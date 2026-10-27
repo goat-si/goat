@@ -764,7 +764,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     rows,
     listRef,
     listReady: findListReady,
-    threadId: citationThreadRef?.threadId ?? null,
+    threadRef: citationThreadRef,
     history: historyControls,
     foldKeyOf: (entryId) =>
       (

@@ -1,5 +1,5 @@
 import type { LegendListRef } from "@legendapp/list/react";
-import { MessageId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
@@ -61,6 +61,7 @@ const rowsFor = (entries: ReadonlyArray<TimelineEntry>): MessagesTimelineRow[] =
 function Reveal(props: {
   readonly entries: ReadonlyArray<TimelineEntry>;
   readonly threadId: string;
+  readonly environmentId?: string;
   readonly history?: MessagesTimelineHistoryControls;
   readonly listRef: React.RefObject<LegendListRef | null>;
 }) {
@@ -69,7 +70,7 @@ function Reveal(props: {
     rows: rowsFor(props.entries),
     listRef: props.listRef,
     listReady: true,
-    threadId: props.threadId,
+    threadRef: { environmentId: props.environmentId ?? "env-here", threadId: props.threadId },
     history: props.history,
     foldKeyOf: () => undefined,
     onNavigate: () => {},
@@ -104,6 +105,31 @@ describe("useSentCallReveal", () => {
     expect(scrollToIndex).not.toHaveBeenCalled();
 
     await screen.rerender(<Reveal entries={[sendCall]} threadId={SENDER} listRef={listRef} />);
+    await vi.waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 0 })),
+    );
+  });
+
+  it("reveals a remote sender's call only in that machine's thread, not one with the same id here", async () => {
+    const { listRef, scrollToIndex } = scrollSpy();
+    await using screen = await render(
+      <Reveal entries={[sendCall]} threadId={SENDER} environmentId="env-here" listRef={listRef} />,
+      { router: "/thread" },
+    );
+    await act(() =>
+      screen.router!.history.push("/thread", {
+        sentFrom: { ...sentFrom, senderEnvironmentId: EnvironmentId.make("env-studio") },
+      }),
+    );
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    await screen.rerender(
+      <Reveal
+        entries={[sendCall]}
+        threadId={SENDER}
+        environmentId="env-studio"
+        listRef={listRef}
+      />,
+    );
     await vi.waitFor(() =>
       expect(scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 0 })),
     );

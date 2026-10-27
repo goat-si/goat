@@ -116,7 +116,7 @@ export function useSentCallReveal(input: {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly listReady: boolean;
   /** The thread this timeline shows. */
-  readonly threadId: string | null;
+  readonly threadRef: { readonly environmentId: string; readonly threadId: string } | null;
   readonly history: MessagesTimelineHistoryControls | undefined;
   readonly foldKeyOf: (entryId: string) => string | undefined;
   readonly onNavigate: () => void;
@@ -132,7 +132,10 @@ export function useSentCallReveal(input: {
   // Right after navigating, the list can still hold the previous thread's entries.
   const showsSender =
     target !== undefined &&
-    input.threadId === target.senderThreadId &&
+    input.threadRef?.threadId === target.senderThreadId &&
+    // The same thread id can exist on two machines; a remote sender names its own.
+    (target.senderEnvironmentId === undefined ||
+      input.threadRef.environmentId === target.senderEnvironmentId) &&
     // Inherited items of a fork keep their source thread, so only this thread's own items count.
     !input.entries.some(
       (entry) =>
