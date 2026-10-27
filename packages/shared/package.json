@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./opencodexRelease": {
+      "types": "./src/opencodexRelease.ts",
+      "import": "./src/opencodexRelease.ts"
+    },
     "./opencodexCompat": {
       "types": "./src/opencodexCompat.ts",
       "import": "./src/opencodexCompat.ts"
