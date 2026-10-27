@@ -18,6 +18,7 @@ import {
   patchPullRequestListEntry,
   pullRequestStatKey as statKey,
   withShownPullRequestStats,
+  retainPullRequestStatsAnswers,
   scopedPullRequestListKey,
   type EnvironmentPullRequestListEntry,
 } from "./pullRequestList";
@@ -45,7 +46,11 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   const scopeKey = JSON.stringify(targets);
   const activeScope = useRef(scopeKey);
   const sources = useAtomValue(sourcesFamily(scopeKey));
-  const requests = useRef<{ page?: AbortController; refresh?: AbortController }>({});
+  const requests = useRef<{
+    page?: AbortController;
+    refresh?: AbortController;
+    error?: string | null;
+  }>({});
   const [loading, setLoading] = useState({
     key: scopeKey,
     page: false,
@@ -64,7 +69,13 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
 
   const loadMore = useCallback(
     async (retry = false) => {
-      if (requests.current.page || requests.current.refresh || (!retry && state.error)) return;
+      if (
+        activeScope.current !== scopeKey ||
+        requests.current.page ||
+        requests.current.refresh ||
+        (!retry && requests.current.error)
+      )
+        return;
       const continuations = targets.flatMap((target) => {
         const pagesAtom = pagesFamily(JSON.stringify(target));
         const head = Option.getOrNull(
@@ -78,6 +89,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       if (!continuations.length) return;
       const controller = new AbortController();
       requests.current.page = controller;
+      requests.current.error = null;
       setLoading({ key: scopeKey, page: true, refresh: false, error: null });
       const responses = await Promise.allSettled(
         continuations.map(async ({ target, pagesAtom, pages, input }) => {
@@ -110,18 +122,22 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
         }),
       );
       if (requests.current.page === controller) delete requests.current.page;
-      if (!controller.signal.aborted && activeScope.current === scopeKey)
-        setLoading({ key: scopeKey, page: false, refresh: false, error: requestErrors(responses) });
+      if (!controller.signal.aborted && activeScope.current === scopeKey) {
+        const error = requestErrors(responses);
+        requests.current.error = error;
+        setLoading({ key: scopeKey, page: false, refresh: false, error });
+      }
     },
-    [targets, registry, scopeKey, state.error, activeScope],
+    [targets, registry, scopeKey, activeScope],
   );
 
   const onRefresh = async () => {
-    if (!targets.length || requests.current.refresh) return;
+    if (activeScope.current !== scopeKey || !targets.length || requests.current.refresh) return;
     requests.current.page?.abort();
     delete requests.current.page;
     const controller = new AbortController();
     requests.current.refresh = controller;
+    requests.current.error = null;
     setLoading({ key: scopeKey, page: false, refresh: true, error: null });
     const responses = await Promise.allSettled(
       targets.map(async (target) => {
@@ -144,8 +160,11 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       }),
     );
     if (requests.current.refresh === controller) delete requests.current.refresh;
-    if (!controller.signal.aborted && activeScope.current === scopeKey)
-      setLoading({ key: scopeKey, page: false, refresh: false, error: requestErrors(responses) });
+    if (!controller.signal.aborted && activeScope.current === scopeKey) {
+      const error = requestErrors(responses);
+      requests.current.error = error;
+      setLoading({ key: scopeKey, page: false, refresh: false, error });
+    }
   };
 
   const data = useMemo(
@@ -195,13 +214,12 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   );
   const visibleRows =
     visible.key === scopeKey && visible.rows.length ? visible.rows : data.entries.slice(0, 8);
+  const baseRows = new Map(data.entries.map((entry) => [scopedPullRequestListKey(entry), entry]));
   const statsKey = JSON.stringify(
     targets.flatMap(({ environmentId }) => {
       const refs = visibleRows
         .filter((row) => {
-          const base = data.entries.find(
-            (entry) => scopedPullRequestListKey(entry) === scopedPullRequestListKey(row),
-          );
+          const base = baseRows.get(scopedPullRequestListKey(row));
           return base?.environmentId === environmentId && base.additions + base.deletions === 0;
         })
         .map(({ projectId, host, repository, number }) => ({
@@ -224,16 +242,20 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     );
   }, [statsKey]);
   const counts = useAtomValue(statsAtom);
+  const answered = () =>
+    counts.map(({ environmentId, result }) => ({
+      environmentId,
+      stats: Option.getOrNull(AsyncResult.value(result))?.stats ?? null,
+    }));
+  const [shown, setShown] = useState(() => ({
+    counts,
+    answers: retainPullRequestStatsAnswers(answered(), []),
+  }));
+  if (shown.counts !== counts)
+    setShown({ counts, answers: retainPullRequestStatsAnswers(answered(), shown.answers) });
   const entries = useMemo(
-    () =>
-      withShownPullRequestStats(
-        data.entries,
-        counts.flatMap(({ environmentId, result }) => {
-          const answer = Option.getOrNull(AsyncResult.value(result));
-          return answer ? [{ environmentId, stats: answer.stats }] : [];
-        }),
-      ),
-    [data.entries, counts],
+    () => withShownPullRequestStats(data.entries, shown.answers),
+    [data.entries, shown.answers],
   );
 
   const updateEntry = useCallback(

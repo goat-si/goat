@@ -7,6 +7,7 @@ import {
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListResult,
+  type ScopedProjectRef,
 } from "@goat/contracts";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
 
@@ -49,6 +50,50 @@ export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry)
 export const pullRequestStatKey = (
   row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
 ) => `${row.projectId}:${row.repository}:${row.number}`;
+
+type PullRequestStatsAnswer = {
+  readonly environmentId: EnvironmentId;
+  readonly stats: readonly PullRequestDiffStat[];
+};
+
+export function retainPullRequestStatsAnswers(
+  counts: readonly {
+    readonly environmentId: EnvironmentId;
+    readonly stats: readonly PullRequestDiffStat[] | null;
+  }[],
+  previous: readonly PullRequestStatsAnswer[],
+): readonly PullRequestStatsAnswer[] {
+  const next = counts.flatMap(({ environmentId, stats }) => {
+    const kept = previous.find((answer) => answer.environmentId === environmentId);
+    if (stats === null) return kept ? [kept] : [];
+    return kept?.stats === stats ? [kept] : [{ environmentId, stats }];
+  });
+  return next.length === previous.length &&
+    next.every((answer, index) => answer === previous[index])
+    ? previous
+    : next;
+}
+
+export function pullRequestProjectOrderIsEqual(
+  previous: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+  next: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+) {
+  return (
+    previous.length === next.length &&
+    previous.every((group, index) => {
+      const members = next[index]?.memberProjectRefs;
+      return (
+        members !== undefined &&
+        group.memberProjectRefs.length === members.length &&
+        group.memberProjectRefs.every(
+          (ref, member) =>
+            ref.environmentId === members[member]?.environmentId &&
+            ref.projectId === members[member]?.projectId,
+        )
+      );
+    })
+  );
+}
 
 export function withShownPullRequestStats(
   entries: readonly EnvironmentPullRequestListEntry[],

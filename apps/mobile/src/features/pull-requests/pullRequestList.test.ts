@@ -20,6 +20,8 @@ import {
   pullRequestListInput,
   scopedPullRequestListKey,
   pullRequestListRowsAreEqual,
+  pullRequestProjectOrderIsEqual,
+  retainPullRequestStatsAnswers,
   withShownPullRequestStats,
   withoutScratchProjectScope,
 } from "./pullRequestList";
@@ -164,6 +166,43 @@ describe("mobile PR list pagination", () => {
 });
 
 describe("shown PR diff stats", () => {
+  it("keeps each offline answer while a newly visible stats batch has no answer", () => {
+    const first = EnvironmentId.make("env-one");
+    const second = EnvironmentId.make("env-two");
+    const stat = {
+      projectId: entry(1).projectId,
+      repository: "org/repo",
+      number: 1,
+      additions: 5,
+      deletions: 2,
+    };
+    const previous = [
+      { environmentId: first, stats: [stat] },
+      { environmentId: second, stats: [stat] },
+    ];
+    expect(
+      retainPullRequestStatsAnswers(
+        [
+          { environmentId: first, stats: null },
+          { environmentId: second, stats: null },
+        ],
+        previous,
+      ),
+    ).toBe(previous);
+    const next = retainPullRequestStatsAnswers(
+      [
+        { environmentId: first, stats: [{ ...stat, additions: 8 }] },
+        { environmentId: second, stats: null },
+      ],
+      previous,
+    );
+    const rows = [first, second].map((environmentId) => ({ ...entry(1), environmentId }));
+    expect(withShownPullRequestStats(rows, next).map(({ additions }) => additions)).toEqual([8, 5]);
+    expect(retainPullRequestStatsAnswers([{ environmentId: first, stats: [] }], previous)).toEqual([
+      { environmentId: first, stats: [] },
+    ]);
+  });
+
   it("fills offline counts per environment without replacing newer row counts", () => {
     const first = EnvironmentId.make("env-one");
     const second = EnvironmentId.make("env-two");
@@ -186,6 +225,31 @@ describe("shown PR diff stats", () => {
     expect(filled.map(({ additions }) => additions)).toEqual([5, 7, 9]);
     expect(filled[2]).toBe(rows[2]);
     expect(withShownPullRequestStats(rows, [])).toBe(rows);
+  });
+});
+
+describe("PR filter project order", () => {
+  it("ignores rebuilt groups while noticing group, member and environment changes", () => {
+    const first = { environmentId: EnvironmentId.make("env-one"), projectId: entry(1).projectId };
+    const second = { ...first, projectId: "other" as PullRequestListEntry["projectId"] };
+    const order = [{ memberProjectRefs: [first, second] }];
+    expect(
+      pullRequestProjectOrderIsEqual(order, [{ memberProjectRefs: [{ ...first }, { ...second }] }]),
+    ).toBe(true);
+    expect(pullRequestProjectOrderIsEqual(order, [{ memberProjectRefs: [second, first] }])).toBe(
+      false,
+    );
+    expect(
+      pullRequestProjectOrderIsEqual(order, [
+        { memberProjectRefs: [first] },
+        { memberProjectRefs: [second] },
+      ]),
+    ).toBe(false);
+    expect(
+      pullRequestProjectOrderIsEqual(order, [
+        { memberProjectRefs: [first, { ...second, environmentId: EnvironmentId.make("env-two") }] },
+      ]),
+    ).toBe(false);
   });
 });
 
