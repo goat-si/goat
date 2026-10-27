@@ -1812,6 +1812,98 @@
       "schema": "public",
       "table": "relay_upstream_api_pauses",
       "entityType": "pks"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "relay_connect_link_reservations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "challenge_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "type": "varchar(191)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "environment_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "proof",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "type": "varchar(32)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "outcome",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
+    },
+    {
+      "columns": ["user_id", "challenge_id"],
+      "nameExplicit": false,
+      "name": "relay_connect_link_reservations_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "relay_connect_link_reservations"
     }
   ],
   "renames": []

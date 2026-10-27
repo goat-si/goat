@@ -10,6 +10,10 @@ import {
   RELAY_LINK_PROOF_TYP,
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
+import { isConnectAssuranceFresh } from "@goat/contracts/connectAssurance";
+import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
+import * as ConnectLinkReservations from "./ConnectLinkReservations.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -66,6 +70,7 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
 export type EnvironmentLinkError =
   | EnvironmentLinkProofExpired
   | import("@goat/contracts/relay").RelayInternalError
+  | import("@goat/contracts/connectAssurance").RelayAuthenticationStrengthError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
@@ -140,6 +145,8 @@ function isLoopbackManagedTunnelOrigin(
 
 const make = Effect.gen(function* () {
   const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
+  const crypto = yield* Crypto.Crypto;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
   const proofReplay = yield* DpopProofs.DpopProofReplay;
@@ -273,34 +280,6 @@ const make = Effect.gen(function* () {
           stage: "validate_expiration",
         });
       }
-      const consumedNonce = yield* proofReplay.consume({
-        thumbprint: verified.environmentPublicKey,
-        jti: verified.jti,
-        iat: verified.iat,
-        expiresAt: expiresAt.value,
-      });
-      if (!consumedNonce) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "replayed_nonce",
-          stage: "consume_proof_nonce",
-        });
-      }
-      const consumedChallenge = yield* proofReplay.consume({
-        thumbprint: "relay-environment-link-challenge",
-        jti: challenge.jti,
-        iat: challenge.iat,
-        expiresAt: expiresAt.value,
-      });
-      if (!consumedChallenge) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "challenge_invalid",
-          stage: "consume_challenge_nonce",
-        });
-      }
       if (input.request.managedTunnelsEnabled && !isLoopbackManagedTunnelOrigin(verified.origin)) {
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
@@ -309,51 +288,125 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
-      // Non-tunnel links must release provisioned tunnel/DNS resources; best-effort deprovision is idempotent.
-      if (!input.request.managedTunnelsEnabled) {
-        yield* managedEndpointProvider
-          .deprovision({
-            userId: input.userId,
-            environmentId: verified.environmentId,
-          })
-          .pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("managed endpoint deprovision on publish-only link failed", {
-                environmentId: verified.environmentId,
-                errorTag: error._tag,
-              }),
+      const reservation = {
+        userId: input.userId,
+        challengeId: challenge.jti,
+        environmentId: verified.environmentId,
+        proof: Hex.encode(
+          yield* crypto.digest("SHA-256", new TextEncoder().encode(input.request.proof)).pipe(
+            Effect.mapError(
+              () =>
+                new EnvironmentLinkProofInvalid({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  reason: "invalid_signature_or_scope",
+                  stage: "verify_proof",
+                }),
             ),
-            Effect.ignore,
-          );
-      }
-      const provisioned = input.request.managedTunnelsEnabled
-        ? yield* managedEndpointProvider.provision({
+          ),
+        ),
+        assurance: challenge.assurance,
+        managedTunnelsEnabled: input.request.managedTunnelsEnabled,
+      };
+      const prior = yield* reservations.reserve(
+        reservation,
+        Effect.gen(function* () {
+          const consumeNow = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
+          if (
+            verified.exp <= consumeNow ||
+            challenge.exp <= consumeNow ||
+            !isConnectAssuranceFresh(challenge.assurance, consumeNow)
+          )
+            return yield* new EnvironmentLinkProofInvalid({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+              reason: "challenge_invalid",
+              stage: "consume_challenge_nonce",
+            });
+          const consumedNonce = yield* proofReplay.consume({
+            thumbprint: verified.environmentPublicKey,
+            jti: verified.jti,
+            iat: verified.iat,
+            expiresAt: expiresAt.value,
+          });
+          if (!consumedNonce) {
+            return yield* new EnvironmentLinkProofInvalid({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+              reason: "replayed_nonce",
+              stage: "consume_proof_nonce",
+            });
+          }
+          const consumedChallenge = yield* proofReplay.consume({
+            thumbprint: "relay-environment-link-challenge",
+            jti: challenge.jti,
+            iat: challenge.iat,
+            expiresAt: expiresAt.value,
+          });
+          if (!consumedChallenge) {
+            return yield* new EnvironmentLinkProofInvalid({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+              reason: "challenge_invalid",
+              stage: "consume_challenge_nonce",
+            });
+          }
+        }),
+      );
+      if (prior) return prior;
+      return yield* Effect.gen(function* () {
+        if (!input.request.managedTunnelsEnabled) {
+          yield* managedEndpointProvider.deprovision({
             userId: input.userId,
             environmentId: verified.environmentId,
-            origin: verified.origin,
-          })
-        : null;
-      const endpoint = provisioned?.endpoint ?? verified.endpoint;
-      // Only advertised managed endpoints need secure URLs; publish-only links route out of band.
-      if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "endpoint_not_secure",
-          stage: "validate_endpoint",
-        });
-      }
-      yield* links.upsert({ ...input, proof: verified, endpoint });
-      const environmentCredential = yield* credentials.create({
-        environmentId: verified.environmentId,
-        environmentPublicKey: verified.environmentPublicKey,
-      });
-      return {
-        environmentId: verified.environmentId,
-        endpoint,
-        endpointRuntime: provisioned?.runtime ?? null,
-        environmentCredential,
-      };
+          });
+        }
+        const provisioned = input.request.managedTunnelsEnabled
+          ? yield* managedEndpointProvider.provision({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+              origin: verified.origin,
+            })
+          : null;
+        const endpoint = provisioned?.endpoint ?? verified.endpoint;
+        // Only advertised managed endpoints need secure URLs; publish-only links route out of band.
+        if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
+          return yield* new EnvironmentLinkProofInvalid({
+            userId: input.userId,
+            environmentId: verified.environmentId,
+            reason: "endpoint_not_secure",
+            stage: "validate_endpoint",
+          });
+        }
+        return yield* reservations.complete(
+          reservation,
+          Effect.gen(function* () {
+            yield* links.upsert({ ...input, proof: verified, endpoint });
+            const environmentCredential = yield* credentials.create({
+              environmentId: verified.environmentId,
+              environmentPublicKey: verified.environmentPublicKey,
+            });
+            return {
+              environmentId: verified.environmentId,
+              endpoint,
+              endpointRuntime: provisioned?.runtime ?? null,
+              environmentCredential,
+            };
+          }),
+        );
+      }).pipe(
+        Effect.onError(() =>
+          Effect.gen(function* () {
+            if (input.request.managedTunnelsEnabled) {
+              yield* managedEndpointProvider.deprovision({
+                userId: input.userId,
+                environmentId: verified.environmentId,
+              });
+            }
+            yield* reservations.failed(reservation);
+          }),
+        ),
+      );
     }),
   });
 });

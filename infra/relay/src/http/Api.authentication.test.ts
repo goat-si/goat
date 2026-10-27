@@ -50,7 +50,7 @@ describe("relay client authentication", () => {
         azp: "https://app.example.test",
         aud: relaySettings.clerkJwtAudience,
       } as never);
-      const result = yield* verifyRelayClientBearerToken(relaySettings, "weak-session").pipe(
+      const result = yield* verifyRelayClientBearerToken(relaySettings, "weak-session", true).pipe(
         Effect.result,
       );
       expect(result._tag).toBe("Failure");

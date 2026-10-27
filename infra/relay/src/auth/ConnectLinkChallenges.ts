@@ -4,11 +4,15 @@ import {
   RelayConnectUpgradeRequiredError,
   type ConnectAuthenticationContext,
 } from "@goat/contracts/connectAssurance";
-import { type RelayEnvironmentLinkChallengeRequest } from "@goat/contracts/relay";
+import {
+  RelayInternalError,
+  type RelayEnvironmentLinkChallengeRequest,
+} from "@goat/contracts/relay";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as RelayDb from "../db.ts";
 import * as CliLinkApprovals from "./CliLinkApprovals.ts";
 import * as RelayTokens from "./RelayTokens.ts";
 import { strengthRequired } from "./ConnectAuthentication.ts";
@@ -37,41 +41,59 @@ export const createLinkChallenge = Effect.fn("ConnectLinkChallenges.create")(fun
     return yield* strengthRequired("unsupported_authentication_flow");
   const auth = input.authentication;
   if (!auth) return yield* strengthRequired("mfa_required");
-  const approvals = yield* CliLinkApprovals.CliLinkApprovals;
-  const assurance =
-    auth.source === "clerk-session"
-      ? auth.assurance
-      : input.request.cliApproval &&
-          input.request.approvalVerifier &&
-          input.request.approvalState &&
-          input.thumbprint
-        ? yield* approvals.consume({
-            approval: input.request.cliApproval,
-            verifier: input.request.approvalVerifier,
-            state: input.request.approvalState,
-            userId: input.userId,
-            thumbprint: input.thumbprint,
-            intent,
-          })
-        : yield* strengthRequired("unsupported_authentication_flow");
-  const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
-  if (!isConnectAssuranceFresh(assurance, now))
-    return yield* strengthRequired("reauthentication_required");
-  const crypto = yield* Crypto.Crypto;
-  const tokens = yield* RelayTokens.RelayTokens;
-  const expires = Math.min(
-    now + 300,
-    Math.min(assurance.firstVerifiedAtFloor, assurance.secondVerifiedAtFloor) + 600,
-  );
-  const challenge = yield* tokens.issueLinkChallenge({
-    userId: assurance.userId,
-    request: input.request,
-    assurance,
-    intent,
-    ...(input.thumbprint ? { cliKeyThumbprint: input.thumbprint } : {}),
-    jti: yield* crypto.randomUUIDv4(),
-    issuedAtEpochSeconds: now,
-    expiresAtEpochSeconds: expires,
-  });
-  return { challenge, expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expires * 1000)) };
+  const transactions = yield* RelayDb.RelayTransactions;
+  return yield* transactions
+    .withTransaction(
+      Effect.gen(function* () {
+        const approvals = yield* CliLinkApprovals.CliLinkApprovals;
+        const assurance =
+          auth.source === "clerk-session"
+            ? auth.assurance
+            : input.request.cliApproval &&
+                input.request.approvalVerifier &&
+                input.request.approvalState &&
+                input.thumbprint
+              ? yield* approvals.consume({
+                  approval: input.request.cliApproval,
+                  verifier: input.request.approvalVerifier,
+                  state: input.request.approvalState,
+                  userId: input.userId,
+                  thumbprint: input.thumbprint,
+                  intent,
+                })
+              : yield* strengthRequired("unsupported_authentication_flow");
+        const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
+        if (!isConnectAssuranceFresh(assurance, now))
+          return yield* strengthRequired("reauthentication_required");
+        const crypto = yield* Crypto.Crypto;
+        const tokens = yield* RelayTokens.RelayTokens;
+        const expires = Math.min(
+          now + 300,
+          Math.min(assurance.firstVerifiedAtFloor, assurance.secondVerifiedAtFloor) + 600,
+        );
+        const challenge = yield* tokens.issueLinkChallenge({
+          userId: assurance.userId,
+          request: input.request,
+          assurance,
+          intent,
+          ...(input.thumbprint ? { cliKeyThumbprint: input.thumbprint } : {}),
+          jti: yield* crypto.randomUUIDv4(),
+          issuedAtEpochSeconds: now,
+          expiresAtEpochSeconds: expires,
+        });
+        return { challenge, expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expires * 1000)) };
+      }),
+    )
+    .pipe(
+      Effect.catchTags({
+        SqlError: () =>
+          Effect.fail(
+            new RelayInternalError({
+              code: "internal_error",
+              reason: "persistence_failed",
+              traceId: "connect-challenge",
+            }),
+          ),
+      }),
+    );
 });

@@ -2,6 +2,7 @@ import * as ConnectAccounts from "./ConnectAccounts.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import { createClerkClient, verifyToken } from "@clerk/backend";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -122,3 +123,78 @@ describe("Connect session assurance", () => {
     }).pipe(run),
   );
 });
+
+it.effect.each([
+  { iss: "https://wrong.example.test" },
+  { aud: "https://wrong-relay.example.test" },
+  { azp: "https://staging.app.example.test" },
+])("rejects a verified JWT from the wrong issuer, audience or party: %j", (override) =>
+  Effect.gen(function* () {
+    setup();
+    yield* TestClock.setTime(NOW * 1000);
+    vi.mocked(verifyToken).mockResolvedValue({ ...claims, ...override } as never);
+    expect(
+      (yield* (yield* ConnectAuthentication.ConnectAuthentication)
+        .session("token")
+        .pipe(Effect.flip))._tag,
+    ).toBe("RelayAuthInvalidError");
+  }).pipe(run),
+);
+
+it.effect.each(["pending", "revoked", "expired"])(
+  "inactive Clerk session %s never issues authority",
+  (status) =>
+    Effect.gen(function* () {
+      const { getSession } = setup();
+      yield* TestClock.setTime(NOW * 1000);
+      vi.mocked(verifyToken).mockResolvedValue(claims as never);
+      getSession.mockResolvedValue({ status, userId: "user-1" });
+      expect(
+        (yield* (yield* ConnectAuthentication.ConnectAuthentication)
+          .session("token")
+          .pipe(Effect.flip))._tag,
+      ).toBe("RelayAuthenticationStrengthError");
+    }).pipe(run),
+);
+
+it.effect.each([
+  { clientId: "wrong-client", scopes: ["openid", "profile", "email", "offline_access"] },
+  { clientId: "cli-client", scopes: ["openid"] },
+])("OAuth client/scope mismatch cannot authorize withdrawal: %j", (override) =>
+  Effect.gen(function* () {
+    setup();
+    vi.mocked(createClerkClient).mockReturnValue({
+      authenticateRequest: async () => ({
+        isAuthenticated: true,
+        toAuth: () => ({ tokenType: "oauth_token", userId: "user-1", ...override }),
+      }),
+    } as never);
+    expect(
+      (yield* (yield* ConnectAuthentication.ConnectAuthentication).oauth("oauth").pipe(Effect.flip))
+        ._tag,
+    ).toBe("RelayAuthInvalidError");
+  }).pipe(run),
+);
+
+it.effect("a pending Clerk lookup times out closed without OAuth fallback", () =>
+  Effect.gen(function* () {
+    const { getSession } = setup();
+    yield* TestClock.setTime(NOW * 1000);
+    const started = Promise.withResolvers<void>();
+    vi.mocked(verifyToken).mockResolvedValue(claims as never);
+    const lookup = Promise.withResolvers<{ userId: string; status: string }>();
+    getSession.mockImplementation(() => {
+      started.resolve();
+      return lookup.promise;
+    });
+    const auth = yield* ConnectAuthentication.ConnectAuthentication;
+    const fiber = yield* auth.session("token").pipe(Effect.result, Effect.forkChild);
+    yield* Effect.promise(() => started.promise);
+    yield* TestClock.adjust("10 seconds");
+    const result = yield* Fiber.join(fiber);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure._tag).toBe("RelayAuthenticationUnavailableError");
+    lookup.resolve({ userId: "user-1", status: "active" });
+  }).pipe(run),
+);

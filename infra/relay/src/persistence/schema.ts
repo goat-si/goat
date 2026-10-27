@@ -227,3 +227,16 @@ export const relayConnectAccounts = pgTable("relay_connect_accounts", {
   generation: integer("generation").notNull(),
   status: varchar("status", { length: 32 }).notNull().$type<"active" | "suspended" | "deleted">(),
 });
+
+export const relayConnectLinkReservations = pgTable(
+  "relay_connect_link_reservations",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    challengeId: varchar("challenge_id", { length: 255 }).notNull(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    proof: text("proof").notNull(),
+    status: varchar("status", { length: 32 }).notNull(),
+    outcome: text("outcome"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.challengeId] })],
+);

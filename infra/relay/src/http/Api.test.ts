@@ -1,3 +1,4 @@
+import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
@@ -98,6 +99,9 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            withdraw: () => Effect.void,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -219,6 +223,9 @@ describe("device listing compatibility", () => {
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            withdraw: () => Effect.void,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -308,6 +315,9 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            withdraw: () => Effect.void,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -463,6 +473,7 @@ function layerRelayUnlinkTest(input?: {
   readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
 }) {
   return Layer.mergeAll(
+    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, { withdraw: () => Effect.void }),
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),

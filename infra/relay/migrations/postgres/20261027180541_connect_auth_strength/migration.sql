@@ -16,3 +16,13 @@ CREATE TABLE "relay_connect_accounts" (
 	"generation" integer NOT NULL,
 	"status" varchar(32) NOT NULL
 );
+
+CREATE TABLE "relay_connect_link_reservations" (
+  "user_id" varchar(255) NOT NULL,
+  "challenge_id" varchar(255) NOT NULL,
+  "environment_id" varchar(191) NOT NULL,
+  "proof" text NOT NULL,
+  "status" varchar(32) NOT NULL,
+  "outcome" text,
+  PRIMARY KEY ("user_id", "challenge_id")
+);

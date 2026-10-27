@@ -1,4 +1,5 @@
 import * as ConnectTokenExchange from "../auth/ConnectTokenExchange.ts";
+import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
@@ -539,6 +540,8 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     readonly managedEndpointNamespace?: string | undefined;
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
+    yield* reservations.withdraw(input);
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
       userId: input.userId,

@@ -1,3 +1,4 @@
+import * as ConnectPushQueue from "./agentActivity/ConnectPushQueue.ts";
 import * as ConnectTokenExchange from "./auth/ConnectTokenExchange.ts";
 import * as ConnectAuthentication from "./auth/ConnectAuthentication.ts";
 import * as ConnectAccounts from "./auth/ConnectAccounts.ts";
@@ -16,7 +17,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Stream from "effect/Stream";
 import * as Etag from "effect/http/Etag";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpPlatform from "effect/http/HttpPlatform";
@@ -65,6 +65,7 @@ import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
 import * as ApnsDeliveries from "./agentActivity/ApnsDeliveries.ts";
 import * as CloudflareApiPause from "./environments/CloudflareApiPause.ts";
 import * as EnvironmentConnector from "./environments/EnvironmentConnector.ts";
+import * as ConnectLinkReservations from "./environments/ConnectLinkReservations.ts";
 import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
 import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
@@ -278,6 +279,7 @@ export const layer = Api.make(
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),
+      Layer.provideMerge(ConnectLinkReservations.layer),
       Layer.provideMerge(
         Layer.mergeAll(
           EnvironmentPublishSignatures.layer,
@@ -347,6 +349,7 @@ export const layer = Api.make(
       ),
       Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
       Layer.provideMerge(layerWebcrypto),
+      Layer.provideMerge(Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle })),
     );
 
     // Fails open: a limiter outage must not drop webhooks the environment would accept.
@@ -393,18 +396,15 @@ export const layer = Api.make(
         deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
       },
       (stream) =>
-        !isGoatConnectPushEnabled()
-          ? Stream.runDrain(stream)
-          : stream.pipe(
-              Stream.withSpan("relay.apn_delivery_queue.process_batch"),
-              Stream.runForEach((message) =>
-                ApnsDeliveries.ApnsDeliveries.pipe(
-                  Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-                  Effect.withSpan("relay.apn_delivery_queue.process_message"),
-                ),
-              ),
-              Effect.provide(layerRuntime),
-            ),
+        ConnectPushQueue.consume(stream, (message) =>
+          ApnsDeliveries.ApnsDeliveries.pipe(
+            Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
+            Effect.withSpan("relay.apn_delivery_queue.process_message"),
+          ),
+        ).pipe(
+          Effect.withSpan("relay.apn_delivery_queue.process_batch"),
+          Effect.provide(layerRuntime),
+        ),
     );
 
     yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
@@ -417,13 +417,10 @@ export const layer = Api.make(
         deadLetterQueue: fcmDeliveryDeadLetterQueue.queueName as unknown as string,
       },
       (stream) =>
-        !isGoatConnectPushEnabled()
-          ? Stream.runDrain(stream)
-          : stream.pipe(
-              Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
-              Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
-              Effect.provide(layerRuntime),
-            ),
+        ConnectPushQueue.consume(stream, FcmDeliveryQueueConsumer.processMessage).pipe(
+          Effect.withSpan("relay.fcm_delivery_queue.process_batch"),
+          Effect.provide(layerRuntime),
+        ),
     );
 
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
