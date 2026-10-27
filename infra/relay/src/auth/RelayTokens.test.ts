@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
 
@@ -34,7 +35,10 @@ const config = RelayConfiguration.RelayConfiguration.of({
   managedEndpointNamespace: undefined,
 });
 
-const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
+const layer = RelayTokens.layer.pipe(
+  Layer.provide(policyUnitLayer),
+  Layer.provide(RelayConfiguration.layer(config)),
+);
 
 describe("RelayTokens", () => {
   it.effect("issues a user-bound environment link challenge", () =>

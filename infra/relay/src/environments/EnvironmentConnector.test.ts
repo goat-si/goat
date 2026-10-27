@@ -179,6 +179,10 @@ function makeAllocations(
   allocation: ManagedEndpointAllocations.ManagedEndpointAllocation | null = {
     userId: "user_123",
     environmentId: "env-connector-test",
+    incarnationId: "10000000-0000-4000-8000-000000000001",
+    accountEpoch: 1,
+    endpointGeneration: 0,
+    capacityReleasedAt: null,
     hostname: "env.example.test",
     tunnelId: "tunnel-id",
     tunnelName: "tunnel-name",
@@ -417,6 +421,10 @@ describe("EnvironmentConnector", () => {
           allocations: makeAllocations({
             userId: "user_123",
             environmentId: "env-connector-test",
+            incarnationId: "10000000-0000-4000-8000-000000000001",
+            accountEpoch: 1,
+            endpointGeneration: 0,
+            capacityReleasedAt: null,
             hostname: "env.example.test",
             tunnelId: "tunnel-id",
             tunnelName: "tunnel-name",
@@ -476,6 +484,10 @@ describe("EnvironmentConnector", () => {
     const allocations = makeAllocations({
       userId: "user_123",
       environmentId: "env-connector-test",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "env.example.test",
       tunnelId: "tunnel-id",
       tunnelName: "tunnel-name",

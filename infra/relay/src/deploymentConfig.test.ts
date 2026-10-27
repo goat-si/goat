@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   managedEndpointHostname,
+  managedEndpointDigestInput,
   isManagedEndpointHostname,
   relayOwnsManagedEndpointZone,
 } from "./deploymentConfig.ts";
@@ -30,4 +31,16 @@ describe("managed endpoint names", () => {
     expect(isManagedEndpointHostname("example.com.attacker.test", "example.com")).toBe(false);
     expect(isManagedEndpointHostname("dev-alex.example.com.", "example.com")).toBe(false);
   });
+});
+
+it("generation zero preserves the exact digest input while retired generations are never selected again", () => {
+  expect(managedEndpointDigestInput("dev_alex", "fixture-user", "fixture-env", 0)).toBe(
+    "dev_alex:fixture-user:fixture-env",
+  );
+  expect(managedEndpointDigestInput("dev_alex", "fixture-user", "fixture-env", 1)).toBe(
+    "dev_alex:fixture-user:fixture-env:1",
+  );
+  expect(() =>
+    managedEndpointDigestInput("prod", "fixture-user", "fixture-env", 2147483647),
+  ).toThrow();
 });

@@ -1,3 +1,4 @@
+import { RelayAccountAccessDeniedError, RelayRateLimitExceededError } from "@goat/contracts/relay";
 import { RelayAuthInvalidError } from "@goat/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 
@@ -44,4 +45,20 @@ describe("relayProtectedErrorMessage", () => {
       `Relay rejected the DPoP proof. ${DPOP_RETRY_HINT}`,
     );
   });
+});
+
+it("keeps invite denial and throttling actionable without a sign-in hint", () => {
+  const denied = new RelayAccountAccessDeniedError({
+    code: "account_access_denied",
+    reason: "not_invited",
+    traceId: "fixture",
+  });
+  expect(relayProtectedErrorMessage(denied)).toContain("invite-only");
+  const rate = new RelayRateLimitExceededError({
+    code: "rate_limit_exceeded",
+    operation: "connect",
+    retryAfterSeconds: 60,
+    traceId: "fixture",
+  });
+  expect(relayProtectedErrorMessage(rate)).toContain("60 seconds");
 });

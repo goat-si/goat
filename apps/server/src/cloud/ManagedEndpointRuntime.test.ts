@@ -1,3 +1,5 @@
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -42,6 +44,9 @@ const runtimeDependencies = (
   httpClient = unusedHttpClient,
 ) =>
   Layer.mergeAll(
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("env-fixture")),
+    }),
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Layer.succeed(HttpClient.HttpClient, httpClient),
     relayClientLayer,

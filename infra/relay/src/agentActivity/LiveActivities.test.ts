@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import type {
   RelayAgentActivityAggregateState,
   RelayLiveActivityRegistrationRequest,
@@ -40,7 +41,9 @@ describe("LiveActivities", () => {
       select: () => ({
         from: () => ({
           where: () =>
-            Effect.succeed([{ activityPushToken: "current-token", remoteStartedAt: armedAt }]),
+            Effect.succeed([
+              { accountEpoch: 1, activityPushToken: "current-token", remoteStartedAt: armedAt },
+            ]),
         }),
       }),
       update: () => ({ set: () => ({ where: () => Effect.void }) }),
@@ -78,7 +81,10 @@ describe("LiveActivities", () => {
       expect(conflictSets[1]?.remoteStartedAt).not.toBe(armedAt);
     }).pipe(
       Effect.provide(
-        LiveActivities.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+        LiveActivities.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
+        ),
       ),
     );
   });
@@ -131,7 +137,10 @@ describe("LiveActivities", () => {
       );
     }).pipe(
       Effect.provide(
-        LiveActivities.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+        LiveActivities.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
+        ),
       ),
     );
   });

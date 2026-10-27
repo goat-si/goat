@@ -1,3 +1,5 @@
+import { signDeliveryPayload } from "./deliveryJobSigning.ts";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { RelayAgentActivityState } from "@goat/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
@@ -46,6 +48,7 @@ const preferences = {
   notifyOnFailure: true,
 };
 const target: LiveActivities.TargetRow = {
+  account_epoch: 1,
   user_id: "user",
   device_id: "phone",
   platform: "android",
@@ -83,9 +86,15 @@ const config = {
   managedEndpointNamespace: undefined,
 } satisfies RelayConfiguration.RelayConfiguration["Service"];
 
+const signedJob = (payload: FcmDeliveries.FcmDeliveryJob) => ({
+  payload,
+  signature: signDeliveryPayload(config.apnsDeliveryJobSigningSecret, "fcm-v2", payload),
+});
+
 function harness() {
   const sent: Array<Parameters<FcmClient.FcmClient["Service"]["send"]>[0]> = [];
-  const queued: FcmDeliveries.FcmDeliveryJob[] = [];
+  const queued: Parameters<FcmDeliveryQueueSender.FcmDeliveryQueueSender["Service"]["send"]>[0][] =
+    [];
   const marked: Array<Parameters<LiveActivities.LiveActivities["Service"]["markDelivery"]>[0]> = [];
   const current = {
     target: { ...target },
@@ -198,8 +207,11 @@ function harness() {
     queued,
     marked,
     current,
-    layer: FcmDeliveries.layer.pipe(Layer.provide(layerServices)),
+    layer: FcmDeliveries.layer.pipe(Layer.provide(policyUnitLayer), Layer.provide(layerServices)),
     job: {
+      version: 2,
+      jobId: "fixture-job",
+      accountEpoch: 1,
       userId: "user",
       deviceId: "phone",
       token: "fcm-token",
@@ -232,12 +244,12 @@ describe("Android delivery routing", () => {
       h.current.otherStates = [secondState];
       return Effect.gen(function* () {
         const delivery = yield* FcmDeliveries.FcmDeliveries;
-        yield* delivery.process(h.job);
+        yield* delivery.process(signedJob(h.job));
         h.current.state = { ...state, phase: firstPhase };
         h.current.otherStates = [{ ...secondState, phase: secondPhase }];
-        yield* delivery.process({ ...h.job, state: h.current.state });
-        yield* delivery.process({ ...h.job, state: h.current.otherStates[0] });
-        yield* delivery.process({ ...h.job, state: h.current.state });
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.otherStates[0]! }));
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
         const alerts = h.sent.filter((message) => message.alert);
         expect(alerts).toHaveLength(1);
         expect(alerts[0]?.data).toMatchObject({
@@ -259,7 +271,7 @@ describe("Android delivery routing", () => {
     h.current.otherStates = [{ ...secondState, phase: "waiting_for_input" }];
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent[0]?.data).toMatchObject({
         alert_title: "Second thread",
         alert_body: "Input: Project",
@@ -277,7 +289,7 @@ describe("Android delivery routing", () => {
     ];
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent.every((message) => !message.alert)).toBe(true);
     }).pipe(Effect.provide(h.layer));
   });
@@ -289,12 +301,12 @@ describe("Android delivery routing", () => {
     h.current.otherStates = [{ ...secondState, phase: "waiting_for_input" }];
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent[0]?.data).toMatchObject({
         alert_title: "Second thread",
         alert_body: "Input: Project",
       });
-      yield* delivery.process({ ...h.job, state: h.current.otherStates[0] });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.otherStates[0]! }));
       expect(h.sent.filter((message) => message.alert)).toHaveLength(1);
     }).pipe(Effect.provide(h.layer));
   });
@@ -306,15 +318,15 @@ describe("Android delivery routing", () => {
       h.current.otherStates = [secondState];
       return Effect.gen(function* () {
         const delivery = yield* FcmDeliveries.FcmDeliveries;
-        yield* delivery.process(h.job);
+        yield* delivery.process(signedJob(h.job));
         h.current.otherStates = [];
         h.current.state = { ...state, phase };
         yield* delivery.enqueue({ target, state: null });
         yield* delivery.process(h.queued[0]);
         expect(h.sent.at(-1)?.alert).toBe(false);
-        yield* delivery.process({ ...h.job, state: h.current.state });
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
         expect(h.sent.filter((message) => message.alert)).toHaveLength(1);
-        yield* delivery.process({ ...h.job, state: h.current.state });
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
         expect(h.sent.filter((message) => message.alert)).toHaveLength(1);
       }).pipe(Effect.provide(h.layer));
     },
@@ -328,7 +340,7 @@ describe("Android delivery routing", () => {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
       yield* delivery.enqueue({ target, state: null, replay: true });
       yield* delivery.process(h.queued[0]);
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent.every((message) => !message.alert)).toBe(true);
       expect(h.marked[0]?.aggregate?.activities).toHaveLength(2);
     }).pipe(Effect.provide(h.layer));
@@ -345,7 +357,7 @@ describe("Android delivery routing", () => {
       h.current[restriction] = [other.environmentId];
       return Effect.gen(function* () {
         const delivery = yield* FcmDeliveries.FcmDeliveries;
-        yield* delivery.process({ ...h.job, state: h.current.state });
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
         expect(h.sent[0]?.data).toMatchObject({
           alert_title: "Fix notifications",
           alert_body: "Approval: Project",
@@ -445,7 +457,7 @@ describe("Android delivery routing", () => {
         h.current.state = { ...state, phase: "completed" };
         yield* delivery.process(h.queued[0]);
         expect(h.sent).toHaveLength(0);
-        yield* delivery.process({ ...h.job, state: h.current.state });
+        yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
         expect(h.sent[0]?.data).toMatchObject({
           active: "false",
           alert_title: "Fix notifications",
@@ -465,7 +477,7 @@ describe("Android delivery routing", () => {
     });
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent[0]?.data).toMatchObject({
         active: "false",
         alert_title: "Fix notifications",
@@ -479,10 +491,10 @@ describe("Android delivery routing", () => {
     const h = harness();
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, token: "old-token" });
-      yield* delivery.process({ ...h.job, queuedAt: -400_000 });
+      yield* delivery.process(signedJob({ ...h.job, token: "old-token" }));
+      yield* delivery.process(signedJob({ ...h.job, queuedAt: -400_000 }));
       h.current.linked = false;
-      yield* delivery.process(h.job);
+      yield* delivery.process(signedJob(h.job));
       expect(h.sent).toHaveLength(0);
     }).pipe(Effect.provide(h.layer));
   });
@@ -493,7 +505,7 @@ describe("Android delivery routing", () => {
     h.current.state = null;
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: null });
+      yield* delivery.process(signedJob({ ...h.job, state: null }));
       expect(h.sent[0]?.data).toMatchObject({ active: "false" });
       expect(h.sent[0]?.alert).toBe(false);
       expect(h.marked[0]?.kind).toBe("live_activity_end");
@@ -515,7 +527,7 @@ describe("Android delivery routing", () => {
     h.current.target.preferences_json = encodeJson({ ...preferences, notifyOnApproval: false });
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent[0]?.data.active).toBe("true");
       expect(h.sent[0]?.data.alert_id).toBeUndefined();
       h.current.target.preferences_json = encodeJson({
@@ -523,7 +535,7 @@ describe("Android delivery routing", () => {
         notificationsEnabled: false,
       });
       h.current.target.last_aggregate_json = encodeJson(aggregateFor([state]));
-      yield* delivery.process({ ...h.job, state: h.current.state });
+      yield* delivery.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent[1]?.data.active).toBe("false");
       expect(h.sent[1]?.data.alert_id).toBeUndefined();
     }).pipe(Effect.provide(h.layer));
@@ -534,7 +546,7 @@ describe("Android delivery routing", () => {
     h.current.state = null;
     return Effect.gen(function* () {
       const delivery = yield* FcmDeliveries.FcmDeliveries;
-      yield* delivery.process({ ...h.job, state: null });
+      yield* delivery.process(signedJob({ ...h.job, state: null }));
       expect(h.sent[0]?.data.activity_expires_at).toBe("0");
       expect(h.sent[0]?.alert).toBe(false);
     }).pipe(Effect.provide(h.layer));
@@ -580,8 +592,8 @@ describe("delivery policy regressions", () => {
     h.current.state = { ...state, phase: "completed" };
     return Effect.gen(function* () {
       const d = yield* FcmDeliveries.FcmDeliveries;
-      yield* d.process(h.job);
-      yield* d.process({ ...h.job, state: h.current.state });
+      yield* d.process(signedJob(h.job));
+      yield* d.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent.filter((x) => x.alert)).toHaveLength(1);
     }).pipe(Effect.provide(h.layer));
   });
@@ -621,7 +633,7 @@ describe("notification-only environments", () => {
     h.current.notificationOnlyEnvironments = [state.environmentId];
     return Effect.gen(function* () {
       const deliveries = yield* FcmDeliveries.FcmDeliveries;
-      yield* deliveries.process({ ...h.job, state: h.current.state });
+      yield* deliveries.process(signedJob({ ...h.job, state: h.current.state }));
       expect(h.sent).toHaveLength(1);
       expect(h.sent[0]?.alert).toBe(true);
       expect(h.sent[0]?.data.alert_path).toBe(state.deepLink);

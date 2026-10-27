@@ -1,4 +1,4 @@
-import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 import { relayProtectedErrorMessage } from "@goat/client-runtime/relay";
 import * as HttpServer from "effect/http/HttpServer";
@@ -27,7 +27,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Etag from "effect/http/Etag";
 import * as HttpEffect from "effect/http/HttpEffect";
@@ -68,32 +67,13 @@ vi.mock("@clerk/backend", () => ({
   verifyToken: vi.fn(),
 }));
 
-const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
-  relayIssuer: "https://relay.example.test",
-  apns: {
-    teamId: "apns-team",
-    keyId: "apns-key",
-    privateKey: Redacted.make("apns-private-key"),
-    bundleId: "com.example.t3",
-    environment: "sandbox",
-  },
-  clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "goat-relay",
-  apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
-  cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
-  cloudMintPublicKey: "cloud-mint-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
-};
-
-const encodeLinkRequest = Schema.encodeEffect(Schema.fromJsonString(RelayEnvironmentLinkRequest));
-const decodeLinkUnavailableError = Schema.decodeUnknownEffect(RelayEnvironmentLinkUnavailableError);
+import { relaySettings, encodeLinkRequest, decodeLinkUnavailableError } from "./Api.testkit.ts";
 
 describe("managed endpoint provisioning errors", () => {
   it.effect("returns the failed stage without exposing provider secrets through HTTP", () => {
     let traceId = "";
     const handlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
@@ -183,7 +163,6 @@ describe("managed endpoint provisioning errors", () => {
     }).pipe(Effect.scoped);
   });
 });
-
 describe("device listing compatibility", () => {
   it.effect("keeps v1 iOS-only while v2 returns every platform for the same account", () => {
     const iphone: RelayClientDeviceRecord = {
@@ -211,6 +190,7 @@ describe("device listing compatibility", () => {
       androidApiLevel: 36,
     };
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
@@ -296,6 +276,7 @@ describe("Cloudflare rate-limit retry hint", () => {
 
   const linkResponse = (failure: ManagedEndpointProvider.ManagedEndpointProvisioningFailed) => {
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
@@ -489,6 +470,7 @@ describe("relay environment authentication", () => {
       }),
       Effect.provide(
         RelayHttpApi.layerEnvironmentAuth.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, credentials)),
         ),
       ),
@@ -1006,6 +988,10 @@ describe("relay managed tunnel recovery", () => {
     const target = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "replacement-tunnel",
       tunnelName: "environment-1-tunnel",
@@ -1079,6 +1065,10 @@ describe("relay environment unlink", () => {
               Effect.succeed({
                 userId: "user-1",
                 environmentId: "environment-1",
+                incarnationId: "10000000-0000-4000-8000-000000000001",
+                accountEpoch: 1,
+                endpointGeneration: 0,
+                capacityReleasedAt: null,
                 hostname: "dev-0123456789abcdef.example.test",
                 tunnelId: "tunnel-1",
                 tunnelName: `goatrelay-managedendpoint-dev-${endpointKey}`,
@@ -1114,6 +1104,10 @@ describe("relay environment unlink", () => {
     const deprovisionTarget = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "tunnel-1",
       tunnelName: "environment-1-tunnel",
@@ -1261,6 +1255,10 @@ describe("relay environment unlink", () => {
     const target = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "tunnel-1",
       tunnelName: "environment-1-tunnel",
@@ -1386,6 +1384,8 @@ describe("relay routing fallback", () => {
         environmentBearer: (effect) =>
           effect.pipe(
             Effect.provideService(RelayEnvironmentPrincipal, {
+              userId: "user-1",
+              accountEpoch: 1,
               environmentId,
               environmentPublicKey,
             }),

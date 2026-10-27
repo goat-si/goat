@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,7 +41,10 @@ describe("EnvironmentLinks", () => {
       expect(query.params).toEqual(["env-1", "public-key-1"]);
     }).pipe(
       Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+        EnvironmentLinks.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
+        ),
       ),
     );
   });
@@ -91,7 +95,10 @@ describe("EnvironmentLinks", () => {
       expect(query.params).toEqual(["user-1", "env-1"]);
     }).pipe(
       Effect.provide(
-        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+        EnvironmentLinks.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
+        ),
       ),
     );
   });

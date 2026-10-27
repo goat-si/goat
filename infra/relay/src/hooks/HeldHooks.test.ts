@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,6 +27,10 @@ const allocationFor = (
 ): ManagedEndpointAllocations.ManagedEndpointAllocation => ({
   userId,
   environmentId,
+  incarnationId: "10000000-0000-4000-8000-000000000001",
+  accountEpoch: 1,
+  endpointGeneration: 0,
+  capacityReleasedAt: null,
   hostname: `${key}.example.test`,
   tunnelId: `tunnel-${key}`,
   tunnelName: `goatrelay-managedendpoint-dev-${key}`,
@@ -103,7 +108,11 @@ const withService = <A, E>(
   return Effect.gen(function* () {
     const heldHooks = yield* HeldHooks.HeldHooks;
     return yield* body({ heldHooks, cleared, woken });
-  }).pipe(Effect.provide(HeldHooks.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(
+    Effect.provide(
+      HeldHooks.layer.pipe(Layer.provide(policyUnitLayer), Layer.provide(layerDependencies)),
+    ),
+  );
 };
 
 describe("HeldHooks", () => {
@@ -111,6 +120,7 @@ describe("HeldHooks", () => {
     withService({}, ({ heldHooks, cleared }) =>
       Effect.gen(function* () {
         yield* heldHooks.setHoldWhileOffline({
+          userId: "user_1",
           environmentId,
           environmentPublicKey: "own-key",
           holdWebhooksWhileOffline: false,

@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
 import * as NodeCrypto from "node:crypto";
 import type {
@@ -113,7 +114,8 @@ function layerTest(input?: {
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
-    Layer.provideMerge(RelayTokens.layer),
+    Layer.provide(policyUnitLayer),
+    Layer.provideMerge(RelayTokens.layer.pipe(Layer.provide(policyUnitLayer))),
     Layer.provide(
       Layer.mergeAll(
         RelayConfiguration.layer(config),

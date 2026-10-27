@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
@@ -57,6 +58,10 @@ const endpointKey = "0123456789abcdef";
 const readyAllocation: ManagedEndpointAllocations.ManagedEndpointAllocation = {
   userId: "user_1",
   environmentId,
+  incarnationId: "10000000-0000-4000-8000-000000000001",
+  accountEpoch: 1,
+  endpointGeneration: 0,
+  capacityReleasedAt: null,
   hostname: "env.example.test",
   tunnelId: "tunnel-id",
   tunnelName: `goatrelay-managedendpoint-dev-${endpointKey}`,
@@ -107,7 +112,8 @@ function makeHarness(options: Harness = {}) {
         ),
       ));
   const layerForwarder = HookForwarder.layer.pipe(
-    Layer.provideMerge(HeldHooks.layer),
+    Layer.provide(policyUnitLayer),
+    Layer.provideMerge(HeldHooks.layer.pipe(Layer.provide(policyUnitLayer))),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(RelayConfiguration.RelayConfiguration, settings),

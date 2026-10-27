@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -49,6 +50,7 @@ describe("EnvironmentCredentials", () => {
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
         ),
@@ -99,6 +101,8 @@ describe("EnvironmentCredentials", () => {
       return Effect.gen(function* () {
         const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
         const token = yield* credentials.create({
+          userId: "fixture-owner",
+          accountEpoch: 1,
           environmentId: "env_test",
           environmentPublicKey: "environment-public-key",
         });
@@ -133,6 +137,7 @@ describe("EnvironmentCredentials", () => {
       }).pipe(
         Effect.provide(
           EnvironmentCredentials.layer.pipe(
+            Layer.provide(policyUnitLayer),
             Layer.provide(NodeCryptoLayer.layer),
             Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
           ),
@@ -169,6 +174,7 @@ describe("EnvironmentCredentials", () => {
     return Effect.gen(function* () {
       const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
       const revoked = yield* credentials.revokeForEnvironmentPublicKey({
+        userId: "fixture-owner",
         environmentId: "env_test",
         environmentPublicKey: "environment-public-key",
       });
@@ -195,6 +201,7 @@ describe("EnvironmentCredentials", () => {
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
         ),
