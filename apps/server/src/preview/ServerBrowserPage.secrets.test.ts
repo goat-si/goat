@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
@@ -15,6 +16,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
   const password = `pw_${NodeCrypto.randomUUID()}`;
   const scoped = `path_${NodeCrypto.randomUUID()}`;
   const framed = `frame_${NodeCrypto.randomUUID()}`;
+  const fetched = `api_${NodeCrypto.randomUUID()}`;
   const decoy = "tok_0123456789abcdef_not_a_cookie";
 
   beforeAll(async () => {
@@ -94,5 +96,41 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       "(() => { const read = document.cookie; history.pushState(null, '', '/'); return read; })()",
     );
     expect(JSON.stringify(moved)).not.toContain(scoped);
+  });
+
+  it("masks a cookie the page only fetched with, under a path no frame ever showed", async () => {
+    await context.addCookies([
+      { name: "api", value: fetched, domain: "credentials.test", path: "/api", httpOnly: true },
+    ]);
+    // The API echoes the cookie it got; the page puts the answer in its text and its console.
+    await context.route(`${origin}/api/**`, (route) =>
+      route.fulfill({ contentType: "application/json", body: JSON.stringify({ api: fetched }) }),
+    );
+    const { page, cdp } = await open();
+    const diagnostics = new ServerBrowserDiagnostics(page);
+    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
+    await page.evaluate(
+      "fetch('/api/whoami').then((answer) => answer.text()).then((text) => { console.log(text); document.body.insertAdjacentHTML('beforeend', '<p id=\"echo\">' + text + '</p>'); })",
+    );
+    await page.locator("#echo").waitFor();
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: diagnostics.consoleEntries,
+      networkEntries: diagnostics.networkEntries,
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    const read = await ServerBrowserPage.evaluate(
+      { page, cdp },
+      { expression: "document.body.innerText" },
+      5_000,
+    );
+    const logs = await diagnostics.readMasked({});
+    for (const observed of [snapshot, read, logs])
+      expect(JSON.stringify(observed)).not.toContain(fetched);
+    expect(snapshot.visibleText).toContain('{"api":"');
   });
 });

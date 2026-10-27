@@ -16,6 +16,7 @@ import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
+import { tabCookies } from "./pageSecrets.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
@@ -306,10 +307,9 @@ const fetchInPage = async (
           `Fetching ${url} failed: ${outcome.error}`,
         );
   }
-  // Every cookie the browser would send to the request, its redirect target or the tab, HttpOnly
-  // ones included.
-  const origins = [url, page.url(), outcome.url].filter((candidate) => /^https?:/.test(candidate));
-  const cookies = await page.context().cookies(origins);
+  // Every cookie the browser would send to the request, its redirect target, the tab's frames or
+  // what the tab fetched before, HttpOnly ones included.
+  const cookies = await tabCookies(page, [url, outcome.url]);
   const redact = (text: string) => redactSecrets(text, cookies);
   const head = {
     url: redact(redactQuery(outcome.url)),

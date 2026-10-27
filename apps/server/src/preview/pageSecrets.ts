@@ -14,15 +14,40 @@ type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
 
 type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
 
+/** Enough recent request paths for a page's API calls; the oldest unused one goes first. */
+const MAX_REQUEST_SCOPES = 256;
+const requestScopes = new WeakMap<object, Map<string, true>>();
+
+/**
+ * Remembers where a page sent a request. A cookie scoped to a path the page only fetched, never
+ * showed in a frame, is sent there, so its value can come back in what the page shows.
+ */
+export const noteRequestUrl = (page: object, url: string) => {
+  if (!/^https?:/i.test(url)) return;
+  let scope: string;
+  try {
+    const parsed = new URL(url);
+    scope = parsed.origin + parsed.pathname;
+  } catch {
+    return;
+  }
+  const scopes = requestScopes.get(page) ?? new Map<string, true>();
+  requestScopes.set(page, scopes);
+  scopes.delete(scope);
+  scopes.set(scope, true);
+  if (scopes.size > MAX_REQUEST_SCOPES) scopes.delete(scopes.keys().next().value ?? scope);
+};
+
 /** The page's URL and every frame's, cross-origin iframes included. */
 export const frameUrls = (page: CookiePage) => [
   page.url(),
   ...(typeof page.frames === "function" ? page.frames().map((frame) => frame.url()) : []),
 ];
 
-/** Cookies sent to any of the tab's frames, plus URLs it showed earlier. */
+/** Cookies sent to any of the tab's frames, to URLs it showed earlier, and to what it fetched. */
 export const tabCookies = (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
-  const urls = [...new Set([...earlier, ...frameUrls(page)])].filter((url) =>
+  const fetched = requestScopes.get(page)?.keys() ?? [];
+  const urls = [...new Set([...earlier, ...frameUrls(page), ...fetched])].filter((url) =>
     /^https?:/i.test(url),
   );
   // An empty list would return every cookie in the context.

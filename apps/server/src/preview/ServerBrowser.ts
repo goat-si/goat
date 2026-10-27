@@ -1962,7 +1962,7 @@ const make = Effect.gen(function* () {
         ).then(ServerBrowserScreen.recheck(tab, request));
       }
       case "logs":
-        return tab.diagnostics.read(decodeLogsInput(input));
+        return tab.diagnostics.readMasked(decodeLogsInput(input));
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
         return inPageFetch(tab.page, tab.control, {

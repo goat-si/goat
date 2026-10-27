@@ -31,6 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
+import { maskSecrets, noteRequestUrl, redactValue, tabCookies } from "./pageSecrets.ts";
 import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
@@ -226,6 +227,7 @@ export class ServerBrowserDiagnostics {
   }
 
   private readonly onRequest = (request: Request) => {
+    noteRequestUrl(this.page, request.url());
     this.track(request).startedAt = Date.now();
     this.network(request, "request", null);
   };
@@ -281,6 +283,13 @@ export class ServerBrowserDiagnostics {
           (input.method === undefined || entry.method.toUpperCase() === input.method.toUpperCase()),
       ),
     };
+  }
+
+  /** A read for an agent: page text the console or a URL echoed has the tab's cookie values masked. */
+  async readMasked(input: PreviewAutomationLogsInput): Promise<PreviewAutomationLogs> {
+    const logs = this.read(input);
+    const cookies = await tabCookies(this.page);
+    return redactValue(logs, maskSecrets(undefined, cookies)) as PreviewAutomationLogs;
   }
 
   readonly dispose = () => {
