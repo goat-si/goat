@@ -352,6 +352,7 @@ const make = Effect.gen(function* () {
     foreground,
     controls,
     changed,
+    idled: (threadId, controlId, now) => reservations.markStopped(threadId, controlId, now),
     error: (cause) => new ComputerUseLeaseError({ cause }),
   });
 
@@ -473,6 +474,7 @@ const make = Effect.gen(function* () {
         };
         if (existing !== undefined) {
           reservations.forgetClosed(threadId, existing.controlId);
+          reservations.markStopped(threadId, existing.controlId, DateTime.toEpochMillis(now));
           foreground.revokeControl(threadId, existing.controlId);
           stoppedCards.replaced(existing);
         }
@@ -533,7 +535,7 @@ const make = Effect.gen(function* () {
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
     if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
-      if (end(threadId, "revoked", controlId)) yield* changed;
+      if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     const grants = yield* live(undefined, true);
@@ -541,7 +543,7 @@ const make = Effect.gen(function* () {
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
     if (record.everyApp === "unattended" && others.length > 0) {
-      if (end(threadId, "revoked", controlId)) yield* changed;
+      if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
@@ -595,7 +597,12 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const end = (threadId: ThreadId, reason: ComputerUseControlEnd, expectedId?: string) => {
+  const end = (
+    threadId: ThreadId,
+    reason: ComputerUseControlEnd,
+    now: number,
+    expectedId?: string,
+  ) => {
     const record = controls.get(threadId);
     if (
       expectedId !== undefined &&
@@ -606,6 +613,7 @@ const make = Effect.gen(function* () {
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
+    reservations.markStopped(threadId, record.controlId, now);
     notifyAuthority({
       kind: reason === "revoked" ? "credentialRevoked" : "stop",
       threadId,
@@ -751,7 +759,8 @@ const make = Effect.gen(function* () {
     releaseApps: calls.releaseApps,
     streamOpened: calls.streamOpened,
     stop: (threadId) =>
-      Effect.sync(() => end(threadId, "stopped")).pipe(
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) => end(threadId, "stopped", now)),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
@@ -821,9 +830,9 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.sync(() => {
+    stopAll: Effect.map(Clock.currentTimeMillis, (now) => {
       foreground.clear();
-      return [...controls.keys()].filter((id) => end(id, "stopped_all"));
+      return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
     }).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
@@ -859,11 +868,11 @@ const make = Effect.gen(function* () {
         ),
       ),
     ),
-    disable: Effect.sync(() => {
+    disable: Effect.map(Clock.currentTimeMillis, (now) => {
       foreground.clear();
       const listed = blockedTurns.size > 0;
       blockedTurns.clear();
-      const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
+      const ended = [...controls.keys()].filter((id) => end(id, "disabled", now));
       // Turning computer use off outranks Stop, so the channel closes a stopped thread's proxy.
       const stopped = [...controls].filter(([, r]) => r.ended?.startsWith("stopped") === true);
       for (const [id, record] of stopped) controls.set(id, { ...record, ended: "disabled" });
