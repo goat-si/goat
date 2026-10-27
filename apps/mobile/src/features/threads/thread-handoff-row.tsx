@@ -145,7 +145,7 @@ function HandoffEndpoint(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={model?.name ?? label}
       accessibilityHint="Show provider account"
       className="min-h-6 max-w-full flex-row items-center justify-center gap-1.5"
       hitSlop={{ top: 8, bottom: 8 }}
