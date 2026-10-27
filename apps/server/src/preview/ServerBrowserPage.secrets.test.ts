@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { rememberSecret } from "./pageSecrets.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -92,6 +93,27 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       timeoutMs: 30_000,
     });
     expect(JSON.stringify(snapshot)).not.toContain("alpha");
+  });
+
+  it("masks a filled secret and a cookie value inside it as one, whichever matches first", async () => {
+    const filled = "alpha-MiddleCookie123-omega";
+    await context.addCookies([{ name: "mid", value: "MiddleCookie123", url: origin }]);
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.setContent(`<p>echo ${filled}</p>`);
+    rememberSecret(page, [filled]);
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp: await context.newCDPSession(page),
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    const text = JSON.stringify(snapshot);
+    for (const part of ["alpha", "omega", "MiddleCookie123"]) expect(text).not.toContain(part);
   });
 
   it("keeps cookie and password values out of evaluation results", async () => {

@@ -212,7 +212,7 @@ export class ServerBrowserDiagnostics {
       requestId: tracked.id,
       phase,
       url: redactUrl(this.mask(url)),
-      method: request.method().slice(0, 32),
+      method: this.mask(request.method()).slice(0, 32),
       status: status ?? previous?.status ?? null,
       failed: phase === "failed",
       ...(phase === "failed"

@@ -66,6 +66,17 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
   return [...seen.values()];
 };
 
+/**
+ * A secret GOAT filled in the page joins the values its context held, so where it and a cookie
+ * value overlap, both are found in the original text and masked as one.
+ */
+export const rememberSecret = (page: Pick<Page, "context">, forms: ReadonlyArray<string>) => {
+  const context = page.context();
+  const seen = remembered.get(context) ?? new Map<string, Cookie>();
+  remembered.set(context, seen);
+  for (const value of forms) if (value !== "") seen.set(`=${value}`, { name: "", value });
+};
+
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(dotted ? text.replace(dotted, MASKED_VALUE) : text, cookies);
 

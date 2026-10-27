@@ -21,7 +21,12 @@ const PASSWORD = "pw_unit_secret_value";
 /** One password field behind a scripted CDP session; faults are injected per method. */
 const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: boolean } = {}) => {
   const field = { value: "", type: "password", isConnected: true };
-  const page = { frames: () => [], mainFrame: () => page } as unknown as Page;
+  const context = {};
+  const page = {
+    frames: () => [],
+    mainFrame: () => page,
+    context: () => context,
+  } as unknown as Page;
   const send = async (method: string, params?: Record<string, unknown>) => {
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
     if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };

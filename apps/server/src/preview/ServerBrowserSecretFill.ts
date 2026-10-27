@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import { playwrightQuoted } from "./pageSecrets.ts";
+import { playwrightQuoted, rememberSecret } from "./pageSecrets.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -405,6 +405,7 @@ export const make = Effect.gen(function* () {
             const values = filledValues.get(request.threadId) ?? new Set<string>();
             values.add(value);
             filledValues.set(request.threadId, values);
+            rememberSecret(tab.page, encodedForms(value));
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
