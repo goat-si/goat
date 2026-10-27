@@ -89,6 +89,12 @@ function diffReadLine(id: string, read: TreeRead): string {
   });
 }
 
+/** Whether a reply is an error, so it read nothing a diff could start from. */
+function replyFailed(line: string): boolean {
+  const message = parse(line);
+  return message?.error !== undefined || record(message?.result)?.isError === true;
+}
+
 const textOf = (result: Readonly<Record<string, unknown>> | undefined) =>
   (Array.isArray(result?.content) ? result.content : [])
     .map((block: unknown) => record(block))
@@ -157,7 +163,8 @@ export const makeInputVerifier = (input: {
   readonly scope: Scope.Scope;
   readonly live: (child: Running) => boolean;
 }) => {
-  const reads = new Map<number, TreeRead>();
+  /** Each window's last tree read, with the driver child that holds its snapshot. */
+  const reads = new Map<number, { readonly read: TreeRead; readonly child: Running }>();
   const ask = Effect.fn("ComputerUseInputVerify.ask")(function* (child: Running, read: TreeRead) {
     const id = input.nextId();
     const answered = yield* Deferred.make<Envelope | undefined>();
@@ -171,29 +178,32 @@ export const makeInputVerifier = (input: {
     return Option.getOrUndefined(reply);
   });
   return {
-    /** A fresh driver child has no snapshots to diff against. */
-    clear: () => reads.clear(),
-    /** Records an answered get_window_state as the window's baseline. */
-    answered: (tool: string | undefined, args: unknown, failed: boolean) => {
-      const read = tool === "get_window_state" && !failed ? treeReadOf(args) : undefined;
-      if (read !== undefined) reads.set(read.window_id, read);
-    },
     /**
-     * A screen-run cell is left alone: it keeps its own observation and its tokens, which a
-     * re-read would retire mid-script.
+     * Records a tree read as its window's baseline, and re-reads after unverified input. A
+     * screen-run cell is left alone: it keeps its own observation and its tokens, which a re-read
+     * would retire mid-script.
      */
     wrap: (sink: ReplySink, message: Envelope | undefined, child: Running): ReplySink => {
       const tool = message?.params?.name;
       const windowId = targetOf(message?.params?.arguments)?.windowId;
       const primitive = typeof message?.id === "string" && message.id.startsWith(PRIMITIVE_ID);
       if (!input.enabled || primitive || typeof tool !== "string") return sink;
+      const treeRead =
+        tool === "get_window_state" ? treeReadOf(message?.params?.arguments) : undefined;
+      if (treeRead !== undefined)
+        return {
+          answer: (line, status, context) => {
+            if (!replyFailed(line)) reads.set(treeRead.window_id, { read: treeRead, child });
+            return sink.answer(line, status, context);
+          },
+        };
       if (!VERIFIABLE_INPUT_TOOLS.has(tool) || windowId === undefined) return sink;
       return {
         answer: (line, status, context) => {
-          const read = reads.get(windowId);
-          if (read === undefined || !replyUnverified(line) || !input.live(child))
+          const baseline = reads.get(windowId);
+          if (baseline?.child !== child || !replyUnverified(line) || !input.live(child))
             return sink.answer(line, status, context);
-          return ask(child, read).pipe(
+          return ask(child, baseline.read).pipe(
             Effect.map((diff) => (diff === undefined ? line : withTreeDiff(line, diff))),
             Effect.catchCause(() => Effect.succeed(line)),
             Effect.flatMap((final) => sink.answer(final, status, context)),

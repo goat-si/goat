@@ -114,7 +114,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const outstanding = new Map<string, OutstandingCall>();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
   let proven: Running | undefined;
-  /** A child whose screen capture is stuck; the next call starts a fresh one first. */
   let stalled: Running | undefined;
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
@@ -348,7 +347,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                   "settled",
                 );
               if (verdict === "proof") proven = current;
-              verifier.answered(request.tool, request.args, message.result?.isError === true);
             } else {
               handshakeAnswers.remember(request.method, message);
               outstanding.delete(key);
@@ -387,7 +385,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           }).pipe(Effect.scoped, Effect.forkIn(current.scope));
         if (lifecycle.current !== current) return;
         overlay.reset();
-        verifier.clear();
         // A fresh child hears the provider's handshake again; its answers are dropped.
         for (const line of handshake) {
           if (lifecycle.current !== current || !active()) return;
