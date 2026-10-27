@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
 import {
   assetUrlStateFromResult,
@@ -8,7 +8,7 @@ import {
   EMPTY_ASSET_URL_ATOM,
 } from "@goat/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { projectFaviconDatabaseCache } from "../lib/projectFaviconDatabaseCache";
@@ -77,6 +77,7 @@ export function useRefreshAssetUrl(
   environmentId: EnvironmentId | null,
   resource: AssetResource | null,
 ): () => Promise<string | null> {
+  const registry = useContext(RegistryContext);
   const connection = usePreparedConnection(environmentId);
   const httpBaseUrl = connection._tag === "Some" ? connection.value.httpBaseUrl : null;
   const createUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -85,10 +86,13 @@ export function useRefreshAssetUrl(
   });
   return useCallback(async () => {
     if (environmentId === null || resource === null || httpBaseUrl === null) return null;
-    const state = assetUrlStateFromResult(
-      await createUrl({ environmentId, input: { resource } }),
-      httpBaseUrl,
-    );
+    const connectionAtom = environmentSession.preparedConnectionValueAtom(environmentId);
+    if (registry.get(connectionAtom)._tag === "None") return null;
+    const result = await createUrl({ environmentId, input: { resource } });
+    // Signing can wait through a reconnect; use the destination connection that answered.
+    const connection = registry.get(connectionAtom);
+    if (connection._tag === "None") return null;
+    const state = assetUrlStateFromResult(result, connection.value.httpBaseUrl);
     return state._tag === "Success" ? state.url : null;
-  }, [createUrl, environmentId, httpBaseUrl, resource]);
+  }, [createUrl, environmentId, httpBaseUrl, registry, resource]);
 }
