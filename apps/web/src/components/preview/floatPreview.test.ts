@@ -90,6 +90,23 @@ it("leaves the thread on screen's large card and hidden cards alone when another
   expect(state.expanded.get("env-1|thread-2")).toMatchObject({ tabId: "tab_theirs" });
   expect(selectAgentCardsShown("env-1|thread-1")(state)).toBe(false);
   expect(selectAgentCardsShown("env-1|thread-2")(state)).toBe(true);
+
+  // Closing the card an agent enlarged shrinks only that thread's card.
+  usePreviewSessionStack.getState().dismiss({
+    id: "browser:thread-2:tab_theirs",
+    kind: "browser",
+    environmentId: "env-1" as EnvironmentId,
+    host: "mac",
+    platform: "mac",
+    threadId: ThreadId.make("thread-2"),
+    target: { kind: "browser", tabId: "tab_theirs", url: "http://localhost:5173/", title: "" },
+    owner: "agent",
+    status: "acting",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  const after = usePreviewSessionStack.getState().expanded;
+  expect(after.has("env-1|thread-2")).toBe(false);
+  expect(after.get("env-1|thread-1")).toMatchObject({ tabId: "tab_mine" });
 });
 
 it("opens a device an agent started as a background panel tab, and floats one a person asks for", () => {

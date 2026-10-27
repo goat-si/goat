@@ -133,7 +133,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
       expanded: withoutExpanded(
         state.expanded,
         stackThreadKey(session.environmentId, session.threadId),
-        session.id,
+        session,
       ),
     })),
   expand: (session) =>
@@ -150,10 +150,10 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
 function withoutExpanded(
   expanded: ReadonlyMap<string, ExpandedSession>,
   threadKey: string,
-  sessionId?: string,
+  session?: PreviewSession,
 ): ReadonlyMap<string, ExpandedSession> {
   const entry = expanded.get(threadKey);
-  if (entry === undefined || (sessionId !== undefined && entry.sessionId !== sessionId))
+  if (entry === undefined || (session !== undefined && !matchesFocus(session, entry)))
     return expanded;
   const next = new Map(expanded);
   next.delete(threadKey);
