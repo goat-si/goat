@@ -81,7 +81,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(unavailable),
       );
     if (!rows[0]) return yield* new AccountLifecycleConflict({ code: "operation_not_found" });
-    yield* Schema.decodeUnknownEffect(AccountOperationProgress)(rows[0].step_state).pipe(
+    yield* Schema.decodeEffect(AccountOperationProgress)(rows[0].step_state).pipe(
       Effect.mapError(unavailable),
     );
     return rows[0];

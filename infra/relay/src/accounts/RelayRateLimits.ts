@@ -77,13 +77,20 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
               }),
           ),
         );
-      const result = yield* (
-        input.operation === "mobile_registration" || input.operation === "activity_publish"
-          ? (input.operation === "mobile_registration" ? bindings.mobile : bindings.publish)(
-              key,
-            ).pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
-          : bindings.hourly(key, input.operation)
-      ).pipe(
+      const check: Effect.Effect<
+        { readonly allowed: boolean; readonly retryAfterSeconds: number },
+        HourlyError | MobileError | PublishError
+      > =
+        input.operation === "mobile_registration"
+          ? bindings
+              .mobile(key)
+              .pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
+          : input.operation === "activity_publish"
+            ? bindings
+                .publish(key)
+                .pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
+            : bindings.hourly(key, input.operation);
+      const result = yield* check.pipe(
         Effect.catchCause(() =>
           Effect.fail(
             new RelayAuthorizationUnavailableError({

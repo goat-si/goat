@@ -1,6 +1,8 @@
 import * as Alchemy from "alchemy";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,29 +28,29 @@ const rateLayer = RestartableRate.make(
   Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
     const inner = yield* Rate.make;
-    return inner.pipe(
-      Effect.map((methods) => {
-        const instance = globalThis.crypto.randomUUID();
-        return {
-          consume: Effect.fn("PolicyFixture.consume")(function* (operation: HourlyOperation) {
-            const clock = yield* Clock.Clock;
-            return yield* methods.consume(operation).pipe(
-              Effect.provideService(Clock.Clock, {
-                currentTimeMillis: Effect.succeed(100),
-                currentTimeMillisUnsafe: () => 100,
-                currentTimeNanos: clock.currentTimeNanos,
-                currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
-                monotonicTimeNanos: clock.monotonicTimeNanos,
-                monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-                sleep: (duration) => clock.sleep(duration),
-              }),
-            );
-          }),
-          reset: () => state.abort("wp3 persisted rate restart"),
-          instance: () => Effect.succeed(instance),
-        };
-      }),
-    );
+    return Effect.gen(function* () {
+      const methods = yield* inner;
+      const crypto = yield* Crypto.Crypto;
+      const instance = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      return {
+        consume: Effect.fn("PolicyFixture.consume")(function* (operation: HourlyOperation) {
+          const clock = yield* Clock.Clock;
+          return yield* methods.consume(operation).pipe(
+            Effect.provideService(Clock.Clock, {
+              currentTimeMillis: Effect.succeed(100),
+              currentTimeMillisUnsafe: () => 100,
+              currentTimeNanos: clock.currentTimeNanos,
+              currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+              monotonicTimeNanos: clock.monotonicTimeNanos,
+              monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+              sleep: (duration) => clock.sleep(duration),
+            }),
+          );
+        }),
+        reset: () => state.abort("wp3 persisted rate restart"),
+        instance: () => Effect.succeed(instance),
+      };
+    }).pipe(Effect.provide(NodeCrypto.layer));
   }),
 );
 
@@ -84,27 +86,27 @@ const inboxLayer = RestartableInbox.make(
   Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
     const inner = yield* Inbox.makeWithAuthorization(authorizationLayer);
-    return inner.pipe(
-      Effect.map((methods) => {
-        const instance = globalThis.crypto.randomUUID();
-        return {
-          hold: methods.hold,
-          setMode: (mode: string) =>
-            Effect.promise(() => state.raw.storage.put("authorization", mode)),
-          runAlarm: () => methods.alarm(),
-          reset: () => state.abort("wp3 persisted inbox restart"),
-          instance: () => Effect.succeed(instance),
-          pending: () =>
-            Effect.sync(() => {
-              const row = [
-                ...state.raw.storage.sql.exec("SELECT count(*) AS count FROM held_hooks"),
-              ][0];
-              if (typeof row?.count !== "number") throw new Error("Invalid fixture row count");
-              return row.count;
-            }),
-        };
-      }),
-    );
+    return Effect.gen(function* () {
+      const methods = yield* inner;
+      const crypto = yield* Crypto.Crypto;
+      const instance = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      return {
+        hold: methods.hold,
+        setMode: (mode: string) =>
+          Effect.promise(() => state.raw.storage.put("authorization", mode)),
+        runAlarm: () => methods.alarm(),
+        reset: () => state.abort("wp3 persisted inbox restart"),
+        instance: () => Effect.succeed(instance),
+        pending: () =>
+          Effect.sync(() => {
+            const row = [
+              ...state.raw.storage.sql.exec("SELECT count(*) AS count FROM held_hooks"),
+            ][0];
+            if (typeof row?.count !== "number") throw new Error("Invalid fixture row count");
+            return row.count;
+          }),
+      };
+    }).pipe(Effect.provide(NodeCrypto.layer));
   }),
 );
 
@@ -144,7 +146,7 @@ export const layer = PolicyWorker.make(
           case "/rate-instance":
             return HttpServerResponse.text(yield* rate.instance());
           case "/rate-reset":
-            yield* rate.reset().pipe(Effect.catchCause(() => Effect.void));
+            yield* rate.reset().pipe(Effect.ignoreCause);
             return HttpServerResponse.empty();
           case "/hook-mode":
             yield* inbox.setMode(url.searchParams.get("mode") ?? "stale");
@@ -181,7 +183,7 @@ export const layer = PolicyWorker.make(
           case "/hook-instance":
             return HttpServerResponse.text(yield* inbox.instance());
           case "/hook-reset":
-            yield* inbox.reset().pipe(Effect.catchCause(() => Effect.void));
+            yield* inbox.reset().pipe(Effect.ignoreCause);
             return HttpServerResponse.empty();
           default:
             return HttpServerResponse.empty({ status: 404 });

@@ -80,6 +80,7 @@ it.effect(
         Layer.provide(policyUnitLayer),
         Layer.provide(
           Layer.mock(RelayTokens, {
+            resolveDpopAccessTokenScopes: () => null,
             verifyDpopAccessToken: () =>
               Effect.succeed({
                 iss: "https://relay.example.test",
@@ -161,6 +162,7 @@ it.live(
         Layer.provide(postgresPolicyLayer(pg)),
         Layer.provide(
           Layer.mock(RelayTokens, {
+            resolveDpopAccessTokenScopes: () => null,
             verifyDpopAccessToken: () =>
               Effect.succeed({
                 iss: "https://relay.example.test",

@@ -127,6 +127,7 @@ it.live(
           links.upsert({
             userId,
             request: {
+              proof: "fixture-link-proof",
               notificationsEnabled: true,
               liveActivitiesEnabled: false,
               managedTunnelsEnabled: false,
@@ -142,8 +143,9 @@ it.live(
               providerKind: "manual",
             },
           });
-        const outcomes = yield* Effect.all(
-          ["a", "b"].map((id) => link("owner", id).pipe(Effect.as(id), Effect.result)),
+        const outcomes = yield* Effect.forEach(
+          ["a", "b"],
+          (id) => link("owner", id).pipe(Effect.as(id), Effect.result),
           { concurrency: 2 },
         );
         expect(outcomes.filter((r) => r._tag === "Success")).toHaveLength(1);

@@ -25,6 +25,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/http/Etag";
@@ -217,16 +218,9 @@ export const layer = Api.make(
       },
     });
     const policy = yield* AccountLimits.config;
-    const operatorSecret = yield* Config.Redacted("RELAY_OPERATOR_SECRET").pipe(
-      Config.mapEffect((value) =>
-        /^\S+$/.test(Redacted.value(value))
-          ? Effect.succeed(value)
-          : Effect.fail(
-              new Config.ConfigError(
-                new Error("RELAY_OPERATOR_SECRET must be nonempty and contain no whitespace"),
-              ),
-            ),
-      ),
+    const operatorSecret = yield* Config.schema(
+      Schema.Redacted(Schema.String.pipe(Schema.check(Schema.isPattern(/^\S+$/)))),
+      "RELAY_OPERATOR_SECRET",
     );
     const accountCounters = yield* AccountRateLimitObject.AccountRateLimitObject;
     const mobileRate = yield* Cloudflare.RateLimit("MOBILE_REGISTRATION_RATE_LIMIT", {

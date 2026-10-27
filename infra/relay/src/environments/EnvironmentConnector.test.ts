@@ -27,6 +27,7 @@ import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentConnector from "./EnvironmentConnector.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 
 const cloudKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -162,6 +163,7 @@ function layerConnectorTest(
   },
 ) {
   return EnvironmentConnector.layer.pipe(
+    Layer.provide(policyUnitLayer),
     Layer.provide(NodeCryptoLayer.layer),
     Layer.provide(Layer.succeed(EnvironmentLinks.EnvironmentLinks, options?.links ?? makeLinks())),
     Layer.provide(
@@ -204,6 +206,7 @@ function makeAllocations(
     enableRecovery: () => Effect.die("unused"),
     listByTunnelNames: () => Effect.die("unused"),
     claimRelease: () => Effect.die("unused"),
+    markCapacityReleased: () => Effect.die("unused markCapacityReleased"),
     withClaimedTunnel: () => Effect.die("unused"),
     claimDeprovision: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),

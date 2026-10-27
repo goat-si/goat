@@ -64,7 +64,7 @@ export const policyErrorWithTrace = Effect.fn("relay.api.policy_error")(function
 ) {
   yield* appendPolicyHeaders(error);
   const traceId = yield* currentTraceId;
-  return yield* Schema.decodeUnknownEffect(PolicyError)({ ...error, traceId }).pipe(Effect.orDie);
+  return yield* Schema.decodeEffect(PolicyError)({ ...error, traceId }).pipe(Effect.orDie);
 });
 export const rethrowPolicyError = Effect.fn("relay.api.rethrow_policy_error")(
   (error: typeof PolicyError.Type) => policyErrorWithTrace(error).pipe(Effect.flatMap(Effect.fail)),

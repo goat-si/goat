@@ -28,6 +28,7 @@ test.provider(
         const url = yield* stack.deploy(
           Effect.map(Fixture.PolicyWorker, (w) => w.url).pipe(Effect.provide(Fixture.layer)),
         );
+        if (url === undefined) throw new Error("Local Worker fixture did not return a URL");
         const hostname = new URL(url).hostname;
         expect(
           hostname === "127.0.0.1" ||
@@ -50,7 +51,9 @@ test.provider(
         expect(yield* get("/hook-pending").pipe(Effect.flatMap((r) => r.json))).toBe(0);
       }).pipe(
         Effect.provideService(AlchemyContext, context),
-        Effect.ensuring(stack.destroy().pipe(Effect.provideService(AlchemyContext, context))),
+        Effect.ensuring(
+          stack.destroy().pipe(Effect.provideService(AlchemyContext, context), Effect.orDie),
+        ),
       );
     }),
 );

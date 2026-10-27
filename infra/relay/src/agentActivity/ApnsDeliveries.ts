@@ -882,7 +882,7 @@ export const make = Effect.gen(function* () {
         kind: payload.kind,
       }))
     )
-      return;
+      return staleJobResult({ deviceId: payload.target.deviceId, kind: payload.kind });
     yield* Effect.annotateCurrentSpan({
       "relay.mobile.device_id": payload.target.deviceId,
       "relay.delivery.kind": payload.kind,

@@ -21,8 +21,9 @@ it.live(
         const credentials = yield* EnvironmentCredentials;
         const db = yield* RelayDb;
         const sql = db.$client;
-        const outcomes = yield* Effect.all(
-          ["owner-a", "owner-b"].map((userId) =>
+        const outcomes = yield* Effect.forEach(
+          ["owner-a", "owner-b"],
+          (userId) =>
             owners
               .claim({
                 userId,
@@ -31,7 +32,6 @@ it.live(
                 environmentPublicKey: "fixture-key",
               })
               .pipe(Effect.as(userId), Effect.result),
-          ),
           { concurrency: 2 },
         );
         const success = outcomes.find((r) => r._tag === "Success");

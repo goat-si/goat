@@ -48,7 +48,10 @@ export class HeldHooks extends Context.Service<
       readonly environmentId: string;
       readonly environmentPublicKey: string;
       readonly holdWebhooksWhileOffline: boolean;
-    }) => Effect.Effect<void, PersistenceError | HookInbox.HookInboxError>;
+    }) => Effect.Effect<
+      void,
+      PersistenceError | EnvironmentOwnership.OwnershipError | HookInbox.HookInboxError
+    >;
     readonly wake: (input: {
       readonly userId: string;
       readonly environmentId: string;

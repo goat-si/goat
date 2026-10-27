@@ -598,6 +598,51 @@ describe("ApnsDeliveries", () => {
     );
   });
 
+  it.effect(
+    "returns a stale result for unauthorized signed jobs without sending or recording",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      let sends = 0;
+      const payload = makeApnsDeliveryJobPayload({
+        accountEpoch: 1,
+        kind: "live_activity_update",
+        userId: target.user_id,
+        deviceId: target.device_id,
+        token: "old-epoch-token",
+        aggregate,
+        createdAt: "1970-01-01T00:00:00.000Z",
+        expiresAt: "1970-01-01T00:10:00.000Z",
+        jobId: "old-epoch-job",
+      });
+      const signed = signApnsDeliveryJob({ secret: config.apnsDeliveryJobSigningSecret, payload });
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        expect(yield* deliveries.processSignedJob(signed)).toEqual({
+          deviceId: target.device_id,
+          kind: "live_activity_update",
+          ok: true,
+          apnsStatus: null,
+          apnsReason: "Stale APNs delivery job skipped.",
+          apnsId: null,
+        });
+        expect(sends).toBe(0);
+        expect(attempts).toEqual([]);
+      }).pipe(
+        Effect.provide(
+          layerFor({
+            attempts,
+            authorization: { eligible: () => Effect.succeed(false), result: (effect) => effect },
+            execute: (request) =>
+              Effect.sync(() => {
+                sends++;
+                return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
   it.effect("skips stale signed Live Activity jobs when the registered token changed", () => {
     const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
     let executeCount = 0;

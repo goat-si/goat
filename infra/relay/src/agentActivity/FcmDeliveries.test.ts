@@ -772,14 +772,18 @@ it.live.each(["before-guard", "in-transport"] as const)(
               return { unregistered: false };
             }),
         });
-        const now = (yield* DateTime.now).epochMilliseconds;
-        h.current.state = { ...state, updatedAt: new Date(now).toISOString() };
-        const job = signedJob({ ...h.job, queuedAt: now, state: h.current.state });
+        const now = yield* DateTime.now;
+        h.current.state = { ...state, updatedAt: DateTime.formatIso(now) };
+        const job = signedJob({
+          ...h.job,
+          queuedAt: now.epochMilliseconds,
+          state: h.current.state,
+        });
         let result: "ack" | "retry" | null = null;
         const message: Cloudflare.Queues.Message<unknown> = {
           id: "fixture",
           body: job,
-          timestamp: new Date(now),
+          timestamp: DateTime.toDateUtc(now),
           attempts: 1,
           ack: () => {
             result = "ack";

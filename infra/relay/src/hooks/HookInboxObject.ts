@@ -82,83 +82,81 @@ const deliver = Effect.fn("HookInboxObject.deliver")(function* (
   );
 });
 
-export const makeWithAuthorization = <R>(
-  authorizationLayer: Layer.Layer<HookDeliveryAuthorization.HookDeliveryAuthorization, never, R>,
-) =>
-  Effect.gen(function* () {
-    const state = yield* Cloudflare.DurableObjectState;
-    // Only the per-object inner Effect may access storage.
-    return Effect.gen(function* () {
-      const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
-      const layerSql = SqliteClient.layer({ storage: state.raw.storage });
-      const inboxId = state.raw.id.name ?? state.raw.id.toString();
-      const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(Effect.provide(layerSql), Effect.orDie);
-      yield* run(HookInboxStore.migrate);
+export const makeWithAuthorization = Effect.fn("HookInboxObject.makeWithAuthorization")(function* <
+  R,
+>(authorizationLayer: Layer.Layer<HookDeliveryAuthorization.HookDeliveryAuthorization, never, R>) {
+  const state = yield* Cloudflare.DurableObjectState;
+  // Only the per-object inner Effect may access storage.
+  return Effect.gen(function* () {
+    const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
+    const layerSql = SqliteClient.layer({ storage: state.raw.storage });
+    const inboxId = state.raw.id.name ?? state.raw.id.toString();
+    const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.provide(layerSql), Effect.orDie);
+    yield* run(HookInboxStore.migrate);
 
-      const scheduleBy = Effect.fn("HookInboxObject.scheduleBy")(function* (at: number) {
-        const current = yield* state.storage.getAlarm();
-        if (current === null || current > at) yield* state.storage.setAlarm(at);
-      });
+    const scheduleBy = Effect.fn("HookInboxObject.scheduleBy")(function* (at: number) {
+      const current = yield* state.storage.getAlarm();
+      if (current === null || current > at) yield* state.storage.setAlarm(at);
+    });
 
-      // withInboxSpan supplies each method's root span; avoid a second wrapper span.
-      return {
-        hold: Effect.fnUntraced(
-          function* (hook: HookInboxStore.HeldHook, baseUrl: string) {
-            if (!(yield* authorization.allowed(hook.authorization).pipe(Effect.orDie)))
-              return false;
-            const dueAt = yield* run(HookInboxStore.hold(hook, baseUrl));
-            yield* Effect.annotateCurrentSpan({ "relay.inbox.stored": dueAt !== null });
-            if (dueAt === null) return false;
-            yield* scheduleBy(dueAt);
-            return true;
-          },
-          withInboxSpan("relay.inbox.hold", inboxId),
-        ),
-        wake: Effect.fnUntraced(
-          function* (baseUrl: string) {
-            const pending = yield* run(HookInboxStore.wake(baseUrl));
-            yield* Effect.annotateCurrentSpan({ "relay.inbox.pending": pending });
-            if (pending) yield* state.storage.setAlarm(yield* Clock.currentTimeMillis);
-            return pending;
-          },
-          withInboxSpan("relay.inbox.wake", inboxId),
-        ),
-        clear: Effect.fnUntraced(
-          function* (owner?: HookDeliveryAuthorization.HookAuthorization) {
-            const pending = owner
-              ? yield* run(HookInboxStore.clearOwned(owner))
-              : (yield* run(HookInboxStore.clear), false);
-            if (pending) yield* scheduleBy(yield* Clock.currentTimeMillis);
-            else yield* state.storage.deleteAlarm();
-          },
-          withInboxSpan("relay.inbox.clear", inboxId),
-        ),
-        alarm: () =>
-          run(
-            HookInboxStore.deliverDue(deliver).pipe(
-              Effect.provideService(
-                HookDeliveryAuthorization.HookDeliveryAuthorization,
-                authorization,
-              ),
+    // withInboxSpan supplies each method's root span; avoid a second wrapper span.
+    return {
+      hold: Effect.fnUntraced(
+        function* (hook: HookInboxStore.HeldHook, baseUrl: string) {
+          if (!(yield* authorization.allowed(hook.authorization).pipe(Effect.orDie))) return false;
+          const dueAt = yield* run(HookInboxStore.hold(hook, baseUrl));
+          yield* Effect.annotateCurrentSpan({ "relay.inbox.stored": dueAt !== null });
+          if (dueAt === null) return false;
+          yield* scheduleBy(dueAt);
+          return true;
+        },
+        withInboxSpan("relay.inbox.hold", inboxId),
+      ),
+      wake: Effect.fnUntraced(
+        function* (baseUrl: string) {
+          const pending = yield* run(HookInboxStore.wake(baseUrl));
+          yield* Effect.annotateCurrentSpan({ "relay.inbox.pending": pending });
+          if (pending) yield* state.storage.setAlarm(yield* Clock.currentTimeMillis);
+          return pending;
+        },
+        withInboxSpan("relay.inbox.wake", inboxId),
+      ),
+      clear: Effect.fnUntraced(
+        function* (owner?: HookDeliveryAuthorization.HookAuthorization) {
+          const pending = owner
+            ? yield* run(HookInboxStore.clearOwned(owner))
+            : (yield* run(HookInboxStore.clear), false);
+          if (pending) yield* scheduleBy(yield* Clock.currentTimeMillis);
+          else yield* state.storage.deleteAlarm();
+        },
+        withInboxSpan("relay.inbox.clear", inboxId),
+      ),
+      alarm: () =>
+        run(
+          HookInboxStore.deliverDue(deliver).pipe(
+            Effect.provideService(
+              HookDeliveryAuthorization.HookDeliveryAuthorization,
+              authorization,
             ),
-          ).pipe(
-            // Backoff must not delay an earlier run requested by a concurrent wake.
-            Effect.flatMap((nextAt) => (nextAt === null ? Effect.void : scheduleBy(nextAt))),
-            Effect.catchCause(() =>
-              Effect.logWarning("Held webhook delivery run failed", {
-                errorTag: "inbox_delivery_failed",
-              }).pipe(
-                Effect.andThen(Effect.annotateCurrentSpan({ "relay.inbox.run_result": "failed" })),
-                Effect.andThen(Clock.currentTimeMillis),
-                Effect.flatMap((now) => scheduleBy(now + RUN_FAILURE_RETRY_MS)),
-              ),
-            ),
-            withInboxSpan("relay.inbox.deliver", inboxId),
           ),
-      };
-    }).pipe(Effect.provide(authorizationLayer));
-  });
+        ).pipe(
+          // Backoff must not delay an earlier run requested by a concurrent wake.
+          Effect.flatMap((nextAt) => (nextAt === null ? Effect.void : scheduleBy(nextAt))),
+          Effect.catchCause(() =>
+            Effect.logWarning("Held webhook delivery run failed", {
+              errorTag: "inbox_delivery_failed",
+            }).pipe(
+              Effect.andThen(Effect.annotateCurrentSpan({ "relay.inbox.run_result": "failed" })),
+              Effect.andThen(Clock.currentTimeMillis),
+              Effect.flatMap((now) => scheduleBy(now + RUN_FAILURE_RETRY_MS)),
+            ),
+          ),
+          withInboxSpan("relay.inbox.deliver", inboxId),
+        ),
+    };
+  }).pipe(Effect.provide(authorizationLayer));
+});
 export const layer = (db: RelayDb.RelayDb["Service"]) =>
   HookInboxObject.make(
     makeWithAuthorization(

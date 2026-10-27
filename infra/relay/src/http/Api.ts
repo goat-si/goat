@@ -378,7 +378,6 @@ export const layerEnvironmentAuth = Layer.effect(
       ) {
         const token = readHttpAuthorizationCredential(credential);
         const principal = yield* credentials.authenticate(token).pipe(
-          Effect.catchIf(isPolicyError, rethrowPolicyError),
           Effect.catchTags({
             EnvironmentCredentialAuthenticatePersistenceError: () =>
               Effect.fail(
@@ -388,6 +387,7 @@ export const layerEnvironmentAuth = Layer.effect(
                 }),
               ),
           }),
+          Effect.catchIf(isPolicyError, rethrowPolicyError),
         );
         if (principal._tag === "None") {
           return yield* rethrowPolicyError(

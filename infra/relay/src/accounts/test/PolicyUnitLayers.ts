@@ -22,42 +22,40 @@ import type { RelayConfiguration } from "../../Config.ts";
 
 export const policyUnitLayer = Layer.mergeAll(
   Layer.succeed(AccountAccess, {
-    admit: Effect.fnUntraced((userId) => Effect.succeed({ userId, accountEpoch: 1 })),
-    capture: Effect.fnUntraced((userId) => Effect.succeed({ userId, accountEpoch: 1 })),
-    requireAllowed: Effect.fnUntraced((input) =>
-      Effect.succeed({ userId: input.userId, accountEpoch: 1 }),
-    ),
+    admit: (userId) => Effect.succeed({ userId, accountEpoch: 1 }),
+    capture: (userId) => Effect.succeed({ userId, accountEpoch: 1 }),
+    requireAllowed: (input) => Effect.succeed({ userId: input.userId, accountEpoch: 1 }),
   }),
-  Layer.succeed(AccountTransactions, { run: Effect.fnUntraced((_input, effect) => effect) }),
-  Layer.succeed(RelayRateLimits, { charge: Effect.fnUntraced(() => Effect.void) }),
+  Layer.succeed(AccountTransactions, { run: (_input, effect) => effect }),
+  Layer.succeed(RelayRateLimits, { charge: () => Effect.void }),
   Layer.succeed(AccountLimits, DEFAULT_LIMITS),
   Layer.succeed(EnvironmentOwnership, {
-    beginRelease: Effect.fnUntraced(() => Effect.succeed([])),
-    finishRelease: Effect.fnUntraced(() => Effect.succeed(true)),
-    claim: Effect.fnUntraced(() => Effect.void),
-    assertActive: Effect.fnUntraced(() => Effect.void),
+    beginRelease: () => Effect.succeed([]),
+    finishRelease: () => Effect.succeed(true),
+    claim: () => Effect.void,
+    assertActive: () => Effect.void,
   }),
   Layer.succeed(AccountDeviceAdmission, {
-    write: Effect.fnUntraced((_input, body) => body(1)),
-    unregister: Effect.fnUntraced((_userId, body) => body),
+    write: (_input, body) => body(1),
+    unregister: (_userId, body) => body,
   }),
   Layer.succeed(ManagedProvisioningIntents, {
-    prepare: Effect.fnUntraced(() => Effect.succeed("10000000-0000-4000-8000-000000000001")),
-    record: Effect.fnUntraced(() => Effect.void),
+    prepare: () => Effect.succeed("10000000-0000-4000-8000-000000000001"),
+    record: () => Effect.void,
   }),
   Layer.succeed(DeliveryAuthorization, {
-    eligible: Effect.fnUntraced(() => Effect.succeed(true)),
-    result: Effect.fnUntraced((effect) => effect),
+    eligible: () => Effect.succeed(true),
+    result: (effect) => effect,
   }),
   Layer.succeed(HookDeliveryAuthorization, {
-    allowed: Effect.fnUntraced(() => Effect.succeed(true)),
+    allowed: () => Effect.succeed(true),
   }),
-  Layer.succeed(ManagedTunnelLimits, { ensureCapacity: Effect.fnUntraced(() => Effect.void) }),
+  Layer.succeed(ManagedTunnelLimits, { ensureCapacity: () => Effect.void }),
 );
 
 export const identityUnitLayer = (config: RelayConfiguration["Service"]) =>
   Layer.succeed(EndpointIdentity, {
-    resolve: Effect.fnUntraced((input) =>
+    resolve: (input) =>
       Effect.sync(() => {
         const stage = config.managedEndpointNamespace ?? "prod";
         const hash = createHash("sha256")
@@ -74,6 +72,5 @@ export const identityUnitLayer = (config: RelayConfiguration["Service"]) =>
           tunnelName: managedEndpointTunnelName(stage, hash),
         };
       }),
-    ),
-    check: Effect.fnUntraced(() => Effect.void),
+    check: () => Effect.void,
   });

@@ -40,12 +40,12 @@ it.live(
           userId: "owner-b",
           registration: registration("victim", "victim-token"),
         });
-        const last = yield* Effect.all(
-          ["phone-9", "phone-10"].map((deviceId) =>
+        const last = yield* Effect.forEach(
+          ["phone-9", "phone-10"],
+          (deviceId) =>
             devices
               .register({ userId: "owner-a", registration: registration(deviceId) })
               .pipe(Effect.result),
-          ),
           { concurrency: 2 },
         );
         expect(last.filter((r) => r._tag === "Success")).toHaveLength(1);

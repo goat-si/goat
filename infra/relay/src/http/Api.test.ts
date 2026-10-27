@@ -67,7 +67,12 @@ vi.mock("@clerk/backend", () => ({
   verifyToken: vi.fn(),
 }));
 
-import { relaySettings, encodeLinkRequest, decodeLinkUnavailableError } from "./Api.testkit.ts";
+import {
+  relaySettings,
+  encodeLinkRequest,
+  decodeLinkUnavailableError,
+  layerRelayUnlinkTest,
+} from "./Api.testkit.ts";
 
 describe("managed endpoint provisioning errors", () => {
   it.effect("returns the failed stage without exposing provider secrets through HTTP", () => {
@@ -76,6 +81,7 @@ describe("managed endpoint provisioning errors", () => {
       Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
@@ -193,6 +199,7 @@ describe("device listing compatibility", () => {
       Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
@@ -279,6 +286,7 @@ describe("Cloudflare rate-limit retry hint", () => {
       Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
@@ -478,61 +486,6 @@ describe("relay environment authentication", () => {
     );
   });
 });
-
-function layerRelayUnlinkTest(input?: {
-  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
-  readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
-  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
-  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
-  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
-  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
-  readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
-  readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
-  readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
-}) {
-  return Layer.mergeAll(
-    Layer.mock(HookInbox.HookInbox, {
-      clear: input?.clearInbox ?? (() => Effect.void),
-    }),
-    Layer.succeed(
-      RelayDb.RelayTransactions,
-      RelayDb.RelayTransactions.of({
-        withTransaction: input?.withTransaction ?? ((effect) => effect),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentLinks.EnvironmentLinks,
-      EnvironmentLinks.EnvironmentLinks.of({
-        upsert: () => Effect.die("unused upsert"),
-        listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
-        listForUser: () => Effect.die("unused listForUser"),
-        getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
-        findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
-        setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
-        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentCredentials.EnvironmentCredentials,
-      EnvironmentCredentials.EnvironmentCredentials.of({
-        create: () => Effect.die("unused create"),
-        authenticate: () => Effect.die("unused authenticate"),
-        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      ManagedEndpointProvider.ManagedEndpointProvider,
-      ManagedEndpointProvider.ManagedEndpointProvider.of({
-        provision: input?.provision ?? (() => Effect.die("unused provision")),
-        reconcileOrigin: input?.reconcileOrigin ?? (() => Effect.succeed("ready")),
-        prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
-        deprovision: input?.deprovision ?? (() => Effect.succeed(true)),
-        release: input?.release ?? (() => Effect.die("unused release")),
-      }),
-    ),
-  );
-}
 
 const linkedEnvironmentRecord = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -1048,9 +1001,15 @@ describe("relay managed tunnel recovery", () => {
 });
 
 describe("relay environment unlink", () => {
-  it.effect("drops the unlinked endpoint's held webhooks, even if clearing fails", () => {
+  it.effect("clears held webhooks before releasing ownership and retries failed clearing", () => {
     const cleared: Array<string> = [];
     const endpointKey = "0123456789abcdef";
+    let releases = 0;
+    const failure = new HookInbox.HookInboxError({
+      operation: "clear",
+      endpointKey,
+      cause: new Error("unavailable"),
+    });
     const unlink = (clearFails: boolean) =>
       unlinkEnvironmentRecord({
         userId: "user-1",
@@ -1081,21 +1040,25 @@ describe("relay environment unlink", () => {
               }),
             clearInbox: (input) =>
               clearFails
-                ? Effect.fail(
-                    new HookInbox.HookInboxError({
-                      operation: "clear",
-                      endpointKey: input.endpointKey,
-                      cause: new Error("unavailable"),
-                    }),
-                  )
+                ? Effect.fail(failure)
                 : Effect.sync(() => void cleared.push(input.endpointKey)),
+            finishRelease: () =>
+              Effect.sync(() => {
+                releases++;
+                return true;
+              }),
           }),
         ),
       );
     return Effect.gen(function* () {
       expect(yield* unlink(false)).toBe(true);
       expect(cleared).toEqual([endpointKey]);
-      expect(yield* unlink(true)).toBe(true);
+      expect(releases).toBe(1);
+      expect(yield* Effect.flip(unlink(true))).toBe(failure);
+      expect(releases).toBe(1);
+      expect(yield* unlink(false)).toBe(true);
+      expect(releases).toBe(2);
+      expect(cleared).toEqual([endpointKey, endpointKey]);
     });
   });
 
@@ -1271,12 +1234,10 @@ describe("relay environment unlink", () => {
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {
-      expect(
-        yield* unlinkEnvironmentRecord({
-          userId: "user-1",
-          environmentId: "environment-1",
-        }),
-      ).toBe(true);
+      const input = { userId: "user-1", environmentId: "environment-1" };
+      expect(yield* unlinkEnvironmentRecord(input)).toBe(false);
+      expect(targets).toEqual([target]);
+      expect(yield* unlinkEnvironmentRecord(input)).toBe(true);
       expect(targets).toEqual([target, target]);
     }).pipe(
       Effect.provide(

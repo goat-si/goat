@@ -29,6 +29,7 @@ test.provider("hourly DO admission persists after actual object destruction", (s
           Effect.provide(Fixture.layer),
         ),
       );
+      if (url === undefined) throw new Error("Local Worker fixture did not return a URL");
       const hostname = new URL(url).hostname;
       expect(
         hostname === "127.0.0.1" ||
@@ -71,7 +72,9 @@ test.provider("hourly DO admission persists after actual object destruction", (s
       }
     }).pipe(
       Effect.provideService(AlchemyContext, context),
-      Effect.ensuring(stack.destroy().pipe(Effect.provideService(AlchemyContext, context))),
+      Effect.ensuring(
+        stack.destroy().pipe(Effect.provideService(AlchemyContext, context), Effect.orDie),
+      ),
     );
   }),
 );

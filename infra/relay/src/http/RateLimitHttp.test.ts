@@ -64,6 +64,7 @@ test.provider("real HTTP budgets deny every protected path before its side effec
           Effect.provide(Fixture.layer),
         ),
       );
+      if (url === undefined) throw new Error("Local Worker fixture did not return a URL");
       const hostname = new URL(url).hostname;
       expect(
         hostname === "127.0.0.1" ||
@@ -108,7 +109,13 @@ test.provider("real HTTP budgets deny every protected path before its side effec
       vi.mocked(verifyToken).mockResolvedValue({
         sub: "owner",
         aud: "fixture-relay",
-      } as Awaited<ReturnType<typeof verifyToken>>);
+        __raw: "fixture-session-token",
+        iss: "https://clerk.example.test",
+        sid: "fixture-session",
+        iat: 0,
+        nbf: 0,
+        exp: 4_000_000_000,
+      });
       const relayKey = signingKey();
       const hostKey = signingKey();
       const linkKey = signingKey();
@@ -472,7 +479,9 @@ test.provider("real HTTP budgets deny every protected path before its side effec
       }
     }).pipe(
       Effect.provideService(AlchemyContext, context),
-      Effect.ensuring(stack.destroy().pipe(Effect.provideService(AlchemyContext, context))),
+      Effect.ensuring(
+        stack.destroy().pipe(Effect.provideService(AlchemyContext, context), Effect.orDie),
+      ),
     );
   }),
 );

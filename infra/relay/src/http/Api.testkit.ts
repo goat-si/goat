@@ -1,3 +1,12 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
+import { EnvironmentOwnership } from "../environments/EnvironmentOwnership.ts";
+import * as Layer from "effect/Layer";
+import * as RelayDb from "../db.ts";
+import * as HookInbox from "../hooks/HookInbox.ts";
+import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
+import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
 import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
 import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
@@ -39,3 +48,69 @@ export const encodeLinkRequest = Schema.encodeEffect(
 export const decodeLinkUnavailableError = Schema.decodeUnknownEffect(
   RelayEnvironmentLinkUnavailableError,
 );
+
+export function layerRelayUnlinkTest(input?: {
+  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
+  readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
+  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
+  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
+  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
+  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
+  readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
+  readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
+  readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
+  readonly finishRelease?: EnvironmentOwnership["Service"]["finishRelease"];
+}) {
+  return Layer.mergeAll(
+    policyUnitLayer,
+    Layer.succeed(EnvironmentOwnership, {
+      beginRelease: () => Effect.succeed([]),
+      finishRelease: input?.finishRelease ?? (() => Effect.succeed(true)),
+      claim: () => Effect.void,
+      assertActive: () => Effect.void,
+    }),
+    Layer.succeed(AccountTransactions, {
+      run: (_input, effect) => (input?.withTransaction ? input.withTransaction(effect) : effect),
+    }),
+    Layer.mock(HookInbox.HookInbox, {
+      clear: input?.clearInbox ?? (() => Effect.void),
+    }),
+    Layer.succeed(
+      RelayDb.RelayTransactions,
+      RelayDb.RelayTransactions.of({
+        withTransaction: input?.withTransaction ?? ((effect) => effect),
+      }),
+    ),
+    Layer.succeed(
+      EnvironmentLinks.EnvironmentLinks,
+      EnvironmentLinks.EnvironmentLinks.of({
+        upsert: () => Effect.die("unused upsert"),
+        listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
+        listForUser: () => Effect.die("unused listForUser"),
+        getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
+        findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
+        setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
+        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
+      }),
+    ),
+    Layer.succeed(
+      EnvironmentCredentials.EnvironmentCredentials,
+      EnvironmentCredentials.EnvironmentCredentials.of({
+        create: () => Effect.die("unused create"),
+        authenticate: () => Effect.die("unused authenticate"),
+        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
+      }),
+    ),
+    Layer.succeed(
+      ManagedEndpointProvider.ManagedEndpointProvider,
+      ManagedEndpointProvider.ManagedEndpointProvider.of({
+        provision: input?.provision ?? (() => Effect.die("unused provision")),
+        reconcileOrigin: input?.reconcileOrigin ?? (() => Effect.succeed("ready")),
+        prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
+        deprovision: input?.deprovision ?? (() => Effect.succeed(true)),
+        release: input?.release ?? (() => Effect.die("unused release")),
+      }),
+    ),
+  );
+}
