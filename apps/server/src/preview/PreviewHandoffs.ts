@@ -38,7 +38,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
-import type { HandoffEnded } from "./ServerBrowserScreen.ts";
+import type { HandoffChanged } from "./ServerBrowserScreen.ts";
 
 /** Long enough to find the device and finish a sign-in; the wake tells the agent it expired. */
 const REQUEST_MINUTES = 30;
@@ -87,6 +87,8 @@ export class PreviewHandoffs extends Context.Service<
      * request held, when its record could not be written; the person can hand it back again.
      */
     readonly handBack: (sessionId: string) => Effect.Effect<void, HandoffError>;
+    /** A person took over a desktop control by preview session id; its request shows opened. */
+    readonly taken: (sessionId: string) => Effect.Effect<void>;
     /** A handoff record changed; one of these that ended frees its target. The watcher's step. */
     readonly recordEnded: (handoff: Handoff) => Effect.Effect<void>;
     /** Settles desktop requests whose control ended. Runs on every control change. */
@@ -281,6 +283,36 @@ const make = Effect.gen(function* () {
     if (entry !== undefined) yield* handBackEntry(sessionId, entry);
   }, locked);
 
+  /**
+   * A person took the screen: the request stays held, and the thread shows it opened. Opening
+   * can repeat (taken, dropped, taken again), so each one is its own command.
+   */
+  const opened = (entry: Pending) =>
+    crypto.randomUUIDv4().pipe(
+      Effect.flatMap((id) =>
+        threads.dispatch({
+          type: "handoff.transition",
+          commandId: CommandId.make(`handoff:${entry.handoffId}:opened:${id}`),
+          threadId: entry.threadId,
+          handoffId: entry.handoffId,
+          state: "opened",
+          actor: SCREEN,
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("a screen handoff opening was not recorded", {
+          handoffId: entry.handoffId,
+          cause,
+        }),
+      ),
+      Effect.asVoid,
+    );
+
+  const taken = Effect.fn("PreviewHandoffs.taken")(function* (sessionId: string) {
+    const entry = pending.get(sessionId);
+    if (entry !== undefined) yield* opened(entry);
+  }, locked);
+
   const desktopEnded = Effect.gen(function* () {
     if (Option.isNone(leases)) return;
     const desktop = [...pending].filter(([, entry]) => entry.target.kind === "desktop");
@@ -300,13 +332,16 @@ const make = Effect.gen(function* () {
   });
   const reconcileDesktop = desktopEnded.pipe(locked);
 
-  const browserEnded = Effect.fn("PreviewHandoffs.browserEnded")(function* (ended: HandoffEnded) {
+  const browserChanged = Effect.fn("PreviewHandoffs.browserChanged")(function* (
+    ended: HandoffChanged,
+  ) {
     const key = browserSessionId(ended.threadId, ended.tabId);
     const entry = pending.get(key);
     // A late end of an earlier request on this tab leaves the newer one alone.
     if (entry === undefined || entry.handoffId !== ended.requestId) return;
+    if (ended.change === "taken") return yield* opened(entry);
     // Nobody waits on the stream's hand back: a failed write is logged and the next check retries.
-    if (ended.end === "handedBack")
+    if (ended.change === "handedBack")
       return yield* handBackEntry(key, entry).pipe(
         Effect.catchIf(
           (error) => error.reason === "unavailable",
@@ -317,7 +352,7 @@ const make = Effect.gen(function* () {
         ),
         Effect.ignore,
       );
-    if (ended.end === "stopped") return yield* stop(key, entry);
+    if (ended.change === "stopped") return yield* stop(key, entry);
     yield* endUnasked(key, entry, SCREEN);
   }, locked);
 
@@ -556,11 +591,13 @@ const make = Effect.gen(function* () {
     Effect.catchCause((cause) => Effect.logWarning("orphaned screen handoffs remain", { cause })),
   );
 
-  if (Option.isSome(browser) && browser.value.onHandoffEnd) {
-    const ends = yield* Queue.unbounded<HandoffEnded>();
-    const unsubscribe = browser.value.onHandoffEnd((ended) => void Queue.offerUnsafe(ends, ended));
+  if (Option.isSome(browser) && browser.value.onHandoffChange) {
+    const ends = yield* Queue.unbounded<HandoffChanged>();
+    const unsubscribe = browser.value.onHandoffChange(
+      (changed) => void Queue.offerUnsafe(ends, changed),
+    );
     yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-    yield* Queue.take(ends).pipe(Effect.flatMap(browserEnded), Effect.forever, Effect.forkScoped);
+    yield* Queue.take(ends).pipe(Effect.flatMap(browserChanged), Effect.forever, Effect.forkScoped);
   }
   if (Option.isSome(leases)) {
     const changes = yield* leases.value.subscribe;
@@ -603,6 +640,7 @@ const make = Effect.gen(function* () {
       return reasons;
     }),
     handBack,
+    taken,
     recordEnded,
     handle,
     reconcileDesktop,

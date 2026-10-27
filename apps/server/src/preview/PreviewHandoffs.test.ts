@@ -11,6 +11,7 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -31,7 +32,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PreviewHandoffs from "./PreviewHandoffs.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
-import { type HandoffEnded, makeSurface } from "./ServerBrowserScreen.ts";
+import { type HandoffChanged, makeSurface } from "./ServerBrowserScreen.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 const environmentId = EnvironmentId.make("test-environment");
@@ -71,11 +72,11 @@ const world = (
       (thread, tabId) => (thread === threadId && tabId === tab.tabId ? tab : undefined),
       () => {},
     );
-    const withheld: Array<HandoffEnded> = [];
-    let deliverEnd: (ended: HandoffEnded) => void = () => {};
-    if (options.withholdEnds) surface.service.onHandoffEnd((ended) => void withheld.push(ended));
+    const withheld: Array<HandoffChanged> = [];
+    let deliverEnd: (ended: HandoffChanged) => void = () => {};
+    if (options.withholdEnds) surface.service.onHandoffChange((ended) => void withheld.push(ended));
     // The screen's end is recorded once its transition command commits.
-    const settled = yield* Deferred.make<string>();
+    const settled = yield* Queue.unbounded<string>();
     let failing = options.failedWrites ?? 0;
     // Like the orchestrator's receipts: an id that was refused stays refused.
     const refused = new Set<string>();
@@ -83,7 +84,8 @@ const world = (
     const dispatch = (
       command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
     ) =>
-      command.type === "handoff.transition" && (failing > 0 || refused.has(command.commandId))
+      command.type === "handoff.transition" &&
+      ((failing > 0 && command.state !== "opened") || refused.has(command.commandId))
         ? Effect.suspend(() => {
             if (failing > 0) failing--;
             refused.add(command.commandId);
@@ -96,7 +98,7 @@ const world = (
             .pipe(
               Effect.tap(() =>
                 command.type === "handoff.transition"
-                  ? Deferred.succeed(settled, command.state)
+                  ? Queue.offer(settled, command.state)
                   : Effect.void,
               ),
             );
@@ -129,7 +131,7 @@ const world = (
               ...surface.service,
               ...(options.withholdEnds
                 ? {
-                    onHandoffEnd: (listener: (ended: HandoffEnded) => void) => {
+                    onHandoffChange: (listener: (ended: HandoffChanged) => void) => {
                       deliverEnd = listener;
                       return () => {};
                     },
@@ -181,7 +183,7 @@ const world = (
     const deliverWithheld = () => {
       for (const ended of withheld.splice(0)) deliverEnd(ended);
     };
-    const deliver = (ended: HandoffEnded) => deliverEnd(ended);
+    const deliver = (ended: HandoffChanged) => deliverEnd(ended);
     /** Completes once the tab is no longer held for a person. */
     const freed = yield* Deferred.make<void>();
     control.onChange(() => {
@@ -227,7 +229,11 @@ it.effect(
           await control.take("viewer");
           await control.release("viewer");
         });
-        expect(yield* Deferred.await(settled)).toBe("completed");
+        // Taking it opens the request; handing it back completes it.
+        expect([yield* Queue.take(settled), yield* Queue.take(settled)]).toEqual([
+          "opened",
+          "completed",
+        ]);
         const record = yield* handoffs.read({ threadId, handoffId: result.handoff.handoffId });
         expect([record.state, record.actor]).toEqual([
           "completed",
@@ -266,7 +272,7 @@ it.effect(
           null,
           true,
         ]);
-        expect(yield* Deferred.isDone(settled)).toBe(false);
+        expect(yield* Queue.size(settled)).toBe(0);
       }),
     ),
 );
@@ -278,9 +284,13 @@ it.effect("holds only the asking agent's desktop control, until the person hands
       const result = yield* requests.request({ threadId, providerInstanceId: instanceId, reason });
       expect(desktop).toEqual([`${controlId}:true`]);
       expect(yield* requests.desktopReasons).toEqual(new Map([[controlId, reason]]));
+      // Take over opens the request and keeps it held while the person works.
+      yield* requests.taken(desktopSession);
+      expect(yield* Queue.take(settled)).toBe("opened");
+      expect(yield* requests.desktopReasons).toEqual(new Map([[controlId, reason]]));
 
       yield* requests.handBack(desktopSession);
-      expect(yield* Deferred.await(settled)).toBe("completed");
+      expect(yield* Queue.take(settled)).toBe("completed");
       expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
       expect(yield* requests.desktopReasons).toEqual(new Map());
       const record = yield* handoffs.read({
@@ -299,7 +309,7 @@ it.effect("cancels a desktop request once its control stops, by whatever path st
       const result = yield* requests.request({ threadId, providerInstanceId: instanceId, reason });
       endControl();
       yield* requests.reconcileDesktop;
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       // A person's Stop is recorded as the agent's own end, so the stopped agent is not woken.
       const record = yield* handoffs.read({ threadId, handoffId });
@@ -321,7 +331,7 @@ it.effect("cancels requests a restart left with nothing held", () =>
       });
       // A fresh service on the same database: the tabs and their holds are gone.
       const after = yield* world(orchestrator);
-      expect(yield* Deferred.await(after.settled)).toBe("cancelled");
+      expect(yield* Queue.take(after.settled)).toBe("cancelled");
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       const record = yield* after.handoffs.read({ threadId, handoffId });
       expect([record.state, record.actor]).toEqual(["cancelled", { type: "server" }]);
@@ -345,7 +355,8 @@ it.effect("frees the tab when a person hands it back while the agent is asking a
       // The agent asks again before GOAT has handled that hand back.
       expect((yield* requests.request(asked)).handoff.handoffId).toBe(result.handoff.handoffId);
       deliverWithheld();
-      expect(yield* Deferred.await(settled)).toBe("completed");
+      expect(yield* Queue.take(settled)).toBe("opened");
+      expect(yield* Queue.take(settled)).toBe("completed");
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
       yield* Deferred.await(freed);
@@ -361,7 +372,7 @@ it.effect("cancels a desktop request when its control expires, which sends no si
       yield* requests.request({ threadId, providerInstanceId: instanceId, reason });
       endControl("expired");
       yield* TestClock.adjust("5 minutes");
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       expect(yield* requests.desktopReasons).toEqual(new Map());
     }),
   ),
@@ -400,8 +411,8 @@ it.effect("ignores a late hand back of an earlier request when a newer one holds
       expect(control.handoffReason).toBe("Step B");
       deliverWithheld();
       // Ends are handled in order: B's own Stop after A's late hand back is what settles B.
-      deliver({ threadId, tabId: "tab-1", end: "ended", requestId: second });
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      deliver({ threadId, tabId: "tab-1", change: "ended", requestId: second });
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       expect((yield* handoffs.read({ threadId, handoffId: second })).state).toBe("cancelled");
     }),
   ),
@@ -453,7 +464,7 @@ it.effect("ends a request without a wake when a person archives the thread", () 
         threadId,
       });
       yield* TestClock.adjust("15 seconds");
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       yield* Deferred.await(freed);
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       // Ended as the agent would, so the wake reactor stays quiet.
@@ -487,7 +498,7 @@ it.effect("ends a request without a wake when a person stops the turn that asked
       });
       yield* worker.drain();
       yield* TestClock.adjust("15 seconds");
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       yield* Deferred.await(freed);
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       expect((yield* handoffs.read({ threadId, handoffId })).actor.type).toBe("agent");
@@ -516,9 +527,9 @@ it.effect("leaves a newer turn's request held when a Stop of an earlier turn arr
       });
       yield* requests.handle(stopOf(RunId.make("run:earlier")));
       expect(control.handoffReason).toBe(reason);
-      expect(yield* Deferred.isDone(settled)).toBe(false);
+      expect(yield* Queue.size(settled)).toBe(0);
       yield* requests.handle(stopOf(run.id));
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       expect(control.handoffReason).toBe(null);
     }),
   ),
@@ -540,7 +551,7 @@ it.effect("keeps a desktop request held when its hand back is not recorded, and 
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("pending");
       // The person sees the error and hands it back again.
       yield* requests.handBack(desktopSession);
-      expect(yield* Deferred.await(settled)).toBe("completed");
+      expect(yield* Queue.take(settled)).toBe("completed");
       expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
     }),
@@ -573,10 +584,11 @@ it.effect(
         yield* Deferred.await(failed);
         expect(control.handoffReason).toBe(reason);
         expect(control.agentCanActNow("agent-session")).toBe(false);
+        expect(yield* Queue.take(settled)).toBe("opened");
         // The person who handed it back sees that it did not take.
         yield* Deferred.await(unsaved);
         yield* TestClock.adjust("15 seconds");
-        expect(yield* Deferred.await(settled)).toBe("completed");
+        expect(yield* Queue.take(settled)).toBe("completed");
         yield* Deferred.await(freed);
         expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
         expect(control.agentCanActNow("agent-session")).toBe(true);
@@ -607,7 +619,8 @@ it.effect(
         });
         yield* Deferred.await(failed);
         control.stopAgents();
-        expect(yield* Deferred.await(settled)).toBe("cancelled");
+        expect(yield* Queue.take(settled)).toBe("opened");
+        expect(yield* Queue.take(settled)).toBe("cancelled");
         yield* TestClock.adjust("15 seconds");
         const record = yield* handoffs.read({ threadId, handoffId });
         expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
@@ -632,7 +645,7 @@ it.effect("retries a Stop whose record write failed, so the stopped agent is nev
       control.stopAgents();
       yield* Deferred.await(failed);
       yield* TestClock.adjust("15 seconds");
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       // Past the request's own deadline it stays the agent's end, which wakes nobody.
       yield* TestClock.adjust("31 minutes");
       const record = yield* handoffs.read({ threadId, handoffId });
@@ -671,7 +684,8 @@ it.effect("ends an unrecorded hand back as a Stop when a person stops the turn m
       });
       yield* worker.drain();
       yield* TestClock.adjust("15 seconds");
-      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(yield* Queue.take(settled)).toBe("opened");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
       const record = yield* handoffs.read({ threadId, handoffId });
       expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
     }),
