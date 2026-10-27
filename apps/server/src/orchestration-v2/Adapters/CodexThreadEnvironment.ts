@@ -22,32 +22,24 @@ const configSetsBrowser = (config: unknown) => {
 };
 
 /**
- * Drops GOAT's opener for a directory whose merged Codex config sets BROWSER in its shell
- * environment policy, since GOAT's thread entry would replace it. Read once per directory; an
- * unreadable config yields to the user for that call and is read again next time.
+ * Drops GOAT's opener where the merged Codex config sets BROWSER in its shell environment policy,
+ * since GOAT's thread entry would replace it. Read on every thread setup, so edits apply to the
+ * next load; an unreadable config yields to the user.
  */
 export const makeCodexConfiguredBrowser = <E, R>(
   readConfig: (cwd: string | null) => Effect.Effect<{ readonly config: unknown }, E, R>,
-) => {
-  const setsBrowserByCwd = new Map<string, boolean>();
-  return Effect.fn("CodexThreadEnvironment.withoutConfiguredBrowser")(function* (
+) =>
+  Effect.fn("CodexThreadEnvironment.withoutConfiguredBrowser")(function* (
     session: McpProviderSession.McpProviderSessionConfig | undefined,
     cwd: string | null | undefined,
   ) {
     if (session?.urlOpener === undefined) return session;
-    const key = cwd ?? "";
-    let setsBrowser = setsBrowserByCwd.get(key);
-    if (setsBrowser === undefined) {
-      const read = yield* readConfig(cwd ?? null).pipe(Effect.option);
-      setsBrowser = Option.match(read, {
-        onNone: () => true,
-        onSome: (response) => configSetsBrowser(response.config),
-      });
-      if (Option.isSome(read)) setsBrowserByCwd.set(key, setsBrowser);
-    }
+    const setsBrowser = Option.match(yield* readConfig(cwd ?? null).pipe(Effect.option), {
+      onNone: () => true,
+      onSome: (response) => configSetsBrowser(response.config),
+    });
     if (!setsBrowser) return session;
     const { urlOpener: _, ...rest } = session;
     const withoutOpener: McpProviderSession.McpProviderSessionConfig = rest;
     return withoutOpener;
   });
-};

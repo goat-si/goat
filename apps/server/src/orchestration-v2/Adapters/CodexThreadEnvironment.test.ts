@@ -18,21 +18,20 @@ const browserOf = (config: ReturnType<typeof codexThreadMcpEnvironment>) =>
   config["shell_environment_policy.set.BROWSER"];
 
 describe("Codex thread BROWSER", () => {
-  it.effect("keeps a BROWSER the user's Codex config sets for a directory", () =>
+  it.effect("follows the BROWSER the user's Codex config sets, including later edits", () =>
     Effect.gen(function* () {
-      const configs: Record<string, unknown> = {
-        "/chosen": { shell_environment_policy: { set: { BROWSER: "firefox" } } },
-        "/plain": { shell_environment_policy: { inherit: "all" } },
-      };
-      const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
-        Effect.succeed({ config: configs[cwd ?? ""] }),
-      );
+      let config: unknown = { shell_environment_policy: { inherit: "all" } };
+      const withoutConfiguredBrowser = makeCodexConfiguredBrowser(() => Effect.succeed({ config }));
+      const browserAt = () =>
+        withoutConfiguredBrowser(session, "/project").pipe(
+          Effect.map((next) => browserOf(codexThreadMcpEnvironment(next))),
+        );
 
-      const chosen = yield* withoutConfiguredBrowser(session, "/chosen");
-      const plain = yield* withoutConfiguredBrowser(session, "/plain");
-
-      expect(browserOf(codexThreadMcpEnvironment(chosen))).toBeUndefined();
-      expect(browserOf(codexThreadMcpEnvironment(plain))).toBe(session.urlOpener);
+      expect(yield* browserAt()).toBe(session.urlOpener);
+      config = { shell_environment_policy: { set: { BROWSER: "firefox" } } };
+      expect(yield* browserAt()).toBeUndefined();
+      config = {};
+      expect(yield* browserAt()).toBe(session.urlOpener);
     }),
   );
 
