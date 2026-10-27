@@ -1278,11 +1278,11 @@ export default function FilePreviewPanel({
       </div>
     );
   }
-
   return (
     <div
       className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       data-file-view
+      data-glass-layer
       // Clicking read-only content focuses the view, so the path copy shortcuts follow it.
       tabIndex={-1}
     >

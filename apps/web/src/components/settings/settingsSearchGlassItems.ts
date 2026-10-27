@@ -2,6 +2,12 @@ import type { SettingsSearchItem } from "./settingsSearch";
 
 export const GLASS_SETTINGS_SEARCH_ITEMS = [
   {
+    id: "appearance-style",
+    title: "Style",
+    to: "/settings/appearance",
+    searchTerms: ["liquid glass transparent translucent wallpaper preset frosted"],
+  },
+  {
     // Prefixed because the slider control already owns the `glass-opacity` id.
     id: "setting-glass-opacity",
     title: "Glass opacity",

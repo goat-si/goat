@@ -110,6 +110,41 @@ export function AppearanceSettingsPanel() {
 
       <SettingsSection id="appearance-interface" title="Interface">
         <SettingsRow
+          {...searchableSetting("appearance-style")}
+          description="Choose the look of panels, menus, and dialogs."
+          resetAction={
+            settings.appearancePreset !== DEFAULT_UNIFIED_SETTINGS.appearancePreset ? (
+              <SettingResetButton
+                label="style"
+                onClick={() =>
+                  updateSettings({ appearancePreset: DEFAULT_UNIFIED_SETTINGS.appearancePreset })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.appearancePreset}
+              onValueChange={(value) => {
+                if (value === "default" || value === "liquid-glass") {
+                  updateSettings({ appearancePreset: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Style">
+                <SelectValue>
+                  {settings.appearancePreset === "liquid-glass" ? "Liquid Glass" : "Default"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="default">Default</SelectItem>
+                <SelectItem value="liquid-glass">Liquid Glass</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
           description="Adjust the contrast of colors and borders across the interface."
           resetAction={
@@ -159,7 +194,11 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("setting-glass-opacity")}
-          description="Higher values make menus, dialogs, and the composer more solid."
+          description={
+            settings.appearancePreset === "liquid-glass"
+              ? "Higher values make panels, menus, dialogs, and the composer more solid."
+              : "Higher values make menus, dialogs, and the composer more solid."
+          }
           resetAction={
             settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
               <SettingResetButton

@@ -3449,10 +3449,10 @@ export default function ChatView(props: ChatViewProps) {
     addFiles: addDroppedFilesToComposer,
     addFolders: addDroppedFoldersToComposer,
   });
-
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
+      data-glass-layer
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
       <DeviceSetupDialogHost
@@ -3484,6 +3484,7 @@ export default function ChatView(props: ChatViewProps) {
           <header
             ref={threadPanelPopoverAnchorRef}
             data-chat-header
+            data-glass-layer
             className={cn(
               "relative bg-background [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
               isElectron
@@ -3532,7 +3533,6 @@ export default function ChatView(props: ChatViewProps) {
             />
           </header>
         )}
-
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas
             findOptions={{
@@ -3568,7 +3568,7 @@ export default function ChatView(props: ChatViewProps) {
               setThreadError={setThreadError}
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
             />
-            <div className="relative flex min-h-0 flex-1 flex-col bg-background">
+            <div data-glass-layer className="relative flex min-h-0 flex-1 flex-col bg-background">
               <ThreadTimeline
                 readyActivity={timelineActivity}
                 onScrollableNodeChange={setTimelineScrollNode}

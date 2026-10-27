@@ -179,6 +179,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   return (
     <nav
       aria-label="Settings sections"
+      data-glass-pane="rail"
       className={cn(
         "flex w-60 shrink-0 flex-col border-e bg-sidebar text-sidebar-foreground max-md:w-14",
         compactSearchOpen &&

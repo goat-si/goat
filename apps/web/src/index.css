@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./desktop/windowMaterial.css";
+@import "./appearance/liquidGlass.css";
 
 @font-face {
   font-family: "Pretendard";
