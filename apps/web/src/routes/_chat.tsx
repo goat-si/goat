@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { PreviewSessionStack } from "../components/preview/sessions/PreviewSessionStack";
-import { isAppModalPage } from "../components/sidebar/mainAppLocation";
+import { isAppModalPage, isSettingsPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
 import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../threadRoutes";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
@@ -189,7 +189,11 @@ function ChatRouteLayout() {
   const modalOpen = useMatches({
     select: (matches) => matches.some((match) => isAppModalPage(match.pathname)),
   });
-  // Settings and Usage render over the thread that opened them, so ChatView never remounts.
+  // Chat shortcuts act on a thread view, which Settings replaces.
+  const settingsOpen = useMatches({
+    select: (matches) => matches.some((match) => isSettingsPage(match.pathname)),
+  });
+  // Usage renders over the thread that opened it, so ChatView never remounts.
   const [backgroundTarget, setBackgroundTarget] = useState(threadTarget);
   if (!modalOpen && threadRouteTargetKey(backgroundTarget) !== threadRouteTargetKey(threadTarget)) {
     setBackgroundTarget(threadTarget);
@@ -200,7 +204,7 @@ function ChatRouteLayout() {
     shownTarget?.kind === "server" ? shownTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
     <>
-      {modalOpen ? null : <ChatRouteGlobalShortcuts />}
+      {modalOpen || settingsOpen ? null : <ChatRouteGlobalShortcuts />}
       <PreviewSessionStack
         environmentId={sessionsEnvironmentId}
         threadRef={shownTarget?.kind === "server" ? shownTarget.threadRef : null}

@@ -4,9 +4,7 @@ import { RotateCcwIcon } from "~/components/solar";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 
-import { AppRouteModal, AppRouteModalClose } from "../components/AppRouteModal";
-import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
-import { SettingsSidebarNav } from "../components/settings/SettingsSidebarNav";
+import { SettingsPageShell } from "../components/settings/SettingsPageShell";
 import { AutomationHoldNotices } from "../components/settings/AutomationHoldNotice";
 import {
   SettingsScopeProvider,
@@ -118,30 +116,21 @@ function SettingsContentLayout() {
   const [restoreSignal, setRestoreSignal] = useState(0);
 
   return (
-    <AppRouteModal label="Settings">
-      <div className="relative flex min-h-0 flex-1">
-        <SettingsSidebarNav pathname={location.pathname} />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
-            <SettingsBreadcrumb pathname={location.pathname} />
-            <div className="ms-auto flex shrink-0 items-center gap-1">
-              {location.pathname === "/settings/general" ? (
-                <RestoreDeviceDefaultsButton
-                  onRestored={() => setRestoreSignal((value) => value + 1)}
-                />
-              ) : null}
-              <AppRouteModalClose />
-            </div>
-          </header>
-          <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
-            <AutomationHoldNotices />
-            <SettingsScopeBoundary pathname={location.pathname}>
-              <Outlet />
-            </SettingsScopeBoundary>
-          </div>
-        </div>
+    <SettingsPageShell
+      pathname={location.pathname}
+      actions={
+        location.pathname === "/settings/general" ? (
+          <RestoreDeviceDefaultsButton onRestored={() => setRestoreSignal((value) => value + 1)} />
+        ) : null
+      }
+    >
+      <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
+        <AutomationHoldNotices />
+        <SettingsScopeBoundary pathname={location.pathname}>
+          <Outlet />
+        </SettingsScopeBoundary>
       </div>
-    </AppRouteModal>
+    </SettingsPageShell>
   );
 }
 
