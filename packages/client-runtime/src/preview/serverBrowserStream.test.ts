@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   createPreviewFramePainter,
   createPreviewStreamClient,
+  previewStreamControlLabel,
   type PreviewStreamControl,
 } from "./serverBrowserStream.ts";
 
@@ -79,6 +80,23 @@ describe("preview stream control", () => {
     );
     expect(onControl).not.toHaveBeenCalled();
     expect(client.send({ type: "reload" })).toBe(false);
+    client.stop();
+  });
+
+  it("says a tab waits for you while the agent's request for a person is open", () => {
+    const { client, socket, onControl } = connect();
+    socket.control({ ...agent, waitingForPerson: true });
+    const waiting = onControl.mock.lastCall?.[0] as PreviewStreamControl;
+    expect(previewStreamControlLabel(waiting)).toBe("Waiting for you");
+    // Once the person takes it, the label is theirs; another viewer's control still wins.
+    expect(previewStreamControlLabel({ ...waiting, controller: "you" })).toBe("You have control");
+    expect(previewStreamControlLabel({ ...waiting, controller: "another-viewer" })).toBe(
+      "Another viewer has control",
+    );
+    socket.control({ ...agent, generation: 2 });
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0] ?? null)).toBe(
+      "Agent has control",
+    );
     client.stop();
   });
 
