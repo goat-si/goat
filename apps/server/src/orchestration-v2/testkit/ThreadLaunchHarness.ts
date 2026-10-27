@@ -83,6 +83,7 @@ export const claudeAdapter = {
 interface HarnessOptions {
   readonly adapter?: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly prepared?: Deferred.Deferred<void>;
+  readonly afterRelease?: Effect.Effect<void>;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -226,7 +227,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       Layer.mergeAll(
         layerRegistry,
         layerExternalServices,
-        prepared === undefined
+        prepared === undefined && options.afterRelease === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
@@ -240,7 +241,10 @@ export function makeHarness(options: HarnessOptions = {}) {
                       .pipe(
                         Effect.tap(() =>
                           command.type === "prepared-run.release"
-                            ? Deferred.succeed(prepared, undefined)
+                            ? (prepared === undefined
+                                ? Effect.void
+                                : Deferred.succeed(prepared, undefined)
+                              ).pipe(Effect.andThen(options.afterRelease ?? Effect.void))
                             : Effect.void,
                         ),
                       ),
