@@ -654,7 +654,7 @@ describe("foreground through real computer-use attachment", () => {
           // Q starts on the same control and gets its own implied foreground.
           const reused = Option.getOrThrow(
             yield* leases.everyAppControl(threadId, false, {
-              directed: true,
+              person: true,
               runId: RunId.make("run:Q"),
             }),
           );

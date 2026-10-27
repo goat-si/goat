@@ -147,7 +147,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
-      run?: { readonly directed?: boolean; readonly runId?: RunId },
+      run?: { readonly person?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
      * Apps a full access run named in a request. The desktop adds them to the driver's manifest,
@@ -359,9 +359,9 @@ const make = Effect.gen(function* () {
         DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now),
     );
 
-  // A directed full access run takes the foreground without asking; see ComputerUseForeground.
+  // A person's full access run takes the foreground without asking; see ComputerUseForeground.
   const implyFocus = (record: ControlRecord) => {
-    if (record.everyApp !== "directed" || record.runId === undefined) return false;
+    if (record.everyApp !== "person" || record.runId === undefined) return false;
     if (paused !== undefined || privateHost) return false;
     return foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
   };
@@ -438,14 +438,14 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly directed?: boolean; readonly runId?: RunId },
+    run?: { readonly person?: boolean; readonly runId?: RunId },
   ) {
     if (!unattended)
       return Option.fromNullishOr(
         yield* mint(
           threadId,
           Option.none(),
-          run?.directed === true ? "directed" : "interactive",
+          run?.person === true ? "person" : "interactive",
           run?.runId,
         ),
       );

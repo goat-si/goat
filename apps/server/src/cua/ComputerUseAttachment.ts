@@ -180,7 +180,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   const control = everyApp
     ? yield* leases.value
         .everyAppControl(input.threadId, unattended, {
-          directed: kind === "directed",
+          person: kind === "person",
           ...(input.runId === undefined ? {} : { runId: input.runId }),
         })
         .pipe(Effect.orElseSucceed(() => Option.none()))

@@ -122,7 +122,7 @@ it.effect(
         Effect.gen(function* () {
           // The every-app control the attachment gives this origin in full access.
           const control = Option.getOrThrow(
-            yield* leases.everyAppControl(threadId, false, { directed: true, runId }),
+            yield* leases.everyAppControl(threadId, false, { person: true, runId }),
           );
           assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
           if (!leases.releaseForeground) return assert.fail("releaseForeground is required");
@@ -267,7 +267,7 @@ it.effect(
   () =>
     withWaiting(({ request, leases, orchestrator, runId }) =>
       Effect.gen(function* () {
-        yield* leases.everyAppControl(threadId, false, { directed: true, runId });
+        yield* leases.everyAppControl(threadId, false, { person: true, runId });
         assert.equal((yield* request({ apps: [APP] }, WAIT)).kind, "available");
         assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
         assert.deepInclude(yield* request({ foreground: true, apps: [APP] }, WAIT), {
@@ -289,7 +289,7 @@ it.effect(
       yield* withWaiting(
         ({ request, leases, runId }) =>
           Effect.gen(function* () {
-            yield* leases.everyAppControl(threadId, false, { directed: true, runId });
+            yield* leases.everyAppControl(threadId, false, { person: true, runId });
             assert.deepEqual(yield* Queue.take(watched), []);
             assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
             assert.deepEqual(yield* Queue.take(watched), [devBuild]);

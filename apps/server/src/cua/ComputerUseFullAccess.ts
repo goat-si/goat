@@ -11,8 +11,12 @@ import type { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
-/** Who a full access control on every app is for: a directed run, another interactive run (a server wake), or unattended work. */
-export type EveryAppKind = "directed" | "interactive" | "unattended";
+/**
+ * Who a full access control on every app is for: `person` is a directed run (a person, or an agent
+ * they direct; ComputerUseOrigin.directedRun), `interactive` another interactive run such as a
+ * server wake, and `unattended` unattended work.
+ */
+export type EveryAppKind = "person" | "interactive" | "unattended";
 
 /** The kind a turn would get, or undefined outside full access. */
 export const everyAppKind = (input: {
@@ -22,7 +26,7 @@ export const everyAppKind = (input: {
 }): EveryAppKind | undefined => {
   if (input.runtimeMode !== "full-access") return undefined;
   if (input.unattended) return "unattended";
-  return input.directed ? "directed" : "interactive";
+  return input.directed ? "person" : "interactive";
 };
 
 /** Whether the thread is still in full access. A failed read admits nothing, so the control ends. */
