@@ -14,6 +14,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- names a published Pi directory by its content digest.
+import * as NodeCrypto from "node:crypto";
 import * as Config from "../config.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
@@ -72,6 +74,16 @@ export type ProviderHomeRuntime = {
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly allowedModels: ReadonlySet<string>;
 };
+/** A validated route that has not changed anything on disk yet. */
+export type ProviderHomeCandidate = Omit<ProviderHomeRuntime, "environment"> & {
+  readonly environment: ProviderInstanceEnvironment | undefined;
+  readonly overlay: Readonly<Record<string, string>>;
+  readonly pi?: {
+    readonly instanceId: ProviderInstanceId;
+    readonly block: JsonRecord;
+    readonly defaultModel: string;
+  };
+};
 type ExportedModels = { readonly ids: ReadonlyArray<string>; readonly names: Map<string, string> };
 
 const readPiExport = (document: JsonRecord, baseUrl: string) => {
@@ -126,8 +138,24 @@ const mergeOpenCodeInline = (
   });
 };
 
-/** Durable so native sessions resume after the instance is re-created; only these files are owned. */
-const writePiAgentDirectory = Effect.fn("ProviderHomeRuntime.writePiAgentDirectory")(function* (
+const piAgentFiles = (block: JsonRecord, defaultModel: string) => {
+  const files: ReadonlyArray<readonly [string, string]> = [
+    [
+      "models.json",
+      JSON.stringify({ providers: { opencodex: { ...block, apiKey: LOOPBACK_KEY } } }, null, 2),
+    ],
+    ["settings.json", JSON.stringify({ defaultProvider: "opencodex", defaultModel }, null, 2)],
+  ];
+  const digest = NodeCrypto.createHash("sha256").update(JSON.stringify(files)).digest("hex");
+  return { files, name: digest.slice(0, 16) };
+};
+
+/**
+ * Publishes routed Pi configuration under a name derived from its content: it is staged in a
+ * candidate directory and renamed into place, so a running Pi never reads a partial or replaced
+ * file. Native sessions stay in the user's session directory, so recreation does not move them.
+ */
+const publishPiAgentDirectory = Effect.fn("ProviderHomeRuntime.publishPiAgentDirectory")(function* (
   instanceId: ProviderInstanceId,
   block: JsonRecord,
   defaultModel: string,
@@ -135,17 +163,27 @@ const writePiAgentDirectory = Effect.fn("ProviderHomeRuntime.writePiAgentDirecto
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const server = yield* Config.ServerConfig;
-  const directory = path.join(server.stateDir, "providers", "pi", instanceId, "home-agent");
-  yield* fs.makeDirectory(directory, { recursive: true });
-  const write = (name: string, value: unknown) =>
-    fs
-      .writeFileString(path.join(directory, `${name}.tmp`), JSON.stringify(value, null, 2))
-      .pipe(
-        Effect.andThen(fs.rename(path.join(directory, `${name}.tmp`), path.join(directory, name))),
-      );
-  yield* write("models.json", { providers: { opencodex: { ...block, apiKey: LOOPBACK_KEY } } });
-  yield* write("settings.json", { defaultProvider: "opencodex", defaultModel });
-  return directory;
+  const { files, name } = piAgentFiles(block, defaultModel);
+  const root = path.join(server.stateDir, "providers", "pi", instanceId, "home-agent");
+  const target = path.join(root, name);
+  if (yield* fs.exists(target)) return target;
+  yield* fs.makeDirectory(root, { recursive: true });
+  const candidate = yield* fs.makeTempDirectory({ directory: root, prefix: ".candidate-" });
+  yield* Effect.forEach(
+    files,
+    ([name, text]) => fs.writeFileString(path.join(candidate, name), text),
+    { discard: true },
+  ).pipe(
+    Effect.andThen(fs.rename(candidate, target)),
+    // Another publication of the same content may have won the rename.
+    Effect.catch((error) =>
+      fs
+        .exists(target)
+        .pipe(Effect.flatMap((exists) => (exists ? Effect.void : Effect.fail(error)))),
+    ),
+    Effect.ensuring(fs.remove(candidate, { recursive: true }).pipe(Effect.ignore)),
+  );
+  return target;
 });
 
 const piSessionDirectory = Effect.fn("ProviderHomeRuntime.piSessionDirectory")(function* (
@@ -211,10 +249,10 @@ const exportDocument = Effect.fn("ProviderHomeRuntime.export")(function* (
 });
 
 /**
- * Builds the process-only overlay for a routed Claude Code, OpenCode or Pi instance. The persisted
- * instance environment and the user's provider files are never changed.
+ * Validates a routed Claude Code, OpenCode or Pi instance against this machine's OpenCodex and
+ * returns its process-only overlay without writing anything, so approvals can check it first.
  */
-export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare")(
+export const inspectProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.inspect")(
   function* (
     driver: ProviderHomeOverlayDriver,
     instanceId: ProviderInstanceId,
@@ -258,21 +296,18 @@ export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare
     const document = yield* exportDocument(driver, baseUrl, merged);
     let exported: ExportedModels;
     let overlay: Record<string, string>;
+    let pi: ProviderHomeCandidate["pi"];
     if (driver === "pi") {
-      const pi = yield* Effect.try({
+      const piExport = yield* Effect.try({
         try: () => readPiExport(document, baseUrl),
         catch: () => fail("OpenCodex's Pi export must describe the selected loopback endpoint."),
       });
-      exported = pi;
-      const [first] = pi.ids;
-      if (first === undefined || pi.ids.some((id) => !id.trim())) return yield* fail(NO_MODELS);
-      const directory = yield* writePiAgentDirectory(instanceId, pi.block, first).pipe(
-        Effect.mapError(() => fail("Could not write this instance's Pi Home configuration.")),
-      );
-      overlay = {
-        PI_CODING_AGENT_DIR: directory,
-        PI_CODING_AGENT_SESSION_DIR: yield* piSessionDirectory(merged),
-      };
+      exported = piExport;
+      const [first] = piExport.ids;
+      if (first === undefined || piExport.ids.some((id) => !id.trim()))
+        return yield* fail(NO_MODELS);
+      pi = { instanceId, block: piExport.block, defaultModel: first };
+      overlay = { PI_CODING_AGENT_SESSION_DIR: yield* piSessionDirectory(merged) };
     } else {
       const openCode = yield* Effect.try({
         try: () => readOpenCodeExport(document, baseUrl),
@@ -311,17 +346,14 @@ export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare
       isCustom: true,
       capabilities: null,
     }));
-    const overridden = new Set(Object.keys(overlay));
-    const nextEnvironment = yield* decodeEnvironment([
-      ...(environment ?? []).filter(({ name }) => !overridden.has(name)),
-      ...Object.entries(overlay).map(([name, value]) => ({ name, value, sensitive: false })),
-    ]);
     return {
       baseUrl,
-      environment: nextEnvironment,
+      environment,
+      overlay,
+      ...(pi === undefined ? {} : { pi }),
       models,
       allowedModels: new Set(models.map((model) => model.slug)),
-    } satisfies ProviderHomeRuntime;
+    } satisfies ProviderHomeCandidate;
   },
   Effect.mapError((error) =>
     isRuntimeError(error)
@@ -329,3 +361,41 @@ export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare
       : fail("Could not prepare this instance's Home runtime. Refresh and retry."),
   ),
 );
+
+/** Applies an inspected route: publishes Pi's files and returns the launch environment. */
+const publishProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.publish")(function* (
+  candidate: ProviderHomeCandidate,
+) {
+  const { pi } = candidate;
+  const overlay =
+    pi === undefined
+      ? candidate.overlay
+      : {
+          ...candidate.overlay,
+          PI_CODING_AGENT_DIR: yield* publishPiAgentDirectory(
+            pi.instanceId,
+            pi.block,
+            pi.defaultModel,
+          ).pipe(
+            Effect.mapError(() => fail("Could not write this instance's Pi Home configuration.")),
+          ),
+        };
+  const overridden = new Set(Object.keys(overlay));
+  const environment = yield* decodeEnvironment([
+    ...(candidate.environment ?? []).filter(({ name }) => !overridden.has(name)),
+    ...Object.entries(overlay).map(([name, value]) => ({ name, value, sensitive: false })),
+  ]).pipe(Effect.mapError(() => fail("Could not build this instance's Home environment.")));
+  return {
+    baseUrl: candidate.baseUrl,
+    environment,
+    models: candidate.models,
+    allowedModels: candidate.allowedModels,
+  } satisfies ProviderHomeRuntime;
+});
+
+/** Inspects and then publishes a route; only runtime construction after admission calls this. */
+export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare")(function* (
+  ...input: Parameters<typeof inspectProviderHomeRuntime>
+) {
+  return yield* publishProviderHomeRuntime(yield* inspectProviderHomeRuntime(...input));
+});

@@ -32,8 +32,8 @@ import * as Routes from "./CodexRouteService.ts";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import * as HomeAdapters from "./ProviderHomeAdapters.ts";
 import {
+  inspectProviderHomeRuntime,
   layerProviderHomeInventory,
-  prepareProviderHomeRuntime,
   type ProviderHomeRuntimeEnv,
 } from "./ProviderHomeRuntime.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -258,7 +258,8 @@ const make = Effect.gen(function* () {
           latest.instance.environment,
         ).pipe(Effect.provideContext(context), Effect.mapError(invalid));
       } else
-        yield* prepareProviderHomeRuntime(
+        // Observational: the route is published only when the committed settings are applied.
+        yield* inspectProviderHomeRuntime(
           overlay,
           intent.request.instanceId,
           nextConfig,

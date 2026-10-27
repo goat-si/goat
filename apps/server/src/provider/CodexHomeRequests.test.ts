@@ -24,10 +24,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Settings from "../serverSettings.ts";
+import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
+import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as Runner from "../processRunner.ts";
 import * as Installation from "./CodexInstallation.ts";
@@ -54,6 +57,7 @@ const approval = (
       readonly acquire: Installation.CodexInstallation["Service"]["acquire"];
     };
     readonly homeRoute?: HomeRoute.OpenCodexRoute["Service"];
+    readonly openCodex?: Layer.Layer<Inventory.OpenCodexInventory | Runner.ProcessRunner>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -132,8 +136,11 @@ const approval = (
       ],
     };
     const dependencies = Layer.mergeAll(
-      Layer.mock(Inventory.OpenCodexInventory)({}),
-      Layer.mock(Runner.ProcessRunner)({}),
+      options.openCodex ??
+        Layer.mergeAll(
+          Layer.mock(Inventory.OpenCodexInventory)({}),
+          Layer.mock(Runner.ProcessRunner)({}),
+        ),
       Layer.mock(Installation.CodexInstallation)(
         options.installation ?? { managedDirectory: "unused-approval-installation" },
       ),
@@ -555,4 +562,81 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       assert.equal(leases, 0);
       assert.equal(f.finished(), 1);
     }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+/** This machine's OpenCodex: a linked listener whose export describes one Home model for Pi. */
+const piOpenCodex = (calls: Array<Runner.ProcessRunInput>) =>
+  Layer.mergeAll(
+    Layer.mock(Inventory.OpenCodexInventory)({
+      readParity: Effect.succeed({
+        ...fleetSnapshot("mac-studio"),
+        binaries: [{ path: "/fixture/ocx", version: "2.92.0" }],
+      }),
+    }),
+    Layer.mock(Runner.ProcessRunner)({
+      run: (input) =>
+        Effect.sync(() => {
+          calls.push(input);
+          return {
+            stdout: JSON.stringify({
+              providers: {
+                opencodex: {
+                  baseUrl: "http://127.0.0.1:10100/v1",
+                  api: "openai-completions",
+                  models: [{ id: "provider/model" }],
+                },
+              },
+            }),
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }),
+    }),
+  );
+
+it.effect.each(["busy", "stale"] as const)(
+  "leaves the active Pi configuration unchanged when a %s Home approval is refused",
+  (refusal) =>
+    Effect.gen(function* () {
+      const calls: Array<Runner.ProcessRunInput> = [];
+      const f = yield* approval("connect", "pi", { openCodex: piOpenCodex(calls) });
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const server = yield* Config.ServerConfig;
+      const root = path.join(server.stateDir, "providers", "pi", instanceId, "home-agent");
+      const active = path.join(root, "active-fixture");
+      yield* fs.makeDirectory(active, { recursive: true });
+      yield* fs.writeFileString(path.join(active, "models.json"), "active models");
+      const before = yield* fs.readDirectory(root);
+      if (refusal === "stale")
+        yield* commitAndApply(
+          f.routes.mutateProviderInstance(
+            {
+              mutation: {
+                operation: "upsert",
+                instanceId,
+                instance: { ...f.instance, displayName: "Competing UI B" },
+              },
+            },
+            caller,
+          ),
+        );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          if (refusal === "busy") yield* f.routes.reserveUse(instanceId);
+          yield* f.requests.resumeContinuations;
+        }),
+      );
+      assert.equal(calls.length, 1);
+      assert.deepEqual(yield* fs.readDirectory(root), before);
+      assert.equal(yield* fs.readFileString(path.join(active, "models.json")), "active models");
+      const saved = (yield* f.routes.capture(instanceId)).instance.config;
+      assert.equal(decodeRoute(saved).modelRoute, "default");
+      assert.equal(f.finished(), 1);
+    }).pipe(Effect.provide(layer)),
 );

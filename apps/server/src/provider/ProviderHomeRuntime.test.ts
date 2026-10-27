@@ -15,7 +15,7 @@ import * as Config from "../config.ts";
 import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as Runner from "../processRunner.ts";
-import { prepareProviderHomeRuntime } from "./ProviderHomeRuntime.ts";
+import { inspectProviderHomeRuntime, prepareProviderHomeRuntime } from "./ProviderHomeRuntime.ts";
 
 const HOME = "http://127.0.0.1:10100/v1";
 const instanceId = ProviderInstanceId.make("home-runtime");
@@ -64,8 +64,9 @@ const boundary = (
       run: (input) =>
         Effect.sync(() => {
           calls.push(input);
+          const document = typeof stdout === "function" ? stdout() : stdout;
           return {
-            stdout: typeof stdout === "string" ? stdout : JSON.stringify(stdout),
+            stdout: typeof document === "string" ? document : JSON.stringify(document),
             stderr: "",
             code: ChildProcessSpawner.ExitCode(0),
             timedOut: false,
@@ -294,6 +295,44 @@ it.effect.each(["not json", JSON.stringify({ provider: "not a map" })])(
       const environment = [{ name: "OPENCODE_CONFIG_CONTENT", value: inherited, sensitive: false }];
       const result = yield* prepare("opencode", {}, environment).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "inspects without writing and publishes a changed Pi catalog beside the active one",
+  () => {
+    let models = [{ id: "provider/model", name: "Home model" }];
+    const { layer } = boundary(() => ({
+      providers: { opencodex: { ...piExport.providers.opencodex, models } },
+    }));
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const server = yield* Config.ServerConfig;
+      const root = path.join(server.stateDir, "providers", "pi", instanceId, "home-agent");
+      const inspected = yield* inspectProviderHomeRuntime(
+        "pi",
+        instanceId,
+        { modelRoute: "opencodex", opencodexBaseUrl: HOME },
+        [],
+      ).pipe(Effect.provideService(HostProcess.Environment, {}));
+      assert.deepEqual([...inspected.allowedModels], ["opencodex/provider/model"]);
+      assert.isFalse(yield* fs.exists(root));
+      const active = variable((yield* prepare("pi", {})).environment, "PI_CODING_AGENT_DIR") ?? "";
+      const activeModels = yield* fs.readFileString(path.join(active, "models.json"));
+      models = [{ id: "provider/other", name: "Other" }];
+      const next = yield* prepare("pi", {});
+      const published = variable(next.environment, "PI_CODING_AGENT_DIR") ?? "";
+      assert.notEqual(published, active);
+      assert.equal(yield* fs.readFileString(path.join(active, "models.json")), activeModels);
+      assert.include(
+        yield* fs.readFileString(path.join(published, "models.json")),
+        "provider/other",
+      );
+      assert.deepEqual([...next.allowedModels], ["opencodex/provider/other"]);
+      const leftovers = (yield* fs.readDirectory(root)).filter((name) => name.startsWith("."));
+      assert.deepEqual(leftovers, []);
     }).pipe(Effect.provide(layer));
   },
 );
