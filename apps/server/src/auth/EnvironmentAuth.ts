@@ -506,6 +506,9 @@ export class EnvironmentAuth extends Context.Service<
       AuthAccessTokenResult,
       ServerAuthInvalidCredentialError | ServerAuthInvalidRequestError | ServerAuthInternalError
     >;
+    readonly setCloudLinkTrust: (
+      userId: string | null,
+    ) => Effect.Effect<void, ServerAuthInternalError>;
     readonly createPairingLink: (input?: {
       readonly ttl?: Duration.Duration;
       readonly label?: string;
@@ -1320,7 +1323,6 @@ export const make = Effect.gen(function* () {
 
       return yield* authenticateRequest(request);
     });
-
   const authenticateMcpClient: EnvironmentAuth["Service"]["authenticateMcpClient"] = (request) => {
     const token = parseBearerToken(request);
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
@@ -1351,7 +1353,6 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.authenticateMcpClient"),
     );
   };
-
   const issueMcpClientSession: EnvironmentAuth["Service"]["issueMcpClientSession"] = (input) =>
     sessions
       .issue({
@@ -1371,7 +1372,6 @@ export const make = Effect.gen(function* () {
         Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
         Effect.withSpan("EnvironmentAuth.issueMcpClientSession"),
       );
-
   const authenticateBrowserSession: EnvironmentAuth["Service"]["authenticateBrowserSession"] = (
     request,
   ) => {
@@ -1387,7 +1387,6 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.authenticateBrowserSession"),
     );
   };
-
   const consumeMcpApprovalCode: EnvironmentAuth["Service"]["consumeMcpApprovalCode"] = (
     code,
     access,
@@ -1409,7 +1408,6 @@ export const make = Effect.gen(function* () {
       ),
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
-
   return EnvironmentAuth.of({
     getDescriptor: Effect.fn("EnvironmentAuth.getDescriptor")(function () {
       return Effect.succeed(descriptor);
@@ -1418,6 +1416,11 @@ export const make = Effect.gen(function* () {
     createBrowserSession,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
+    setCloudLinkTrust: Effect.fn("EnvironmentAuth.setCloudLinkTrust")((userId) =>
+      bootstrapCredentials
+        .setCloudTrust(userId)
+        .pipe(Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause }))),
+    ),
     issuePairingCredential,
     issueStartupPairingCredential,
     listPairingLinks,
@@ -1439,15 +1442,12 @@ export const make = Effect.gen(function* () {
     authenticateBrowserSession,
   });
 });
-
 export const layer = Layer.effect(EnvironmentAuth, make).pipe(
   Layer.provideMerge(PairingGrantStore.layer),
   Layer.provideMerge(SessionStore.layer),
   Layer.provideMerge(EnvironmentAuthPolicy.layer),
 );
-
 const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerConfig);
-
 export const layerRuntime = layer.pipe(
   Layer.provideMerge(layerStorage),
   Layer.provideMerge(ServerEnvironment.layerIdentity),

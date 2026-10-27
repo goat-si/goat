@@ -59,15 +59,11 @@ const jsonFlag = Flag.Boolean("json").pipe(
 );
 
 const headlessFlag = Flag.Boolean("headless").pipe(
-  Flag.withDescription("Authorize without a local browser using the OAuth device flow."),
+  Flag.withDescription("Unsupported in Connect beta; use a local browser approval."),
   Flag.withDefault(false),
 );
 
-/**
- * Inside an SSH session there is no local browser to complete the loopback
- * OAuth callback, so the device authorization grant is the only flow that
- * can work.
- */
+// A remote shell cannot complete the supported local-browser approval flow.
 const headlessSessionConfig = Config.all({
   sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
   sshTty: Config.String("SSH_TTY").pipe(Config.option),
@@ -366,9 +362,9 @@ const logCloudDisconnectFailure = (
     }),
   );
 
-const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(function* () {
-  const tokens = yield* CliTokenManager.CloudCliTokenManager;
-  const token = yield* tokens.getExisting;
+const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(function* (
+  token: Option.Option<CliTokenManager.PersistedToken>,
+) {
   if (Option.isNone(token)) {
     return { status: "not-authenticated" } satisfies RelayUnlinkResult;
   }
@@ -428,7 +424,7 @@ const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_resu
       );
     } else if (input.relayResult.value.status === "not-authenticated") {
       yield* Console.warn(
-        "The relay-side environment record was not revoked.\nDeregister it from the GOAT Connect page of your GOAT account, or run `goat connect login` and retry.",
+        "Remote revocation pending.\nRetry: goat connect login, then goat connect unlink; or withdraw the environment from the hosted account page.",
       );
     } else if (input.relayResult.value.status === "revoked") {
       yield* Console.log("Revoked the relay-side environment record.");
@@ -440,14 +436,18 @@ export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (opti
   readonly clearAuthorization: boolean;
 }) {
   yield* CliState.setCliDesiredCloudLink(false);
-  const liveResult = yield* runLiveCloudUnlink();
-  const relayResult = yield* Effect.exit(unlinkRelayEnvironment());
+  const tokens = yield* CliTokenManager.CloudCliTokenManager;
+  const credential = yield* Effect.exit(tokens.getExisting.pipe(Effect.timeout("5 seconds")));
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const trustWithdrawal = yield* Effect.exit(auth.setCloudLinkTrust(null));
   yield* CliState.clearPersistedCloudLink;
-
-  if (options.clearAuthorization) {
-    const tokens = yield* CliTokenManager.CloudCliTokenManager;
-    yield* tokens.clear;
-  }
+  if (options.clearAuthorization) yield* tokens.clear;
+  const liveResult = yield* runLiveCloudUnlink();
+  const relayResult = Exit.isFailure(credential)
+    ? credential
+    : yield* Effect.exit(
+        unlinkRelayEnvironment(credential.value).pipe(Effect.timeout("5 seconds")),
+      );
 
   yield* reportCloudDisconnectResults({
     clearAuthorization: options.clearAuthorization,
@@ -455,6 +455,12 @@ export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (opti
     relayResult,
   });
 
+  if (Exit.isFailure(trustWithdrawal)) {
+    yield* Console.warn(
+      "Local pending Connect grants could not be withdrawn. Retry goat connect unlink.",
+    );
+    return yield* Effect.failCause(trustWithdrawal.cause);
+  }
   if (options.clearAuthorization) {
     yield* Console.log(
       "Signed out of GOAT Connect locally.\nThe background service is managed separately with `goat service`.",
@@ -517,6 +523,12 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
   if (options.headless || (yield* headlessSessionConfig))
     return yield* new CliTokenManager.CloudCliAuthorizationUnsupportedError({});
   const publishOnly = options.publishOnly ?? false;
+  if (publishOnly) {
+    yield* Console.error(
+      "Publishing agent activity is unavailable in the reachability-only Connect beta.",
+    );
+    return null;
+  }
   if (!publishOnly) {
     const relayClient = yield* RelayClient.RelayClient;
     const installed = yield* acquireRelayClientForLink(
@@ -663,12 +675,8 @@ const connectPublishCommand = Command.make("publish", {
       flags,
       Effect.gen(function* () {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
-        const tokens = yield* CliTokenManager.CloudCliTokenManager;
         const enabled = !flags.disable;
-        yield* secrets.set(
-          PUBLISH_AGENT_ACTIVITY_SECRET,
-          stringToBytes(enabled ? "true" : "false"),
-        );
+        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, stringToBytes("false"));
         if (!enabled) {
           // Cancel unprovisioned publish-only links too, or the next start will recreate them.
           // Managed links also serve the tunnel and must survive.
@@ -681,28 +689,8 @@ const connectPublishCommand = Command.make("publish", {
           return;
         }
 
-        yield* Console.log("Publishing agent activity enabled.");
-        const linked = Option.isSome(yield* secrets.get(CLOUD_LINKED_USER_ID));
-        if (linked) {
-          return;
-        }
-
-        if (!(yield* tokens.hasCredential)) {
-          yield* Console.log(
-            "Run `goat connect login` first so this environment can be authorized to publish.",
-          );
-          return;
-        }
-        // A desired managed link already covers publishing and must not be downgraded.
-        if (yield* CliState.readCliDesiredCloudLink) {
-          yield* Console.log(
-            "A GOAT Connect link is already pending. Start GOAT to finish provisioning it; publishing starts once it links.",
-          );
-          return;
-        }
-        yield* CliState.setCliDesiredCloudLink(true, "publish_only");
-        yield* Console.log(
-          "Restart GOAT to finish authorizing this environment to publish (no managed tunnel is created).",
+        yield* Console.error(
+          "Publishing agent activity is unavailable in the reachability-only Connect beta.",
         );
       }),
     ),
@@ -732,7 +720,7 @@ const reportServiceOnboarding = Effect.fn("cli.connect.report_service_onboarding
 ) {
   if (outcome === "pending") {
     yield* Console.log(
-      "\nBackground service restarting\n\nThe server establishes the GOAT Connect link once it is back. Check the log above if it does not come back.",
+      "\nBackground service restarting\n\nThe server resumes the approved GOAT Connect link once it is back. Check the log above if it does not come back.",
     );
     return;
   }
@@ -740,8 +728,8 @@ const reportServiceOnboarding = Effect.fn("cli.connect.report_service_onboarding
     const platform = yield* HostProcess.Platform;
     yield* Console.log(
       platform === "darwin"
-        ? "\n✓ Background service ready\n\nGOAT is set to run while you are logged in to this Mac. The server establishes the GOAT Connect link on startup."
-        : "\n✓ Background service ready\n\nGOAT is set to keep running after you log out. The server establishes the GOAT Connect link on startup.",
+        ? "\n✓ Background service ready\n\nGOAT is set to run while you are logged in to this Mac. The server resumes the approved GOAT Connect link on startup."
+        : "\n✓ Background service ready\n\nGOAT is set to keep running after you log out. The server resumes the approved GOAT Connect link on startup.",
     );
     return;
   }

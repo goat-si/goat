@@ -32,7 +32,10 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
-import { buildConnectAuthorizeRequestUrl } from "@goat/shared/connectAuth";
+import {
+  buildConnectAuthorizeRequestUrl,
+  buildConnectClerkAuthorizeUrl,
+} from "@goat/shared/connectAuth";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
@@ -51,13 +54,15 @@ const CLOUD_CLI_OAUTH_REFRESH_EARLY_MS = Duration.toMillis(Duration.minutes(5));
 const OAUTH_REQUEST_TIMEOUT = Duration.seconds(10);
 const boldTerminalText = (value: string): string => `\u001b[1m${value}\u001b[22m`;
 
-function formatLoopbackAuthorizationPrompt(authorizationUrl: string): string {
+function formatLoopbackAuthorizationPrompt(authorizationUrl: string, linking = true): string {
   return [
     "Open this URL to authorize GOAT Connect:",
     `  ${authorizationUrl}`,
     "",
     `Press ${boldTerminalText("Enter")} to open it in your browser.`,
-    "A local browser and MFA are required for the Connect beta.",
+    linking
+      ? "A local browser and MFA are required for the Connect beta."
+      : "This signs in for account-owned withdrawal. Linking still requires a separate browser approval.",
   ].join("\n");
 }
 
@@ -436,7 +441,6 @@ export const make = Effect.gen(function* () {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
-    if (!intent) return yield* new CloudCliAuthorizationUnsupportedError({});
     const approvalRequest = yield* makePkceRequest;
     const key = yield* Effect.try(() => createCliApprovalKey());
     const approvalCallback = yield* Deferred.make<string>();
@@ -510,7 +514,7 @@ export const make = Effect.gen(function* () {
           });
         }
         yield* Deferred.succeed(callback, code);
-        return (yield* Deferred.isDone(approvalCallback))
+        return !intent || (yield* Deferred.isDone(approvalCallback))
           ? HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml())
           : HttpServerResponse.text(
               "Authorization code received. Waiting for the matching browser approval.",
@@ -534,23 +538,36 @@ export const make = Effect.gen(function* () {
       Layer.build,
     );
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
-    const authorizationUrl = buildConnectAuthorizeRequestUrl({
-      hostedAppUrl,
-      state,
-      challenge,
-      loopbackPort: metadata.loopbackPort,
-      approval: {
-        intent,
-        cliKeyThumbprint: key.thumbprint,
-        approvalChallenge: approvalRequest.challenge,
-        state,
-      },
-    });
-    yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl));
+    const authorizationUrl = intent
+      ? buildConnectAuthorizeRequestUrl({
+          hostedAppUrl,
+          state,
+          challenge,
+          loopbackPort: metadata.loopbackPort,
+          approval: {
+            intent,
+            cliKeyThumbprint: key.thumbprint,
+            approvalChallenge: approvalRequest.challenge,
+            state,
+          },
+        })
+      : buildConnectClerkAuthorizeUrl({
+          authorizationEndpoint: new URL("authorize", metadata.tokenEndpoint).toString(),
+          clientId: metadata.clientId,
+          redirectUri: metadata.redirectUri,
+          scopes: metadata.scopes,
+          state,
+          challenge,
+        });
+    yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl, intent !== undefined));
     const authorization = yield* waitForLoopbackAuthorization({
       authorizationUrl,
-      callback: Effect.all([Deferred.await(callback), Deferred.await(approvalCallback)]).pipe(
-        Effect.map(([code]) => code),
+      callback: (intent
+        ? Effect.all([Deferred.await(callback), Deferred.await(approvalCallback)]).pipe(
+            Effect.map(([code]) => code),
+          )
+        : Deferred.await(callback)
+      ).pipe(
         Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
         Effect.catchTags({
           TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
@@ -572,6 +589,7 @@ export const make = Effect.gen(function* () {
       client_id: metadata.clientId,
       code_verifier: verifier,
     });
+    if (!intent) return { _tag: "IdentityAuthorized", token } as const;
     return {
       _tag: "Authorized",
       token,
@@ -627,9 +645,7 @@ export const make = Effect.gen(function* () {
         return { _tag: "Authorized", token: token.value } as const;
       }
       const authorization = yield* Effect.scoped(login());
-      return authorization._tag === "Authorized"
-        ? ({ _tag: "Authorized", token: yield* persist(authorization.token) } as const)
-        : authorization;
+      return { _tag: "Authorized", token: yield* persist(authorization.token) } as const;
     }).pipe(
       Effect.mapError((cause) =>
         Terminal.isQuitError(cause) || isAuthorizationUnsupported(cause)
@@ -654,7 +670,11 @@ export const make = Effect.gen(function* () {
     return yield* semaphore
       .withPermits(1)(
         Effect.scoped(login(intent)).pipe(
-          Effect.flatMap((approved) => persist(approved.token).pipe(Effect.as(approved))),
+          Effect.flatMap((approved) =>
+            approved._tag === "Authorized"
+              ? persist(approved.token).pipe(Effect.as(approved))
+              : Effect.fail(new CloudCliAuthorizationUnsupportedError({})),
+          ),
         ),
       )
       .pipe(

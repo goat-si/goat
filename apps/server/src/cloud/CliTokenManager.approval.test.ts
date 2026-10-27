@@ -17,7 +17,7 @@ import * as ExternalLauncher from "../process/externalLauncher.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 
 const env = {
-  GOAT_HOSTED_APP_URL: "https://app.example.test",
+  GOAT_HOSTED_APP_URL: "https://app.trygoat.ai",
   GOAT_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("clerk.example.test$")}`,
   GOAT_CLERK_CLI_OAUTH_CLIENT_ID: "cli-client",
 };
@@ -102,7 +102,7 @@ describe("CLI approval and OAuth callback join", () => {
             ),
             callbackClient.execute,
           );
-        expect((yield* approval("https://staging.app.example.test")).status).toBe(403);
+        expect((yield* approval("https://staging.app.trygoat.ai")).status).toBe(403);
         expect((yield* order === "code-first" ? code() : approval()).status).toBe(200);
         expect(exchanges).toBe(0);
         expect((yield* order === "code-first" ? code() : approval()).status).toBe(400);
@@ -125,3 +125,85 @@ describe("CLI approval and OAuth callback join", () => {
       ),
   );
 });
+
+it.live("ordinary CLI login obtains only withdrawal identity without minting a link approval", () =>
+  Effect.gen(function* () {
+    const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
+    const launched = yield* Deferred.make<string>();
+    let stored = 0;
+    const requests: string[] = [];
+    const flowLayer = CliTokenManager.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerSecretStore.ServerSecretStore, {
+            get: () => Effect.succeedNone,
+            set: () =>
+              Effect.sync(() => {
+                stored++;
+              }),
+          }),
+          Layer.mock(ExternalLauncher.ExternalLauncher, {
+            launchBrowser: (url) => Deferred.succeed(launched, url).pipe(Effect.asVoid),
+          }),
+          Layer.succeed(
+            Terminal.Terminal,
+            Terminal.make({
+              columns: Effect.succeed(80),
+              rows: Effect.succeed(24),
+              readInput: Effect.succeed(input),
+              readLine: Effect.die("unused"),
+              display: () => Effect.void,
+            }),
+          ),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.sync(() => {
+                requests.push(new URL(request.url).pathname);
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    access_token: "withdrawal-oauth",
+                    refresh_token: "withdrawal-refresh",
+                    expires_in: 3600,
+                    token_type: "bearer",
+                  }),
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    const fiber = yield* CliTokenManager.CloudCliTokenManager.pipe(
+      Effect.flatMap((manager) => manager.get),
+      Effect.provide(flowLayer),
+      Effect.forkChild,
+    );
+    yield* Queue.offer(input, {
+      input: Option.none(),
+      key: { name: "enter", ctrl: false, meta: false, shift: false },
+    });
+    const authorize = new URL(yield* Deferred.await(launched));
+    expect(authorize.pathname).toBe("/oauth/authorize");
+    expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+    const callback = new URL(authorize.searchParams.get("redirect_uri") ?? "");
+    callback.searchParams.set("state", authorize.searchParams.get("state") ?? "");
+    callback.searchParams.set("code", "withdrawal-code");
+    expect((yield* (yield* HttpClient.HttpClient).get(callback.toString())).status).toBe(200);
+    const result = yield* Fiber.join(fiber);
+    expect(result._tag).toBe("Authorized");
+    expect("approval" in result).toBe(false);
+    expect(requests).toEqual(["/oauth/token"]);
+    expect(stored).toBe(1);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+        NodeServices.layer,
+        FetchHttpClient.layer,
+      ),
+    ),
+    Effect.scoped,
+  ),
+);

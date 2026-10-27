@@ -197,7 +197,9 @@ describe("releaseManagedTunnelOnShutdown", () => {
         ),
         Effect.provideService(
           EnvironmentAuth.EnvironmentAuth,
-          EnvironmentAuth.EnvironmentAuth.of({} as EnvironmentAuth.EnvironmentAuth["Service"]),
+          EnvironmentAuth.EnvironmentAuth.of({
+            setCloudLinkTrust: () => Effect.void,
+          } as EnvironmentAuth.EnvironmentAuth["Service"]),
         ),
         Effect.provideService(
           CliTokenManager.CloudCliTokenManager,
@@ -451,7 +453,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
       }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
     },
   );
-  it.effect("restarts only an unchanged, locally confirmed policy-1 connector", () => {
+  it.effect("retains a confirmed policy-1 connector through normal shutdown and startup", () => {
     const config = {
       providerKind: "cloudflare_tunnel",
       connectorToken: "existing-token",
@@ -472,6 +474,16 @@ describe("releaseManagedTunnelOnShutdown", () => {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
     return Effect.gen(function* () {
       const link = yield* CloudLink.CloudLink;
+      yield* link.applyRelayConfig({
+        connectAuthPolicyVersion: 1,
+        relayUrl: "https://relay.example.test",
+        cloudUserId: "user-123",
+        environmentCredential: "approved-credential",
+        endpointRuntime: config,
+        cloudMintPublicKey:
+          "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMY09Vo5CzEA6aEkhB/0h27t4Qs71SHS1fTSI4K0KvZQ=\n-----END PUBLIC KEY-----\n",
+      });
+      expect(yield* link.releaseManagedTunnelOnShutdown()).toBe(false);
       expect(yield* link.registerManagedTunnelRecovery("http://127.0.0.1:3773")).toMatchObject({
         status: "ready",
       });
@@ -481,8 +493,15 @@ describe("releaseManagedTunnelOnShutdown", () => {
         }),
       ).toBe(false);
       expect(requests).toEqual([]);
-      expect(applyConfigCalls).toEqual([config]);
-    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
+      expect(applyConfigCalls).toEqual([null, config, config]);
+    }).pipe(
+      provideReleaseHarness({
+        store,
+        applyConfigCalls,
+        requests,
+        getExisting: Effect.die("Retained connectors cannot request OAuth or new credentials"),
+      }),
+    );
   });
   it.effect("cannot relink at startup with only cached OAuth and a desired-link flag", () => {
     const { store } = makeMemorySecretStore(managedLinkSecrets);

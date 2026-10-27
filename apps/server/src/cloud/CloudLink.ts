@@ -676,7 +676,7 @@ const make = Effect.gen(function* () {
         if (Option.isNone(runtimeBytes)) return false;
         const config = Option.getOrNull(decodeRuntimeConfig(bytesToString(runtimeBytes.value)));
         if (config === null || config.providerKind !== "cloudflare_tunnel") return false;
-        // Require the relay-confirmed port unless falling back after the relay stayed unreachable.
+        // A retained connector may restart only on its relay-confirmed origin.
         if (requireConfirmedOrigin) {
           if (Option.isNone(markerBytes)) return false;
           const marker = Option.getOrNull(decodeConfirmedOrigin(bytesToString(markerBytes.value)));
@@ -730,6 +730,7 @@ const make = Effect.gen(function* () {
       const endpointRuntimeJson = payload.endpointRuntime
         ? yield* encodeEndpointRuntimeConfigJson(payload.endpointRuntime)
         : null;
+      yield* environmentAuth.setCloudLinkTrust(null);
       yield* endpointRuntime.applyConfig(null);
       yield* secrets.remove(CLOUD_ENDPOINT_CONFIRMED_ORIGIN);
       // Store runtime config last so partial writes cannot appear managed or respawn a stale tunnel.
@@ -748,6 +749,7 @@ const make = Effect.gen(function* () {
       yield* secrets.remove(CLOUD_LINK_REVOKED);
       yield* secrets.set("cloud-connect-auth-policy-version", stringToBytes("1"));
       yield* secrets.set(CLOUD_MINT_PUBLIC_KEY, stringToBytes(payload.cloudMintPublicKey));
+      yield* environmentAuth.setCloudLinkTrust(payload.cloudUserId);
       yield* awarenessRelay.requestCatchUp();
       if (endpointRuntimeJson !== null) {
         yield* secrets.set(CLOUD_ENDPOINT_RUNTIME_CONFIG, stringToBytes(endpointRuntimeJson));
@@ -853,15 +855,17 @@ const make = Effect.gen(function* () {
     Effect.catchTags({ SchemaError: internalError("persist-relay-config") }),
   );
 
-  // Cloudflare bills provisioned tunnels even while environments are offline.
+  // Policy-1 connectors survive shutdown because cached OAuth cannot replace them.
   const releaseManagedTunnelOnShutdown = Effect.fn(
     "environment.cloud.releaseManagedTunnelOnShutdown",
   )(function* () {
+    const policy = yield* secrets.get("cloud-connect-auth-policy-version");
+    if (Option.isSome(policy) && bytesToString(policy.value) === "1") return false;
     const runtimeConfig = yield* secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG);
     if (Option.isNone(runtimeConfig)) {
       return false;
     }
-    // CLI authorization releases only CLI-desired managed links; web/mobile links recover by credential and expire through the relay reaper.
+    // Legacy CLI links can still be withdrawn during shutdown.
     if (
       !(yield* readCliDesiredCloudLink.pipe(withSecrets)) ||
       (yield* readCliDesiredLinkMode.pipe(withSecrets)) !== "managed"
@@ -963,6 +967,9 @@ const make = Effect.gen(function* () {
     function* () {
       return yield* endpointRuntime.withLinkStateLock(
         Effect.gen(function* () {
+          yield* environmentAuth
+            .setCloudLinkTrust(null)
+            .pipe(Effect.catch(internalError("remove-relay-config")));
           const endpointRuntimeStatus = yield* endpointRuntime.applyConfig(null);
           yield* Effect.all(
             [
@@ -1166,114 +1173,118 @@ const make = Effect.gen(function* () {
   );
 
   const mintCredential = Effect.fn("environment.cloud.mintCredential")(
-    function* (request: RelayCloudMintCredentialRequest) {
-      const cloudMintPublicKey = yield* secrets
-        .get(CLOUD_MINT_PUBLIC_KEY)
-        .pipe(
-          Effect.flatMap((bytes) =>
-            Option.isSome(bytes)
-              ? Effect.succeed(bytesToString(bytes.value))
-              : Effect.fail(new EnvironmentAuth.ServerAuthCloudMintPublicKeyMissingError({})),
-          ),
-        );
-      const relayIssuer = yield* secrets
-        .get(RELAY_ISSUER_SECRET)
-        .pipe(
-          Effect.flatMap((bytes) =>
-            Option.isSome(bytes)
-              ? Effect.succeed(bytesToString(bytes.value))
-              : secrets
-                  .get(RELAY_URL_SECRET)
-                  .pipe(
-                    Effect.flatMap((fallbackBytes) =>
-                      Option.isSome(fallbackBytes)
-                        ? Effect.succeed(bytesToString(fallbackBytes.value))
-                        : Effect.fail(
-                            new EnvironmentAuth.ServerAuthCloudRelayIssuerMissingError({}),
-                          ),
-                    ),
-                  ),
-          ),
-        );
-      const environmentId = yield* environment.getEnvironmentId;
-      const linkedCloudUserId = yield* readInstalledCloudUserId;
-      const now = yield* DateTime.now;
-      const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
-      const proofOption = yield* verifyRelayJwt({
-        publicKey: cloudMintPublicKey,
-        token: request.proof,
-        typ: RELAY_MINT_REQUEST_TYP,
-        issuer: normalizeRelayIssuer(relayIssuer),
-        audience: `goat-env:${environmentId}`,
-        nowEpochSeconds: nowSeconds,
-      }).pipe(Effect.flatMap(decodeCloudMintProof), Effect.option);
-      if (
-        Option.isNone(proofOption) ||
-        proofOption.value.connectAuthPolicyVersion !== 1 ||
-        proofOption.value.assurance?.policyVersion !== 1 ||
-        proofOption.value.assurance.userId !== proofOption.value.sub ||
-        Option.getOrNull(yield* secrets.get("cloud-connect-auth-policy-version"))?.toString() !==
-          stringToBytes("1").toString() ||
-        proofOption.value.environmentId !== environmentId ||
-        proofOption.value.sub !== linkedCloudUserId ||
-        proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
-        !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
-        !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
-      ) {
-        return yield* new CloudLinkProofRejectedError({ request: "mint" });
-      }
-      const proof = proofOption.value;
+    (request: RelayCloudMintCredentialRequest) =>
+      endpointRuntime.withLinkStateLock(
+        Effect.gen(function* () {
+          const cloudMintPublicKey = yield* secrets
+            .get(CLOUD_MINT_PUBLIC_KEY)
+            .pipe(
+              Effect.flatMap((bytes) =>
+                Option.isSome(bytes)
+                  ? Effect.succeed(bytesToString(bytes.value))
+                  : Effect.fail(new EnvironmentAuth.ServerAuthCloudMintPublicKeyMissingError({})),
+              ),
+            );
+          const relayIssuer = yield* secrets
+            .get(RELAY_ISSUER_SECRET)
+            .pipe(
+              Effect.flatMap((bytes) =>
+                Option.isSome(bytes)
+                  ? Effect.succeed(bytesToString(bytes.value))
+                  : secrets
+                      .get(RELAY_URL_SECRET)
+                      .pipe(
+                        Effect.flatMap((fallbackBytes) =>
+                          Option.isSome(fallbackBytes)
+                            ? Effect.succeed(bytesToString(fallbackBytes.value))
+                            : Effect.fail(
+                                new EnvironmentAuth.ServerAuthCloudRelayIssuerMissingError({}),
+                              ),
+                        ),
+                      ),
+              ),
+            );
+          const environmentId = yield* environment.getEnvironmentId;
+          const linkedCloudUserId = yield* readInstalledCloudUserId;
+          const now = yield* DateTime.now;
+          const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
+          const proofOption = yield* verifyRelayJwt({
+            publicKey: cloudMintPublicKey,
+            token: request.proof,
+            typ: RELAY_MINT_REQUEST_TYP,
+            issuer: normalizeRelayIssuer(relayIssuer),
+            audience: `goat-env:${environmentId}`,
+            nowEpochSeconds: nowSeconds,
+          }).pipe(Effect.flatMap(decodeCloudMintProof), Effect.option);
+          if (
+            Option.isNone(proofOption) ||
+            proofOption.value.connectAuthPolicyVersion !== 1 ||
+            proofOption.value.assurance?.policyVersion !== 1 ||
+            proofOption.value.assurance.userId !== proofOption.value.sub ||
+            Option.getOrNull(
+              yield* secrets.get("cloud-connect-auth-policy-version"),
+            )?.toString() !== stringToBytes("1").toString() ||
+            proofOption.value.environmentId !== environmentId ||
+            proofOption.value.sub !== linkedCloudUserId ||
+            proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
+            !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
+            !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
+          ) {
+            return yield* new CloudLinkProofRejectedError({ request: "mint" });
+          }
+          const proof = proofOption.value;
 
-      const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
-      const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
-      const consumedReplayGuards = yield* consumeCloudReplayGuards({
-        secrets,
-        names: [jtiSecretName, nonceSecretName],
-        value: stringToBytes(DateTime.formatIso(now)),
-      });
-      if (!consumedReplayGuards) {
-        return yield* new CloudLinkProofReplayedError({ request: "mint" });
-      }
+          const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
+          const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
+          const consumedReplayGuards = yield* consumeCloudReplayGuards({
+            secrets,
+            names: [jtiSecretName, nonceSecretName],
+            value: stringToBytes(DateTime.formatIso(now)),
+          });
+          if (!consumedReplayGuards) {
+            return yield* new CloudLinkProofReplayedError({ request: "mint" });
+          }
 
-      const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
-      const issued = yield* environmentAuth.createPairingLink({
-        scopes: AuthStandardClientScopes,
-        subject: "cloud-connect",
-        ttl: Duration.minutes(2),
-        label: "GOAT Connect connect",
-        proofKeyThumbprint: proof.clientProofKeyThumbprint,
-      });
-      const responsePayload = {
-        connectAuthPolicyVersion: 1,
-        iss: `goat-env:${environmentId}`,
-        aud: normalizeRelayIssuer(relayIssuer),
-        sub: environmentId,
-        jti: yield* crypto.randomUUIDv4(),
-        iat: nowSeconds,
-        exp: Math.floor(issued.expiresAt.epochMilliseconds / 1_000),
-        environmentId,
-        clientProofKeyThumbprint: proof.clientProofKeyThumbprint,
-        requestNonce: proof.nonce,
-        credential: issued.credential,
-      } satisfies RelayEnvironmentMintResponseProofPayload;
-      const responseProof = yield* signRelayJwt({
-        privateKey: keyPair.privateKey,
-        typ: RELAY_MINT_RESPONSE_TYP,
-        payload: responsePayload,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({
-              cause,
-            }),
-        ),
-      );
-      return {
-        credential: issued.credential,
-        expiresAt: DateTime.formatIso(issued.expiresAt),
-        proof: responseProof,
-      } satisfies RelayEnvironmentMintResponse;
-    },
+          const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+          const issued = yield* environmentAuth.createPairingLink({
+            scopes: AuthStandardClientScopes,
+            subject: "cloud-connect",
+            ttl: Duration.minutes(2),
+            label: "GOAT Connect connect",
+            proofKeyThumbprint: proof.clientProofKeyThumbprint,
+          });
+          const responsePayload = {
+            connectAuthPolicyVersion: 1,
+            iss: `goat-env:${environmentId}`,
+            aud: normalizeRelayIssuer(relayIssuer),
+            sub: environmentId,
+            jti: yield* crypto.randomUUIDv4(),
+            iat: nowSeconds,
+            exp: Math.floor(issued.expiresAt.epochMilliseconds / 1_000),
+            environmentId,
+            clientProofKeyThumbprint: proof.clientProofKeyThumbprint,
+            requestNonce: proof.nonce,
+            credential: issued.credential,
+          } satisfies RelayEnvironmentMintResponseProofPayload;
+          const responseProof = yield* signRelayJwt({
+            privateKey: keyPair.privateKey,
+            typ: RELAY_MINT_RESPONSE_TYP,
+            payload: responsePayload,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({
+                  cause,
+                }),
+            ),
+          );
+          return {
+            credential: issued.credential,
+            expiresAt: DateTime.formatIso(issued.expiresAt),
+            proof: responseProof,
+          } satisfies RelayEnvironmentMintResponse;
+        }),
+      ),
     Effect.catchIf(ServerSecretStore.isSecretStoreError, internalError("issue-credential")),
     Effect.catchTags({ PlatformError: internalError("issue-credential") }),
   );

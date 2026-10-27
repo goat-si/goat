@@ -222,3 +222,29 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
     }).pipe(Effect.scoped, Effect.provide(layerPairingGrantStore())),
   );
 });
+
+it.effect(
+  "legacy and withdrawn cloud grants cannot consume ordinary scopes with hub consent off",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* PairingGrantStore.PairingGrantStore;
+      const legacy = yield* store.issueOneTimeToken({
+        subject: "cloud-connect",
+        scopes: ["terminal:read"],
+      });
+      yield* store.setCloudTrust("account");
+      expect((yield* store.consume(legacy.credential).pipe(Effect.result))._tag).toBe("Failure");
+      const pending = yield* store.issueOneTimeToken({
+        subject: "cloud-connect",
+        scopes: ["terminal:read"],
+      });
+      yield* store.setCloudTrust(null);
+      yield* store.setCloudTrust("account");
+      expect((yield* store.consume(pending.credential).pipe(Effect.result))._tag).toBe("Failure");
+      const current = yield* store.issueOneTimeToken({
+        subject: "cloud-connect",
+        scopes: ["terminal:read"],
+      });
+      expect((yield* store.consume(current.credential)).subject).toBe("cloud-connect");
+    }).pipe(Effect.provide(layerPairingGrantStore()), Effect.provide(NodeServices.layer)),
+);
