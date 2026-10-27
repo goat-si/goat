@@ -57,27 +57,25 @@ function fixture(gate?: {
             ),
       ),
     list: () => Effect.sync(() => ({ result: [...tunnels].map(([id, name]) => ({ id, name })) })),
-    create: ({ name }) =>
-      Effect.gen(function* () {
-        const id = `tunnel-${++sequence}`;
-        tunnels.set(id, name);
-        if (gate?.at === "create" && !heldToken) {
-          heldToken = true;
-          yield* gate.wait;
-        } else if (gate?.at === "create" && gate.replacementWait) {
-          yield* gate.replacementWait;
-        }
-        return { id, name };
-      }),
+    create: Effect.fn("ConnectLinkRecovery.tunnels.create")(function* ({ name }) {
+      const id = `tunnel-${++sequence}`;
+      tunnels.set(id, name);
+      if (gate?.at === "create" && !heldToken) {
+        heldToken = true;
+        yield* gate.wait;
+      } else if (gate?.at === "create" && gate.replacementWait) {
+        yield* gate.replacementWait;
+      }
+      return { id, name };
+    }),
     putConfiguration: () => Effect.void,
-    getToken: (id) =>
-      Effect.gen(function* () {
-        if (gate?.at === "token" && !heldToken) {
-          heldToken = true;
-          yield* gate.wait;
-        }
-        return `connector:${id}`;
-      }),
+    getToken: Effect.fn("ConnectLinkRecovery.tunnels.getToken")(function* (id) {
+      if (gate?.at === "token" && !heldToken) {
+        heldToken = true;
+        yield* gate.wait;
+      }
+      return `connector:${id}`;
+    }),
     delete: (id) =>
       Effect.suspend(() =>
         failDelete

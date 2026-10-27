@@ -22,9 +22,8 @@ export function RestoreConnectAccessButton() {
             refreshManagedRelayEnvironments();
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not restore Connect access.");
-          } finally {
-            setPending(false);
           }
+          setPending(false);
         }}
       />
       {error ? <Text accessibilityRole="alert">{error}</Text> : null}

@@ -26,12 +26,16 @@ export function RestoreConnectAccessButton() {
               undefined,
               { reportFailure: false },
             );
-            if (result._tag !== "Success") throw squashAtomCommandFailure(result);
+            if (result._tag !== "Success") {
+              const cause = squashAtomCommandFailure(result);
+              setError(
+                cause instanceof Error ? cause.message : "Could not restore Connect access.",
+              );
+            }
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not restore Connect access.");
-          } finally {
-            setPending(false);
           }
+          setPending(false);
         }}
       >
         Restore Connect access

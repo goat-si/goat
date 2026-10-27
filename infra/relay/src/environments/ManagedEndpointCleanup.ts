@@ -11,6 +11,8 @@ export const removeResources = Effect.fn("ManagedEndpointCleanup.removeResources
       userId: target.userId,
       environmentId: target.environmentId,
       stage,
+      ...(target.tunnelId === null ? {} : { tunnelId: target.tunnelId }),
+      ...(target.dnsRecordId === null ? {} : { dnsRecordId: target.dnsRecordId }),
       cause,
     });
   // Provider writes can succeed before their database checkpoint; discover by the reserved identity.

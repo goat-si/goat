@@ -464,10 +464,22 @@ describe("ManagedRelayClient", () => {
 it.effect(
   "readmission uses the retained signer only for the intended account and cannot leak into a later request",
   () => {
-    const bodies: Array<{ readmitClientKey: boolean; subject_token: string }> = [];
-    const fetchFn = ((input, init) => {
-      const body = init?.body;
-      bodies.push(JSON.parse(String(body)));
+    const bodies: URLSearchParams[] = [];
+    const fetchFn = (async (input, init) => {
+      const request = new Request(input, init);
+      if (!request.url.endsWith("/v1/client/dpop-token")) {
+        return Response.json({
+          environmentId: "env-1",
+          endpoint: {
+            httpBaseUrl: "https://desktop.example.test/",
+            wsBaseUrl: "wss://desktop.example.test/ws",
+            providerKind: "cloudflare_tunnel",
+          },
+          status: "online",
+          checkedAt: "2026-09-04T00:00:00.000Z",
+        });
+      }
+      bodies.push(new URLSearchParams(await request.text()));
       return Promise.resolve(
         Response.json({
           access_token: "readmitted",
@@ -495,7 +507,15 @@ it.effect(
         clerkToken: clerkToken("original", "fresh-mfa"),
       });
       expect(bodies).toHaveLength(1);
-      expect(bodies[0]?.readmitClientKey).toBe(true);
+      expect(bodies[0]?.get("readmitClientKey")).toBe("true");
+      expect(bodies[0]?.get("subject_token")).toBe(clerkToken("original", "fresh-mfa"));
+      yield* client.resetTokenCache;
+      yield* client.getEnvironmentStatus({
+        clerkToken: clerkToken("original", "later"),
+        scopes: [RelayEnvironmentStatusScope],
+        environmentId: EnvironmentId.make("env-1"),
+      });
+      expect(bodies[1]?.get("readmitClientKey")).toBe("false");
     }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
   },
 );

@@ -74,7 +74,9 @@ it.effect(
         { thread_id: "quiet", cursor: "2026-10-15T03:00:00.000Z" },
         { thread_id: "shared", cursor: "2026-10-15T03:00:00.000Z" },
       ]);
-      assert.deepStrictEqual(yield* runMigrations(), [[111, "NotificationCursorRepair"]]);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
+        [111, "NotificationCursorRepair"],
+      ]);
       assert.deepStrictEqual(yield* cursors, [
         { thread_id: "failed", cursor: "2026-10-15T04:00:00.000Z" },
         { thread_id: "healthy", cursor: "2026-10-15T06:00:00.000Z" },
@@ -101,7 +103,9 @@ it.effect("leaves a database without idle compaction cursors unchanged", () =>
     yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id,thread_id,ordinal,provider,status,requested_at,completed_at,payload_json)
       VALUES ('visited-run','visited',1,'codex','completed','2026-10-15','2026-10-15T01:00:00.000Z','{}')`;
     const before = yield* threadRows;
-    assert.deepStrictEqual(yield* runMigrations(), [[111, "NotificationCursorRepair"]]);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
+      [111, "NotificationCursorRepair"],
+    ]);
     assert.deepStrictEqual(yield* threadRows, before);
     yield* migration;
     assert.deepStrictEqual(yield* threadRows, before);

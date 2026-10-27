@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Protected release gates bind human live-smoke evidence to deployed bytes.
 import * as NodeFSP from "node:fs/promises";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
 
 const manifest = JSON.parse(
   process.env.CONNECT_EXPECTED_ARTIFACT ??
@@ -32,11 +34,13 @@ if (manifest.stage === "production" && evidence.rejectedOrigin !== "https://stag
   throw new Error("Production must reject staging at the loopback approval receiver");
 if (typeof evidence.evidenceUrl !== "string" || new URL(evidence.evidenceUrl).protocol !== "https:")
   throw new Error("Live acceptance needs a durable evidence link");
-console.log(
-  JSON.stringify({
-    sourceSha: manifest.sourceSha,
-    artifactDigest: manifest.artifactDigest,
-    origin: manifest.publicConfig.hostedAppUrl,
-    evidenceUrl: evidence.evidenceUrl,
-  }),
+Effect.runSync(
+  Console.log(
+    JSON.stringify({
+      sourceSha: manifest.sourceSha,
+      artifactDigest: manifest.artifactDigest,
+      origin: manifest.publicConfig.hostedAppUrl,
+      evidenceUrl: evidence.evidenceUrl,
+    }),
+  ),
 );

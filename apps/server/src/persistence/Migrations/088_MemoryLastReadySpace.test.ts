@@ -17,7 +17,7 @@ it.effect("081 rolls DDL back and preserves the retained destination across ledg
       .pipe(Effect.exit);
     assert.deepStrictEqual(rollback, Exit.fail("rollback"));
     assert.isEmpty(yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`);
-    assert.deepStrictEqual(yield* runMigrations(), [
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
       [88, "MemoryLastReadySpace"],
       [89, "MemoryHubAdministered"],
       [90, "MemoryCheckpointLifecycle"],
@@ -44,7 +44,7 @@ it.effect("081 rolls DDL back and preserves the retained destination across ledg
       [111, "NotificationCursorRepair"],
     ]);
     yield* sql`INSERT INTO memory_last_ready_space(singleton,space) VALUES (1,${space})`;
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
     assert.deepStrictEqual(yield* sql`SELECT singleton,space FROM memory_last_ready_space`, [
       { singleton: 1, space },
     ]);

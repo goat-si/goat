@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Crypto from "effect/Crypto";
 import * as Redacted from "effect/Redacted";
+import * as Reactivity from "effect/reactivity/Reactivity";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as RelayDb from "../db.ts";
@@ -46,6 +47,7 @@ export const postgresFixture = Layer.effect(
     );
   }),
 ).pipe(
+  Layer.provide(Reactivity.layer),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle })),
   Layer.provide(

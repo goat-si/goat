@@ -2,6 +2,8 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
 
 const stage = process.argv[2];
 if (stage !== "staging" && stage !== "production")
@@ -54,4 +56,6 @@ await NodeFSP.writeFile(
     2,
   ) + "\n",
 );
-console.log(JSON.stringify({ sourceSha, stage, origin, artifactDigest, publicConfig }));
+Effect.runSync(
+  Console.log(JSON.stringify({ sourceSha, stage, origin, artifactDigest, publicConfig })),
+);

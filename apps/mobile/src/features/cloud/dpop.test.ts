@@ -188,16 +188,13 @@ it.effect("a retained secure-store key is explicitly readmitted after fresh MFA 
               expect(verified.ok).toBe(true);
               const body =
                 request.body._tag === "Uint8Array"
-                  ? (JSON.parse(new TextDecoder().decode(request.body.body)) as {
-                      subject_token: string;
-                      readmitClientKey: boolean;
-                    })
+                  ? new URLSearchParams(new TextDecoder().decode(request.body.body))
                   : null;
-              expect(body?.readmitClientKey).toBe(true);
-              seen.push(body?.subject_token ?? "");
+              expect(body?.get("readmitClientKey")).toBe("true");
+              seen.push(body?.get("subject_token") ?? "");
               return HttpClientResponse.fromWeb(
                 request,
-                body?.subject_token === freshToken
+                body?.get("subject_token") === freshToken
                   ? Response.json({
                       access_token: "admitted",
                       issued_token_type: "urn:ietf:params:oauth:token-type:access_token",

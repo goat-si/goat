@@ -151,7 +151,8 @@ describe("GOAT migration ids", () => {
       Effect.gen(function* () {
         yield* seedGoatLedger(names, firstGoatId);
         if (firstGoatId === 61) assert.isFalse(yield* hasReviewGuides);
-        assert.deepStrictEqual(yield* runMigrations(), [...expected]);
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [...expected]);
+        yield* runMigrations();
         assert.isTrue(yield* hasReviewGuides);
         assert.deepStrictEqual(yield* history, migrationManifest);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -409,11 +410,12 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER);
       assert.isFalse(yield* hasShellStopIndex);
       // GOAT bodies such as ServerActivityIndexes' ALTER TABLE fail if run twice.
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [68, "ShellStopRequestIndex"],
         [69, "ThreadMessageSearch"],
         ...GOAT_SINCE_256,
       ]);
+      yield* runMigrations();
       assert.isTrue(yield* hasShellStopIndex);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -426,12 +428,13 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
   ] as const)("%s moves what it recorded and runs the rest at their new ids", ([, recorded]) =>
     Effect.gen(function* () {
       yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER.slice(0, recorded));
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [68, "ShellStopRequestIndex"],
         [69, "ThreadMessageSearch"],
         ...NIGHTLY_256_GOAT_LEDGER.slice(recorded).map(([, name]) => currentGoatRow(name)),
         ...GOAT_SINCE_256,
       ]);
+      yield* runMigrations();
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

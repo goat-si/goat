@@ -76,10 +76,9 @@ it.effect.each(["credential-failure", "pending-delete"] as const)(
       const program = disconnectCloud({ clearAuthorization: true }).pipe(
         Effect.provideService(Console.Console, {
           ...console,
-          warn: (...args) =>
-            Effect.sync(() => {
-              warnings.push(args.join(" "));
-            }),
+          warn: (...args) => {
+            warnings.push(args.join(" "));
+          },
         }),
         Effect.provideService(ServerSecretStore.ServerSecretStore, {
           get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
