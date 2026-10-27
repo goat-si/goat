@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
 import { isLoopbackHost } from "@goat/shared/preview";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
@@ -6,6 +6,7 @@ import { environmentPresentations } from "../../state/presentation";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { readPreparedConnection } from "../../state/session";
 import { ensureLocalApi } from "../../localApi";
+import { useStableCallback } from "../../hooks/useStableCallback";
 
 export const isLoopbackUrl = (url: string | null) =>
   url !== null && isLoopbackHost(new URL(url).hostname);
@@ -61,12 +62,12 @@ export function useCodexAuthCallback() {
     promise: Promise<string>;
     cancelled: boolean;
   } | null>(null);
-  const cancelCallback = useCallback((url?: string) => {
+  const cancelCallback = useStableCallback((url?: string) => {
     const active = receiver.current;
     if (!active || active.cancelled || (url !== undefined && active.url !== url)) return;
     active.cancelled = true;
     void window.desktopBridge?.cancelProviderAuthCallback?.(active.url).catch(() => undefined);
-  }, []);
+  });
   const receiveCallback = async (url: string, signal: AbortSignal): Promise<string | null> => {
     if (signal.aborted) return null;
     const previous = receiver.current;
