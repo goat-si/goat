@@ -52,8 +52,9 @@ function FloatingStopAll(props: { readonly environmentId: EnvironmentId }) {
 }
 
 /**
- * What agents drive on this environment's host, one card per browser tab or desktop thread,
- * waiting ones first, at the thread pane's top right where the floating mini player starts. One
+ * What the thread on screen has agents drive, one card per browser tab and one for its desktop,
+ * waiting ones first, at the thread pane's top right where the floating mini player starts. Other
+ * threads' sessions never show here, and their pictures are never requested. One
  * session at a time can be enlarged in place. The cards hide when the pane has no room beside the
  * conversation, and the header's toggle shows or hides them. Pictures stream only while cards show
  * and the window is visible (D11, #1215).

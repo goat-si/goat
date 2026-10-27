@@ -15,7 +15,6 @@ import {
 import { type ReactNode, useState } from "react";
 import { useAtomMount } from "@effect/atom-react";
 
-import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import {
   selectThreadRightPanelState,
   useRightPanelStore,
@@ -40,6 +39,7 @@ import { DeviceLoadingView } from "./DeviceLoadingView";
 import { DeviceSetup, deviceHubReadiness, isAndroidDiscoveryUncertain } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
+import { floatPreview } from "../preview/floatPreview";
 
 const platformLabel = (platform: DevicePlatform) =>
   platform === "ios" ? "iOS Simulators" : "Android Emulators";
@@ -133,13 +133,17 @@ export function DevicePanel(props: {
 
   const floatActive = () => {
     if (!activeDevice) return;
-    usePreviewMiniPlayerStore.getState().open(props.threadRef, {
-      kind: "device",
-      hostId: activeDevice.hostId,
-      deviceId: activeDevice.id,
-      platform: activeDevice.platform,
-      name: activeDevice.name,
-    });
+    floatPreview(
+      props.threadRef,
+      {
+        kind: "device",
+        hostId: activeDevice.hostId,
+        deviceId: activeDevice.id,
+        platform: activeDevice.platform,
+        name: activeDevice.name,
+      },
+      { by: "person" },
+    );
     useRightPanelStore.getState().close(props.threadRef);
   };
 

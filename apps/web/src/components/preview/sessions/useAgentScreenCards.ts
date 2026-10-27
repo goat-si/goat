@@ -244,9 +244,19 @@ function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
 }
 
 /**
- * The sessions that get a card: every agent-driven browser tab and desktop session on the
- * environment's host, waiting ones first, one per thread for the desktop, minus the tab the
- * thread's mini player already shows and sessions whose card the person closed.
+ * Whether a session belongs to the thread on screen. Computer use and browser use are pinned to
+ * the thread that started them, so another thread's session, one that names no thread, and any
+ * session on a view with no thread never get a card there. Stop all stays host-wide.
+ */
+export const isThreadSession = (session: PreviewSession, threadRef: ScopedThreadRef | null) =>
+  threadRef !== null &&
+  session.environmentId === threadRef.environmentId &&
+  session.threadId === threadRef.threadId;
+
+/**
+ * The sessions that get a card: the agent-driven browser tabs and desktop sessions of the thread
+ * on screen, waiting ones first, one desktop card, minus the tab the thread's mini player already
+ * shows and sessions whose card the person closed.
  */
 export function useAgentScreenSessions(
   environmentId: EnvironmentId | null,
@@ -260,7 +270,9 @@ export function useAgentScreenSessions(
   const hiddenLive = usePreviewSessionStack((state) => state.hiddenLive);
   const sessions = usePreviewSessions(environmentId);
   const threadId = threadRef?.threadId;
-  return onePerThread(orderPreviewSessions(sessions)).filter(
+  return onePerThread(
+    orderPreviewSessions(sessions.filter((session) => isThreadSession(session, threadRef))),
+  ).filter(
     (session) =>
       !(session.status === "stopped" && dismissed.has(sessionKey(session))) &&
       !hiddenLive.has(sessionKey(session)) &&
@@ -273,10 +285,15 @@ export function useAgentScreenSessions(
   );
 }
 
-/** Sessions still listed on the host whose card the person closed; the header brings them back. */
-export function useHiddenLiveAgentSessions(environmentId: EnvironmentId | null) {
+/** The thread's sessions still listed whose card the person closed; the header brings them back. */
+export function useHiddenLiveAgentSessions(
+  environmentId: EnvironmentId | null,
+  threadRef: ScopedThreadRef | null,
+) {
   const hiddenLive = usePreviewSessionStack((state) => state.hiddenLive);
-  return usePreviewSessions(environmentId).filter((session) => hiddenLive.has(sessionKey(session)));
+  return usePreviewSessions(environmentId).filter(
+    (session) => isThreadSession(session, threadRef) && hiddenLive.has(sessionKey(session)),
+  );
 }
 
 /**

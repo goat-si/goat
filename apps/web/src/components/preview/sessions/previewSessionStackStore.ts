@@ -69,7 +69,8 @@ interface PreviewSessionStackState {
   readonly focus: PreviewSessionStackFocus | null;
   /** Bumps on each request, so asking for the same session again scrolls to it again. */
   readonly focusRequest: number;
-  readonly setShown: (shown: boolean) => void;
+  /** Showing brings back the closed cards of the given thread; other threads keep theirs closed. */
+  readonly setShown: (shown: boolean, threadId?: string) => void;
   readonly setNarrow: (narrow: boolean) => void;
   readonly dismiss: (session: PreviewSession) => void;
   readonly expand: (session: PreviewSession) => void;
@@ -85,7 +86,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
   expanded: null,
   focus: null,
   focusRequest: 0,
-  setShown: (shown) => {
+  setShown: (shown, threadId) => {
     const { narrow } = get();
     // Hiding cards that only a narrow pane let through keeps the window's choice for wide panes.
     if (!shown && narrow) return set({ revealedWhileNarrow: false });
@@ -93,7 +94,13 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     set({
       hidden: !shown,
       revealedWhileNarrow: shown && narrow,
-      ...(shown ? { hiddenLive: new Map<string, HiddenSession>() } : {}),
+      ...(shown
+        ? {
+            hiddenLive: new Map(
+              [...get().hiddenLive].filter(([, { session }]) => session.threadId !== threadId),
+            ),
+          }
+        : {}),
     });
   },
   setNarrow: (narrow) => {
