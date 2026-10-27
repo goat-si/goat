@@ -85,6 +85,7 @@ import {
   RelayLinkProofRequest,
 } from "./relay.ts";
 import * as Voice from "./voice.ts";
+export * from "./voice.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
