@@ -30,5 +30,12 @@ export const mockSessionNotices = [
       description: "Continuing without the integration.",
     },
   },
+  {
+    update: {
+      sessionUpdate: "notice",
+      severity: "future-severity",
+      title: "Future announcement",
+    },
+  },
   { update: { sessionUpdate: "notice", severity: "info", title: " \n\t " } },
 ];

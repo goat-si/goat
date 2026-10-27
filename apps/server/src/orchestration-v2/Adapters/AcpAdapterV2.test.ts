@@ -1796,86 +1796,83 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect.each([1, 2])(
-    "projects live notices without replay tools or text splits (ACP %s)",
-    (protocolVersion) =>
-      Effect.gen(function* () {
-        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
-        const instanceId = ProviderInstanceId.make("acp-test-notice");
-        const adapter = yield* makeAcpAdapterV2({
-          instanceId,
-          flavor: {
-            driver: ACP_TEST_DRIVER,
-            capabilities: AcpProviderCapabilitiesV2,
-            makeRuntime: makeMockRuntime({
-              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: NodePath.resolve(
-                import.meta.dirname,
-                "../../../scripts/acp-mock-agent.ts",
-              ),
-              protocolEvents,
-              environment: {
-                GOAT_ACP_EMIT_NOTICE: "1",
-                GOAT_ACP_PROTOCOL_VERSION: String(protocolVersion),
-              },
-            }),
-          },
-          selfInvocation: yield* resolveSelfInvocation(),
-        });
-        const threadId = ThreadId.make("thread-acp-notice");
-        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: process.cwd(),
-        });
-        const modelSelection = { instanceId, model: "default" } as const;
-        const runtime = yield* adapter.openSession({
-          threadId,
-          providerSessionId: ProviderSessionId.make("provider-session-acp-notice"),
-          modelSelection,
-          runtimePolicy,
-        });
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-        });
-        const now = yield* DateTime.now;
-        yield* runtime.startTurn(
-          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
-        );
-        const items = Array.from(
-          yield* runtime.events.pipe(
-            Stream.takeUntil((event) => event.type === "turn.terminal"),
-            Stream.runCollect,
-          ),
-        ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
+  it.effect.each([1, 2])("projects ACP %s notices without replay", (protocolVersion) =>
+    Effect.gen(function* () {
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-notice");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+            mockAgentPath: NodePath.join(import.meta.dirname, "../../../scripts/acp-mock-agent.ts"),
+            protocolEvents,
+            environment: {
+              GOAT_ACP_EMIT_NOTICE: "1",
+              GOAT_ACP_PROTOCOL_VERSION: String(protocolVersion),
+            },
+          }),
+        },
+        selfInvocation: yield* resolveSelfInvocation(),
+      });
+      const threadId = ThreadId.make("thread-acp-notice");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-notice"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+      );
+      const items = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
 
-        const initialize = Array.from(yield* Queue.takeAll(protocolEvents)).find(
-          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "initialize",
-        );
-        assert.deepInclude(
-          initialize && rawProtocolRequestParam(initialize, "clientCapabilities"),
-          { session: { notices: {} } },
-        );
-        const title =
-          "skill discovery warning: candidate was skipped because its metadata is invalid";
-        assert.deepEqual(
-          items.flatMap((item) => (item.type === "system_notice" ? [item.message] : [])),
-          [title, "Optional integration unavailable\n\nContinuing without the integration."],
-        );
-        assert.isFalse(items.some((item) => item.type === "dynamic_tool"));
-        const replies = new Map(
-          items.flatMap((item) =>
-            item.type === "assistant_message" ? [[item.id, item.text]] : [],
-          ),
-        );
-        assert.deepEqual(
-          [...replies.values()],
-          ["before the notice, after the notice"],
-          "a notice neither joins the reply nor splits it",
-        );
-      }).pipe(Effect.provide(layerTest), Effect.scoped),
+      const initialize = Array.from(yield* Queue.takeAll(protocolEvents)).find(
+        (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "initialize",
+      );
+      assert.deepInclude(initialize && rawProtocolRequestParam(initialize, "clientCapabilities"), {
+        session: { notices: {} },
+      });
+      const title =
+        "skill discovery warning: candidate was skipped because its metadata is invalid";
+      const notices = items.filter((item) => item.type === "system_notice");
+      assert.deepEqual(
+        notices.map((item) => [item.message, item.severity]),
+        [
+          [title, "info"],
+          ["Optional integration unavailable\n\nContinuing without the integration.", "warning"],
+          ["Future announcement", "warning"],
+        ],
+      );
+      assert.isFalse(items.some((item) => item.type === "dynamic_tool"));
+      const replies = new Map(
+        items.flatMap((item) => (item.type === "assistant_message" ? [[item.id, item.text]] : [])),
+      );
+      assert.deepEqual(
+        [...replies.values()],
+        ["before the notice, after the notice"],
+        "a notice neither joins the reply nor splits it",
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("projects ACP v2 fidelity updates into first-class orchestration items", () =>

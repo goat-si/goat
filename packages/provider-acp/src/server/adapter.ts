@@ -90,7 +90,7 @@ import {
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "./runtimeModel.ts";
-import { isReplayedAcpNotice } from "./noticeProjection.ts";
+import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
 import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
@@ -3877,7 +3877,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // Notices share the enclosing turn's span and leave its open message streaming.
         const emitNotice = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          notice: { readonly title: string; readonly description?: string },
+          notice: Parameters<typeof acpNoticeContent>[0],
         ) {
           const nativeItemId = `${context.nativeTurnId}:notice:${context.itemOrdinals.size}`;
           const now = yield* DateTime.now;
@@ -3896,11 +3896,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ordinal: yield* resolveItemOrdinal(context, nativeItemId),
               type: "system_notice",
               status: "completed",
-              title: notice.title,
-              message:
-                notice.description === undefined
-                  ? notice.title
-                  : `${notice.title}\n\n${notice.description}`,
+              ...acpNoticeContent(notice),
               startedAt: now,
               completedAt: now,
               updatedAt: now,

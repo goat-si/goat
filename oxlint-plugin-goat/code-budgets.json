@@ -278,7 +278,7 @@
   "apps/server/src/notes/NotesService.ts": { "nonNull": 6 },
   "apps/server/src/notes/frontmatter.ts": { "nonNull": 1 },
   "apps/server/src/opencodex/OpenCodexInventory.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts": { "lines": 8024 },
+  "apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts": { "lines": 8021 },
   "apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts": { "lines": 1841 },
   "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts": { "lines": 15495 },
   "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.testkit.ts": {
@@ -752,7 +752,7 @@
   },
   "packages/provider-acp-registry/src/server/driver.ts": { "nonNull": 1 },
   "packages/provider-acp/src/server/AcpSessionRuntime.ts": { "lines": 2894, "nonNull": 5 },
-  "packages/provider-acp/src/server/adapter.ts": { "lines": 8636, "nonNull": 7 },
+  "packages/provider-acp/src/server/adapter.ts": { "lines": 8632, "nonNull": 7 },
   "packages/provider-acp/src/server/clientTerminals.ts": { "nonNull": 2 },
   "packages/provider-acp/src/server/runtimeModel.test.ts": { "lines": 1530 },
   "packages/provider-acp/src/server/runtimeModel.ts": { "lines": 1626, "nonNull": 3 },
