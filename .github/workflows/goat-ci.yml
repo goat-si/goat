@@ -360,6 +360,8 @@ jobs:
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
           lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
           pr-assets.test.ts
+          lib/desktop-launch-fixture.test.ts
+          smoke-desktop-app.test.ts
 
       - name: Test CI scripts
         if: matrix.task == 'test'

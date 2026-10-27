@@ -9,6 +9,11 @@ Nightly builds `dev`; stable rebuilds a nightly that has soaked for 24 hours. Th
 must be enabled before it publishes. Install and update GOAT from those archives
 or with `goat update <version>`.
 
+The built web client must boot before the JS bundle is staged. macOS DMGs and Linux AppImages
+must also open a seeded thread in a temporary GOAT home before their assets can be staged for
+publication. A failed desktop launch keeps its logs and screenshot in the run's staging drafts;
+the fixture starts at schema 69 so the packaged server must apply GOAT's later migrations.
+
 <a id="what-the-workflow-does"></a>
 
 ## Upstream reference (disabled)

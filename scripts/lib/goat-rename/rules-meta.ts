@@ -35,6 +35,31 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     /http:\/\/t3-boot\.test/g,
     "http://goat-boot.test",
   ),
+  rule("desktop-launch-home-copy", at("scripts/smoke-desktop-app.ts"), /\bT3 home\b/g, "GOAT home"),
+  rule(
+    "desktop-launch-home-identifier",
+    at("scripts/smoke-desktop-app.ts"),
+    /\bt3Home\b/g,
+    "goatHome",
+  ),
+  rule(
+    "desktop-launch-home-directory",
+    at("scripts/smoke-desktop-app.ts"),
+    /(?<=NodePath\.join\(home, ")t3(?="\))/g,
+    "goat",
+  ),
+  rule(
+    "desktop-launch-scratch",
+    at("scripts/smoke-desktop-app.ts"),
+    /t3-desktop-launch-/g,
+    "goat-desktop-launch-",
+  ),
+  rule(
+    "desktop-launch-linux-executable",
+    at(".github/workflows/goat-nightly.yml"),
+    /(?<=squashfs-root\/)t3code\b/g,
+    "goat-desktop",
+  ),
   // The dev container: product name, port labels and cache volumes. Its GOAT_HOME stays on the
   // workspace .t3, which holds an existing container's state; an explicit home skips the legacy fallback.
   rule("devcontainer-product", inDevcontainer, /\bT3 Code\b/g, "GOAT"),

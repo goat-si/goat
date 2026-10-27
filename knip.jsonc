@@ -32,6 +32,7 @@
         "export-brand-icons.ts",
         "goat-rename.ts",
         "sign-macos.ts",
+        "smoke-desktop-app.ts",
         // Local Linux computer use helper build and its live check.
         "build-computer-use-helper-linux.ts",
         "computer-use-linux-smoke.ts",
