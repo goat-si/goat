@@ -246,7 +246,7 @@ export function guestShareAfterCancelledSend(
 }
 
 /** Guest attribution comes only from `decideGuestMessageSend`; a client cannot claim it. */
-export function withoutGuestAttribution<
+function withoutGuestAttribution<
   C extends { readonly context?: OrchestrationMessageContext | undefined },
 >(command: C): C {
   if (command.context?.guest === undefined) return command;

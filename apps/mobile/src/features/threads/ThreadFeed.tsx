@@ -1525,6 +1525,7 @@ function renderFeedEntry(
             <AgentMessageSentByLabel
               environmentId={props.environmentId}
               senderThreadId={message.senderThreadId}
+              remoteSender={message.context?.remoteSender}
             />
           ) : null}
           {presentation.attribution === "t3code" ? (
@@ -1655,10 +1656,11 @@ function renderFeedEntry(
           </View>
           {bubbleBodyVisible ? (
             <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-              {foldRowId !== null && message.senderThreadId ? (
+              {foldRowId !== null ? (
                 <OpenSenderThreadButton
                   environmentId={props.environmentId}
                   senderThreadId={message.senderThreadId}
+                  remoteSender={message.context?.remoteSender}
                 />
               ) : null}
               {intentBadge ? (
