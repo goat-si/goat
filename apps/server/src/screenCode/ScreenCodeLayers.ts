@@ -17,7 +17,7 @@ export const withScreenCode = <A, E, R>(serverBrowser: Layer.Layer<A, E, R>) =>
     ),
   );
 
-export const primitives = ComputerUsePrimitiveChannel.layer;
+const primitives = ComputerUsePrimitiveChannel.layer;
 
 export const provideScreenPrimitives = <A, E, R>(application: Layer.Layer<A, E, R>) =>
   application.pipe(Layer.provideMerge(primitives));
