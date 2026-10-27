@@ -110,6 +110,9 @@ describe("turn thread cards", () => {
       answer,
     ]);
     expect(screen.text()).toContain("PR #12 is open and green.");
+    const card = screen.button("Open Lane 1, Done");
+    const description = document.getElementById(card.getAttribute("aria-describedby") ?? "");
+    expect(description?.textContent).toBe("PR #12 is open and green.");
     // A thread that has not answered yet says how it got here instead.
     expect(screen.text()).toContain("Started in this turn");
   });
