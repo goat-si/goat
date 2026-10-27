@@ -185,4 +185,14 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       error: "saw [redacted]",
     });
   });
+  it("masks the page's text in an evaluation's exception", async () => {
+    const { page, cdp } = await open();
+    const failed = await ServerBrowserPage.evaluate(
+      { page, cdp },
+      { expression: "(() => { throw new Error(document.body.innerText) })()" },
+      5_000,
+    ).catch((error: unknown) => String(error instanceof Error ? error.message : error));
+    expect(failed).toContain("Echo:");
+    expect(failed).not.toContain(session);
+  });
 });

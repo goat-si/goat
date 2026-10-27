@@ -1084,10 +1084,10 @@ export const evaluate = async (
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));
   if (result.exceptionDetails) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationExecutionError",
-      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-    );
+    const { exception, text } = result.exceptionDetails;
+    // The page writes its own exception's message, so it is masked like a result.
+    const message = await redactEvaluation(page, cdp, exception?.description ?? text, before);
+    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", String(message));
   }
   const value =
     "value" in result.result ? result.result.value : (result.result.description ?? null);

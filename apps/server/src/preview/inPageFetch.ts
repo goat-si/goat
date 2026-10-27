@@ -297,6 +297,8 @@ const fetchInPage = async (
   // Page-side code is passed as source: the server compiles without DOM types.
   const outcome = (await page.evaluate(`(${FETCH_SCRIPT})(${args})`)) as PageOutcome;
   if ("error" in outcome) {
+    // A page's own fetch can fail with any message, the tab's cookie values included.
+    const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));
     throw outcome.timedOut
       ? new ServerBrowserOperationError(
           "PreviewAutomationTimeoutError",
@@ -304,7 +306,7 @@ const fetchInPage = async (
         )
       : new ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
-          `Fetching ${url} failed: ${outcome.error}`,
+          `Fetching ${url} failed: ${failed}`,
         );
   }
   // Every cookie the browser would send to the request, its redirect target, the tab's frames or
@@ -315,7 +317,7 @@ const fetchInPage = async (
     url: redact(redactQuery(outcome.url)),
     status: outcome.status,
     ok: outcome.ok,
-    contentType: outcome.contentType,
+    contentType: redact(outcome.contentType),
   };
   if (outcome.kind === "raw") return { ...head, format: "raw", text: "", truncated: false };
   // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.
