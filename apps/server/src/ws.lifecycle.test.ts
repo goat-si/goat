@@ -106,13 +106,20 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { assert, it } from "@effect/vitest";
-import { AuthSessionId, EnvironmentId, WS_METHODS, WsRpcGroup } from "@goat/contracts";
+import {
+  AuthOrchestrationReadScope,
+  AuthSessionId,
+  EnvironmentId,
+  WS_METHODS,
+  WsRpcGroup,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -317,7 +324,7 @@ it.effect.each([
               sessionId: AuthSessionId.make("lifecycle-test"),
               subject: "lifecycle-test",
               method: "browser-session-cookie",
-              scopes: [],
+              scopes: [AuthOrchestrationReadScope],
             },
             {
               hasHost: Effect.succeed(false),
@@ -342,6 +349,7 @@ it.effect.each([
         headers: Headers.empty,
       });
       const initial = yield* Queue.take(responses);
+      if (initial._tag === "Defect") return yield* Effect.die(initial.defect);
       assert.equal(initial._tag, "Chunk");
       if (initial._tag !== "Chunk") return yield* Effect.die("Missing lifecycle replay");
       const receivesDrain = "runtimeDrain" in input && input.runtimeDrain === true;
@@ -363,6 +371,7 @@ it.effect.each([
       const live = yield* Stream.fromQueue(responses).pipe(
         Stream.mapEffect((response) =>
           Effect.gen(function* () {
+            if (response._tag === "Defect") return yield* Effect.die(response.defect);
             assert.equal(response._tag, "Chunk");
             if (response._tag !== "Chunk") return yield* Effect.die("Lifecycle RPC ended");
             yield* acknowledge;
@@ -381,6 +390,7 @@ it.effect.each([
         Layer.mergeAll(
           Layer.fresh(layerLifecycleSources),
           ServerLifecycleEvents.layer,
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
           Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
         ),
