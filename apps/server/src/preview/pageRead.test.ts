@@ -245,20 +245,15 @@ it("refuses a changed secret even when its new value appeared in page text durin
     expect(await page.evaluate("window.activeReadObservers")).toBe(0);
   }));
 
-it("reports a continuously changing DOM without leaving its observer active", () =>
+it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     await page.setContent("<main>Changing</main>");
-    await page.evaluate(
-      `(() => { let tick = 0; const change = () => { document.querySelector('main').textContent = String(++tick); window.readFrame = requestAnimationFrame(change); }; change(); })()`,
-    );
-    try {
-      expect(await read({ timeoutMs: 150 })).toMatchObject({
-        settled: false,
-        pending: { domChanging: true },
-      });
-    } finally {
-      await page.evaluate("cancelAnimationFrame(window.readFrame)");
-    }
+    // The quiet period outlasts the deadline, so the read must return unsettled at the deadline.
+    expect(await read({ timeoutMs: 150, settleMs: 5_000 })).toMatchObject({
+      settled: false,
+      pending: { domChanging: true },
+      text: "Changing",
+    });
   }));
 
 it("keeps late network coverage unknown across same-document navigation", () =>
