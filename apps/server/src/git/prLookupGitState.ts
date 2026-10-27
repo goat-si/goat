@@ -18,11 +18,19 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     { readonly startedAtMs: number; readonly completedAtMs: number; readonly value: string | null }
   >();
   const pending = new Map<string, Effect.Effect<string | null, GitCommandError>>();
+  // Closed and merged lookups confirmed against fresh git state, per cwd and branch.
+  const verifiedTerminal = new Map<
+    string,
+    { readonly epoch: number; readonly verifiedAtMs: number; readonly result: string }
+  >();
   const epoch = (cwd: string) => epochs.get(cwd) ?? 0;
   const clear = (cwd: string) => {
     const prefix = `${cwd}\u0000`;
     for (const key of remembered.keys()) {
       if (key.startsWith(prefix)) remembered.delete(key);
+    }
+    for (const key of verifiedTerminal.keys()) {
+      if (key.startsWith(prefix)) verifiedTerminal.delete(key);
     }
   };
   const saveFingerprint = (key: string, value: string) => {
@@ -107,5 +115,45 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     remembered.set(entryKey, { startedAtMs, completedAtMs, value });
     return value;
   });
-  return { epoch, bumpEpoch, remember, forget, validate };
+  // A closed or merged answer is re-checked against fresh git state before it is trusted. The
+  // same answer at the same epoch then needs no recheck until the background TTL ends; any
+  // metadata change bumps the epoch first.
+  const verifyTerminal = Effect.fn("PrLookupGitState.verifyTerminal")(function* <
+    P extends { readonly url: string; readonly state: string },
+    E,
+  >(cwd: string, branch: string, found: P, recheck: Effect.Effect<P | null, E>) {
+    const key = `${cwd}\u0000${branch}`;
+    const entry = verifiedTerminal.get(key);
+    const startedAtMs = yield* Clock.currentTimeMillis;
+    if (
+      entry !== undefined &&
+      entry.epoch === epoch(cwd) &&
+      entry.result === `${found.url}\u0000${found.state}` &&
+      startedAtMs - entry.verifiedAtMs < BACKGROUND_READ_TTL_MS
+    )
+      return found;
+    const generation = epoch(cwd);
+    const verified = yield* recheck;
+    if (verified === null || verified.state === "open" || epoch(cwd) !== generation)
+      return verified;
+    verifiedTerminal.delete(key);
+    if (verifiedTerminal.size >= options.capacity) {
+      const oldest = verifiedTerminal.keys().next().value;
+      if (oldest !== undefined) verifiedTerminal.delete(oldest);
+    }
+    verifiedTerminal.set(key, {
+      epoch: generation,
+      verifiedAtMs: startedAtMs,
+      result: `${verified.url}\u0000${verified.state}`,
+    });
+    return verified;
+  });
+  return {
+    epoch,
+    bumpEpoch,
+    remember,
+    forget,
+    validate,
+    verifyTerminal,
+  };
 });
