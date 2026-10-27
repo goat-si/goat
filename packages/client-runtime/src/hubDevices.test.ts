@@ -363,6 +363,21 @@ describe("Hub Child readiness", () => {
     });
   });
 
+  it("withholds Ready and every action after the latest status read failed", () => {
+    const rows = hubDeviceList({
+      nodes: null,
+      snapshot: null,
+      hosts: [host("test-child", { state: "child", checkedAt: 1, setup: readySetup() })],
+      statusCurrent: false,
+    });
+    expect(rows[0]?.childSetup).toMatchObject({
+      label: "Setup status unavailable. Refresh status.",
+      proof: null,
+      nextAction: "none",
+      actionable: false,
+    });
+  });
+
   it.each([
     { operationId: "older-setup" },
     { destinationEnvironmentId: EnvironmentId.make("other-child") },

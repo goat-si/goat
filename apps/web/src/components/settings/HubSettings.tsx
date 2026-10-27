@@ -257,7 +257,7 @@ function HubControls({
           {...searchableSetting("hub-cloud-auto-join")}
           serverScoped
           settingKeys={["hub"]}
-          description="A cloud machine this hub creates gets its OpenCodex and joins as a Child the first time it is used. Off: new machines stay standalone, and linked ones stay linked."
+          description="A cloud machine this hub creates joins as a Child the first time it is used: GOAT installs OpenCodex and Codex, links it, and verifies one request through Home, so it needs no sign-in there. Off: new machines stay standalone, and linked ones stay linked."
           status={
             hub.joinError ? (
               <span role="alert" className="text-destructive">

@@ -2,7 +2,6 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   hubDeviceList,
   type ChildOptIn,
-  type ChildSetup,
   type HubDeviceRow,
 } from "@goat/client-runtime/hub-devices";
 import {
@@ -18,7 +17,6 @@ import { FLEET_LOCAL_HOST_KEY, type EnvironmentId, type HostStatusEntry } from "
 import { useContext, useState } from "react";
 
 import { useEnvironmentSettings } from "~/hooks/useSettings";
-import { cn } from "~/lib/utils";
 import { fleetEnvironmentsAtom } from "~/state/fleet";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -27,6 +25,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { HubChildSetup } from "./HubChildSetup";
 import {
   AddHubDevice,
   HubActionResult,
@@ -51,12 +50,6 @@ const VERDICT_BADGE = {
   unproven: "outline",
 } as const;
 
-const CHILD_SETUP_TEXT: Record<ChildSetup["tone"], string> = {
-  progress: "text-muted-foreground",
-  warning: "text-warning-foreground",
-  destructive: "text-destructive-foreground",
-};
-
 /**
  * Settings → Hub's one device list for the selected environment: the machines its hub reaches,
  * each with its OpenCodex link state, and the Home's progress making a cloud machine its Child.
@@ -77,6 +70,7 @@ export function HubDeviceListSection(props: {
     nodes: nodes.value?.nodes ?? null,
     snapshot: props.snapshot,
     hosts: props.hosts,
+    statusCurrent: props.hostsState === "read",
   });
   const message =
     rows.length > 0
@@ -205,9 +199,11 @@ function HubDeviceListRow({
   const linkLabel =
     device !== null
       ? HUB_TRANSPORT_LABEL[device.transport]
-      : linkKnown
-        ? "Not linked to OpenCodex"
-        : null;
+      : row.childSetup?.state === "child"
+        ? "Linked to OpenCodex"
+        : linkKnown
+          ? "Not linked to OpenCodex"
+          : null;
   const runVerify = async (alias: string) => {
     setVerifying(true);
     setError(null);
@@ -264,7 +260,14 @@ function HubDeviceListRow({
             .join(" · ")}
         </p>
       )}
-      {row.childSetup === null ? null : <ChildSetupLine setup={row.childSetup} />}
+      {row.childSetup === null ? null : (
+        <HubChildSetup
+          environmentId={environmentId}
+          setup={row.childSetup}
+          actions={actions}
+          onRefresh={onVerified}
+        />
+      )}
       {row.childOptIn === null ? null : (
         <ChildOptInSwitch
           environmentId={environmentId}
@@ -299,18 +302,6 @@ function HubDeviceListRow({
       )}
       {node === null ? null : <HubNodeFooter nodes={nodes} node={node} />}
     </li>
-  );
-}
-
-/** Shown until the machine is a Child: what setup is doing, or why it stopped. */
-function ChildSetupLine({ setup }: { readonly setup: ChildSetup }) {
-  return (
-    <p role="status" className={cn("text-xs", CHILD_SETUP_TEXT[setup.tone])}>
-      {setup.label} · {formatRelativeTimeLabel(new Date(setup.checkedAt).toISOString())}
-      {setup.detail === null ? null : (
-        <span className="block text-muted-foreground">{setup.detail}</span>
-      )}
-    </p>
   );
 }
 
@@ -352,8 +343,8 @@ function ChildOptInSwitch({
       <label htmlFor={id} className="min-w-0 text-xs">
         Join as OpenCodex Child after each SSH setup
         <span className="block text-muted-foreground">
-          GOAT installs this hub's OpenCodex there and links it with the host key it pinned. Turning
-          this off keeps an existing link.
+          GOAT installs OpenCodex and Codex there, links it with the host key it pinned, and
+          verifies one request through Home. Turning this off keeps an existing link.
         </span>
         {error === null ? null : (
           <span role="alert" className="block text-destructive">

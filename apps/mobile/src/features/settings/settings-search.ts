@@ -66,7 +66,7 @@ const SETTINGS_SEARCH_TERMS = {
   ],
   SettingsEnvironmentAgentBehavior: ["response streaming", "preview browser", "browser access"],
   SettingsEnvironmentMaintenance: ["updates", "provider updates", "restart", "manage environments"],
-  SettingsHubNodes: ["hub", "devices", "nodes", "machines"],
+  SettingsHubNodes: ["hub", "devices", "nodes", "machines", "child", "ready", "continue setup"],
   SettingsGoatBot: ["bot", "slack", "channels", "home"],
   SettingsDecisionInbox: ["decisions", "questions", "approvals"],
   SettingsAbout: [

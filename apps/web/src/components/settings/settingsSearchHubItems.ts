@@ -44,6 +44,7 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
       "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
       "add device join leave remove disconnect repair relink",
       "child setup cloud machine bootstrap npm missing blocked degraded",
+      "ready verified linked continue setup home request",
     ],
   },
   {
