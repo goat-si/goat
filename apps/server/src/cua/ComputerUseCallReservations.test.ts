@@ -6,10 +6,14 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Statement from "effect/sql/Statement";
+import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { ORPHAN_CALL_GRACE_MS } from "./ComputerUseCallReservations.ts";
+import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import { APP_LEASE_IDLE_MS } from "./ComputerUseAppLeases.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
@@ -63,7 +67,187 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
   return { leases, a, b, first, second, reserve, release, close };
 });
 
+const openProxy = Effect.fn("reservations.openProxy")(function* (
+  threadId: ThreadId,
+  controlId: string,
+) {
+  const reading = yield* Deferred.make<void>();
+  const exit = yield* Deferred.make<void>();
+  const proxy = yield* leaseUpdates({ threadId, controlId }).pipe(
+    Stream.take(1),
+    Stream.runForEach(() =>
+      Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(exit))),
+    ),
+    Effect.provide(ServerSettings.ServerSettingsService.layerTest({ enableCua: true })),
+    Effect.forkChild,
+  );
+  yield* Deferred.await(reading);
+  return Deferred.succeed(exit, undefined).pipe(Effect.andThen(Fiber.join(proxy)));
+});
+
 describe("server computer-use call reservations", () => {
+  it.effect.each([
+    {
+      name: "a proxy lost without close blocks its window during grace and admits it exactly at grace expiry",
+      held: { pid: 42, window_id: 7 },
+      next: { pid: 42, window_id: 7 },
+    },
+    {
+      name: "a lost desktop ticket blocks an unrelated window only until grace expiry",
+      held: { text: "desktop" },
+      next: { pid: 99, window_id: 8 },
+    },
+    {
+      name: "a lost window ticket blocks the desktop only until grace expiry",
+      held: { pid: 42, window_id: 7 },
+      next: { text: "desktop" },
+    },
+  ])("$name", ({ held, next }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const disconnect = yield* openProxy(f.a, f.first.controlId);
+        const ticket = yield* f.reserve(f.a, held);
+        if (ticket.status !== "admitted" || ticket.reservationId === null)
+          return assert.fail("expected orphan ticket");
+        yield* disconnect;
+        yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS - 1);
+        assert.deepEqual(yield* f.reserve(f.b, next), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* TestClock.adjust(1);
+        assert.equal((yield* f.reserve(f.b, next)).status, "admitted");
+        assert.deepEqual(
+          yield* f.leases.callReservation(f.a, {
+            action: "validate",
+            controlId: f.first.controlId,
+            connectionId: "driver:1",
+            reservationId: ticket.reservationId,
+          }),
+          { status: "refused", detail: "replaced" },
+        );
+      }),
+    ).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "expiry fences late old-generation reserve and release without touching a replacement",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          const disconnect = yield* openProxy(f.a, f.first.controlId);
+          const ticket = yield* f.reserve();
+          if (ticket.status !== "admitted" || ticket.reservationId === null)
+            return assert.fail("expected orphan ticket");
+          yield* disconnect;
+          yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
+          const validation = {
+            action: "validate" as const,
+            controlId: f.first.controlId,
+            connectionId: "driver:1",
+            reservationId: ticket.reservationId,
+          };
+          assert.deepEqual(yield* f.leases.callReservation(f.a, validation), {
+            status: "refused",
+            detail: "replaced",
+          });
+          const disconnectReplacement = yield* openProxy(f.a, f.first.controlId);
+          assert.deepEqual(yield* f.reserve(), { status: "refused", detail: "replaced" });
+          const replacement = yield* f.reserve(
+            f.a,
+            { pid: 42, window_id: 7 },
+            "type_text",
+            "driver:2",
+          );
+          if (replacement.status !== "admitted" || replacement.reservationId === null)
+            return assert.fail("expected replacement ticket");
+          yield* f.release(f.a, ticket.reservationId);
+          yield* f.release(f.a, replacement.reservationId);
+          yield* f.close();
+          assert.deepEqual(
+            yield* f.leases.callReservation(f.a, {
+              ...validation,
+              connectionId: "driver:2",
+              reservationId: replacement.reservationId,
+            }),
+            replacement,
+          );
+          assert.deepEqual(yield* f.reserve(f.b), {
+            status: "refused",
+            detail: "target_busy",
+            holderThreadId: f.a,
+          });
+          yield* disconnectReplacement;
+        }),
+      ).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "closing one of two live lease streams does not expire their active window ticket",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          const first = yield* openProxy(f.a, f.first.controlId);
+          const last = yield* openProxy(f.a, f.first.controlId);
+          const ticket = yield* f.reserve();
+          if (ticket.status !== "admitted" || ticket.reservationId === null)
+            return assert.fail("expected live ticket");
+          yield* first;
+          yield* TestClock.adjust(APP_LEASE_IDLE_MS + ORPHAN_CALL_GRACE_MS);
+          assert.deepInclude(yield* f.reserve(f.b, { pid: 42, window_id: 8 }), {
+            status: "refused",
+            detail: "app_busy",
+            holderThreadId: f.a,
+          });
+          assert.deepEqual(
+            yield* f.leases.callReservation(f.a, {
+              action: "validate",
+              controlId: f.first.controlId,
+              connectionId: "driver:1",
+              reservationId: ticket.reservationId,
+            }),
+            ticket,
+          );
+          yield* last;
+          yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS - 1);
+          assert.deepEqual(yield* f.reserve(f.b), {
+            status: "refused",
+            detail: "target_busy",
+            holderThreadId: f.a,
+          });
+          yield* TestClock.adjust(1);
+          assert.equal((yield* f.reserve(f.b)).status, "admitted");
+        }),
+      ).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "a stopped control's window ticket is discovered before targetBusy and reclaimed after grace (#1689)",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        assert.equal((yield* f.reserve()).status, "admitted");
+        yield* f.leases.stop(f.a);
+        assert.deepEqual(yield* f.reserve(f.b), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS - 1);
+        assert.deepEqual(yield* f.reserve(f.b), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* TestClock.adjust(1);
+        assert.equal((yield* f.reserve(f.b)).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect("notification settle is an observation, so it takes no mutation reservation", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

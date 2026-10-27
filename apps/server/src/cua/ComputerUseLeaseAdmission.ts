@@ -139,6 +139,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         );
         const state = yield* controlState(threadId, call.controlId);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
+        reservations.reclaimStopped(canAct, now);
         // Release and close do not wait on admission: neither can resurrect a yielding validation.
         if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
           return { status: "refused", detail: "replaced" } as const;
@@ -184,10 +185,10 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         if (open === 0) {
           streams.delete(controlId);
           gone.add(controlId);
+          appLeases.release(threadId, controlId);
+          // A live sibling stream still owns the control's calls and apps.
+          reservations.markStopped(threadId, controlId, DateTime.toEpochMillis(now));
         } else streams.set(controlId, open);
-        appLeases.release(threadId, controlId);
-        // Its calls may still be stopping with their driver; they hold their apps briefly.
-        reservations.markStopped(threadId, controlId, DateTime.toEpochMillis(now));
       }),
     );
   /** A lease stream for this control opened: its proxy is (back) there. */
