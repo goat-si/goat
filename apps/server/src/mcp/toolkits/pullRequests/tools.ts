@@ -216,6 +216,7 @@ const PullRequestIdentity = {
 export const LinkPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
   alreadyLinked: Schema.Boolean,
+  next: Schema.optional(Schema.String),
 });
 export type LinkPullRequestResult = typeof LinkPullRequestResult.Type;
 

@@ -8,7 +8,7 @@
  *
  * @module blockingLayers
  */
-import type { Page } from "playwright-core";
+import type { Frame, Page } from "playwright-core";
 import type { SessionControl } from "./SessionControl.ts";
 
 export interface LayerCandidate {
@@ -21,7 +21,10 @@ export interface LayerCandidate {
   readonly pointerEvents: string;
   /** Computed z-index; "auto" when the element sets none. */
   readonly zIndex: string;
+  /** aria-modal, or a native dialog opened with showModal(): the rest of the page is inert. */
   readonly ariaModal: boolean;
+  /** In the browser's top layer as an open popover or a modal dialog, above any z-index. */
+  readonly topLayer?: boolean;
   /** Page content lay beneath it at some sampled point. */
   readonly overContent: boolean;
   /** The document, its body, <main> or role=main: content, never an overlay. */
@@ -73,8 +76,18 @@ const LAYERS_SCRIPT = `(gridSize) => {
     }
     return element;
   };
+  // :modal is a dialog opened with showModal(); it makes the rest of the page inert without ARIA.
+  const matches = (element, selector) => {
+    try {
+      return element.matches(selector);
+    } catch {
+      return false;
+    }
+  };
+  const roleOf = (element) =>
+    (element.getAttribute("role") || "").toLowerCase() || (element.tagName === "DIALOG" ? "dialog" : "");
   const isDialog = (element) => {
-    const role = (element.getAttribute("role") || "").toLowerCase();
+    const role = roleOf(element);
     return role === "dialog" || role === "alertdialog" || element.getAttribute("aria-modal") === "true";
   };
   const qualifies = (element) => {
@@ -103,19 +116,23 @@ const LAYERS_SCRIPT = `(gridSize) => {
   // an overlay split into panels is one layer, and an app shell or root around it is not chosen.
   // A small modal filled by a wrapper or button still counts as the modal, not the child hit.
   const isModal = (element) =>
-    (element.getAttribute("role") || "").toLowerCase() === "alertdialog" ||
-    element.getAttribute("aria-modal") === "true";
+    roleOf(element) === "alertdialog" ||
+    element.getAttribute("aria-modal") === "true" ||
+    matches(element, ":modal");
   const promote = (hit, stack) => {
     let overlay = null;
     let dialog = null;
     let modal = null;
+    let topLayer = null;
     for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
       if (!modal && isModal(node)) modal = node;
+      // An open popover is drawn above the page however it is positioned.
+      if (!topLayer && matches(node, ":popover-open")) topLayer = node;
       if (!qualifies(node)) continue;
       if (coversContent(node, stack)) overlay = node;
       if (isDialog(node)) dialog = node;
     }
-    return overlay || dialog || modal || hit;
+    return overlay || dialog || modal || topLayer || hit;
   };
   const collapse = (text) => (text || "").replace(/\\s+/g, " ").trim();
   const nameOf = (element) => {
@@ -132,7 +149,11 @@ const LAYERS_SCRIPT = `(gridSize) => {
     const heading = element.querySelector("h1,h2,h3,h4,h5,h6");
     const headingText = heading ? collapse(heading.textContent) : "";
     if (headingText) return headingText;
-    return collapse(element.innerText || element.textContent);
+    const text = collapse(element.innerText || element.textContent);
+    if (text) return text;
+    // A consent wall often holds nothing but a cross-origin frame; its title says what it asks.
+    const frame = element.querySelector("iframe[title], iframe[aria-label]");
+    return frame ? collapse(frame.getAttribute("aria-label") || frame.getAttribute("title")) : "";
   };
   const hintOf = (element) => {
     if (element.id) return "#" + element.id;
@@ -198,7 +219,7 @@ const LAYERS_SCRIPT = `(gridSize) => {
     const visible =
       Math.max(0, Math.min(rect.right, width) - Math.max(rect.left, 0)) *
       Math.max(0, Math.min(rect.bottom, height) - Math.max(rect.top, 0));
-    const role = (element.getAttribute("role") || "").toLowerCase();
+    const role = roleOf(element);
     const mainContent =
       element === document.documentElement ||
       element === document.body ||
@@ -214,7 +235,8 @@ const LAYERS_SCRIPT = `(gridSize) => {
       position: style.position,
       pointerEvents: style.pointerEvents,
       zIndex: style.zIndex,
-      ariaModal: element.getAttribute("aria-modal") === "true",
+      ariaModal: element.getAttribute("aria-modal") === "true" || matches(element, ":modal"),
+      topLayer: matches(element, ":modal") || matches(element, ":popover-open"),
       overContent,
       mainContent,
       empty: element.childElementCount === 0 && !collapse(element.textContent),
@@ -249,6 +271,8 @@ const isBlocking = (candidate: LayerCandidate) => {
     return !candidate.mainContent && isConsentBar(candidate);
   if (candidate.role === "dialog") return true;
   if (candidate.mainContent) return false;
+  // Nothing on the page can stack above the top layer, whatever lies beneath it.
+  if (candidate.topLayer === true) return true;
   // A scrim holds nothing itself, so it blocks even where the page beneath it is blank.
   if (!candidate.overContent)
     return candidate.empty && candidate.position === "fixed" && candidate.zIndex !== "auto";
@@ -292,9 +316,87 @@ type Sampled = Omit<LayersReport, "blocking">;
 const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
   target.evaluate(`(${LAYERS_SCRIPT})(${grid})`) as Promise<Sampled>;
 
+type HitNode = {
+  getRootNode(): { elementFromPoint(x: number, y: number): unknown };
+};
+type Point = readonly [number, number];
+
+/** Runs in the page: whether the element is what its document draws at each point. */
+const drawnAt = (element: HitNode, points: ReadonlyArray<Point>): ReadonlyArray<boolean> =>
+  points.map(([x, y]) => element.getRootNode().elementFromPoint(x, y) === element);
+
+/** Grid points per side sampled across a frame's box to see how much of it the browser draws. */
+const DRAWN_GRID = 5;
+
+/**
+ * The part of the viewport a frame shows. A grid over its box, in the top page's coordinates and
+ * clipped by every frame around it, is carried into each document on the way down and hit-tested
+ * there, so a point counts only where every frame element on its path is what is drawn: clips,
+ * covers, transforms and fixed frames all count as the browser paints them. Null when unmeasured.
+ */
+const visibleArea = async (frame: Frame, viewport: Sampled["viewport"]) => {
+  const links: Array<{
+    readonly element: Awaited<ReturnType<Frame["frameElement"]>>;
+    readonly parent: Frame;
+    readonly box: { x: number; y: number; width: number; height: number };
+  }> = [];
+  for (let current: Frame | null = frame; current !== null;) {
+    const parent = current.parentFrame();
+    if (parent === null) break;
+    const element = await current.frameElement().catch(() => null);
+    const box = element === null ? null : await element.boundingBox().catch(() => null);
+    if (element === null || box === null) return null;
+    links.push({ element, parent, box });
+    current = parent;
+  }
+  let left = 0;
+  let top = 0;
+  let right = viewport.width;
+  let bottom = viewport.height;
+  for (const { box } of links) {
+    left = Math.max(left, box.x);
+    top = Math.max(top, box.y);
+    right = Math.min(right, box.x + box.width);
+    bottom = Math.min(bottom, box.y + box.height);
+  }
+  if (right <= left || bottom <= top) return 0;
+  const points: Array<Point> = [];
+  for (let column = 0; column < DRAWN_GRID; column++)
+    for (let row = 0; row < DRAWN_GRID; row++)
+      points.push([
+        left + ((column + 0.5) * (right - left)) / DRAWN_GRID,
+        top + ((row + 0.5) * (bottom - top)) / DRAWN_GRID,
+      ]);
+  const drawn = points.map(() => true);
+  for (const [index, { element, parent }] of links.entries()) {
+    // The parent document's own frame element maps the top page's points into its viewport.
+    const holder = links[index + 1];
+    const size = holder
+      ? ((await parent.evaluate("[innerWidth, innerHeight]").catch(() => null)) as Point | null)
+      : null;
+    if (holder && size === null) return null;
+    const local = points.map(([x, y]): Point =>
+      holder && size
+        ? [
+            ((x - holder.box.x) * size[0]) / holder.box.width,
+            ((y - holder.box.y) * size[1]) / holder.box.height,
+          ]
+        : [x, y],
+    );
+    const hits = await element.evaluate(drawnAt, local).catch(() => null);
+    if (hits === null) return null;
+    hits.forEach((hit, point) => {
+      if (!hit) drawn[point] = false;
+    });
+  }
+  const share = drawn.filter(Boolean).length / points.length;
+  return (right - left) * (bottom - top) * share;
+};
+
 /**
  * A modal inside an iframe blocks that frame's part of the page. Only modals count there, so a
- * frame's own header or full-frame app root never reads as blocking the page.
+ * frame's own header or full-frame app root never reads as blocking the page, and a frame out of
+ * sight blocks nothing.
  */
 const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["viewport"]) => {
   if (typeof page.frames !== "function" || typeof page.mainFrame !== "function") return [];
@@ -305,15 +407,12 @@ const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["vi
       .frames()
       .filter((frame) => frame !== main)
       .map(async (frame) => {
-        const [sampled, box] = await Promise.all([
+        const [sampled, visible] = await Promise.all([
           sampleIn(frame, grid).catch(() => null),
-          frame
-            .frameElement()
-            .then((element) => element.boundingBox())
-            .catch(() => null),
+          visibleArea(frame, viewport),
         ]);
-        if (!sampled || !Array.isArray(sampled.candidates) || !box || area <= 0) return [];
-        const share = (box.width * box.height) / area;
+        if (!sampled || !Array.isArray(sampled.candidates) || !visible || area <= 0) return [];
+        const share = visible / area;
         return sampled.candidates.filter(isModal).map((candidate) => ({
           ...candidate,
           coverage: Math.min(1, candidate.coverage * share),

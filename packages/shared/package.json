@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./actionOutcomeSafety": {
+      "types": "./src/actionOutcomeSafety.ts",
+      "import": "./src/actionOutcomeSafety.ts"
+    },
     "./opencodexCompat": {
       "types": "./src/opencodexCompat.ts",
       "import": "./src/opencodexCompat.ts"

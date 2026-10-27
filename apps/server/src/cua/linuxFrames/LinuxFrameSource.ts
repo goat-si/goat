@@ -62,6 +62,12 @@ export class LinuxFrameSource extends Context.Service<
 /** JPEG qualities tried in turn until a frame fits PREVIEW_SESSION_FRAME_LIMITS.maxBytes. */
 const QUALITIES = [70, 45] as const;
 
+/**
+ * Still-drawing refusals in a row before a viewer hears the capture failed. A change in the window
+ * tree spoils one capture and clears by the next; on a quiet desktop none were measured in 240.
+ */
+const STILL_DRAWING_TRIES = 3;
+
 /** One capture's outcome: a frame, a reason there is none, or nothing to say this time. */
 export type FrameOutcome =
   | {
@@ -168,6 +174,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
 ) {
   const hub = yield* PubSub.sliding<DesktopCuaFrame>(16);
   const loops = yield* FiberMap.make<string>();
+  const stillDrawing = new Map<string, number>();
 
   const supported: Effect.Effect<boolean> =
     platform !== "linux"
@@ -204,6 +211,13 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     }
     const capturedAt = yield* Clock.currentTimeMillis;
     const shot = yield* Effect.promise(() => io.capture(env, target));
+    const tries =
+      "refused" in shot && shot.refused === STILL_DRAWING
+        ? (stillDrawing.get(target.key) ?? 0) + 1
+        : 0;
+    stillDrawing.set(target.key, tries);
+    if (tries >= STILL_DRAWING_TRIES)
+      return { unavailable: "captureFailed" } satisfies FrameOutcome;
     if ("refused" in shot) return refusalOutcome(shot.refused, shot.transient === true);
     const data = yield* frameJpeg(shot.rgb, shot.width, shot.height);
     if (data === undefined) return { unavailable: "captureFailed" } satisfies FrameOutcome;
@@ -234,6 +248,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     targets: ReadonlyArray<Target>,
   ) {
     yield* FiberMap.clear(loops);
+    stillDrawing.clear();
     if (platform !== "linux") return;
     for (const target of targets) yield* FiberMap.run(loops, target.key, loop(seq, target));
   });

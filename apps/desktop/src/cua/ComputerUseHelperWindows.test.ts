@@ -169,4 +169,19 @@ describe("Windows computer use readiness", () => {
       "FrameSource.cs must check WindowsFacts.IsProtectedWindow in both Capture and Admission",
     );
   });
+
+  it("stamps each Windows frame with the time its capture began, as the macOS helper does", () => {
+    // DesktopFrames pairs the cursor and reports ageMs only for a stamped frame.
+    const frameSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "FrameSource.cs"),
+      "utf8",
+    );
+    const capture = frameSource.slice(frameSource.indexOf("Dictionary<string, object> Capture("));
+    const stamp = capture.search(
+      /long capturedAt = DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\);/,
+    );
+    assert.isAtLeast(stamp, 0, "Capture must read the wall clock in Unix milliseconds");
+    assert.isBelow(stamp, capture.indexOf("CaptureGuard.CaptureNative("));
+    assert.match(capture, /frame\["capturedAt"\] = capturedAt;/);
+  });
 });

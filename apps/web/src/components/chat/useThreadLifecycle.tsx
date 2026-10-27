@@ -1,4 +1,5 @@
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
+import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { Dispatch } from "react";
 import type { ComposerThreadTarget } from "../../composerDraftStore";
@@ -418,7 +419,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   };
   const handleStopBackgroundWorkStable = useStableCallback(handleStopBackgroundWork);
   const openRelatedThreadGenerationRef = useRef(0);
-  const onOpenRelatedThread = async (threadId: ThreadId) => {
+  const onOpenRelatedThread = async (threadId: ThreadId, options?: OpenThreadOptions) => {
     const generation = ++openRelatedThreadGenerationRef.current;
     const threadRef = scopeThreadRef(environmentId, threadId);
     const isEnvironmentLive = () =>
@@ -446,6 +447,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
+      ...(options?.sentFrom ? { state: { sentFrom: options.sentFrom } } : {}),
     });
   };
   const onOpenRelatedThreadStable = useStableCallback(onOpenRelatedThread);

@@ -1,3 +1,17 @@
+import {
+  seedCompaction,
+  layerDatabase,
+  layerStoresProvided,
+  layerEffectOutboxProvided,
+  layerCommandReceiptStoreProvided,
+  layerIsolatedOutbox,
+  layerTest,
+  providerInstanceId,
+  providerDriver,
+  modelSelection,
+  makeThread,
+  threadCreatedEvent,
+} from "./FoundationPersistence.testkit.ts";
 import * as ThreadHistoryArchive from "./ThreadHistoryArchive.ts";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -10,16 +24,12 @@ import {
   ContextTransferId,
   EventId,
   MessageId,
-  type ModelSelection,
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
   RunAttemptId,
@@ -46,9 +56,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
-
 import { vi } from "vite-plus/test";
-
 import * as ServerConfig from "../config.ts";
 import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -60,7 +68,6 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -69,84 +76,6 @@ import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 const isLiveStreamBufferError = Schema.is(LiveStreamBufferError);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
-const layerDatabase = SqlitePersistence.layerMemory;
-const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
-const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
-const layerStoresProvided = Layer.mergeAll(
-  layerDatabase,
-  layerEventStoreProvided,
-  layerProjectionStoreProvided,
-);
-const layerEventSinkProvided = EventSink.layer.pipe(Layer.provide(layerStoresProvided));
-const layerEffectOutboxProvided = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
-const layerCommandReceiptStoreProvided = CommandReceiptStore.layer.pipe(
-  Layer.provide(layerDatabase),
-);
-const layerIsolatedOutbox = Layer.fresh(EffectOutbox.layer.pipe(Layer.provideMerge(layerDatabase)));
-const layerProjectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
-  Layer.provide(layerStoresProvided),
-);
-const layerTest = Layer.mergeAll(
-  layerStoresProvided,
-  layerEventSinkProvided,
-  layerEffectOutboxProvided,
-  layerCommandReceiptStoreProvided,
-  IdAllocator.layer,
-  layerProjectionMaintenanceProvided,
-);
-
-const providerInstanceId = ProviderInstanceId.make("codex");
-const providerDriver = ProviderDriverKind.make("codex");
-const modelSelection = {
-  instanceId: providerInstanceId,
-  model: "gpt-5.4",
-} satisfies ModelSelection;
-
-function makeThread(threadId: ThreadId, now: DateTime.Utc): OrchestrationV2AppThread {
-  return {
-    createdBy: "user",
-    creationSource: "web",
-    id: threadId,
-    projectId: ProjectId.make(`project:${threadId}`),
-    title: `Thread ${threadId}`,
-    providerInstanceId,
-    modelSelection,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: {
-      parentThreadId: null,
-      relationshipToParent: null,
-      rootThreadId: threadId,
-    },
-    forkedFrom: null,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: null,
-  };
-}
-
-function threadCreatedEvent(input: {
-  readonly id: string;
-  readonly thread: OrchestrationV2AppThread;
-  readonly now: DateTime.Utc;
-}): OrchestrationV2DomainEvent {
-  return {
-    id: EventId.make(input.id),
-    type: "thread.created",
-    threadId: input.thread.id,
-    providerInstanceId,
-    occurredAt: input.now,
-    payload: input.thread,
-  };
-}
 
 it.effect("rebuilds event history one bounded page at a time", () =>
   Effect.gen(function* () {
@@ -226,26 +155,6 @@ it.effect("rebuilds event history one bounded page at a time", () =>
     assert.isTrue((yield* maintenance.verify).valid);
   }).pipe(Effect.provide(layerTest)),
 );
-
-const seedCompaction = Effect.fnUntraced(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`INSERT INTO orchestration_v2_legacy_imports (
-    thread_id, source_updated_at, shell_imported_at, transcript_imported_at, imported_message_count
-  ) VALUES ('imported', '2026-10-17', '2026-10-17', '2026-10-17', 0)`;
-  yield* sql`WITH RECURSIVE history(n) AS (
-    SELECT 1 UNION ALL SELECT n + 1 FROM history WHERE n < 151
-  ) INSERT INTO orchestration_events (
-    event_id, aggregate_kind, stream_id, stream_version, event_type,
-    occurred_at, actor_kind, payload_json, metadata_json, application_event_version
-  ) SELECT 'event-' || n, 'thread', 'thread', n,
-    CASE WHEN n IN (1, 51, 101) THEN 'message.updated' ELSE 'thread.visited' END,
-    '2026-10-17', 'server', '{"id":"message"}', '{}', 2 FROM history`;
-  yield* sql`WITH RECURSIVE history(n) AS (
-    SELECT 1 UNION ALL SELECT n + 1 FROM history WHERE n < 100
-  ) INSERT INTO orchestration_command_receipts (
-    rowid, command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type
-  ) SELECT n * 2, 'command-' || n, 'thread', 'imported', '2026-10-17', 0, 'accepted', 'legacy' FROM history`;
-});
 
 it.effect("discovers on the reader worker and deletes on the writer", () =>
   Effect.gen(function* () {
@@ -2606,6 +2515,94 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         assert.deepEqual(yield* Ref.get(executions), [firstEffectId, secondEffectId]);
       }).pipe(Effect.provide(layerWorker));
     }),
+  );
+
+  it.effect.each([{ replayed: false }, { replayed: true }] as const)(
+    "starts later thread work behind a delegated-task stop that never returns (replayed: $replayed)",
+    ({ replayed }) =>
+      Effect.gen(function* () {
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const key = `foundation-hung-delegated-stop:${replayed}`;
+        const threadId = ThreadId.make(`thread:${key}`);
+        const stopEffectId = `effect:${key}:stop`;
+        const stopStarted = yield* Deferred.make<void>();
+        const turnStarted = yield* Deferred.make<void>();
+        yield* outbox.enqueue([
+          {
+            id: stopEffectId,
+            commandId: CommandId.make(`command:${key}:stop`),
+            threadId,
+            request: { type: "delegated-tasks.stop" },
+          },
+        ]);
+        if (replayed) {
+          assert.isTrue(
+            Option.isSome(
+              yield* outbox.claimNext({ workerId: "crashed-worker", leaseDurationMs: 30_000 }),
+            ),
+          );
+          assert.equal((yield* outbox.reconcileAfterProcessLoss).requeued, 1);
+        }
+
+        const layerExecutor = Layer.succeed(
+          EffectWorker.OrchestrationEffectExecutorV2,
+          EffectWorker.OrchestrationEffectExecutorV2.of({
+            execute: (effect) =>
+              effect.request.type === "delegated-tasks.stop"
+                ? Deferred.succeed(stopStarted, undefined).pipe(Effect.andThen(Effect.never))
+                : Deferred.succeed(turnStarted, undefined),
+          }),
+        );
+        const layerWorker = EffectWorker.layerWithOptions({
+          workerId: "hung-delegated-stop-worker",
+        }).pipe(
+          Layer.provide(
+            Layer.merge(Layer.succeed(EffectOutbox.EffectOutboxV2, outbox), layerExecutor),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          yield* EffectWorker.runDaemonWithOptions({ concurrency: 2 }).pipe(Effect.forkScoped);
+          yield* Deferred.await(stopStarted);
+          yield* outbox.enqueue([
+            {
+              id: `effect:${key}:turn`,
+              commandId: CommandId.make(`command:${key}:turn`),
+              threadId,
+              request: { type: "provider-turn.start", runId: RunId.make(`run:${key}`) },
+            },
+          ]);
+          yield* outbox.notifyAvailable();
+
+          const turn = yield* Deferred.await(turnStarted).pipe(
+            Effect.timeoutOption("1 hour"),
+            Effect.forkChild,
+          );
+          yield* TestClock.adjust("1 hour");
+          assert.isTrue(
+            Option.isSome(yield* Fiber.join(turn)),
+            "provider-turn.start never ran behind the hung delegated-tasks.stop",
+          );
+          const stop = yield* outbox.get(stopEffectId);
+          assert.isTrue(Option.isSome(stop));
+          if (Option.isSome(stop)) {
+            assert.equal(stop.value.status, "failed");
+            assert.include(stop.value.lastError ?? "", "Timed out");
+          }
+        }).pipe(
+          Effect.provide(layerWorker),
+          Effect.scoped,
+          Effect.ensuring(
+            outbox
+              .cancelUnsettled({
+                threadId,
+                effectTypes: ["delegated-tasks.stop", "provider-turn.start"],
+                reason: "fixture complete",
+              })
+              .pipe(Effect.orDie),
+          ),
+        );
+      }),
   );
 
   it.effect(

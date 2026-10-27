@@ -1,3 +1,4 @@
+import { classifyBrowserActionOutcome } from "../preview/actionOutcomeSafety.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Target and image IDs are host-owned opaque values.
 import * as NodeCrypto from "node:crypto";
 import type {
@@ -218,14 +219,24 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     input: unknown,
   ) =>
     broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
-      Effect.mapError(() =>
-        operation === "snapshot"
-          ? fail("downstream_failure", "Refresh the tab status before retrying.")
-          : {
-              ...fail("unknown_outcome", "Inspect the tab before any later action."),
-              effectStarted: true,
-            },
-      ),
+      Effect.mapError((error) => {
+        const safety = classifyBrowserActionOutcome({
+          operation,
+          status: "failed",
+          errorTag: error._tag,
+          ...(error._tag === "PreviewAutomationControlInterruptedError"
+            ? { controlReason: error.reason, dispatched: error.dispatched }
+            : {}),
+        });
+        return {
+          ...fail(
+            safety.possibleCommit ? "unknown_outcome" : "downstream_failure",
+            "Inspect the tab before any later action.",
+          ),
+          effectStarted: safety.possibleCommit,
+          safety,
+        };
+      }),
     );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
@@ -655,7 +666,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
-      return { value: result, category: "confirmed", evidence: ["Preview operation completed"] };
+      return {
+        value: result,
+        category: "confirmed",
+        evidence: ["Preview operation completed"],
+        safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
+      };
     },
   );
   const availability: ScreenHostDispatcher["availability"] = Effect.fn(

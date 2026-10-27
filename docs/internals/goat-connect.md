@@ -86,8 +86,8 @@ disables exposure without uninstalling the environment's background service.
 
 Managed allocations belong to a user/environment pair. Provisioning checkpoints
 external tunnel and DNS resources so retries can reconcile partial work. A
-normal shutdown of a CLI-managed link releases its tunnel to avoid paying for
-an idle resource, retaining the hostname reservation for the next startup.
+normal shutdown of a CLI-managed link releases its tunnel to free account
+capacity, retaining the hostname reservation for the next startup.
 It also retains the allocation record so the environment remains "offline"
 rather than becoming "not authorized".
 
@@ -106,9 +106,12 @@ teardown retains enough state to retry. See the
 
 ## Idle tunnels are reclaimed and recovered
 
-Cloudflare bills a tunnel whether or not a connector is attached, so a laptop
-that sleeps with a linked environment leaves a paid tunnel behind. The relay's
-five-minute maintenance job can reclaim those tunnels. `RELAY_TUNNEL_CLEANUP_MODE`
+Every existing tunnel uses account capacity, even without a connected connector.
+[Cloudflare Tunnels for Platforms](https://developers.cloudflare.com/tunnel/features/tunnels-for-platforms/)
+includes the first 1,000 tunnels per account; additional purchased capacity costs
+$4.50 per tunnel per month. Cleanup frees capacity and avoids buying more;
+recurring savings depend on subscription changes. The relay's five-minute
+maintenance job can reclaim idle tunnels. `RELAY_TUNNEL_CLEANUP_MODE`
 selects `off`, `dry-run`, or `enabled`, with `off` as the default. The mode is
 read at deploy time, so changing it means a relay deploy, not a variable flip.
 A candidate is a same-stage tunnel that Cloudflare reports down for at least
