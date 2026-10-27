@@ -77,7 +77,8 @@ export class TabClaims extends Context.Service<
 >()("goat/screenCode/TabClaims") {}
 
 export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
-  close: (tab: TabClaim, afterStop: boolean) => Effect.Effect<void>,
+  /** "kept" when the tab must outlive the turn after all, such as one waiting for a person. */
+  close: (tab: TabClaim, afterStop: boolean) => Effect.Effect<void | "kept">,
 ) {
   const claims = yield* SynchronizedRef.make(new Map<string, TabClaim>());
   const deferred = new Map<string, TabClaim[]>();
@@ -226,7 +227,11 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
           const result = yield* Effect.exit(close(found, authority.afterStop));
           outcomes.push({
             tabId: found.tabId,
-            status: Exit.isSuccess(result) ? "closed" : "failed",
+            status: Exit.isSuccess(result)
+              ? result.value === "kept"
+                ? "kept"
+                : "closed"
+              : "failed",
           });
         }
         yield* SynchronizedRef.update(claims, (all) => {

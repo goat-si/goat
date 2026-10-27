@@ -2,6 +2,8 @@ import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 import { Schema } from "effect";
 import {
   PreviewAutomationControlReason,
+  PreviewAutomationTabControl,
+  PreviewAutomationTabOwner,
   previewControlMessage,
 } from "./previewAutomationControl.ts";
 
@@ -86,9 +88,6 @@ export const PreviewAutomationSnapshotInput = Schema.Struct({
 });
 export type PreviewAutomationSnapshotInput = typeof PreviewAutomationSnapshotInput.Type;
 
-/** `human`: a person controls the tab now; `agent`: an agent session opened it; `unclaimed`: neither. */
-export const PreviewAutomationTabOwner = Schema.Literals(["agent", "human", "unclaimed"]);
-
 export const PreviewAutomationProfile = Schema.Struct({
   id: BrowserProfileId,
   name: Schema.String,
@@ -103,13 +102,7 @@ export const PreviewAutomationStatus = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
   loading: Schema.Boolean,
-  control: Schema.optional(
-    Schema.Struct({
-      owner: PreviewAutomationTabOwner,
-      ownedByCaller: Schema.Boolean,
-      generation: Schema.Number,
-    }),
-  ),
+  control: Schema.optional(PreviewAutomationTabControl),
   dialog: Schema.optional(
     Schema.NullOr(
       Schema.Struct({

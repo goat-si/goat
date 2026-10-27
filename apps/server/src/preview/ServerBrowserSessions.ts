@@ -18,6 +18,8 @@ export interface ServerBrowserSessionView {
   readonly humanControls: boolean;
   readonly private: boolean;
   readonly agentStopped: boolean;
+  /** What the agent asked a person to do here, while the tab waits for them. */
+  readonly handoffReason: string | null;
 }
 
 export const browserSessionView = async (tab: {
@@ -34,4 +36,5 @@ export const browserSessionView = async (tab: {
   humanControls: tab.control.controller !== null,
   private: tab.control.isPrivate,
   agentStopped: tab.control.isAgentStopped,
+  handoffReason: tab.control.handoffReason,
 });

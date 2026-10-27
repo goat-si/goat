@@ -112,6 +112,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const current = status.success;
       if (current.tabId !== tab.tabId && (yield* gone)) return;
+      // Handed to a person for a step: it outlives the turn, as a tab kept for handoff does.
+      if (current.tabId === tab.tabId && current.control?.waitingForPerson === true)
+        return "kept" as const;
       if (
         current.tabId !== tab.tabId ||
         current.control === undefined ||

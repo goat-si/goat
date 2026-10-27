@@ -1107,7 +1107,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(SshRemoteDispatchLive.layer),
+  Layer.provide(Layer.merge(SshRemoteDispatchLive.layer, PreviewSessions.layerHandoffs)),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

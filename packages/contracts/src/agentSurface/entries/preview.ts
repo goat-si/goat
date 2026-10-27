@@ -528,6 +528,30 @@ export const previewEntries = {
       openWorldHint: true,
     },
   }),
+  "preview.request_handoff": entry({
+    resource: "preview",
+    verb: "request_handoff",
+    name: "goat_preview_request_handoff",
+    toolkit: "previewControls",
+    summary: "Ask a person to finish a step on this thread's browser tab or desktop.",
+    description:
+      "Ask a person to finish a step you cannot, such as a sign-in, second factor or CAPTCHA, on your browser tab (tabId) or, without tabId, the desktop your computer use control drives. Its card says waiting for you with your reason. Your input there is refused until they hand it back. End the turn; GOAT wakes this thread when they hand back, decline or it expires.",
+    guide:
+      "A browser request needs an agent tab of this thread from goat_preview_open or goat_screen_run; the tab stays open after the turn ends. A desktop request needs this thread's computer use control and pauses agents on that screen. The card shows the reason on web and desktop, and the thread shows the request on every client. A person can take control, finish the step and hand back, which completes it; Stop cancels it; they can also decline it, or answer it from the thread. Asking again for the same target while one is open returns that request. After the wake, observe again before acting: the page or window may have changed. Never ask a person to type a secret for you here; use goat_handoff_create.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Asks a person to act on the calling thread's own tab or control.",
+    idempotencyReason:
+      "A pending request for the same tab or control is returned instead of a new one.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: ["sign_in"],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "preview.back": entry({
     resource: "preview",
     verb: "back",

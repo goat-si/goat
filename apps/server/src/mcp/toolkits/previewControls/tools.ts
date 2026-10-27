@@ -5,12 +5,15 @@ import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
   PreviewListResult,
+  PreviewRequestHandoffInput,
+  PreviewRequestHandoffResult,
   PreviewTabId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as PreviewManager from "../../../preview/Manager.ts";
+import * as PreviewHandoffs from "../../../preview/PreviewHandoffs.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -42,4 +45,21 @@ const PreviewCloseTool = Tool.make(agentSurfaceRegistry["preview.close"].name, {
   parameters: Schema.Struct({ tabId: PreviewTabId }),
   success: Schema.Struct({}),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.close"]));
-export const PreviewControlsToolkit = Toolkit.make(PreviewListTool, PreviewCloseTool);
+const requestHandoff = agentSurfaceRegistry["preview.request_handoff"];
+const PreviewRequestHandoffTool = Tool.make(requestHandoff.name, {
+  description: requestHandoff.description,
+  parameters: PreviewRequestHandoffInput,
+  success: PreviewRequestHandoffResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    PreviewHandoffs.PreviewHandoffs,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(requestHandoff));
+export const PreviewControlsToolkit = Toolkit.make(
+  PreviewListTool,
+  PreviewCloseTool,
+  PreviewRequestHandoffTool,
+);

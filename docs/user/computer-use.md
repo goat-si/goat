@@ -140,6 +140,14 @@ work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
 
+When an agent needs you for a step it cannot do, such as a sign-in, a second
+factor or a CAPTCHA, it asks: its tile reads **Waiting for you** with what it
+needs, and the request also appears in its thread on every device. The agent
+stays off that tab, or off this computer, until you finish the step and choose
+**Hand back**, or answer the request in the thread. Then the agent picks up
+where it stopped. If nobody answers within 30 minutes, the request expires and
+the agent hears that too.
+
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
