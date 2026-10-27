@@ -306,7 +306,16 @@ it.effect(
         }),
       );
       const layerControl = ProviderTurnControlService.layer.pipe(
-        Layer.provide(Layer.merge(layerProjection, layerSessionManager)),
+        Layer.provide(
+          Layer.mergeAll(
+            layerProjection,
+            layerSessionManager,
+            Layer.mock(EventSink.EventSinkV2)({
+              latestSequence: () => Effect.succeed(0),
+              stream: () => Stream.never,
+            }),
+          ),
+        ),
       );
 
       const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {
@@ -440,6 +449,10 @@ it.effect(
               Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
                 get: () => Effect.succeed(Option.some(runtime)),
               }),
+              Layer.mock(EventSink.EventSinkV2)({
+                latestSequence: () => Effect.succeed(0),
+                stream: () => Stream.never,
+              }),
               Layer.mock(ServerSettings.ServerSettingsService)({
                 getSettings: Effect.succeed({
                   ...DEFAULT_SERVER_SETTINGS,
@@ -479,7 +492,14 @@ it.effect(
     }),
 );
 
-const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (hangRead: boolean) {
+const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (
+  hangRead: boolean,
+  options: {
+    readonly interrupt?: Effect.Effect<void>;
+    readonly stream?: Stream.Stream<OrchestrationV2StoredEvent, EventSink.EventSinkV2Error>;
+    readonly sessionMissing?: boolean;
+  } = {},
+) {
   const now = yield* DateTime.now;
   const threadId = ThreadId.make("thread:restart-wait");
   const oldSessionId = ProviderSessionId.make("session:restart-wait");
@@ -536,7 +556,10 @@ const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (hangR
     resumeThread: () => Effect.die("unused"),
     startTurn: () => Effect.die("unused"),
     steerTurn: () => Effect.die("unused"),
-    interruptTurn: () => Deferred.succeed(interrupted, undefined).pipe(Effect.asVoid),
+    interruptTurn: () =>
+      Deferred.succeed(interrupted, undefined).pipe(
+        Effect.andThen(options.interrupt ?? Effect.void),
+      ),
     respondToRuntimeRequest: () => Effect.die("unused"),
     readThreadSnapshot: () => Effect.die("unused"),
     rollbackThread: () => Effect.die("unused"),
@@ -546,7 +569,7 @@ const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (hangR
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-          get: () => Effect.succeed(Option.some(runtime)),
+          get: () => Effect.succeed(options.sessionMissing ? Option.none() : Option.some(runtime)),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getProviderControlContext: () =>
@@ -570,7 +593,9 @@ const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (hangR
           latestSequence: () => Effect.succeed(0),
           stream: () =>
             Stream.unwrap(
-              Deferred.succeed(subscribed, undefined).pipe(Effect.as(Stream.fromQueue(events))),
+              Deferred.succeed(subscribed, undefined).pipe(
+                Effect.as(options.stream ?? Stream.fromQueue(events)),
+              ),
             ),
         }),
       ),
@@ -600,6 +625,9 @@ const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (hangR
     readEntered,
     subscribed,
     complete,
+    state,
+    events,
+    now,
     reads: () => reads,
     input: {
       threadId,
@@ -651,4 +679,141 @@ it.effect("restart awaits the persisted terminal signal instead of polling proje
       assert.isAtMost(f.reads(), 3);
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "restart rejects a hung interrupt acknowledgement without starting replacement work",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* restartWaitFixture(false, { interrupt: Effect.never });
+      const started = yield* Ref.make(false);
+      const finished = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+        const fiber = yield* control
+          .interruptAndAwaitTerminal(f.input)
+          .pipe(
+            Effect.andThen(Ref.set(started, true)),
+            Effect.flip,
+            Effect.ensuring(Deferred.succeed(finished, undefined)),
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(f.interrupted);
+        yield* TestClock.adjust("31 seconds");
+        assert.isTrue(yield* Deferred.isDone(finished));
+        const error = yield* Fiber.join(fiber);
+        assert.instanceOf(error, ProviderTurnControlService.ProviderTurnControlError);
+        assert.equal(error.operation, "restart");
+        assert.equal(error.cause, "Provider terminal state could not be confirmed before restart.");
+        assert.isFalse(yield* Ref.get(started));
+      }).pipe(Effect.provide(f.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "restart rejects closed or failed terminal streams without starting replacement work",
+  () =>
+    Effect.gen(function* () {
+      const overflow = new EventSink.EventSinkStreamError({ cause: "subscriber overflow" });
+      for (const stream of [Stream.empty, Stream.fail(overflow)]) {
+        const f = yield* restartWaitFixture(false, { stream });
+        const started = yield* Ref.make(false);
+        yield* Effect.gen(function* () {
+          const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+          const error = yield* control
+            .interruptAndAwaitTerminal(f.input)
+            .pipe(Effect.andThen(Ref.set(started, true)), Effect.flip);
+          assert.instanceOf(error, ProviderTurnControlService.ProviderTurnControlError);
+          assert.equal(error.operation, "restart");
+          assert.equal(
+            error.cause,
+            stream === Stream.empty
+              ? "The persisted terminal event stream ended before restart."
+              : overflow,
+          );
+          assert.isFalse(yield* Ref.get(started));
+        }).pipe(Effect.provide(f.layer));
+      }
+    }),
+);
+
+it.effect("restart requires both exact persisted targets to be terminal", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false);
+    yield* Ref.update(f.state, (current) => ({
+      ...current,
+      attempts: current.attempts.map((attempt) => ({
+        ...attempt,
+        status: "running" as const,
+        completedAt: null,
+      })),
+    }));
+    const finished = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const fiber = yield* control
+        .interruptAndAwaitTerminal(f.input)
+        .pipe(Effect.ensuring(Deferred.succeed(finished, undefined)), Effect.forkScoped);
+      yield* Deferred.await(f.subscribed);
+      yield* f.complete;
+      yield* TestClock.adjust("1 second");
+      assert.isFalse(yield* Deferred.isDone(finished));
+      const current = yield* Ref.get(f.state);
+      const attempt = current.attempts[0];
+      assert.isDefined(attempt);
+      if (attempt === undefined) return yield* Effect.die("fixture has no attempt");
+      const terminal = { ...attempt, status: "superseded" as const, completedAt: f.now };
+      yield* Ref.set(f.state, { ...current, attempts: [terminal] });
+      yield* Queue.offer(f.events, {
+        sequence: 2,
+        commandId: null,
+        event: {
+          id: EventId.make("event:restart-attempt-terminal"),
+          threadId: f.input.threadId,
+          occurredAt: f.now,
+          type: "run-attempt.updated",
+          payload: terminal,
+        },
+      });
+      yield* Fiber.join(fiber);
+      assert.isTrue(yield* Deferred.isDone(finished));
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("restart refuses a missing persisted target even after a terminal signal", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false);
+    const finished = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const fiber = yield* control
+        .interruptAndAwaitTerminal(f.input)
+        .pipe(
+          Effect.flip,
+          Effect.ensuring(Deferred.succeed(finished, undefined)),
+          Effect.forkScoped,
+        );
+      yield* Deferred.await(f.subscribed);
+      yield* Ref.update(f.state, (current) => ({ ...current, attempts: [] }));
+      yield* f.complete;
+      yield* TestClock.adjust("1 second");
+      assert.isFalse(yield* Deferred.isDone(finished));
+      yield* TestClock.adjust("30 seconds");
+      assert.isTrue(yield* Deferred.isDone(finished));
+      assert.equal((yield* Fiber.join(fiber)).operation, "restart");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("restart preserves recovery without a live session", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false, { sessionMissing: true });
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      yield* control.interruptAndAwaitTerminal(f.input);
+      assert.isFalse(yield* Deferred.isDone(f.interrupted));
+      assert.isFalse(yield* Deferred.isDone(f.subscribed));
+    }).pipe(Effect.provide(f.layer));
+  }),
 );
