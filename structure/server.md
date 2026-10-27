@@ -238,10 +238,12 @@ attaches through `resumeTurn` and never submits. See `docs/internals/cloud-crede
 `docs/internals/providers.md` and `docs/internals/adding-a-provider.md` are the contributor
 procedures. This page is the inventory.
 
-Codex Home routing belongs to `apps/server/src/provider/OpenCodexRoute.ts`.
-It observes OpenCodex on the Codex execution host. OpenCodex owns link keys
-and tunnel lifecycle; GOAT's route selection stays on the Codex instance.
-The shared status contract is `packages/contracts/src/codexRoute.ts`.
+Provider Home approval belongs to `apps/server/src/provider/ProviderHomeRequests.ts`. Codex launch
+verification stays in `OpenCodexRoute.ts`; Claude Code, OpenCode and Pi are routed only when their
+instance selects Home, through the process-only overlay `ProviderHomeDriver.ts` applies at driver
+registration. OpenCodex owns link keys and tunnel lifecycle, and the route selection stays on the
+instance. A configured or observed route is not the Child's inference proof. Shared route and
+settings contracts live in `packages/contracts/src/codexRoute.ts`.
 
 Proposed (not implemented): a hub environment that is the OpenCodex Home for the fleet. Devices
 join through OpenCodex Remote Link or Hub mode, driven over GOAT's SSH sessions, and GOAT checks
