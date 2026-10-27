@@ -159,14 +159,17 @@ Leave and re-link clean up the device before the Home (disconnect, restart, stan
 `/healthz`), then force-revoke: the Home's own revoke runs a remote disconnect whose failure
 restarts the tunnel. A device that cannot be cleaned up keeps its link until a person decides.
 
-`apps/server/src/opencodex/OpenCodexChildBootstrap.ts` makes a cloud machine this hub created into
-its Child at provision time. `CloudMachineService.onReady` fires after each real readying (the
-Boat SSH entry is written), and the bootstrap forks one job per alias: install this Home's
-OpenCodex release with a user-prefix npm install, start it (`ocx service`, else `ocx start`),
-then `HubMembership.joinProvisioned`, which links only when OpenCodex offers GOAT's own pin. It
-runs only while `hub.enabled`, skips a recorded Child, waits 10 minutes before retrying a
-blocked machine, and never touches SSH hosts a person added. Outcomes persist per alias in the
-state directory and reach `goat_host_status` as the host entry's `opencodexChild`.
+`apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
+hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
+machine; the Child's own GOAT (`OpenCodexChildReady.ts`, behind `goat_hub_child_prepare`) installs
+Codex, syncs the Home catalog and routes one bootstrap instance with no provider sign-in.
+`ChildReadyDispatch.ts` drives those steps over the pinned SSH channel with a fresh signed
+`opencodex-child-setup` purpose per phase; only the Home checks consent, before issuing and after
+every reply, and revokes delegated Child sessions when consent ends. Membership is not Ready:
+Ready needs one real model request through that Child's local OpenCodex and Home, with zero local
+credentials before and after, and expires after 24 hours or on any link, listener, instance or
+credential change. Status reads never infer. Outcomes persist per alias and reach
+`goat_host_status` as the host entry's `opencodexChild`.
 
 `apps/server/src/hub/OpenCodexManagedUpdate.ts` moves GOAT-managed OpenCodex installs to the newest
 release on OpenCodex's `latest` channel under ADR-0019's rules: staged bucket, idle (subagents
