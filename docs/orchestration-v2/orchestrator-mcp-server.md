@@ -248,31 +248,9 @@ any catalog model.
 Creates a GOAT-owned delegated task and immediately dispatches the supplied task
 prompt, in a local child thread or on an SSH host.
 
-```ts
-type DelegateTaskInput = {
-  task: string;
-  target?: {
-    host?: string;
-    providerInstanceId?: string;
-    driverKind?: string;
-    model?: string;
-  };
-  remote?: {
-    cwd: string;
-    workspace?:
-      | { type: "cwd" }
-      | { type: "worktree"; branch: string; baseRef?: string; startFromOrigin?: boolean }
-      | { type: "existing_worktree"; worktreePath: string; branch?: string };
-  };
-  title?: string;
-  role?: "implementation" | "research" | "review" | "design" | "test" | "general";
-  mode?: "async" | "wait";
-  timeoutMs?: number;
-  clientRequestId?: string;
-  runtimeMode?: "inherit" | "approval-required" | "auto-accept-edits" | "full-access";
-  interactionMode?: "inherit" | "plan" | "default";
-};
-```
+Use `goat_describe { path: "task.create", detail: "full" }` for the current
+input and output schema, including target options and checkout isolation. The
+registry entry and its tool schema are the source of truth for callers.
 
 Provider, model, runtime mode, and interaction mode inherit from the parent
 when omitted. A driver-only target inherits the parent's provider instance

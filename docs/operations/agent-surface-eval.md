@@ -169,7 +169,6 @@ verdict requires those tasks; this does not gate `goat_screen_run`.
 - `goat_eval` is unbuilt. Its candidate arm remains historical; this runner does
   not validate `goat_screen_run`. Record screen-run evidence separately until a
   screen-task campaign is designed.
-- Until the `agentToolListing` setting is on dev, a listing campaign can run only its full arm.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.

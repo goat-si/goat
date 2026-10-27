@@ -1,9 +1,9 @@
 # Agent surface
 
 > **요약 (Korean summary)**
-> GOAT의 에이전트 표면(MCP 도구 191개, `goat` CLI, 문서)을 작은 균일 문법 위로 다시 세우는 설계다.
+> GOAT의 에이전트 표면(MCP 도구, `goat` CLI, 문서)을 작은 균일 문법 위로 다시 세우는 설계다.
 > 레지스트리(`resource.verb` 경로, 패리티 테스트 포함)와 사람 핸드오프 레코드는 이미 배포되었다.
-> 결과는 `ok | error | needs_human` 세 갈래로 유지하고, 끝나지 않은 작업은 반드시 `meta.operation` 핸들을 붙여 `operation.read/wait/cancel`로 다룬다.
+> 결과는 `ok | error | needs_human` 세 갈래로 유지하고, 등록된 operation 종류의 끝나지 않은 작업은 `meta.operation` 핸들을 붙여 `operation.read/wait/cancel`로 다룬다.
 > 오류 코드에 `resource_exhausted`, `failed_precondition`, `unknown_outcome`을 더하고, 재시도 가능 여부는 호출마다 계산한다. 도메인 사유는 변환 전에 보존한다.
 > `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
 > `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓴다. 화면 작업에는 `goat_screen_run`이 유한한 JavaScript 셀을 제공하며, 호출마다 권한을 다시 검사한다.
@@ -22,8 +22,7 @@ An agent working in GOAT meets three surfaces that grew separately: MCP tools, a
 server CLI built for operators, and prose docs. They disagree in naming, result
 shape, retry behavior, and coverage.
 
-**Now.** `/mcp` mounts 191 tools: 179 `Tool.make` declarations and 12
-`Tool.dynamic` ones, of which 123 are named `goat_*`. Every tool has a registry
+**Now.** `/mcp` mounts the tools counted in the generated [audit](./agent-surface-audit.md). Every tool has a registry
 entry, and a test fails when the assembled catalog and the registry disagree
 ([agentSurface.test.ts](../../apps/server/src/mcp/agentSurface.test.ts)). The
 generated [audit](./agent-surface-audit.md) measures the rest: few mutating tools
@@ -89,7 +88,7 @@ it running, as `cloud_agent.run_forget` does.
 A verb on a sub-resource names the sub-resource first: `channel.task_read`,
 `memory.settings_update`, `ssh.host_prepare`.
 
-**Now.** `tools/list` shows every path as `goat_<resource>_<verb>`; the meta tools keep
+**Now.** The full `tools/list` shows every path as `goat_<resource>_<verb>`; the meta tools keep
 their short names, `goat_describe` and `goat_call`. 79 names a tool shipped under are
 not that projection ([#781](https://github.com/goat-si/goat/issues/781)). `/mcp` still
 accepts each of them in `tools/call` without listing it, runs the listed tool, and
@@ -267,8 +266,9 @@ treats a pending login as an error would retry it and start a second flow.
 `next` carries today's `next.call` hints in registry-path form, such as
 `provider.addable_list` after setup or `ssh.host_prepare` after key
 registration. Long-running work gets no fourth status. Accepting it succeeded, so the result is
-`ok`, and `meta.operation` is then required: an `ok` without it means the work is
-done. Callers learn completion only from the operation (see
+`ok`. For the operation kinds GOAT registers, `meta.operation` is then required and callers
+learn completion only from it; for those kinds an `ok` without it means the work is done.
+Long-running work in other domains does not carry a handle yet (see
 [Long-running work](#long-running-work)).
 
 `ErrorCode` is a closed set. The first ten come from the original proposal; the
@@ -329,38 +329,19 @@ written before any work is registered, so after a restart a recorded start that 
 longer runs settles as failed and is never started again. A sync a person or outside
 client starts directly has no handoff and stays in memory.
 
-**Proposed.** One reference type and three verbs over the stores that already own
-the work:
+**Now.** `operation.read`, `operation.wait`, and `operation.cancel` expose task, SSH setup,
+provider sync, and approved provider change work through signed handles over their existing
+stores ([operations.ts](../../apps/server/src/mcp/toolkits/agentSurface/operations.ts)).
+The opaque handle names work but grants no authority: each verb runs the domain's access checks.
+A handle that verifies but whose store has lost the record reads `unknown`; a handle that fails
+verification returns `not_found`, while one past its retention period returns `expired`.
+Cancel returns `not_cancellable` when that kind has no cancel path, and terminal reads carry the
+work's own result envelope. The `operation.wait` timeout bounds even its status read and leaves
+the work running.
 
-```ts
-type OperationRef = {
-  operationId: string;
-  kind: string; // provider_sync, ssh_setup, task, thread_run, cloud_machine, ...
-  state: "queued" | "running" | "waiting_human" | "succeeded" | "failed" | "cancelled" | "unknown";
-  cancellable: boolean;
-  pollAfterMs?: number;
-};
-```
-
-- `operationId` is an opaque token the server signs with the environment's key.
-  It carries the kind, the native id, the environment, the caller principal, and
-  the issue time. It names a target and grants nothing.
-- `operation.read` and `operation.wait { timeoutMs ≤ 300000 }` call the kind's
-  existing status path, and `operation.cancel` calls its existing cancel path,
-  through the invocation function. Each verb therefore runs exactly the checks of
-  the tool it replaces: cancel is a write and needs the domain's write
-  authorization, runtime mode, and profile, the same as `goat_provider_sync_cancel`
-  or `goat_task_cancel` today.
-- A valid token whose store has no record reports `unknown`: the server issued it,
-  so the work may have happened. A token that fails verification is `not_found`.
-  A token older than its kind's retention is `expired`. Kinds with in-memory stores
-  give `unknown` after a restart until they persist.
-- A terminal operation carries the envelope its work produced.
-- `cancellable` comes from the kind; `operation.cancel` on a kind without cancel
-  is `failed_precondition`. Cancel is cooperative and may end in another terminal
-  state, as in MCP tasks and LSP. `forget` stops observing and leaves work running.
-- `waiting_human` links the open handoff, so "a person must act, then the server
-  continues" is one handle.
+**Proposed.** Extend operation handles to remaining long-running domains, including cloud
+machine creation. Each domain keeps its own store and cancellation policy; a common handle
+would let an agent observe work without learning a different polling contract for every domain.
 
 This mirrors Google's long-running operations ([AIP-151](https://google.aip.dev/151))
 and the MCP tasks extension. It implements neither protocol; [D15](#decision-log)
@@ -430,24 +411,6 @@ other way. An outside agent that does not need that sends `x-goat-tool-listing: 
 `tools/list` result names the listing agents get in `_meta["goat/agentToolListing"]`, which is
 how the D8 runner checks a core arm.
 
-**Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
-
-- No path: resources with one-line summaries, the human-step kinds, and the
-  operation verbs, in a fixed order, plus `surfaceVersion`, a hash of the
-  registry that tells clients and prompt caches when it changed.
-- A resource (`"thread"`): its verbs with summaries, effect classes, and
-  `idempotency`.
-- A full path (`"thread.send"`): input and output JSON Schema, effect class,
-  reserved arguments, examples, related paths, legacy names, and
-  `available: { now: boolean, reason?: string }` computed for this caller,
-  including goatclaw profile capabilities and lanes left.
-
-`query` ranks paths by text, the way a `search_tools` tool with a detail level
-keeps large tool sets out of context
-([Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp)).
-`host` describes a remote's registry, which may be older. The same function backs
-`goat describe` and `goat <resource> <verb> --help`.
-
 **Now.** `goat_describe` answers at the three depths from the
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
@@ -460,6 +423,15 @@ only when the call is made; examples and related paths are not in it yet. `query
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
+
+Provider-owned discovery narrows this further: GOAT changes Claude Code's `ENABLE_TOOL_SEARCH`
+`auto` setting to `true`, while core tools carry `_meta["anthropic/alwaysLoad"]` so they stay
+resident ([Claude adapter](../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts),
+[listing](../../apps/server/src/mcp/toolListing.ts)). Codex can defer MCP tools when
+`tool_search` is available; its code mode lacks that search, so GOAT keeps every core name in
+turn context ([harness test](../../apps/server/src/mcp/harnessListing.test.ts)). Pi defers optional
+tools only when its tool search exists, and keeps core tools active
+([Pi extension](../../packages/provider-pi/src/server/mcpExtensionSource.ts)).
 
 **Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
 authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
@@ -534,20 +506,6 @@ tool name ([#1068](https://github.com/goat-si/goat/issues/1068)).
 `goat_call` to the origin's `/mcp` with the shell's credential (see
 [The `goat` command](#the-goat-command)). `goat acp-mcp-call <tool> <json>`, the ACP terminal
 fallback, is its alias and always prints the envelope.
-
-**Proposed.** `goat_call { path, args }` runs one registry entry and returns the
-envelope. It uses the one invocation function that direct MCP calls, the CLI, and
-any later composition also use. That function runs argument refusal, the entry's
-`McpToolAccess` declaration against the caller's `McpInvocationContext`, domain
-admission (goatclaw profile, lane claims, human-only rules), and host routing, in
-that order. `goat_call` has no access class of its own. Declaring it
-`readsAsCaller` would be wrong twice: that declaration requires a thread
-credential, so it would refuse outside clients that may call the same tools
-directly, and it narrows nothing
-([McpToolAccess.ts](../../apps/server/src/mcp/McpToolAccess.ts)).
-
-A test calls every registry entry directly and through `goat_call` with the same
-caller and asserts identical refusals.
 
 **Now.** `goat_call` resolves a path, a canonical `goat_<resource>_<verb>` name, or a
 legacy name, and runs the tool through the same registered handle `/mcp` serves
@@ -751,16 +709,15 @@ cannot reach (thread-only, client-only, and writes for a read-only client). Perm
 profiles are still checked only when a tool runs. Tool reference prose is still
 hand-written in
 [orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md).
+`goat_describe` and the generated `--help` read the same registry, so the running server is
+the reference. Per-resource reference pages are not committed to the repository: the
+[documentation rules](../../AGENTS.md#documentation) allow one catalog, which the registry
+already is.
 
-**Proposed.** The running server is the reference. `goat_describe`, `/llms.txt`
-filtered by the caller's permission profile too, and generated `--help` all read
-the registry, so they cannot drift from it, and they show what this caller on this
-version can do. Per-resource reference pages are not committed to the repository:
-the [documentation rules](../../AGENTS.md#documentation) allow one catalog, which
-the registry already is. CI fails when an entry's effect disagrees with its access
-declaration or when an example fails against the toolkit test harness. The
-hand-written tool sections in `orchestrator-mcp-server.md` shrink to lifecycle
-and policy once describe ships.
+**Proposed.** `/llms.txt` is also filtered by the caller's permission profile, and
+`goat_describe` serves examples. CI fails when an entry's effect disagrees with its access
+declaration or when an example fails against the toolkit test harness. The rest of the
+hand-written tool prose in `orchestrator-mcp-server.md` moves to lifecycle and policy.
 
 ## The `goat` command
 
@@ -777,27 +734,6 @@ Windows ([DesktopCliCommand.ts](../../apps/desktop/src/app/DesktopCliCommand.ts)
 [install guide](../user/install.md#the-goat-command)). Bare `goat` runs the
 server; the subcommands are operator tools.
 
-**Proposed.**
-
-```text
-goat <resource> <verb> [args] [--json] [--host <alias>] [--dry-run] [--request-id <id>]
-goat describe [path] [--query <text>]
-goat call <path> [json | -]
-goat operation read|wait|cancel <id>
-goat handoff list | open <id> | decline <id>
-goat login | logout | whoami
-goat serve | start | pair | auth | service | update | uninstall | connect | ...   (unchanged)
-```
-
-Resource commands and `--help` are generated from the registry. `goat call`
-replaces `acp-mcp-call`, which stays as an alias. `--json` prints the envelope as
-one JSON document on stdout, with logs on stderr. Exit codes: `0` ok, `1` error,
-`2` usage, `3` needs_human, `4` retryable error, `5` unknown outcome. An `ok` that
-carries an operation exits `0` and prints the operation id. `goat operation wait`
-maps the operation's state: `succeeded` exits `0`, `failed` and `cancelled`
-exit `1`, `waiting_human` exits `3`, `unknown` exits `5`, and a wait that
-times out while the work is still `queued` or `running` exits `6`.
-
 **Now.** `goat describe`, `goat call`, and a `goat <resource> <verb>` command for every
 registry path run before the operator CLI loads
 ([agentSurfaceCommand.ts](../../apps/server/src/cli/agentSurfaceCommand.ts)). Each sends one
@@ -807,7 +743,10 @@ access checks, goatclaw gate, and host routing as a direct one; `--host` is only
 `-f key=value` sets a string, and `-F key=value` turns `true`, `false`, `null`, and integers
 into JSON and reads `@file`. The operator verbs `thread list|start|send|show`, `project
 add|remove|rename`, and `provider diagnose` keep their meaning, and their help lists the
-registry verbs beside them. Exit codes follow the table above. When no envelope came back, a
+registry verbs beside them. Exit codes are `0` for success, `1` for error, `2` for usage,
+`3` for a human step, `4` for a retryable error, and `5` for an unknown outcome.
+`goat operation wait` also exits `6` when work remains queued or running after its timeout.
+When no envelope came back, a
 failure before `goat_call` was sent exits `4` only when the server could not be reached or
 answered the handshake with HTTP 429 or 5xx, and `1` for any other handshake refusal; after it
 was sent, a lost answer exits `4` for a read and `5` for a write. A refused credential (401, 403,
@@ -875,6 +814,9 @@ boundary.
   `providers:manage` approves. It runs under the approver's session, and each
   remote installs and stores credentials itself; credentials are never copied
   between machines ([ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts)).
+  `goat_call` attaches a `provider_sync` operation handle to accepted work, and
+  [HandoffWakeReactor](../../apps/server/src/handoffs/HandoffWakeReactor.ts) wakes the
+  requesting thread when the approval's continuation settles.
 - `provider.update`, `provider.add`, `provider.link`, and `provider.remove` change
   provider settings here or on an SSH host through
   [ProviderSettings](../../apps/server/src/provider/ProviderSettings.ts), which writes
@@ -899,10 +841,8 @@ A remote write runs under an SSH-issued `providers:manage` session that the orig
 requests only for a call it has already admitted, and a remote too old to issue one
 fails the call rather than falling back.
 
-**Proposed.** Three things change. `provider.sync` returns
-`meta.operation` (kind `provider_sync`) and either persists or reports `unknown`
-after a restart. The requesting thread is woken when the card resolves. The
-per-flow `next.call` hints become the operation, so the agent waits on one handle.
+**Proposed.** Replace this flow's per-call `next.call` hints with its operation handle as
+the single follow-up instruction.
 
 ## Rollout
 
@@ -913,12 +853,12 @@ Each PR shipped on its own and left `tools/list` unchanged until the flip (row 1
 | 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                                                                |
 | 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                                                                |
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774)                                                |
-| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                                                                |
-| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                                                                |
+| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started: envelope shipped in [#773](https://github.com/goat-si/goat/pull/773); classification remains partial                                                                                                             |
+| 5   | One invocation function, `goat_call`, `goat_describe`                         | Shipped ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                                                                |
 | 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                                                                     |
-| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                                                                      |
+| 7   | Operations over existing stores; durable provider sync                        | Started: task and SSH operations shipped in [#920](https://github.com/goat-si/goat/pull/920), provider sync and approved provider changes in [#925](https://github.com/goat-si/goat/pull/925); other domains remain       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                                                                  |
-| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                                                                |
+| 9   | Registry-generated CLI commands and credentials                               | Shipped: credentials ([#935](https://github.com/goat-si/goat/pull/935)); generated commands ([#938](https://github.com/goat-si/goat/pull/938))                                                                            |
 | 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
 | 11  | `goat_screen_run`                                                             | Implemented on this branch; runtime proof pending                                                                                                                                                                         |
 
