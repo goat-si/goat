@@ -7,6 +7,26 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
+  it("renames multiline GitHub identities without changing nested GitLab fixtures (#1923)", () => {
+    const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
+    const source = [
+      'canonicalKey: "github.com/pingdotgg/t3code",',
+      'owner: "pingdotgg",',
+      'name: "t3code",',
+    ].join("\n");
+    const renamed = [
+      'canonicalKey: "github.com/goat-si/goat",',
+      'owner: "goat-si",',
+      'name: "goat",',
+    ].join("\n");
+    expect(apply(path, source)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    const nested = 'owner: "t3tools",\nname: "t3code",';
+    expect(apply(path, nested)).toBe(nested);
+    const unrelated = 'owner: "pingdotgg",\nname: "t3code",';
+    expect(apply("a/b.test.ts", unrelated)).toBe(unrelated);
+  });
+
   it("keeps fork head names aligned with their renamed expectations (#1923)", () => {
     const path = "packages/source-control-github/src/server/gitHubPullRequests.test.ts";
     const source = [

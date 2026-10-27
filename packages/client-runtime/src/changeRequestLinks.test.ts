@@ -42,10 +42,17 @@ describe("findProjectForChangeRequest", () => {
       project({
         canonicalKey: "github.com/goat-si/goat",
         provider: SourceControlProviderKind.make("github"),
-        owner: "pingdotgg",
-        name: "t3code",
+        owner: "goat-si",
+        name: "goat",
       }),
     ];
+    expect(
+      findProjectForChangeRequest(projects, {
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 1,
+      }),
+    ).toBe(projects[0]);
     expect(
       findProjectForChangeRequest(projects, {
         host: "github.com-evil.test",

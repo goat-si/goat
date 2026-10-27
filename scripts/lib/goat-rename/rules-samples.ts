@@ -64,6 +64,14 @@ const sampleRepo = (id: string, find: RegExp, replace: string): TextRule => ({
 
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "samples:change-request-github-fields",
+    category: "samples",
+    find: /(\bowner:\s*")pingdotgg("\s*,\s*name:\s*")t3code"/g,
+    replace: '$1goat-si$2goat"',
+    multiline: true,
+    scope: (path) => path === "packages/client-runtime/src/changeRequestLinks.test.ts",
+  },
+  {
     id: "samples:github-fork-head-name",
     category: "samples",
     find: /(\bheadRepository:\s*\{[^{}\r\n]*\bname:\s*")t3code(?=")/g,
