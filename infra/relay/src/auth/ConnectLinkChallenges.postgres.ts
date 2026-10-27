@@ -77,17 +77,25 @@ it.effect(
       };
       const invalidSigner = yield* Layer.build(
         Tokens.layer.pipe(
+          // This signer must not reuse the valid service from the enclosing fixture's memo map.
+          Layer.fresh,
           Layer.provide(
             Config.layer({ ...config, cloudMintPrivateKey: Redacted.make("invalid-signing-key") }),
           ),
         ),
       );
-      expect(
-        (yield* createLinkChallenge(input).pipe(
-          Effect.provideService(Tokens.RelayTokens, Context.get(invalidSigner, Tokens.RelayTokens)),
-          Effect.result,
-        ))._tag,
-      ).toBe("Failure");
+      const failed = yield* createLinkChallenge(input).pipe(
+        Effect.provideService(Tokens.RelayTokens, Context.get(invalidSigner, Tokens.RelayTokens)),
+        Effect.result,
+      );
+      expect(failed._tag).toBe("Failure");
+      if (failed._tag === "Failure") {
+        expect(failed.failure).toMatchObject({
+          _tag: "RelayJwtError",
+          operation: "sign",
+          typ: "goat-link-challenge+jwt",
+        });
+      }
       const db = yield* RelayDb.RelayDb;
       expect(
         (yield* db.$client`SELECT * FROM relay_dpop_proofs WHERE thumbprint = 'cli-link-approval'`)

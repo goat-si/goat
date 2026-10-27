@@ -749,8 +749,8 @@ export const RelayMobileClientId = "goat-mobile" as const;
 export const RelayWebClientId = "goat-web" as const;
 
 export const RelayDpopAccessTokenRequest = Schema.Struct({
-  readmitClientKey: Schema.optionalKey(Schema.Boolean),
-  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
+  readmitClientKey: Schema.optionalKey(Schema.Boolean.pipe(Schema.toCodecStringTree)),
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1).pipe(Schema.toCodecStringTree)),
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
   subject_token: TrimmedNonEmptyString.annotate({
     description: "Clerk bearer token for the signed-in cloud user.",

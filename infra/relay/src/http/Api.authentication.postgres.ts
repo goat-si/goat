@@ -190,9 +190,16 @@ it.effect(
                 "x-forwarded-proto": origin.protocol.slice(0, -1),
                 authorization: `Bearer ${token}`,
                 dpop: `${header}.${claims}.${signature}`,
-                "content-type": "application/json",
+                "content-type":
+                  body instanceof URLSearchParams
+                    ? "application/x-www-form-urlencoded"
+                    : "application/json",
               },
-              ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+              ...(body === undefined
+                ? {}
+                : {
+                    body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body),
+                  }),
             }),
           ),
         );
@@ -242,16 +249,19 @@ it.effect(
         })).status,
       ).toBe(403);
       expect(
-        (yield* request("/v1/client/dpop-token", {
-          connectAuthPolicyVersion: 1,
-          grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-          subject_token: "oauth",
-          subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
-          requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-          resource: config.relayIssuer,
-          scope: "environment:connect",
-          client_id: "goat-web",
-        })).status,
+        (yield* request(
+          "/v1/client/dpop-token",
+          new URLSearchParams({
+            connectAuthPolicyVersion: "1",
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+            subject_token: "oauth",
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+            requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            resource: config.relayIssuer,
+            scope: "environment:connect",
+            client_id: "goat-web",
+          }),
+        )).status,
       ).toBe(401);
       for (const path of ["/tunnel", "/tunnel/recovery"]) {
         expect(

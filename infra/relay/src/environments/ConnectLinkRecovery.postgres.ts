@@ -131,7 +131,7 @@ function fixture(gate?: {
         managedEndpointNamespace: "test",
       }),
     ),
-    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(Layer.mock(HookInbox.HookInbox, { clear: () => Effect.void })),
   );
   return {
