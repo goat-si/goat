@@ -18,7 +18,7 @@ export const computerUseHelperBundleId = (desktopAppId: string) => `${desktopApp
 
 /**
  * One helper per desktop channel, so stable, nightly and dev each keep their own grants. It never
- * follows a dev checkout's own app id: macOS would keep one grant per checkout (#1275).
+ * follows a dev checkout's own app id: macOS would keep one grant per checkout.
  */
 export const computerUseHelperBundleIdForChannel = (channel: DesktopChannel) =>
   computerUseHelperBundleId(DESKTOP_CHANNEL_APP_IDS[channel]);
