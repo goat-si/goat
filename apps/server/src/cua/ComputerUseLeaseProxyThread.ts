@@ -15,7 +15,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { cancelledRequestKey } from "./ComputerUseDriverReply.ts";
-import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
+import { type Envelope, decodeProviderIngress, parse } from "./ComputerUseLeaseProtocol.ts";
 import { type LeaseEnd, LEASE_END_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
@@ -355,8 +355,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     );
 
   const handle = Effect.fn("ComputerUseLeaseProxyThread.routeMessage")(function* (line: string) {
-    const message = parse(line);
-    if (message?.method === "$/cancelRequest") {
+    const decoded = decodeProviderIngress(line);
+    if (decoded.kind === "invalid") return yield* options.output(decoded.response);
+    const message = decoded.message;
+    if (message.method === "$/cancelRequest") {
       const params = message.params as { readonly id?: unknown } | undefined;
       if (typeof params?.id === "string" || typeof params?.id === "number")
         line = JSON.stringify({

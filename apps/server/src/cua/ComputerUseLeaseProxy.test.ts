@@ -18,81 +18,81 @@ import {
   cutOffCall,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
-import { makeAppGuide } from "./ComputerUseGuide.ts";
 
 describe("ComputerUseLeaseProxy", () => {
-  const launchedWithoutWindow = (id: number, pid: number) =>
-    JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      result: {
-        content: [],
-        structuredContent: {
-          pid,
-          launch_state: { requested: true, process_running: true, window_ready: false },
-          windows: [],
-        },
-      },
-    });
-  const told = (answer: Record<string, unknown>) => JSON.stringify(answer.result);
-
-  it.effect(
-    "tells each windowless launch, answered out of order, to list its own app's windows",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* harness({ guide: makeAppGuide("darwin", undefined) });
-        yield* h.push(foregroundActive());
-        yield* h.applied;
-        yield* h.send(call(1, "launch_app", { bundle_id: "com.apple.calculator" }));
-        assert.equal((yield* h.nextToDriver).id, 1);
-        yield* h.nextReservation;
-        yield* h.send(call(2, "launch_app", { bundle_id: "com.apple.TextEdit" }));
-        assert.equal((yield* h.nextToDriver).id, 2);
-        yield* h.nextReservation;
-        // A list_apps answer shaped like a launch is not one; only the request decides.
-        yield* h.send(call(3, "list_apps"));
-        assert.equal((yield* h.nextToDriver).id, 3);
-        yield* h.reply(launchedWithoutWindow(2, 52));
-        yield* h.reply(launchedWithoutWindow(3, 63));
-        yield* h.reply(launchedWithoutWindow(1, 41));
-        const answers = [yield* h.nextToProvider, yield* h.nextToProvider, yield* h.nextToProvider];
-        assert.deepEqual(
-          answers.map((answer) => answer.id),
-          [2, 3, 1],
-        );
-        assert.include(told(answers[0]!), "list_windows({ pid: 52 })");
-        assert.notInclude(told(answers[0]!), "pid: 41");
-        assert.notInclude(told(answers[1]!), "list_windows");
-        assert.include(told(answers[2]!), "list_windows({ pid: 41 })");
-        assert.notInclude(told(answers[2]!), "pid: 52");
-      }),
+  it.effect("rejects JSON-RPC arrays and non-objects locally without forwarding any member", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.applied;
+      const invalid = [
+        [JSON.parse(call(1, "list_apps")), JSON.parse(call(2, "list_windows"))],
+        [],
+        null,
+        "text",
+        42,
+        true,
+        false,
+        {},
+        { jsonrpc: "1.0", id: 1, method: "ping" },
+        { jsonrpc: "2.0", id: {}, method: "ping" },
+        { jsonrpc: "2.0", id: true, method: "ping" },
+        { jsonrpc: "2.0", id: 1, method: 7 },
+        { jsonrpc: "2.0", method: "ping", params: null },
+        { jsonrpc: "2.0", id: 1, method: "ping", result: {} },
+        { jsonrpc: "2.0", id: 1, result: {}, error: { code: -1, message: "bad" } },
+        { jsonrpc: "2.0", result: {} },
+        { jsonrpc: "2.0", id: 1, error: { code: "bad", message: "bad" } },
+      ];
+      for (const [line, code] of [
+        ...invalid.map((value) => [JSON.stringify(value), -32600] as const),
+        ["{", -32700] as const,
+      ]) {
+        yield* h.send(line);
+        const answer = yield* Effect.raceFirst(h.nextToProvider, h.nextToDriver);
+        assert.deepInclude(answer, { jsonrpc: "2.0", id: null });
+        assert.equal((answer.error as { code: number }).code, code);
+        assert.equal(yield* h.driverQueued, 0);
+        assert.equal(yield* h.providerQueued, 0);
+      }
+    }),
   );
 
-  it.effect("a cancelled or unknown launch reply reaches the agent with no launch note", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ guide: makeAppGuide("darwin", undefined) });
-      yield* h.push(foregroundActive());
-      yield* h.applied;
-      yield* h.send(call(1, "launch_app", { bundle_id: "com.apple.calculator" }));
-      assert.equal((yield* h.nextToDriver).id, 1);
-      yield* h.nextReservation;
-      yield* h.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          method: "notifications/cancelled",
-          params: { requestId: 1 },
-        }),
-      );
-      yield* h.nextToDriver;
-      yield* h.reply(launchedWithoutWindow(1, 41));
-      yield* h.reply(launchedWithoutWindow(99, 42));
-      yield* h.send(call(2, "list_apps"));
-      assert.equal((yield* h.nextToDriver).id, 2);
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
-      const answer = yield* h.nextToProvider;
-      assert.equal(answer.id, 2);
-      assert.notInclude(JSON.stringify(answer), "list_windows");
-    }),
+  it.effect(
+    "rejecting an in-flight request id preserves the original call and its eventual reply",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.applied;
+        yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "once" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.send(call(1, "list_windows"));
+        assert.include(JSON.stringify(yield* h.nextToProvider), "work in progress");
+        assert.equal(h.reservations.filter((r) => r.action === "reserve").length, 1);
+        assert.equal(h.reservations.filter((r) => r.action === "release").length, 0);
+        assert.equal(yield* h.driverQueued, 0);
+        const reply = { jsonrpc: "2.0", id: 1, result: { content: [] } };
+        yield* h.reply(JSON.stringify(reply));
+        assert.deepEqual(yield* h.nextToProvider, reply);
+        yield* h.send(call(2, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 2);
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 2 },
+          }),
+        );
+        assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        yield* h.send(call(2, "list_windows"));
+        assert.include(JSON.stringify(yield* h.nextToProvider), "work in progress");
+        assert.equal(yield* h.driverQueued, 0);
+        yield* h.reply(JSON.stringify({ ...reply, id: 2 }));
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }));
+        assert.equal((yield* h.nextToProvider).method, "notifications/message");
+        assert.equal(yield* h.providerQueued, 0);
+      }),
   );
 
   it.effect(
