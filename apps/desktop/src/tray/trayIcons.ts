@@ -73,11 +73,15 @@ export function withActivityDot(
 ): Electron.NativeImage {
   const result = Electron.nativeImage.createEmpty();
   for (const scaleFactor of image.getScaleFactors()) {
-    const { width, height } = image.getSize(scaleFactor);
-    const drawn = drawActivityDot(
-      { width, height, pixels: image.toBitmap({ scaleFactor }) },
-      color,
-    );
+    // getSize reports points; the bitmap of a 2x representation holds twice as many pixels a side.
+    const points = image.getSize(scaleFactor);
+    const width = Math.round(points.width * scaleFactor);
+    const height = Math.round(points.height * scaleFactor);
+    const pixels = image.toBitmap({ scaleFactor });
+    if (pixels.length !== width * height * 4) {
+      throw new Error(`tray icon bitmap at ${scaleFactor}x is not ${width}x${height}`);
+    }
+    const drawn = drawActivityDot({ width, height, pixels }, color);
     result.addRepresentation({
       scaleFactor,
       width,
