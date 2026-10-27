@@ -5,6 +5,7 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as Semaphore from "effect/Semaphore";
@@ -105,7 +106,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
                   state.idle !== true &&
                   (state.apps === undefined ||
                     app === undefined ||
-                    state.apps.some((name) => name.toLowerCase() === app.toLowerCase()))),
+                    state.apps.some((name) => cuaAppKey(name) === cuaAppKey(app)))),
             ),
           ),
   });

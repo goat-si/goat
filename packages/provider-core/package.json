@@ -63,6 +63,10 @@
       "types": "./src/server/handoffBudget.ts",
       "import": "./src/server/handoffBudget.ts"
     },
+    "./server/finiteProviderRequest": {
+      "types": "./src/server/finiteProviderRequest.ts",
+      "import": "./src/server/finiteProviderRequest.ts"
+    },
     "./server/IdAllocator": {
       "types": "./src/server/IdAllocator.ts",
       "import": "./src/server/IdAllocator.ts"

@@ -1,3 +1,4 @@
+import { workRowSymbolName } from "./thread-work-log-icons";
 import { Button } from "../../components/ui/Button";
 import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
@@ -400,47 +401,6 @@ export function ShimmeringWorkContent(props: {
       ) : null}
     </View>
   );
-}
-
-function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
-  switch (icon) {
-    case "agent":
-      return { ios: "sparkles", android: "auto_awesome" };
-    case "alert":
-      return { ios: "exclamationmark.triangle", android: "error" };
-    case "browser":
-      return { ios: "safari", android: "public" };
-    case "check":
-      return { ios: "checkmark", android: "check" };
-    case "command":
-      return { ios: "terminal", android: "terminal" };
-    case "computer":
-      return "computer";
-    case "code":
-      return "chevron.left.forwardslash.chevron.right";
-    case "edit":
-      return { ios: "square.and.pencil", android: "edit" };
-    case "eye":
-      return { ios: "eye", android: "visibility" };
-    case "folder":
-      return { ios: "folder", android: "folder" };
-    case "globe":
-      return { ios: "globe", android: "public" };
-    case "search":
-      return "magnifyingglass";
-    case "hammer":
-      return { ios: "hammer", android: "construction" };
-    case "lock":
-      return { ios: "lock", android: "lock" };
-    case "message":
-      return { ios: "bubble.left", android: "chat_bubble" };
-    case "warning":
-      return { ios: "xmark", android: "close" };
-    case "wrench":
-      return { ios: "wrench", android: "build" };
-    case "zap":
-      return { ios: "bolt", android: "bolt" };
-  }
 }
 
 // Animate only fresh rows; virtualization remounts old rows during scrolling.
