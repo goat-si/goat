@@ -122,6 +122,36 @@ export function resolveDraftProjectSelection(
 
 type ProjectRef = { readonly environmentId: string; readonly projectId: string };
 
+export function resolveDraftShareTransfer(options: {
+  readonly selectedProjectKey: string | null;
+  readonly selectedProject: EnvironmentProject | null;
+  readonly initialProjectRef?: {
+    readonly environmentId?: string;
+    readonly projectId?: string;
+  };
+  readonly hasPendingShare: boolean;
+  readonly awaitingServerConfig: boolean;
+  readonly isImportingShare: boolean;
+}) {
+  const selected = options.selectedProject;
+  const initial = options.initialProjectRef;
+  const project =
+    selected &&
+    options.selectedProjectKey === scopedProjectKey(selected.environmentId, selected.id) &&
+    (!initial?.environmentId ||
+      !initial.projectId ||
+      (selected.environmentId === initial.environmentId && selected.id === initial.projectId))
+      ? selected
+      : null;
+  return {
+    project,
+    // An unreserved share waiting for a destination must leave Back and project selection usable.
+    isPending:
+      options.isImportingShare ||
+      Boolean(project && options.hasPendingShare && !options.awaitingServerConfig),
+  };
+}
+
 export function newTaskDestination(options: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly projectScopes?: ReadonlyArray<HomeProjectScope>;

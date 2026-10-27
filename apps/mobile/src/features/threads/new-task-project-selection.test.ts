@@ -3,10 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import type { HomeProjectScope } from "../home/homeThreadList";
+import { IncomingShareInbox } from "../sharing/incoming-share-inbox";
+import type { IncomingShareDraft } from "../sharing/incoming-share-model";
 import {
   getProjectScopeSelectionTarget,
   newTaskDestination,
   resolveDraftProjectSelection,
+  resolveDraftShareTransfer,
   resolveEnvironmentProjectMatch,
 } from "./new-task-project-selection";
 
@@ -152,6 +155,95 @@ describe("new task project choice", () => {
         pickerClosed: true,
       }),
     ).toEqual({ kind: "preserve" });
+  });
+
+  // regression: #1971 a cancelled multi-project share picker must leave a way out.
+  it("keeps a shared draft unlocked after picker cancellation until a destination is chosen", async () => {
+    const first = makeProject("first");
+    const second = makeProject("second", "other");
+    const projects = [first, second];
+    const scopes = projects.map((project) => makeScope([project]));
+    const share: IncomingShareDraft = {
+      schemaVersion: 1,
+      id: "share",
+      createdAt: "2026-10-28T00:00:00.000Z",
+      text: "Keep this shared task",
+      attachments: [],
+      warnings: [],
+    };
+    const persisted = new Map([[share.id, share]]);
+    const inbox = new IncomingShareInbox({
+      loadDrafts: async () => [...persisted.values()],
+      writeDraft: async (draft) => void persisted.set(draft.id, draft),
+      removeDraft: async (id) => void persisted.delete(id),
+      getPayloads: () => [],
+      clearPayloads: () => undefined,
+      buildDraft: async () => {
+        throw new Error("The native share is already in the inbox");
+      },
+      idForPayloads: async () => share.id,
+      now: () => share.createdAt,
+    });
+    const transfer = (selectedProjectKey: string | null, selectedProject = first) =>
+      resolveDraftShareTransfer({
+        selectedProjectKey,
+        selectedProject,
+        hasPendingShare: true,
+        awaitingServerConfig: false,
+        isImportingShare: false,
+      });
+    const sharing = { ...picker, incomingShareId: share.id };
+
+    expect(resolveDraftProjectSelection(null, projects, scopes, sharing)).toEqual({ kind: "pick" });
+    expect(transfer(null)).toEqual({ project: null, isPending: false });
+    expect(
+      resolveDraftProjectSelection(null, projects, scopes, { ...sharing, pickerClosed: true }),
+    ).toEqual({ kind: "pick" });
+    // The same pending flag guards both Back and the project chooser in the draft screen.
+    expect(transfer(null)).toEqual({ project: null, isPending: false });
+    await expect(inbox.refresh({ ingestNative: false })).resolves.toEqual([share]);
+
+    const selectedKey = "other:second";
+    expect(resolveDraftProjectSelection(selectedKey, projects, scopes, sharing)).toEqual({
+      kind: "preserve",
+    });
+    // Selection hydration must not import into the fallback first project.
+    expect(transfer(selectedKey)).toEqual({ project: null, isPending: false });
+    const chosen = transfer(selectedKey, second);
+    expect(chosen).toEqual({ project: second, isPending: true });
+    if (!chosen.project) throw new Error("The chosen share destination is missing");
+    const destination = {
+      environmentId: String(chosen.project.environmentId),
+      projectId: String(chosen.project.id),
+    };
+    await expect(inbox.reserve(share.id, destination)).resolves.toEqual([
+      { ...share, destination: { environmentId: "other", projectId: "second" } },
+    ]);
+  });
+
+  it("keeps active share imports locked and waits for the route's explicit destination", () => {
+    const first = makeProject("first");
+    const second = makeProject("second", "other");
+    const options = {
+      selectedProjectKey: "environment:first",
+      selectedProject: first,
+      initialProjectRef: { environmentId: "other", projectId: "second" },
+      hasPendingShare: true,
+      awaitingServerConfig: false,
+      isImportingShare: false,
+    };
+    expect(resolveDraftShareTransfer(options)).toEqual({ project: null, isPending: false });
+    expect(
+      resolveDraftShareTransfer({ ...options, selectedProjectKey: null, isImportingShare: true }),
+    ).toEqual({ project: null, isPending: true });
+    expect(
+      resolveDraftShareTransfer({
+        ...options,
+        selectedProjectKey: "other:second",
+        selectedProject: second,
+        awaitingServerConfig: true,
+      }),
+    ).toEqual({ project: second, isPending: false });
   });
 
   it("validates remembered projects and prefers the current thread's project", () => {

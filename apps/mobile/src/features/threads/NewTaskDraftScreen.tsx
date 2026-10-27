@@ -85,6 +85,7 @@ import {
 } from "../keyboard/hardwareKeyboardCommands";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { useInitialNewTaskProject } from "./use-initial-new-task-project";
+import { resolveDraftShareTransfer } from "./new-task-project-selection";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import {
   resolveNewTaskBranchLabel,
@@ -313,11 +314,15 @@ export function NewTaskDraftScreen(props: {
     incomingShare?.attachments.some((attachment) => attachment.type === "file") &&
     selectedEnvironmentServerConfig === null,
   );
-  const isIncomingShareTransferPending = Boolean(
-    incomingShare &&
-    cancelledIncomingShareId !== props.incomingShareId &&
-    !isIncomingShareAwaitingServerConfig,
-  );
+  const { project: incomingShareProject, isPending: isIncomingShareTransferPending } =
+    resolveDraftShareTransfer({
+      selectedProjectKey,
+      selectedProject,
+      initialProjectRef: props.initialProjectRef,
+      hasPendingShare: Boolean(incomingShare && cancelledIncomingShareId !== props.incomingShareId),
+      awaitingServerConfig: isIncomingShareAwaitingServerConfig,
+      isImportingShare,
+    });
   const contextImports = useAtomValue(composerContextImportsAtom);
   const isImportingContext = flow.draftKey ? contextImports[flow.draftKey] === true : false;
   const isComposerInteractionLocked =
@@ -455,23 +460,8 @@ export function NewTaskDraftScreen(props: {
     if (!servesRoute) return;
     const shareId = props.incomingShareId;
     const draftKey = flow.draftKey;
-    const destinationProject = selectedProject;
-    const initialEnvironmentId = props.initialProjectRef?.environmentId;
-    const initialProjectId = props.initialProjectRef?.projectId;
-    const selectedProjectMatchesRoute =
-      !initialEnvironmentId ||
-      !initialProjectId ||
-      (destinationProject?.environmentId === initialEnvironmentId &&
-        destinationProject.id === initialProjectId);
-    if (
-      !shareId ||
-      !draftKey ||
-      !destinationProject ||
-      selectedProjectKey !==
-        scopedProjectKey(destinationProject.environmentId, destinationProject.id) ||
-      !selectedProjectMatchesRoute ||
-      cancelledIncomingShareId === shareId
-    ) {
+    const destinationProject = incomingShareProject;
+    if (!shareId || !draftKey || !destinationProject || cancelledIncomingShareId === shareId) {
       return;
     }
     const importKey = `${shareId}:${draftKey}`;
@@ -668,7 +658,7 @@ export function NewTaskDraftScreen(props: {
       });
   }, [
     servesRoute,
-    selectedProjectKey,
+    incomingShareProject,
     consumeShare,
     cancelledIncomingShareId,
     flow.draftKey,
@@ -678,12 +668,9 @@ export function NewTaskDraftScreen(props: {
     isIncomingShareInboxLoading,
     isIncomingShareUnavailable,
     props.incomingShareId,
-    props.initialProjectRef?.environmentId,
-    props.initialProjectRef?.projectId,
     releaseShareReservation,
     reserveShare,
     selectedEnvironmentServerConfig,
-    selectedProject,
     shareImportAttempt,
   ]);
 
