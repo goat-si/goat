@@ -1,3 +1,4 @@
+import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { makeShellThreadRows, type ShellThreadRow } from "./ProjectionShellThreadRows.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
@@ -943,13 +944,19 @@ export function applyToProjection(
   options: { readonly deferNotificationCursor?: boolean } = {},
 ): OrchestrationV2ThreadProjection {
   const next = applyToProjectionEvent(projection, event);
+  const cursorContext = notificationCursorContext(next, [event]);
   const completedAt = options.deferNotificationCursor
     ? undefined
-    : RunNotification.notificationCompletions(
-        [event],
-        notificationCursorContext(next, [event]),
-      ).get(event.threadId);
-  const thread = RunNotification.preserveThreadNotification(projection.thread, next.thread);
+    : RunNotification.notificationCompletions([event], cursorContext).get(event.threadId);
+  const thread = LatestAnswer.withLatestAnswer(
+    next,
+    LatestAnswer.preserveLatestAnswer(
+      projection.thread,
+      RunNotification.preserveThreadNotification(projection.thread, next.thread),
+    ),
+    event,
+    cursorContext.idleRunIds,
+  );
   return {
     ...next,
     thread:
@@ -1785,6 +1792,9 @@ export function threadShellFromProjection(
     ...(projection.thread.launchedBy === undefined
       ? {}
       : { launchedBy: projection.thread.launchedBy }),
+    ...(projection.thread.latestAnswerExcerpt === undefined
+      ? {}
+      : { latestAnswerExcerpt: projection.thread.latestAnswerExcerpt }),
     ...(projection.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: projection.thread.externalLauncher }),
@@ -2109,6 +2119,9 @@ function shellFromState(input: {
     ...(input.state.thread.launchedBy === undefined
       ? {}
       : { launchedBy: input.state.thread.launchedBy }),
+    ...(input.state.thread.latestAnswerExcerpt === undefined
+      ? {}
+      : { latestAnswerExcerpt: input.state.thread.latestAnswerExcerpt }),
     ...(input.state.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: input.state.thread.externalLauncher }),
@@ -2394,7 +2407,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 updated_at = excluded.updated_at,
                 archived_at = excluded.archived_at,
                 deleted_at = excluded.deleted_at,
-                payload_json = ${RunNotification.threadNotificationPayload(sql)}
+                payload_json = ${LatestAnswer.latestAnswerPayload(
+                  sql,
+                  RunNotification.threadNotificationPayload(sql),
+                )}
             `;
               break;
             }
@@ -3207,6 +3223,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }
           if (!options?.deferNotificationCursor)
             yield* RunNotification.recordNotificationCompletions(sql, [event]);
+          yield* LatestAnswer.recordLatestAnswers(sql, [event]);
         },
         (effect, event) =>
           effect.pipe(
