@@ -8613,17 +8613,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         if (activeRun && activeProviderTurn && activeProviderThread?.providerSessionId) {
           const activeSession = yield* providerSessions
             .get(activeProviderThread.providerSessionId)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestratorDispatchError({
-                    commandId: command.commandId,
-                    commandType: command.type,
-                    cause,
-                  }),
-              ),
-            );
+            .pipe(mapDispatchError(command));
+          // An answer from work with less of the screen waits as the next turn (ComputerUseSteering).
           if (
+            command.answerAsNextTurn !== true &&
             Option.isSome(activeSession) &&
             activeSession.value.providerSession.capabilities.turns.supportsActiveSteering
           ) {

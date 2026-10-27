@@ -15,6 +15,7 @@ import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import { RuntimeRequestRespondCommand } from "./orchestrationV2RuntimeRequest.ts";
 export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import {
   OrchestrationV2LimitRecovery,
@@ -90,7 +91,6 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
-  UserInputAttachments,
   UserInputAttachmentAnswerPayload,
   UserInputRespondedBy,
   RuntimeMode,
@@ -3445,17 +3445,7 @@ export const OrchestrationV2Command = Schema.Union([
     // Replaces all attachments; absent preserves them for older clients editing text.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
   }),
-  Schema.Struct({
-    type: Schema.Literal("runtime-request.respond"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: RuntimeRequestId,
-    decision: Schema.optional(ProviderApprovalDecision),
-    feedback: Schema.optional(Schema.String),
-    answers: Schema.optional(ProviderUserInputAnswers),
-    attachmentsByQuestionId: Schema.optional(UserInputAttachments),
-    respondedBy: Schema.optional(UserInputRespondedBy),
-  }),
+  RuntimeRequestRespondCommand,
   Schema.Struct({
     type: Schema.Literal("thread.user-input.dismiss"),
     commandId: CommandId,

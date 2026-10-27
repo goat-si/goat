@@ -1,13 +1,17 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  RuntimeRequestId,
   ThreadId,
+  TurnItemId,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
@@ -29,6 +33,7 @@ import * as CuaDriver from "../cua/CuaDriver.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -826,6 +831,167 @@ it.effect("an unattended message queued behind a slow start keeps its own turn",
           projection.messages.find((message) => message.id === agentMessageId)?.runId,
           started[0]!.runId,
         );
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+/** A question in the target thread that its asker resumes by message, as Codex async ones do. */
+const askByMessage = Effect.gen(function* () {
+  const eventSink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const requestId = RuntimeRequestId.make("request:by-message");
+  const nodeId = NodeId.make("node:by-message");
+  const shared = { threadId, providerThreadId: null, providerTurnId: null, nativeItemRef: null };
+  yield* eventSink.write({
+    commandId: CommandId.make("ask-by-message"),
+    events: [
+      {
+        id: EventId.make("ask-by-message-node"),
+        type: "node.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          ...shared,
+          id: nodeId,
+          runId: null,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        id: EventId.make("ask-by-message-request"),
+        type: "runtime-request.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      },
+      {
+        id: EventId.make("ask-by-message-item"),
+        type: "turn-item.updated",
+        threadId,
+        nodeId,
+        occurredAt: now,
+        payload: {
+          ...shared,
+          id: TurnItemId.make("item:by-message"),
+          type: "user_input_request",
+          runId: null,
+          nodeId,
+          parentItemId: null,
+          ordinal: 0,
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          requestId,
+          responseMode: "message",
+          questions: [{ id: "color", header: "Color", question: "Which color?", options: [] }],
+        },
+      },
+    ],
+  });
+  return requestId;
+});
+
+it.effect("a promotion cannot steer an unattended message into a person's running turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, steered, layer } = yield* harness("promote-unattended", {
+        supportsActiveSteering: true,
+        computerUse: true,
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        yield* worker.drain();
+        const sent = yield* send(
+          "steer_when_ready",
+          "use the screen",
+          ThreadId.make("channel-worker:promote"),
+        );
+        yield* worker.drain();
+        assert.equal(sent.delivery, "queued");
+
+        // The steer the send gate refused is refused again when asked for by promotion.
+        const promoted = yield* threads
+          .dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: CommandId.make("promote-unattended"),
+            threadId,
+            queuedRunId: sent.run.id,
+            targetRunId: started[0]!.runId,
+          })
+          .pipe(Effect.result);
+        yield* worker.drain();
+        assert.equal(promoted._tag, "Failure");
+        assert.deepEqual(steered, []);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(projection.runs.find((run) => run.id === sent.run.id)?.status, "queued");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("an unattended thread's answer to a question waits behind a person's running turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, steered, layer } = yield* harness("answer-unattended", {
+        supportsActiveSteering: true,
+        computerUse: true,
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        yield* worker.drain();
+        const requestId = yield* askByMessage;
+
+        yield* threads.dispatch({
+          type: "runtime-request.respond",
+          commandId: CommandId.make("answer-unattended"),
+          threadId,
+          requestId,
+          answers: { color: "Blue" },
+          respondedBy: {
+            type: "agent",
+            threadId: ThreadId.make("channel-worker:answer"),
+            environmentId: null,
+            title: null,
+            reason: "Relaying the channel's reply",
+          },
+        });
+        yield* worker.drain();
+        assert.deepEqual(steered, []);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        const answer = projection.messages.find((message) => message.text.includes("Blue"));
+        assert.isDefined(answer);
+        assert.notEqual(answer?.runId, started[0]!.runId);
       }).pipe(Effect.provide(layer));
     }),
   ),

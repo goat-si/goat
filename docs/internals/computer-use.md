@@ -434,13 +434,15 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged. In full access, a thread launched from another environment, and turns it
   launches or sends here (`launched_remotely`), use every app like a person's threads, beside
-  them rather than holding the screen alone, and wait in the same turn for a foreground approval
-  (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
-  cannot read the turn that launched it, so it stays unattended for steering a person's turn and
-  outside full access, and asks for foreground like any run no person started. A user's own
-  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
-  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
-  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
+  them rather than holding the screen alone (`usesScreenLikePerson` in `ComputerUseOrigin.ts`;
+  owner decision, Jun, 2026-10-28). Like every full access run that is not unattended work, they
+  take the foreground without asking (`ComputerUseFullAccess.ts`). This host cannot read the
+  turn that launched it, so it stays unattended outside full access. A user's own `cua-driver`
+  stays blocked for it whatever admission decides, since that driver would not hear Stop. A
+  message, a promotion of a queued message, or a local agent's answer to a question from an
+  origin that reaches less of the screen than the running turn waits as the next turn instead of
+  joining it (`ComputerUseSteering.ts`): a person's turn outranks a remote full access turn, which
+  outranks unattended work.
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement

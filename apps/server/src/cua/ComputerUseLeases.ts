@@ -359,9 +359,9 @@ const make = Effect.gen(function* () {
         DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now),
     );
 
-  // A person's full access run takes the foreground without asking; see ComputerUseForeground.
+  // A directed full access run takes the foreground without asking; see ComputerUseForeground.
   const implyFocus = (record: ControlRecord) => {
-    if (record.everyApp !== "person" || record.runId === undefined) return false;
+    if (record.everyApp !== "directed" || record.runId === undefined) return false;
     if (paused !== undefined || privateHost) return false;
     return foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
   };
@@ -438,17 +438,10 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly person?: boolean; readonly runId?: RunId },
+    run?: { readonly runId?: RunId },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(
-        yield* mint(
-          threadId,
-          Option.none(),
-          run?.person === true ? "person" : "interactive",
-          run?.runId,
-        ),
-      );
+      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "directed", run?.runId));
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))

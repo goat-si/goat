@@ -45,10 +45,7 @@ const personRun = Effect.fn("impliedForeground.personRun")(function* (name: stri
       '2026-01-01', '2026-01-01', '{}')`;
   yield* run(threadId, `run:${name}:R`, 1, "running");
   const control = Option.getOrThrow(
-    yield* leases.everyAppControl(threadId, false, {
-      person: true,
-      runId: RunId.make(`run:${name}:R`),
-    }),
+    yield* leases.everyAppControl(threadId, false, { runId: RunId.make(`run:${name}:R`) }),
   );
   assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
   const signals = yield* leases.subscribe;
@@ -124,10 +121,7 @@ it.effect(
       yield* run(threadId, "run:reused:Q", 2, "running");
       yield* drain;
       const reused = Option.getOrThrow(
-        yield* leases.everyAppControl(threadId, false, {
-          person: true,
-          runId: RunId.make("run:reused:Q"),
-        }),
+        yield* leases.everyAppControl(threadId, false, { runId: RunId.make("run:reused:Q") }),
       );
       assert.equal(reused.controlId, control.controlId);
       // A proxy running R's script sees R's grant leave in this update and cancels the script.
@@ -159,17 +153,11 @@ it.effect(
           VALUES (${threadId}, 'project', 'thread', 'codex', 'full-access', 'default',
             '2026-01-01', '2026-01-01', '{}')`;
         const first = Option.getOrThrow(
-          yield* leases.everyAppControl(threadId, false, {
-            person: true,
-            runId: RunId.make(`run:${budget}:R`),
-          }),
+          yield* leases.everyAppControl(threadId, false, { runId: RunId.make(`run:${budget}:R`) }),
         );
         // The reuse yields after `budget` ops, and the Stop forked behind it runs at that yield.
         const reuse = yield* leases
-          .everyAppControl(threadId, false, {
-            person: true,
-            runId: RunId.make(`run:${budget}:Q`),
-          })
+          .everyAppControl(threadId, false, { runId: RunId.make(`run:${budget}:Q`) })
           .pipe(Effect.provideService(MaxOpsBeforeYield, budget), Effect.forkChild);
         const stop = yield* leases.stop(threadId).pipe(Effect.forkChild);
         const reused = Option.getOrThrow(yield* Fiber.join(reuse));
