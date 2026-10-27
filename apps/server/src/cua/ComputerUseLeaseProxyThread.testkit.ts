@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
+import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 
@@ -60,9 +61,12 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     readonly connectionId: string;
     readonly generation: number;
   }>();
-  const updates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done | string>();
+  const updates = yield* Queue.unbounded<
+    ComputerUseLeaseThreadUpdate | LeaseTransportUpdate,
+    Cause.Done | string
+  >();
   const output = yield* Queue.unbounded<string>();
-  const taken = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate>();
+  const taken = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate | LeaseTransportUpdate>();
   const applied = yield* Queue.unbounded<ComputerUseLeaseUpdate>();
   const started = yield* Queue.unbounded<Effect.Success<ReturnType<typeof makeDriver>>>();
   const closed = yield* Queue.unbounded<ComputerUseCallReservation>();
@@ -179,7 +183,7 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     primitiveReply: Queue.take(primitiveOutput),
     driverStarted: Queue.take(driverStarted),
     driverCutoff: Queue.take(driverCutoff),
-    push: (update: ComputerUseLeaseThreadUpdate) =>
+    push: (update: ComputerUseLeaseThreadUpdate | LeaseTransportUpdate) =>
       Queue.offer(updates, update).pipe(Effect.andThen(Queue.take(taken))),
     next: Queue.take(output).pipe(
       Effect.map(

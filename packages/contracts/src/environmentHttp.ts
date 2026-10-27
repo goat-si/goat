@@ -486,7 +486,7 @@ export function formatConnectReachable(
 }
 
 /**
- * Sections of docs/user/t3-connect-troubleshooting.md. Each is the GitHub anchor of a
+ * Sections of docs/user/goat-connect-troubleshooting.md. Each is the GitHub anchor of a
  * heading there; the test fails when a heading is renamed without updating this list.
  */
 export const GOAT_CONNECT_TROUBLESHOOTING_SECTIONS = [
@@ -505,7 +505,7 @@ export type GoatConnectTroubleshootingSection =
 
 /** Clients, the CLI, and server logs link here as "More info". */
 export function goatConnectTroubleshootingUrl(section: GoatConnectTroubleshootingSection): string {
-  return `https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#${section}`;
+  return `https://github.com/goat-si/goat/blob/dev/docs/user/goat-connect-troubleshooting.md#${section}`;
 }
 
 const REACHABILITY_SECTION = {

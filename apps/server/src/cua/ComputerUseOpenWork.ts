@@ -4,6 +4,7 @@
  * @module ComputerUseOpenWork
  */
 import type { RunId, ThreadId } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
@@ -116,6 +117,8 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
   };
   readonly controls: Map<ThreadId, C>;
   readonly changed: Effect.Effect<void>;
+  /** The control's calls still out can now only be stopping, from this moment. */
+  readonly idled: (threadId: ThreadId, controlId: string, now: number) => void;
   readonly error: (cause: SqlError.SqlError) => E;
 }) => {
   const { sql, foreground, controls, changed } = options;
@@ -128,6 +131,7 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
     const before = controls.get(threadId);
     if (before === undefined || before.ended !== undefined) return false;
     if (yield* openWork(threadId)) return false;
+    const now = yield* Clock.currentTimeMillis;
     // The read yields: a turn that minted or reused the control since then keeps it.
     const after = controls.get(threadId);
     if (
@@ -139,6 +143,7 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
       return false;
     foreground.revokeControl(threadId, after.controlId);
     controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
+    options.idled(threadId, after.controlId, now);
     yield* changed;
     return true;
   });

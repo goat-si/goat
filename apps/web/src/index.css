@@ -137,6 +137,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --glass-blur: 12px;
   --glass-opacity: 80%;
   --glass-saturation: 1.14;
+  /* Surfaces that float over content (composer, banners, pills, menus) keep a floor under the
+     window-tint slider, so the transcript behind them never reads through. */
+  --glass-surface-opacity: max(var(--glass-opacity), 92%);
+  --glass-surface-blur: calc(var(--glass-blur) * 1.5);
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
@@ -447,9 +451,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility surface-glass {
-  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  background: color-mix(in srgb, var(--background) var(--glass-surface-opacity), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     background: var(--background) !important;
@@ -463,9 +467,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent),
       color-mix(in srgb, var(--alert-glass-tint) 4%, transparent)
     ),
-    color-mix(in srgb, var(--background) var(--glass-opacity), transparent) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    color-mix(in srgb, var(--background) var(--glass-surface-opacity), transparent) !important;
+  -webkit-backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
 
   &[data-variant="error"] {
     --alert-glass-tint: var(--destructive);
@@ -508,9 +512,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @utility dialog-glass {
-  background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  background: color-mix(in srgb, var(--background) var(--glass-surface-opacity), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
   border-color: color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
   box-shadow: 0 24px 64px -24px rgb(0 0 0 / 65%);
 
@@ -540,10 +544,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   background: color-mix(
     in srgb,
     var(--popover) 18%,
-    color-mix(in srgb, var(--popover) var(--glass-opacity), transparent)
+    color-mix(in srgb, var(--popover) var(--glass-surface-opacity), transparent)
   );
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
   border: 1px solid color-mix(in srgb, var(--contrast-foreground) 10%, transparent);
 
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
