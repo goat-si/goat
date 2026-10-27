@@ -13,6 +13,7 @@ import { vi } from "vite-plus/test";
 import * as SqliteClient from "./nodeSqliteClient.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
+const readyWorkers = vi.hoisted(() => new WeakSet<NodeWorkerThreads.Worker>());
 const failingWorkers = vi.hoisted(() => ({ message: undefined as string | undefined }));
 const workerStarts = vi.hoisted(() => ({
   onStart: undefined as ((worker: NodeWorkerThreads.Worker) => void) | undefined,
@@ -49,6 +50,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       }
       super(...args);
       startedWorkers.push(this);
+      this.on("message", (reply) => {
+        if (reply?.type === "ready") readyWorkers.add(this);
+      });
       workerStarts.onStart?.(this);
     }
   }
@@ -107,7 +111,20 @@ const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
           worker.off("error", onError);
           worker.off("exit", onExit);
         };
+        const sendBarrier = () => {
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+          worker.postMessage("barrier");
+        };
         const onReply = (reply: unknown) => {
+          if (
+            typeof reply === "object" &&
+            reply !== null &&
+            "type" in reply &&
+            reply.type === "ready"
+          ) {
+            sendBarrier();
+            return;
+          }
           if (reply !== "barrier") return;
           stop();
           resolve();
@@ -127,8 +144,7 @@ const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
         worker.on("message", onReply);
         worker.on("error", onError);
         worker.on("exit", onExit);
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
-        worker.postMessage("barrier");
+        if (readyWorkers.has(worker)) sendBarrier();
       }),
   );
 
@@ -499,6 +515,8 @@ it.effect("keeps a retired truncate fence gated until replacement checkpoint sta
       const mutation = yield* Effect.forkChild(sql`INSERT INTO truncate_recovery VALUES (1)`, {
         startImmediately: true,
       });
+      yield* TestClock.adjust("0 millis");
+      assert.isUndefined(mutation.pollUnsafe());
       const created = yield* Effect.forkChild(nextStartedWorker, { startImmediately: true });
       yield* TestClock.adjust("250 millis");
       const replacement = yield* Fiber.join(created);
@@ -582,7 +600,8 @@ it.effect(
             )
             .pipe(Effect.andThen(Deferred.succeed(committed, undefined))),
         );
-        yield* Deferred.await(entered);
+        yield* TestClock.adjust("0 millis");
+        assert.isTrue(yield* Deferred.isDone(entered));
         yield* Effect.promise(() => failed.terminate());
         workerStarts.onStart = (worker) => {
           workerStarts.onStart = undefined;
@@ -601,18 +620,6 @@ it.effect(
         };
         yield* Effect.gen(function* () {
           yield* TestClock.adjust("250 millis");
-          const replacement = yield* Deferred.await(initializing);
-          const snapshotRequested = yield* Deferred.make<() => void>();
-          const postMessage = replacement.worker.postMessage.bind(replacement.worker);
-          using _heldSnapshot = vi
-            .spyOn(replacement.worker, "postMessage")
-            .mockImplementation((...args) => {
-              if (args[0]?.type !== "check") return postMessage(...args);
-              Deferred.doneUnsafe(
-                snapshotRequested,
-                Effect.succeed(() => postMessage(...args)),
-              );
-            });
           yield* Deferred.succeed(finish, undefined);
           yield* TestClock.adjust("0 millis");
           assert.isTrue(yield* Deferred.isDone(committed));
@@ -625,9 +632,23 @@ it.effect(
           );
           yield* TestClock.adjust("0 millis");
           assert.isFalse(yield* Deferred.isDone(admitted));
+          assert.isTrue(yield* Deferred.isDone(initializing));
+          const replacement = yield* Deferred.await(initializing);
+          const snapshotRequested = yield* Deferred.make<() => void>();
+          const postMessage = replacement.worker.postMessage.bind(replacement.worker);
+          using heldSnapshot = vi
+            .spyOn(replacement.worker, "postMessage")
+            .mockImplementation((...args) => {
+              if (args[0]?.type !== "check") return postMessage(...args);
+              Deferred.doneUnsafe(
+                snapshotRequested,
+                Effect.succeed(() => postMessage(...args)),
+              );
+            });
           replacement.initialize();
           const snapshot = yield* Deferred.await(snapshotRequested);
           assert.isFalse(yield* Deferred.isDone(admitted));
+          heldSnapshot.mockRestore();
           snapshot();
           yield* Fiber.join(mutation);
           assert.deepEqual(yield* sql`SELECT value FROM recovery_transaction ORDER BY value`, [
