@@ -551,3 +551,95 @@ it.effect("replaces an intentionally cancelled reader without waiting for fault 
     }),
   ),
 );
+
+it.effect(
+  "keeps recovery admission closed after an existing transaction commits until a fresh snapshot",
+  () =>
+    withCheckpointClient((sql) =>
+      Effect.gen(function* () {
+        yield* sql`CREATE TABLE recovery_transaction(value INTEGER)`;
+        const failed = startedWorkers.at(-1)!;
+        yield* checkpointWorkerReply(failed);
+        const entered = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const committed = yield* Deferred.make<void>();
+        const admitted = yield* Deferred.make<void>();
+        const initializing = yield* Deferred.make<{
+          readonly worker: NodeWorkerThreads.Worker;
+          readonly initialize: () => void;
+        }>();
+        const transaction = yield* Effect.forkChild(
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* sql`INSERT INTO recovery_transaction VALUES (1)`;
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(finish);
+                yield* sql`INSERT INTO recovery_transaction VALUES (2)`;
+              }),
+            )
+            .pipe(Effect.andThen(Deferred.succeed(committed, undefined))),
+        );
+        yield* Deferred.await(entered);
+        yield* Effect.promise(() => failed.terminate());
+        workerStarts.onStart = (worker) => {
+          workerStarts.onStart = undefined;
+          const postMessage = worker.postMessage.bind(worker);
+          worker.postMessage = (...args) => {
+            if (args[0]?.type !== "initialize") return postMessage(...args);
+            worker.postMessage = postMessage;
+            Deferred.doneUnsafe(
+              initializing,
+              Effect.succeed({
+                worker,
+                initialize: () => postMessage(...args),
+              }),
+            );
+          };
+        };
+        yield* Effect.gen(function* () {
+          yield* TestClock.adjust("250 millis");
+          const replacement = yield* Deferred.await(initializing);
+          const snapshotRequested = yield* Deferred.make<() => void>();
+          const postMessage = replacement.worker.postMessage.bind(replacement.worker);
+          using _heldSnapshot = vi
+            .spyOn(replacement.worker, "postMessage")
+            .mockImplementation((...args) => {
+              if (args[0]?.type !== "check") return postMessage(...args);
+              Deferred.doneUnsafe(
+                snapshotRequested,
+                Effect.succeed(() => postMessage(...args)),
+              );
+            });
+          yield* Deferred.succeed(finish, undefined);
+          yield* TestClock.adjust("0 millis");
+          assert.isTrue(yield* Deferred.isDone(committed));
+          yield* Fiber.join(transaction);
+          const mutation = yield* Effect.forkChild(
+            sql`INSERT INTO recovery_transaction VALUES (3)`.pipe(
+              Effect.andThen(Deferred.succeed(admitted, undefined)),
+            ),
+            { startImmediately: true },
+          );
+          yield* TestClock.adjust("0 millis");
+          assert.isFalse(yield* Deferred.isDone(admitted));
+          replacement.initialize();
+          const snapshot = yield* Deferred.await(snapshotRequested);
+          assert.isFalse(yield* Deferred.isDone(admitted));
+          snapshot();
+          yield* Fiber.join(mutation);
+          assert.deepEqual(yield* sql`SELECT value FROM recovery_transaction ORDER BY value`, [
+            { value: 1 },
+            { value: 2 },
+            { value: 3 },
+          ]);
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              workerStarts.onStart = undefined;
+            }),
+          ),
+        );
+      }),
+    ),
+);

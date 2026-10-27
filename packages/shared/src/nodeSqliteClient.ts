@@ -651,6 +651,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   let restartFiber: Fiber.Fiber<void, never> | undefined;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   let stopped = false;
+  let recovering = false;
   let generation = 0;
   let nextId = 0;
   let inFlight: number | undefined;
@@ -668,6 +669,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   const gated = () =>
     !writer.isTransaction &&
     (stopped ||
+      recovering ||
       unknown ||
       blocked ||
       truncate !== undefined ||
@@ -689,6 +691,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   const recover = (reason: string) => {
     if (closed || stopped) return;
     stopped = true;
+    recovering = true;
     unknown = true;
     truncate = undefined;
     inFlight = undefined;
@@ -803,6 +806,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
         checkpointed = message.checkpointed;
         blocked = message.blocked;
         unknown = false;
+        if (ready) recovering = false;
         retryMs = 250;
       }
       // Even a stale snapshot must retire its request so a newer check can run.
