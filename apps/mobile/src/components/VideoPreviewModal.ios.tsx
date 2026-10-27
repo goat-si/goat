@@ -3,13 +3,17 @@ import { useIsFocused } from "@react-navigation/native";
 import { requireNativeModule } from "expo";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useEffectEvent, useId, useState } from "react";
+import { useEffect, useEffectEvent, useId } from "react";
 import { Keyboard } from "react-native";
 
 import { loadLocalAttachmentPreview } from "../lib/localAttachmentPreview";
 import { fullscreenVideoClosed, fullscreenVideoOpened } from "../lib/videoAudioSession";
-import { mediaVideoPreviewUri, type VideoPreviewSource } from "../lib/videoPreviewSource";
-import { useAssetUrlState, useRefreshAssetUrl } from "../state/assets";
+import {
+  mediaVideoPreviewUri,
+  videoPreviewKey,
+  type VideoPreviewSource,
+} from "../lib/videoPreviewSource";
+import { useRefreshAssetUrl } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
 import {
   acquireAudioSession,
@@ -39,30 +43,35 @@ function NativeVideoPreview(props: {
   readonly onRequestClose: () => void;
 }) {
   const { source } = props;
-  const localAttachment = source.type === "local" ? source.attachment : null;
   const identifier = useId();
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const environmentId =
     source.type === "media" && "environmentId" in source ? source.environmentId : null;
   const resource = source.type === "media" && "resource" in source ? source.resource : null;
   const preparedConnection = usePreparedConnection(environmentId);
-  const assetUrl = useAssetUrlState(environmentId, resource);
   const refreshAssetUrl = useEffectEvent(useRefreshAssetUrl(environmentId, resource));
-  const name = source.type === "media" ? source.name : source.attachment.name;
-  // The first minted URL is kept so a background refresh does not restart playback.
-  const resolvedUrl =
-    source.type === "media"
-      ? mediaVideoPreviewUri(source, assetUrl._tag === "Success" ? assetUrl.url : null)
-      : null;
-  const [playbackUrl, setPlaybackUrl] = useState<string | null>(resolvedUrl);
-  const loadError =
-    resource !== null && playbackUrl === null
-      ? preparedConnection._tag === "None"
-        ? "Reconnect to this environment and open the video again."
-        : assetUrl._tag === "Failure"
-          ? "Could not load this video. Check the connection and try again."
-          : null
-      : null;
+  const loadPresentation = useEffectEvent(async (signal: AbortSignal) => {
+    const file =
+      source.type === "local" ? await loadLocalAttachmentPreview(source.attachment, signal) : null;
+    if (source.type === "local" && file === null) return null;
+    const uri =
+      file?.uri ??
+      (source.type === "media"
+        ? mediaVideoPreviewUri(source, "resource" in source ? await refreshAssetUrl() : null)
+        : null);
+    if (uri === null)
+      throw new Error(
+        preparedConnection._tag === "None"
+          ? "Reconnect to this environment and open the video again."
+          : "Could not load this video. Check the connection and try again.",
+      );
+    return {
+      file,
+      uri,
+      name: source.type === "media" ? source.name : source.attachment.name,
+      sourceIdentifier: source.sourceIdentifier ?? "",
+    };
+  });
 
   useEffect(() => Keyboard.dismiss(), []);
   useEffect(() => {
@@ -70,17 +79,6 @@ function NativeVideoPreview(props: {
     return () => fullscreenVideoClosed();
   }, []);
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- The native player latches the first resolved URL to keep its playback session.
-    if (playbackUrl === null && resolvedUrl !== null) setPlaybackUrl(resolvedUrl);
-  }, [playbackUrl, resolvedUrl]);
-  useEffect(() => {
-    if (!loadError) return;
-    Dialog.alert("Could not open video", loadError);
-    onRequestClose();
-  }, [loadError]);
-
-  useEffect(() => {
-    if (localAttachment === null && playbackUrl === null) return;
     const controller = new AbortController();
     let token: ReturnType<typeof acquireAudioSession> | null = null;
     const release = () => {
@@ -107,36 +105,29 @@ function NativeVideoPreview(props: {
     });
     let ready = false;
     void (async () => {
-      const file =
-        localAttachment !== null
-          ? await loadLocalAttachmentPreview(localAttachment, controller.signal)
-          : null;
-      if (localAttachment !== null && !file) return;
-      if (controller.signal.aborted) {
-        file?.dispose();
-        return;
-      }
-      const current = acquire();
-      if (!current || !(await activateAudioSession(current, true)) || controller.signal.aborted) {
+      // AVKit retains the URL without retry, so mint one for this presentation.
+      const presentation = await loadPresentation(controller.signal);
+      if (presentation === null) return;
+      const { file, uri, name, sourceIdentifier } = presentation;
+      try {
+        if (controller.signal.aborted) return;
+        const current = acquire();
+        if (!current || !(await activateAudioSession(current, true)) || controller.signal.aborted) {
+          release();
+          if (!controller.signal.aborted) onRequestClose();
+          return;
+        }
+        ready = true;
+        const presented = await settlePromise(() =>
+          NativeControls.presentVideo(uri, name, sourceIdentifier, identifier),
+        );
         release();
-        file?.dispose();
+        if (AsyncResult.isFailure(presented)) throw squashAtomCommandFailure(presented);
         if (!controller.signal.aborted) onRequestClose();
-        return;
+      } finally {
+        // Native completion follows dismissal; keep the lease until playback closes.
+        file?.dispose();
       }
-      ready = true;
-      const presented = await settlePromise(() =>
-        NativeControls.presentVideo(
-          file?.uri ?? playbackUrl!,
-          name,
-          source.sourceIdentifier ?? "",
-          identifier,
-        ),
-      );
-      // Native completion follows dismissal, so local playback keeps its file lease.
-      file?.dispose();
-      release();
-      if (AsyncResult.isFailure(presented)) throw squashAtomCommandFailure(presented);
-      if (!controller.signal.aborted) onRequestClose();
     })().catch((error: unknown) => {
       release();
       if (controller.signal.aborted) return;
@@ -158,7 +149,7 @@ function NativeVideoPreview(props: {
       release();
       void NativeControls.dismissVideo(identifier).catch(() => undefined);
     };
-  }, [localAttachment, name, source.sourceIdentifier, playbackUrl, identifier]);
+  }, [identifier]);
 
   return null;
 }
@@ -175,5 +166,11 @@ export function VideoPreviewModal(props: {
   }, [isFocused, hasSource]);
 
   if (!props.source || !isFocused) return null;
-  return <NativeVideoPreview source={props.source} onRequestClose={props.onRequestClose} />;
+  return (
+    <NativeVideoPreview
+      key={videoPreviewKey(props.source)}
+      source={props.source}
+      onRequestClose={props.onRequestClose}
+    />
+  );
 }

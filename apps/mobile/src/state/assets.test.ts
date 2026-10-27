@@ -14,18 +14,25 @@ const state = vi.hoisted(() => ({
   phase: "connected" as "connected" | "offline",
   assetAtom: {},
   mint: vi.fn(),
+  connection: { _tag: "Some", value: { httpBaseUrl: "https://host.test" } } as
+    | { _tag: "None" }
+    | { _tag: "Some"; value: { httpBaseUrl: string } },
   assetQuery: vi.fn(),
 }));
 
-vi.mock("react", () => ({ useCallback: <A>(callback: A) => callback }));
+vi.mock("react", () => ({
+  useCallback: <A>(callback: A) => callback,
+  useContext: () => ({ get: () => state.connection }),
+}));
 vi.mock("@effect/atom-react", () => ({
+  RegistryContext: {},
   useAtomValue: (atom: unknown) =>
     atom === state.assetAtom
       ? AsyncResult.success({ relativeUrl: "/api/assets/image.png", expiresAt: 1 })
       : AsyncResult.initial(false),
 }));
 vi.mock("./session", () => ({
-  environmentSession: { sessionStateAtom: () => ({}) },
+  environmentSession: { sessionStateAtom: () => ({}), preparedConnectionValueAtom: () => ({}) },
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://host.test" } }),
 }));
 vi.mock("./presentation", () => ({
@@ -52,6 +59,7 @@ const threadId = ThreadId.make("asset-thread");
 const resource = { _tag: "media-file", threadId, path: "/repo/image.png" } as const;
 
 beforeEach(() => {
+  state.connection = { _tag: "Some", value: { httpBaseUrl: "https://host.test" } };
   state.session = null;
   state.phase = "connected";
   state.assetQuery.mockReset().mockReturnValue(state.assetAtom);
@@ -101,4 +109,28 @@ it("lets the server authorize an explicit refresh before the client grant loads"
   });
   state.mint.mockResolvedValue(AsyncResult.failure(Cause.fail(denied)));
   await expect(useRefreshAssetUrl(environmentId, resource)()).resolves.toBeNull();
+});
+
+it("resolves fresh capabilities against the destination connection that answered after reconnect", async () => {
+  const pending =
+    Promise.withResolvers<
+      ReturnType<typeof AsyncResult.success<{ relativeUrl: string; expiresAt: number }>>
+    >();
+  state.mint.mockReturnValue(pending.promise);
+  const url = useRefreshAssetUrl(environmentId, resource)();
+  state.connection = { _tag: "Some", value: { httpBaseUrl: "https://reconnected.test" } };
+  pending.resolve(AsyncResult.success({ relativeUrl: "/api/assets/fresh", expiresAt: 2 }));
+  await expect(url).resolves.toBe("https://reconnected.test/api/assets/fresh");
+  expect(state.mint).toHaveBeenCalledWith({ environmentId, input: { resource } });
+});
+
+it("does not return an old capability after disconnecting during signing", async () => {
+  state.mint.mockImplementation(async () => {
+    state.connection = { _tag: "None" };
+    return AsyncResult.success({ relativeUrl: "/api/assets/stale", expiresAt: 2 });
+  });
+  await expect(useRefreshAssetUrl(environmentId, resource)()).resolves.toBeNull();
+  state.mint.mockClear();
+  await expect(useRefreshAssetUrl(environmentId, resource)()).resolves.toBeNull();
+  expect(state.mint).not.toHaveBeenCalled();
 });
