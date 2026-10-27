@@ -1629,7 +1629,7 @@ const make = Effect.gen(function* () {
       (cause: unknown) => {
         event.status = "failed";
         event.completedAt = new Date().toISOString();
-        event.error = cause instanceof Error ? cause.message.split("\n")[0] : String(cause);
+        event.error = tab.diagnostics.firstLine(cause);
         throw cause;
       },
     );

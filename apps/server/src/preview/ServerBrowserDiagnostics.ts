@@ -164,6 +164,12 @@ export class ServerBrowserDiagnostics {
     page.on("crash", this.dispose);
   }
 
+  /** A failure's first line, cut only after masking, so a filled value spanning lines stays hidden. */
+  firstLine(cause: unknown) {
+    const text = cause instanceof Error ? cause.message : String(cause);
+    return this.mask(text, INPUT_LIMIT).split("\n")[0] ?? "";
+  }
+
   private push<A>(stream: keyof typeof this.dropped, entries: A[], entry: A) {
     if (this.disposed) return;
     entries.push(entry);

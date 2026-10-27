@@ -25,6 +25,16 @@ describe("ServerBrowserDiagnostics", () => {
     expect(diagnostics.networkEntries[0]?.method).toBe(`${"M".repeat(27)}[secr`);
   });
 
+  it("keeps a failure's first line only after masking, so a filled value spanning lines stays hidden", () => {
+    const page = new NodeEvents.EventEmitter();
+    const mask = (text: string) => text.replaceAll("alpha\nbeta", "[secret]");
+    const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page, mask);
+    expect(diagnostics.firstLine(new Error("failed alpha\nbeta\nat frame"))).toBe(
+      "failed [secret]",
+    );
+    expect(diagnostics.firstLine("plain alpha\nbeta")).toBe("plain [secret]");
+  });
+
   it("redacts the start of a long cookie value cut by the text limit", async () => {
     const secret = "k".repeat(3_992);
     const page = Object.assign(new NodeEvents.EventEmitter(), {
