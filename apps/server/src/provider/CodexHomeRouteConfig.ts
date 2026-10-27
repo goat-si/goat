@@ -20,7 +20,7 @@ const CREDENTIAL_KEYS = [
 export const usesAuthlessCodexHome = (settings: RouteSettings) =>
   settings.modelRoute === "opencodex" && settings.opencodexAuth === "none";
 
-export const codexHomeProvider = (baseUrl: string) => ({
+const codexHomeProvider = (baseUrl: string) => ({
   name: "OpenCodex",
   base_url: baseUrl,
   wire_api: "responses",
@@ -71,6 +71,23 @@ export const codexHomeRouteArgv = (
   ]);
 };
 
+/** Native thread overrides for the current Home provider; other routes send none. */
+export const codexHomeThreadOverrides = (settings: RouteSettings) => {
+  if (settings.modelRoute !== "opencodex") return {};
+  const authless = usesAuthlessCodexHome(settings);
+  const modelProvider = authless ? "opencodex" : "openai";
+  const baseUrl = new URL(settings.opencodexBaseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL)
+    .toString()
+    .replace(/\/+$/, "");
+  return {
+    modelProvider,
+    config: {
+      model_provider: modelProvider,
+      ...(authless ? { "model_providers.opencodex": codexHomeProvider(baseUrl) } : {}),
+    },
+  };
+};
+
 /** Native start, resume and fork use the instance's current Home provider. */
 export const mergeCodexHomeThreadParams = <
   T extends { readonly config: Readonly<Record<string, Schema.Json>> },
@@ -78,19 +95,8 @@ export const mergeCodexHomeThreadParams = <
   settings: RouteSettings,
   params: T,
 ): T & { readonly modelProvider?: string } => {
-  if (settings.modelRoute !== "opencodex") return params;
-  const authless = usesAuthlessCodexHome(settings);
-  const modelProvider = authless ? "opencodex" : "openai";
-  const baseUrl = new URL(settings.opencodexBaseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL)
-    .toString()
-    .replace(/\/+$/, "");
-  return {
-    ...params,
-    modelProvider,
-    config: {
-      ...params.config,
-      model_provider: modelProvider,
-      ...(authless ? { "model_providers.opencodex": codexHomeProvider(baseUrl) } : {}),
-    },
-  };
+  const overrides = codexHomeThreadOverrides(settings);
+  return "config" in overrides
+    ? { ...params, ...overrides, config: { ...params.config, ...overrides.config } }
+    : params;
 };

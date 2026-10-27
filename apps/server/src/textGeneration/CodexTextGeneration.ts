@@ -118,13 +118,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     fileSystem.remove(path.dirname(filePath), { recursive: true }).pipe(Effect.ignore);
 
   /**
-   * Reception gets a Codex home of its own, because `--ignore-user-config` still loads the user's
-   * global AGENTS.md from `CODEX_HOME`. A Home route gets a pointer to the selected catalog; Home
-   * with None gets nothing else. Other routes link the user's auth.json, which Codex rewrites in
-   * place, so a token refresh lands in the user's file through the link. If a
-   * Codex build ever replaces the link with a file of its own, the finalizer copies that file back,
-   * so the user never keeps a refresh token the refresh already rotated away. When the link cannot
-   * be made, reception falls back to the user's home; memory generation fails before spawning.
+   * Reception's own home keeps the user's global AGENTS.md out. Home routes get only a catalog
+   * pointer, plus a link to auth.json unless they use None. Codex refreshes auth.json in place;
+   * a replaced link is copied back so no rotated token is lost. Without a link, reception falls
+   * back to the user's home and memory generation fails before spawning.
    */
   const makeReceptionCodexHome = Effect.fn("makeReceptionCodexHome")(function* (
     operation: TextGenerationOperations.Operation,

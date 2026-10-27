@@ -1,5 +1,6 @@
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
 import {
+  codexHomeThreadOverrides,
   decodeCodexHomeCatalogArg as decodeRouteCatalogArg,
   mergeCodexHomeThreadParams,
 } from "../../provider/CodexHomeRouteConfig.ts";
@@ -3482,7 +3483,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         .request("thread/resume", {
                           threadId: input.nativeThreadId,
                           excludeTurns: true,
-                          ...mergeCodexHomeThreadParams(launchSettings, { config: {} }),
+                          ...codexHomeThreadOverrides(launchSettings),
                         })
                         .pipe(Effect.flatMap(decodeCodexChildModel)),
                   ),

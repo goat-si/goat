@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - drives a real Codex executable and a local Responses fixture.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -58,7 +58,7 @@ const sse = (model: string) => {
 /** An isolated root, a Responses fixture on loopback and the binary's bundled catalog. */
 const world = Effect.acquireRelease(
   Effect.promise(async () => {
-    const root = await NodeFS.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-native-home-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-native-home-"));
     const seen: Array<Seen> = [];
     const server = NodeHttp.createServer(async (request, response) => {
       const parts: Array<Buffer> = [];
@@ -76,20 +76,20 @@ const world = Effect.acquireRelease(
     if (address === null || typeof address === "string") throw new Error("Fixture has no port");
     const base = "http://127.0.0.1:" + address.port + "/v1";
     const catalogHome = NodePath.join(root, "catalog-home");
-    await NodeFS.mkdir(catalogHome);
+    await NodeFSP.mkdir(catalogHome);
     const catalogJson = NodeChildProcess.execFileSync(BINARY, ["debug", "models", "--bundled"], {
       env: { PATH: process.env.PATH, HOME: catalogHome, CODEX_HOME: catalogHome },
       encoding: "utf8",
     });
     const catalog = NodePath.join(root, "opencodex-catalog.json");
-    await NodeFS.writeFile(catalog, catalogJson);
+    await NodeFSP.writeFile(catalog, catalogJson);
     const model: string = JSON.parse(catalogJson).models[0].slug;
     return { root, seen, server, base, forbidden: base + "/forbidden", catalog, model };
   }),
   ({ root, server }) =>
     Effect.promise(async () => {
       await new Promise((resolve) => server.close(resolve));
-      await NodeFS.rm(root, { recursive: true, force: true });
+      await NodeFSP.rm(root, { recursive: true, force: true });
     }),
 );
 type World = Effect.Success<typeof world>;
@@ -97,12 +97,12 @@ type World = Effect.Success<typeof world>;
 const isolatedHome = async (fixture: World, name: string) => {
   const home = NodePath.join(fixture.root, name);
   const cwd = NodePath.join(home, "project");
-  await NodeFS.mkdir(cwd, { recursive: true });
+  await NodeFSP.mkdir(cwd, { recursive: true });
   // Hostile layers: the user root and a selectable profile both point at the forbidden endpoint.
   const hostile =
     'model_provider="openai"\nopenai_base_url=' + JSON.stringify(fixture.forbidden) + "\n";
-  await NodeFS.writeFile(NodePath.join(home, "config.toml"), hostile);
-  await NodeFS.writeFile(NodePath.join(home, "hostile.config.toml"), hostile);
+  await NodeFSP.writeFile(NodePath.join(home, "config.toml"), hostile);
+  await NodeFSP.writeFile(NodePath.join(home, "hostile.config.toml"), hostile);
   const env = {
     PATH: process.env.PATH,
     HOME: home,
@@ -302,8 +302,8 @@ describe.skipIf(BINARY === "")("pinned native Codex through OpenCodex Home with 
         const output = NodePath.join(home, "output.json");
         const schema = NodePath.join(home, "schema.json");
         const exit = yield* Effect.promise(async () => {
-          await NodeFS.mkdir(execHome, { recursive: true });
-          await NodeFS.writeFile(
+          await NodeFSP.mkdir(execHome, { recursive: true });
+          await NodeFSP.writeFile(
             schema,
             JSON.stringify({
               type: "object",
@@ -346,7 +346,7 @@ describe.skipIf(BINARY === "")("pinned native Codex through OpenCodex Home with 
         });
         assert.equal(exit.code, 0, exit.stderr);
         assert.deepStrictEqual(
-          JSON.parse(yield* Effect.promise(() => NodeFS.readFile(output, "utf8"))),
+          JSON.parse(yield* Effect.promise(() => NodeFSP.readFile(output, "utf8"))),
           { ok: true },
         );
         assert.isAtLeast(fixture.seen.length, 1);
@@ -365,7 +365,7 @@ describe.skipIf(BINARY === "")("pinned native Codex through OpenCodex Home with 
         const { home, cwd, env } = yield* Effect.promise(() => isolatedHome(fixture, "credential"));
         // Codex merges GOAT's -c table into the user's table, so these keys stay effective.
         yield* Effect.promise(() =>
-          NodeFS.appendFile(
+          NodeFSP.appendFile(
             NodePath.join(home, "config.toml"),
             '[model_providers.opencodex]\nname = "User"\nbase_url = "http://127.0.0.1:9/v1"\nwire_api = "responses"\nexperimental_bearer_token = "synthetic-user-token"\nhttp_headers = { "X-User" = "synthetic" }\n',
           ),
