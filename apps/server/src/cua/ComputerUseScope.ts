@@ -9,6 +9,8 @@
  *
  * @module ComputerUseScope
  */
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+
 import { foreground } from "./ComputerUseCallReservations.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
@@ -43,10 +45,19 @@ export interface ListedApp {
   readonly name: string | undefined;
   /** The bundle id list_apps reported, apart from an id that is only the app's name. */
   readonly bundleId?: string;
+  /**
+   * The executable an app without a bundle id runs, which a request may name it by instead: the
+   * Windows helper's listing gives it, a Linux proxy reads it from /proc.
+   */
+  readonly executable?: string;
 }
 
 export type ScopeVerdict =
-  | { readonly _tag: "allow" }
+  | {
+      readonly _tag: "allow";
+      /** Allowed only by the executable the pid ran when last listed, which a caller confirms. */
+      readonly byExecutable?: { readonly pid: number; readonly executable: string };
+    }
   /** The pid's app is not known yet; list the apps and judge again. */
   | { readonly _tag: "resolve"; readonly pid: number }
   | {
@@ -87,12 +98,15 @@ export function takesScreen(name: unknown, args: unknown): boolean {
   return foreground(args);
 }
 
-const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>
-  names.some((name) => name !== undefined && apps.has(name.toLowerCase()));
+/** The one spelling every comparison of app ids and approvals uses; see cuaAppKey. */
+export const appKey = cuaAppKey;
 
-/** The apps a control allows, as a lowercase set; undefined allows every app. */
+const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>
+  names.some((name) => name !== undefined && apps.has(appKey(name)));
+
+/** The apps a control allows, each by appKey; undefined allows every app. */
 export const approvedApps = (apps: ReadonlyArray<string> | undefined) =>
-  apps === undefined ? undefined : new Set(apps.map((app) => app.toLowerCase()));
+  apps === undefined ? undefined : new Set(apps.map(appKey));
 
 export function scopeVerdict(input: {
   readonly name: unknown;
@@ -126,12 +140,19 @@ export function scopeVerdict(input: {
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
-  // Only the id list_apps reports counts: a display name would let two grants that name the
-  // same app differently both reach it, and grants are told apart by these strings alone.
-  return approves(input.apps, app.id)
-    ? { _tag: "allow" }
+  // Only the id list_apps reports counts, or the exact executable it runs: a display name would
+  // let two grants that name the same app differently both reach it.
+  if (approves(input.apps, app.id)) return { _tag: "allow" };
+  return app.executable !== undefined && approves(input.apps, app.executable)
+    ? { _tag: "allow", byExecutable: { pid, executable: app.executable } }
     : { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
+
+/** The spelling of an app a control's grant names it by, for the app lease its calls hold. */
+export const grantedAppId = (app: ListedApp, apps: ReadonlySet<string> | undefined) =>
+  apps !== undefined && !approves(apps, app.id) && approves(apps, app.executable)
+    ? (app.executable ?? app.id)
+    : app.id;
 
 /**
  * Keeps the pid-to-app map in step with a driver answer. Only a list_apps answer (`listing`)
@@ -143,15 +164,33 @@ export function scopeVerdict(input: {
  * id, so outside a listing an answer can only drop a pid whose app it names differently, which
  * also catches a pid reused by another app; the pid is listed again before it is judged.
  */
-export function learnApps(value: unknown, into: Map<number, ListedApp>, listing: boolean): void {
+export function learnApps(
+  value: unknown,
+  into: Map<number, ListedApp>,
+  listing: boolean,
+  executableOf?: (pid: number) => string | undefined,
+): void {
   for (const entry of listing ? listedApps(value) : namedApps(value)) {
-    if (listing)
+    if (listing) {
+      const executable =
+        entry.executable ?? (entry.bundleId === undefined ? executableOf?.(entry.pid) : undefined);
       into.set(entry.pid, {
         id: entry.id,
         name: entry.name,
         ...(entry.bundleId === undefined ? {} : { bundleId: entry.bundleId }),
+        ...(executable === undefined ? {} : { executable }),
       });
-    else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
+    } else {
+      // A reply naming another app or binary for the pid makes it unknown until listed again.
+      const known = into.get(entry.pid);
+      if (
+        known?.id !== entry.id ||
+        (entry.executable !== undefined &&
+          known.executable !== undefined &&
+          appKey(entry.executable) !== appKey(known.executable))
+      )
+        into.delete(entry.pid);
+    }
   }
 }
 
@@ -164,9 +203,16 @@ const namedApp = (value: unknown): NamedApp | undefined => {
   const pid = object?.pid;
   const name = text(object?.app_name) ?? text(object?.name);
   const bundleId = text(object?.bundle_id);
+  const executable = text(object?.executable);
   const id = bundleId ?? name;
   return typeof pid === "number" && Number.isInteger(pid) && id !== undefined
-    ? { pid, id, name, ...(bundleId === undefined ? {} : { bundleId }) }
+    ? {
+        pid,
+        id,
+        name,
+        ...(bundleId === undefined ? {} : { bundleId }),
+        ...(executable === undefined ? {} : { executable }),
+      }
     : undefined;
 };
 
