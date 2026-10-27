@@ -3,7 +3,14 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 
 import { SCREENSHOT_FILE_REFUSED } from "./ComputerUseCaptureFiles.ts";
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import {
+  active,
+  call,
+  CONTROL,
+  foregroundActive,
+  harness,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
 import { linuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import { CROPPED_CAPTURE } from "./linuxHelper/windowCapture.ts";
@@ -26,13 +33,23 @@ const fileArguments = [
   { script: 'get_window_state(window_id=9, image_path="/tmp/s.png")' },
 ];
 
+// Text that only mentions an argument's name asks for no file.
+const allowedCalls = [
+  ["get_window_state", { pid: 4, window_id: 9 }],
+  ["get_window_state", { pid: 4, window_id: 9, query: "image_path" }],
+  ["type_text", { pid: 4, window_id: 9, text: "Rename file_path to outputPath" }],
+  ["set_value", { pid: 4, window_id: 9, element_index: 1, value: "screenshot_out_file" }],
+  ["run_steps", { steps: [{ type: "click", pid: 4, window_id: 9 }], observe: { window_id: 9 } }],
+] as const;
+
 describe("capture file arguments (#1688)", () => {
   it.effect.each(desktops)(
-    "on %s, a call that asks the driver to write a capture to a file never reaches it",
+    "on %s, only a call that asks the driver to write a capture to a file is refused",
     ([, options]) =>
       Effect.gen(function* () {
         const h = yield* harness(options);
-        yield* h.push(active());
+        // Foreground approval lets run_steps through, so only the file check can refuse.
+        yield* h.push(foregroundActive());
         yield* h.applied;
         for (const [index, args] of fileArguments.entries()) {
           yield* h.send(call(index + 1, "get_window_state", args));
@@ -41,8 +58,14 @@ describe("capture file arguments (#1688)", () => {
           assert.include(JSON.stringify(answer), SCREENSHOT_FILE_REFUSED);
           assert.equal(yield* h.driverQueued, 0);
         }
-        yield* h.send(call(99, "get_window_state", { pid: 4, window_id: 9 }));
-        assert.equal((yield* h.nextToDriver).id, 99);
+        for (const [index, [name, args]] of allowedCalls.entries()) {
+          const id = 100 + index;
+          yield* h.send(call(id, name, args));
+          const sent = yield* Effect.raceFirst(h.nextToDriver, h.nextToProvider);
+          assert.deepEqual(sent.params, { name, arguments: args });
+          yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id, result: { content: [] } }));
+          assert.equal((yield* h.nextToProvider).id, id);
+        }
       }),
   );
 
@@ -68,6 +91,7 @@ describe("capture file arguments (#1688)", () => {
         });
         const answer = yield* Effect.raceFirst(h.primitiveReply, h.nextToDriver);
         assert.include(JSON.stringify(answer), SCREENSHOT_FILE_REFUSED);
+        assert.equal((answer as { status?: string }).status, "not_started");
         assert.equal(yield* h.driverQueued, 0);
       }),
   );
@@ -93,12 +117,18 @@ describe("capture file arguments (#1688)", () => {
         yield* h.push(active());
         yield* h.applied;
         yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+        yield* h.applied;
         yield* h.killed;
         yield* h.send(call(1, "get_window_state", fileArguments[0]));
-        assert.equal((yield* h.nextToProvider).id, 1);
+        const paused = yield* h.nextToProvider;
+        assert.equal(paused.id, 1);
+        assert.include(JSON.stringify(paused), PAUSE_MESSAGES.private);
         yield* h.push({ state: "ended", reason: "stopped" });
+        yield* h.applied;
         yield* h.send(call(2, "get_window_state", fileArguments[0]));
-        assert.equal((yield* h.nextToProvider).id, 2);
+        const stopped = yield* h.nextToProvider;
+        assert.equal(stopped.id, 2);
+        assert.include(JSON.stringify(stopped), LEASE_END_MESSAGES.stopped);
         assert.equal(yield* h.driverQueued, 0);
       }),
   );
