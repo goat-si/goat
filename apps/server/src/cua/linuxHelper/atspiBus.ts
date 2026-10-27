@@ -104,6 +104,14 @@ function send(connection: Connection, call: BusCall, signal: AbortSignal): Promi
   if (signal.aborted) return Promise.reject(aborted());
   if (connection.ended) return Promise.reject(new Error("The accessibility bus connection ended."));
   return new Promise<BusReply>((resolve, reject) => {
+    // Built first: a call dbus-next cannot even express fails before anything is armed for it.
+    const message = new Message({
+      destination: call.destination,
+      path: call.path,
+      interface: call.iface,
+      member: call.member,
+      ...(call.signature ? { signature: call.signature, body: [...(call.body ?? [])] } : {}),
+    });
     const settle = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", stop);
@@ -111,6 +119,8 @@ function send(connection: Connection, call: BusCall, signal: AbortSignal): Promi
     };
     const fail = (error: Error) => {
       settle();
+      // dbus-next would otherwise keep waiting for this serial for as long as the connection lives.
+      if (typeof message.serial === "number") connection.bus.cancelCall(message.serial);
       reject(error);
     };
     const stop = () => fail(aborted());
@@ -120,13 +130,6 @@ function send(connection: Connection, call: BusCall, signal: AbortSignal): Promi
     );
     signal.addEventListener("abort", stop, { once: true });
     connection.failures.add(fail);
-    const message = new Message({
-      destination: call.destination,
-      path: call.path,
-      interface: call.iface,
-      member: call.member,
-      ...(call.signature ? { signature: call.signature, body: [...(call.body ?? [])] } : {}),
-    });
     connection.bus.call(message).then(
       (reply) => {
         // Only the peer called answers; dbus-next matches replies by serial alone.

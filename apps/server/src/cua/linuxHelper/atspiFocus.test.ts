@@ -550,7 +550,7 @@ describe("makeSecureFocusProbe", () => {
         return call.destination === REGISTRY ? refs([":1.9", ROOT]) : refs(...windows);
       if (name === "org.a11y.atspi.Collection.GetMatches")
         return refs(
-          ...Array.from({ length: 8 }, (_, i) => [":1.9", call.path + "/m" + i] as const),
+          ...Array.from({ length: 4 }, (_, i) => [":1.9", call.path + "/m" + i] as const),
         );
       if (name === "org.a11y.atspi.Accessible.GetRole") return u32(29);
       if (name === "org.a11y.atspi.Accessible.GetState") return states(FOCUSED);
@@ -595,5 +595,23 @@ describe("makeSecureFocusProbe", () => {
     expect(await makeSecureFocusProbe(ADDRESS, withRegistry(stuck), { deadlineMs: 1 })(10)).toEqual(
       UNKNOWN,
     );
+  });
+
+  it("reads a window with more focused objects than it asks for as unknown, never stopping short of a password field", async () => {
+    // Five objects say they are focused; the fifth is a password field. GetMatches returns at most
+    // the count asked for, as AT-SPI does.
+    const matches = Array.from({ length: 5 }, (_, i) => [":1.9", "/m" + i] as const);
+    const atspi: AtspiCall = async (call) => {
+      const name = method(call);
+      if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID") return u32(10);
+      if (name === "org.a11y.atspi.Accessible.GetChildren")
+        return call.destination === REGISTRY ? refs([":1.9", ROOT]) : refs([":1.9", "/w"]);
+      if (name === "org.a11y.atspi.Collection.GetMatches")
+        return refs(...matches.slice(0, Number(call.body?.[2])));
+      if (name === "org.a11y.atspi.Accessible.GetRole") return u32(call.path === "/m4" ? 40 : 29);
+      if (name === "org.a11y.atspi.Accessible.GetState") return states(FOCUSED);
+      throw new Error("unexpected " + name);
+    };
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
   });
 });

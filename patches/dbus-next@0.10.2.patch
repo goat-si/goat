@@ -99,7 +99,7 @@ index 4a15d67..a560869 100644
      }
    });
 diff --git a/lib/bus.js b/lib/bus.js
-index 5d679eb..a88e1ae 100644
+index 5d679eb..bbb5298 100644
 --- a/lib/bus.js
 +++ b/lib/bus.js
 @@ -173,7 +173,6 @@ class MessageBus extends EventEmitter {
@@ -110,3 +110,33 @@ index 5d679eb..a88e1ae 100644
        });
    }
  
+@@ -350,6 +349,17 @@ class MessageBus extends EventEmitter {
+     });
+   }
+ 
++  /**
++   * Stop waiting for the reply to a call: a reply with this serial that comes later is dropped.
++   * A caller that gives up on a call (a timeout, a cancellation) uses this so nothing is kept for
++   * it.
++   *
++   * @param serial {number} - the serial the call was sent with.
++   */
++  cancelCall (serial) {
++    delete this._methodReturnHandlers[serial];
++  }
++
+   /**
+    * Send a {@link Message} on the bus that does not expect a reply.
+    *
+diff --git a/types.d.ts b/types.d.ts
+index 1156f00..ac93d6d 100644
+--- a/types.d.ts
++++ b/types.d.ts
+@@ -125,6 +125,7 @@ declare module 'dbus-next' {
+         addMethodHandler(handler: Function): void;
+         removeMethodHandler(handler: Function): void;
+         call(msg: Message): Promise<Message | null>;
++        cancelCall(serial: number): void;
+         send(msg: Message): void;
+ 
+         on(event: 'connect', listener: () => void): this;

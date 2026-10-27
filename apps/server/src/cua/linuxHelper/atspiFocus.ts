@@ -40,6 +40,8 @@ const UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod";
 const FOCUSED_STATES = [4096, 0];
 // AtspiRole PASSWORD_TEXT.
 const ROLE_PASSWORD_TEXT = 40;
+// Focused objects Collection is asked for per window; more than this is focus unknown.
+const MAX_FOCUS_MATCHES = 4;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
 // reported unknown, which the helper treats as private.
 const MAX_WINDOWS = 64;
@@ -347,8 +349,8 @@ export function makeSecureFocusProbe(
       seenFocus.push(...focused);
       return focused;
     };
-    const focusedByCollection = async (window: Ref) =>
-      references(
+    const focusedByCollection = async (window: Ref) => {
+      const matches = references(
         await call(
           bus,
           window.path,
@@ -356,9 +358,14 @@ export function makeSecureFocusProbe(
           "GetMatches",
           // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
           "(aiia{ss}iaiiasib)uib",
-          [[FOCUSED_STATES, 1, {}, 1, [], 1, [], 1, false], 1, 4, true],
+          [[FOCUSED_STATES, 1, {}, 1, [], 1, [], 1, false], 1, MAX_FOCUS_MATCHES + 1, true],
         ),
       );
+      // One more than are read: a full answer may have left a focused password field unread.
+      if (matches.length > MAX_FOCUS_MATCHES)
+        throw new Error("More objects say they are focused than the probe reads.");
+      return matches;
+    };
     const anyPassword = (refs: ReadonlyArray<Ref>) =>
       anyInOrder(
         probe,

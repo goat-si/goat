@@ -4,10 +4,24 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BusError, DAEMON, makeAtspiBus } from "./atspiBus.ts";
 import { makeSecureFocusProbe } from "./atspiFocus.ts";
+
+/** Every connection the client opens, so a test can see what dbus-next still holds for it. */
+const buses = vi.hoisted((): Array<unknown> => []);
+vi.mock("dbus-next", async (original) => {
+  const real = await original<typeof import("dbus-next")>();
+  return {
+    ...real,
+    sessionBus: (...args: Parameters<typeof real.sessionBus>) => {
+      const bus = real.sessionBus(...args);
+      buses.push(bus);
+      return bus;
+    },
+  };
+});
 
 /** dbus-next's own wire format, so the fake bus speaks exactly what the client reads. */
 const requireModule = NodeModule.createRequire(import.meta.url);
@@ -202,5 +216,21 @@ describe("accessibility bus calls", () => {
     });
     const probe = makeSecureFocusProbe(async () => "('" + bus.address + "',)\n");
     expect(await probe(10)).toEqual({ known: false, secure: false, windows: 0 });
+  });
+
+  it("forgets a cancelled call, so a peer that never answers leaves nothing waiting on the connection", async () => {
+    const sent = Promise.withResolvers<void>();
+    await using bus = await fakeBus(() => sent.resolve());
+    const call = makeAtspiBus({ address: async () => bus.address });
+    const cancel = new AbortController();
+    const waiting = call(children(":1.9"), cancel.signal);
+    await sent.promise;
+    cancel.abort();
+    await expect(waiting).rejects.toThrow("cancelled");
+    const opened = buses.at(-1);
+    // dbus-next keeps a handler per call it is waiting on, until a reply with that serial comes.
+    expect(
+      Object.keys((opened as unknown as { _methodReturnHandlers: object })._methodReturnHandlers),
+    ).toEqual([]);
   });
 });
