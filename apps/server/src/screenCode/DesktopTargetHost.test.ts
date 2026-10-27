@@ -301,13 +301,17 @@ it.effect("a desktop capture larger than the JSON cap reaches the host as a boun
 
 it.effect("ambiguous app/window binding refuses input", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture({ list_apps: { apps: [apps.apps[0], apps.apps[0]] } });
+    // Two processes of the app each report a window with the asked-for id.
+    const { host, sent } = fixture({
+      list_apps: { apps: [apps.apps[0], { ...apps.apps[0], pid: 43 }] },
+      list_windows: { windows: [windows.windows[0], { ...windows.windows[0], pid: 43 }] },
+    });
     const result = yield* host
       .bindApp(call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }), context)
       .pipe(Effect.result);
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.code).toBe("target_ambiguous");
-    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps"]);
+    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows"]);
     const windowFixture = fixture({
       list_windows: { windows: [windows.windows[0], windows.windows[0]] },
     });
@@ -345,6 +349,44 @@ it.effect("a window binds when the driver's app list exceeds the primitive chann
     expect(observed.value).toMatchObject({ indexedText: "Apply" });
     expect(sent.at(-1)?.args).toMatchObject({ pid: 42, window_id: 7 });
   }),
+);
+
+it.effect("two processes of one app bind the window the agent named", () =>
+  Effect.gen(function* () {
+    const second = { ...apps.apps[0], pid: 43 };
+    const { host, sent } = fixture({
+      list_apps: { apps: [apps.apps[0], second] },
+      list_windows: (args: { app?: string }) =>
+        args.app === "org.example.Editor"
+          ? { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] }
+          : { windows: [] },
+      get_window_state: { ...state, pid: 43, window_id: 8 },
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
+      context,
+    );
+    yield* host.observe(call("get_window_state", {}, bound.value as ScreenTargetRef), context);
+    expect(sent.at(-1)?.args).toMatchObject({ pid: 43, window_id: 8 });
+  }),
+);
+
+it.effect(
+  "a capped app list does not bind a window of an app whose name only contains the one asked for",
+  () =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        list_apps: { message: "Driver reply exceeded the primitive channel limit." },
+        list_windows: (args: { app?: string }) =>
+          args.app === "Edit"
+            ? { windows: [{ pid: 9, window_id: 7, title: "dump.bin", app_name: "HexEditor" }] }
+            : { windows: [] },
+      });
+      const result = yield* host
+        .bindApp(call("bind_app", { name: "Edit", window_id: 7 }), context)
+        .pipe(Effect.result);
+      expect(result._tag === "Failure" && result.failure.code).toBe("target_missing");
+    }),
 );
 
 it.effect("binding an app the driver does not list reports it missing", () =>

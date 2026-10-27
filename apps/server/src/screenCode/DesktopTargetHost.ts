@@ -191,32 +191,39 @@ export const createDesktopTargetHost = (deps: {
         .map(object)
         .filter((app) => app !== undefined)
         .filter((app) => (bundleId ? app.bundle_id === bundleId : app.name === name));
-      if (Array.isArray(listed) && matches.length === 0)
+      const pids = new Set(matches.map((app) => integer(app.pid)));
+      pids.delete(undefined);
+      if (Array.isArray(listed) && pids.size === 0)
         return yield* Effect.fail(fail("target_missing"));
-      if (matches.length > 1) return yield* Effect.fail(fail("target_ambiguous"));
-      const listedPid = integer(matches[0]?.pid);
-      if (Array.isArray(listed) && !listedPid) return yield* Effect.fail(fail("target_missing"));
+      const [onlyPid] = pids.size === 1 ? pids : [];
       // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
-      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows.
+      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. It
+      // also finds the window among several processes of one app.
       const windowsReply = yield* request(
         "list_windows",
-        listedPid ? { pid: listedPid } : { app: appId },
+        onlyPid ? { pid: onlyPid } : { app: appId },
         call,
         context,
         appsReply.connectionGeneration,
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const windows = array(object(driverValue(windowsReply))?.windows)
+      const named = array(object(driverValue(windowsReply))?.windows)
         .map(object)
-        .filter((window) => window !== undefined);
-      const pid =
-        listedPid ?? integer(windows.find((window) => window.window_id === requestedWindow)?.pid);
-      if (!pid) return yield* Effect.fail(fail("target_missing"));
-      const matchingWindows = windows.filter(
-        (window) => window.pid === pid && window.window_id === requestedWindow,
-      );
-      if (matchingWindows.length !== 1) return yield* Effect.fail(fail("target_ambiguous"));
+        .filter((window) => window !== undefined)
+        .filter(
+          (window) =>
+            window.window_id === requestedWindow &&
+            (Array.isArray(listed)
+              ? pids.has(integer(window.pid))
+              : bundleId !== undefined ||
+                window.app_name === undefined ||
+                window.app_name === name),
+        );
+      const pid = integer(named[0]?.pid);
+      if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
+      if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
+      const app = matches.find((candidate) => candidate.pid === pid);
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
@@ -243,7 +250,7 @@ export const createDesktopTargetHost = (deps: {
         ref,
         pid,
         windowId: requestedWindow,
-        appId: string(matches[0]?.bundle_id) ?? string(matches[0]?.name) ?? appId,
+        appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
         epoch,
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
