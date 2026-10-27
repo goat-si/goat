@@ -228,5 +228,5 @@ it.live("preserves the Child setup purpose through runtime session issuance", ()
     expect((yield* auth.listSessions()).map((session) => session.sessionId)).toEqual([
       issued.sessionId,
     ]);
-  }).pipe(Effect.scoped, Effect.provide(layerAuth), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(layerAuth.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
