@@ -18,7 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { describe, expect, vi } from "vite-plus/test";
+import { afterAll, describe, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -42,7 +42,7 @@ const PAGES: Record<string, string> = {
     "  document.getElementById('echo').textContent = 'you typed ' + event.target.value;",
     "});</script>",
   ].join(""),
-  "https://login.test/focus": '<title>Focus</title><input id="pw" type="password" autofocus>',
+  "https://login.test/focus": '<title>Focus</title><input id="pw" type="password">',
   "https://login.test/framed":
     '<title>Framed</title><iframe id="auth" src="https://auth.test/frame"></iframe>' +
     '<iframe id="sandboxed" sandbox="allow-scripts" src="https://auth.test/frame"></iframe>',
@@ -189,6 +189,11 @@ const harness = Effect.gen(function* () {
 
 const fieldValue = (page: Page, frame = page.mainFrame()) => frame.locator("#pw").inputValue();
 
+// A test that times out never reaches its layer's close; this still ends Chromium.
+afterAll(async () => {
+  await (await browser)?.close().catch(() => {});
+});
+
 describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server browser", () => {
   it.live("fills a password on its origin while the agent's answers never carry it", () => {
     const secrets = makeSecrets();
@@ -268,6 +273,8 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
         Effect.gen(function* () {
           const { open, fill, privacy } = yield* harness;
           const { tabId, page } = yield* open("https://login.test/focus");
+          // As a page's own focus would; headless autofocus differs across platforms.
+          yield* Effect.promise(() => page.locator("#pw").focus());
           yield* privacy(tabId, true);
           const { ref, value } = secrets.save("https://login.test");
 
