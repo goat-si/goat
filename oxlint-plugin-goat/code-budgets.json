@@ -173,7 +173,7 @@
   "apps/server/src/cloudMachines/sshConfig.ts": { "nonNull": 3 },
   "apps/server/src/cua/ComputerUseLeaseProxy.ts": { "nonNull": 2 },
   "apps/server/src/device/DeviceActions.ts": { "nonNull": 2 },
-  "apps/server/src/device/DeviceService.test.ts": { "lines": 1151 },
+  "apps/server/src/device/DeviceService.test.ts": { "lines": 1167 },
   "apps/server/src/device/DeviceService.ts": { "lines": 1169 },
   "apps/server/src/device/EasDeviceHost.ts": { "nonNull": 1 },
   "apps/server/src/device/SshDeviceHost.ts": { "nonNull": 4 },
