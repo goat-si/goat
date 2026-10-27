@@ -61,7 +61,8 @@ switches the selected account, instance, model, or route on failure. Check
 OpenCodex on the named machine, select **Check status**, and try again.
 OpenCodex manages its own account selection within Home.
 
-Use **Connect to Home** to follow the connection steps on the named host.
+If the machine is not linked to Home yet, **Open Hub devices** takes you to the
+hub's device list, where you add or repair it.
 Use **Stop using OpenCodex Home** to return this instance to Codex's own settings.
 This doesn't disconnect OpenCodex from Home: use **Leave** in Hub devices, or
 run `ocx disconnect` on that machine. Your own Codex settings may still point

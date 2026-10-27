@@ -81,8 +81,9 @@ its own asks you to update OpenCodex there. Agents read the same from its
 `goat_host_status` entry. Checking status never sends a model request.
 Changing the Child's Codex instance, its settings, or its link to the hub
 clears **Ready** until setup verifies it again. GOAT retries setup after each
-successful SSH setup of the host, and an agent can retry or finish it with
-`goat_hub_device_setup`, including on a Child linked before setup existed.
+successful SSH setup of the host. **Continue setup** on the device's row, or an
+agent with `goat_hub_device_setup`, retries or finishes it, including on a
+Child linked before setup existed.
 Claude Code, OpenCode, and Pi use the hub only when you route them there; see
 [OpenCodex Home](./providers-codex.md#use-opencodex-home).
 
