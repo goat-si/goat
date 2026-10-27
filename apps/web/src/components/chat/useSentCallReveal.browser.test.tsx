@@ -71,6 +71,7 @@ function Reveal(props: {
     listReady: true,
     threadId: props.threadId,
     history: props.history,
+    foldKeyOf: () => undefined,
     onNavigate: () => {},
   });
   return null;
@@ -105,6 +106,24 @@ describe("useSentCallReveal", () => {
     await screen.rerender(<Reveal entries={[sendCall]} threadId={SENDER} listRef={listRef} />);
     await vi.waitFor(() =>
       expect(scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 0 })),
+    );
+  });
+
+  it("reveals the call in a fork whose timeline also shows its parent's inherited work", async () => {
+    const { listRef, scrollToIndex } = scrollSpy();
+    const projected = otherThreadCall.entry.projectedItem;
+    if (projected === undefined) throw new Error("fixture needs a projected item");
+    const inherited: TimelineEntry = {
+      ...otherThreadCall,
+      entry: { ...otherThreadCall.entry, projectedItem: { ...projected, visibility: "inherited" } },
+    };
+    await using screen = await render(
+      <Reveal entries={[inherited, sendCall]} threadId={SENDER} listRef={listRef} />,
+      { router: "/thread" },
+    );
+    await act(() => screen.router!.history.push("/thread", { sentFrom }));
+    await vi.waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 1 })),
     );
   });
 

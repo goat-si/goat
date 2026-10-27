@@ -27,20 +27,28 @@ export function findSendingCall(
   return target.messageId === target.threadId ? launch : null;
 }
 
-/** The row showing the call, or the collapsed group or turn that holds it. */
+/**
+ * The row showing the call, else the collapsed turn or segment that holds it (post-steer segments
+ * fold under their own key, which `foldKeyOf` gives), else its collapsed tool group.
+ */
 export function sendingCallRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
   entry: Entry,
+  foldKeyOf: (entryId: string) => string | undefined,
 ): number {
   const shown = rows.findIndex(
     (row) =>
       (row.kind === "work" || row.kind === "work-live") &&
       row.groupedEntries.some((grouped) => grouped.id === entry.id),
   );
-  if (shown >= 0 || entry.runId == null) return shown;
-  return rows.findIndex(
-    (row) => (row.kind === "work-toggle" || row.kind === "turn-fold") && row.runId === entry.runId,
-  );
+  if (shown >= 0) return shown;
+  const foldKey = foldKeyOf(entry.id);
+  const fold =
+    foldKey === undefined
+      ? -1
+      : rows.findIndex((row) => row.kind === "turn-fold" && row.runId === foldKey);
+  if (fold >= 0 || entry.runId == null) return fold;
+  return rows.findIndex((row) => row.kind === "work-toggle" && row.runId === entry.runId);
 }
 
 const MAX_HISTORY_PAGES = 20;
@@ -68,6 +76,7 @@ export function useSentCallReveal(input: {
   /** The thread this timeline shows. */
   readonly threadId: string | null;
   readonly history: MessagesTimelineHistoryControls | undefined;
+  readonly foldKeyOf: (entryId: string) => string | undefined;
   readonly onNavigate: () => void;
 }) {
   const target = useSentFromState();
@@ -82,11 +91,12 @@ export function useSentCallReveal(input: {
   const showsSender =
     target !== undefined &&
     input.threadId === target.senderThreadId &&
+    // Inherited items of a fork keep their source thread, so only this thread's own items count.
     !input.entries.some(
       (entry) =>
         entry.kind === "work" &&
-        entry.entry.structuredPayload !== undefined &&
-        entry.entry.structuredPayload.threadId !== target.senderThreadId,
+        entry.entry.projectedItem?.visibility === "local" &&
+        entry.entry.projectedItem.item.threadId !== target.senderThreadId,
     );
   const pending =
     target !== undefined &&
@@ -95,7 +105,7 @@ export function useSentCallReveal(input: {
     input.listReady &&
     input.history?.loading !== true;
   const entry = pending ? findSendingCall(input.entries, target) : null;
-  const rowIndex = entry === null ? -1 : sendingCallRowIndex(input.rows, entry);
+  const rowIndex = entry === null ? -1 : sendingCallRowIndex(input.rows, entry, input.foldKeyOf);
   const paged = target !== undefined && paging.activation === target.activation;
   const own = pending && paged;
   const pages = own ? paging.count : 0;

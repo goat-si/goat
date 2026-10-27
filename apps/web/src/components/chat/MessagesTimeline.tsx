@@ -765,6 +765,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
     listReady: findListReady,
     threadId: citationThreadRef?.threadId ?? null,
     history: historyControls,
+    foldKeyOf: (entryId) =>
+      (
+        findFoldRunIds ??
+        timelineTurnFoldRunIdsByEntryId({
+          timelineEntries,
+          latestRun,
+          runningRunId,
+          isWorking,
+          runlessWorkActive,
+        })
+      ).get(entryId),
     onNavigate: navigateTimeline,
   });
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);

@@ -1,3 +1,4 @@
+import { RunId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { goatThreadCallOf } from "./goatThreadCalls";
@@ -147,6 +148,23 @@ describe("findSendingCall", () => {
         isExpandedToolGroup: true,
       },
     ];
-    expect(sendingCallRowIndex(rows, secondSend.entry)).toBe(1);
+    expect(sendingCallRowIndex(rows, secondSend.entry, () => undefined)).toBe(1);
+  });
+
+  it("points a call folded after a steer at its own segment, not the turn's first fold", () => {
+    const runId = RunId.make("run-1");
+    const rows: MessagesTimelineRow[] = [
+      { kind: "turn-fold", id: "fold-turn", createdAt: "", runId, label: "", expanded: false },
+      {
+        kind: "turn-fold",
+        id: "fold-steer",
+        createdAt: "",
+        runId: RunId.make("run-1:steer:s1"),
+        label: "",
+        expanded: false,
+      },
+    ];
+    const folded = { ...secondSend.entry, runId };
+    expect(sendingCallRowIndex(rows, folded, () => "run-1:steer:s1")).toBe(1);
   });
 });
