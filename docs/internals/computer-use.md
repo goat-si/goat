@@ -385,16 +385,16 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
-  The approval card names the apps and machine, the thread and turn, the span and purpose, and
-  whether input stays in the background or may take the foreground, and offers Approve and
-  Decline (`apps/server/src/cua/ComputerUseRequests.ts`). Approving admits that thread's turns
-  to those apps, by the ids `list_apps` reports, until the request's expiry, which counts from
-  when the agent asked; it never approves each action. The proxy ties every call to an app by the
-  pid it targets and refuses calls outside the approved apps
-  (`apps/server/src/cua/ComputerUseScope.ts`). Every approval is time-bounded: there is no
-  standing "always" approval and no list of approved apps in Settings. A person ends one early
-  with "End computer use" on its card, Stop, or turning computer use off, and after its expiry
-  the thread asks again.
+  The card offers Approve and Decline (`apps/server/src/cua/ComputerUseRequests.ts`).
+  Approving admits that thread's turns to those apps, by the ids `list_apps` reports, until the
+  request's expiry, which counts from when the agent asked; it never approves each action. Under
+  an app list, the proxy ties each call on a window or app to its target pid and refuses one
+  outside the list; discovery calls stay unscoped, and a macOS launch must name an approved bundle
+  id (`apps/server/src/cua/ComputerUseScope.ts`). Foreground approval is shorter: pause, Stop,
+  takeover, control replacement or the end of the turn revokes it, and the next foreground input
+  needs a new approval. Every approval is time-bounded: there is no standing "always" approval
+  and no list of approved apps in Settings. A person ends one early with "End computer use" on
+  its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.

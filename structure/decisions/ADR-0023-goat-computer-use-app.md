@@ -141,8 +141,8 @@
     not approved, a blocked URL, an incompatible client, or a named policy.
   - **Readiness and approvals.** Readiness is four answers shown separately: OS grant, an
     authenticated helper, a real capture and tree, and tools available to the model. Apps are
-    approved from a card for a span the agent asks for, 5 to 120 minutes, and every call is
-    checked against the approved apps before it runs. No approval is standing: a person ends one
+    approved from a card for a span the agent asks for, 5 to 120 minutes, and each call on an
+    app's windows is checked against the approved apps before it runs. No approval is standing: a person ends one
     early from its card, and after it expires the thread asks again (owner decision, Jun,
     2026-10-27; an "Always allow" choice with a Settings list was considered and not built).
     A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
