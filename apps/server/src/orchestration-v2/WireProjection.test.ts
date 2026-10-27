@@ -245,7 +245,7 @@ describe("orchestration V2 wire projection", () => {
       input,
       output,
     ) as typeof output;
-    const outer = JSON.parse(masked.content[0]!.text) as { result: string };
+    const outer = JSON.parse(String(masked.content[0]!.text)) as { result: string };
     expect(JSON.parse(outer.result)).toEqual({
       typed: "[typed text]",
       type: "image",
