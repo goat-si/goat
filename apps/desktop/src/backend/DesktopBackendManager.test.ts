@@ -121,6 +121,9 @@ interface MakeInstanceInput {
   readonly spawnerLayer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
+  readonly onStartupFailure?: (
+    failure: DesktopBackendManager.BackendStartupFailure,
+  ) => Effect.Effect<void>;
   readonly onReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
   readonly onStateDirOwned?: Effect.Effect<void>;
@@ -191,6 +194,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
+    ...(input.onStartupFailure ? { onStartupFailure: input.onStartupFailure } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onStateDirOwned ? { onStateDirOwned: () => input.onStateDirOwned! } : {}),
@@ -623,6 +627,91 @@ describe("DesktopBackendManager", () => {
         assert.isFalse(snapshot.restartScheduled);
         yield* TestClock.adjust(Duration.minutes(1));
         assert.equal(startCount, 1);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+  it.effect("reports a crash loop with the server output on the third restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const message = "Error: Cannot find module 'zod/v4' in /work/fixture-é";
+        let exitCount = 0;
+        const firstExit = yield* Deferred.make<void>();
+        const reports: Array<{
+          exitCount: number;
+          failure: DesktopBackendManager.BackendStartupFailure;
+        }> = [];
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                makeProcess({
+                  // "é" split across chunks must not decode as U+FFFD, and the 4,000-char cut
+                  // lands inside the emoji's surrogate pair.
+                  stderr: Stream.make(
+                    new TextEncoder().encode(
+                      `😀${"x".repeat(3_999 - message.length)}${message.slice(0, -1)}`,
+                    ),
+                    new Uint8Array([0xc3]),
+                    new Uint8Array([0xa9]),
+                  ),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                }),
+              ),
+            ),
+          ),
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          backendOutputLog: {
+            persistFailure: () => {
+              exitCount += 1;
+              return Deferred.succeed(firstExit, undefined).pipe(Effect.asVoid);
+            },
+          },
+          onStartupFailure: (failure) =>
+            Effect.sync(() => {
+              reports.push({ exitCount, failure });
+            }),
+        });
+        yield* instance.start;
+        yield* Deferred.await(firstExit);
+        yield* TestClock.adjust(Duration.minutes(1));
+        assert.isNotEmpty(reports);
+        const { exitCount: exitsWhenReported, failure } = reports[0]!;
+        assert.equal(exitsWhenReported, 3);
+        assert.equal(failure.reason, "The server could not start (code=1).");
+        assert.isTrue(failure.output.endsWith(message));
+        assert.isTrue(failure.output.isWellFormed());
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+  it.effect("reports a backend that stays alive without becoming ready", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probed = yield* Deferred.make<void>();
+        const reports = yield* Queue.unbounded<DesktopBackendManager.BackendStartupFailure>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                makeProcess({
+                  stderr: Stream.make(new TextEncoder().encode("Server bootstrap stalled")),
+                  exitCode: Effect.never,
+                }),
+              ),
+            ),
+          ),
+          httpClientLayer: layerHttpClient(() =>
+            Deferred.succeed(probed, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+          onStartupFailure: (failure) => Queue.offer(reports, failure).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        yield* Deferred.await(probed);
+        yield* TestClock.adjust(Duration.minutes(1));
+        const failure = yield* Queue.take(reports);
+        assert.equal(failure.reason, "The server started but did not become ready in time.");
+        assert.equal(failure.output, "Server bootstrap stalled");
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

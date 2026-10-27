@@ -31,6 +31,7 @@ import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
+import * as DesktopStartupRecovery from "./DesktopStartupRecovery.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopCuaDriver from "../cua/DesktopCuaDriver.ts";
 import * as DesktopRemoteUpdates from "../updates/DesktopRemoteUpdates.ts";
@@ -338,6 +339,7 @@ const startup = Effect.gen(function* () {
   yield* updates.configure;
   yield* (yield* DesktopCuaDriver.DesktopCuaDriver).listen;
   yield* DesktopRemoteUpdates.listen;
+  yield* DesktopStartupRecovery.listen;
   yield* linuxUrlHandler.register;
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
