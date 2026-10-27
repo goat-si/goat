@@ -282,11 +282,14 @@ export const layer: Layer.Layer<
     // Keep first/latest keyed events for replay order; page every event to bound sparse scans.
     const compactEventStore = Effect.fn("ProjectionMaintenance.compactEventStore")(
       function* (betweenPages: Effect.Effect<void> = Effect.void) {
-        const observation = (yield* ProjectionMaintenanceObserver)?.onStart();
-        if (observation !== undefined)
-          yield* Effect.addFinalizer((exit) =>
-            Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
-          );
+        const observer = yield* ProjectionMaintenanceObserver;
+        const observation =
+          observer === undefined
+            ? undefined
+            : yield* Effect.acquireRelease(
+                Effect.sync(() => observer.onStart()),
+                (observation, exit) => Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
+              );
         const bounds = yield* sql<{
           readonly event_sequence: number;
           readonly receipt_row_id: number;

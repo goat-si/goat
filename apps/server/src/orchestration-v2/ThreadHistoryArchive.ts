@@ -606,11 +606,14 @@ const make = Effect.gen(function* () {
     return yield* lock
       .withPermits(1)(
         Effect.gen(function* () {
-          const observation = (yield* ThreadHistoryArchiveObserver)?.onStart();
-          if (observation !== undefined)
-            yield* Effect.addFinalizer((exit) =>
-              Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
-            );
+          const observer = yield* ThreadHistoryArchiveObserver;
+          const observation =
+            observer === undefined
+              ? undefined
+              : yield* Effect.acquireRelease(
+                  Effect.sync(() => observer.onStart()),
+                  (observation, exit) => Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
+                );
           yield* recover();
           yield* removeStrayFiles();
           let archivedThreads = 0;
