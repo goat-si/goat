@@ -24,13 +24,14 @@ const uriEncoded = (value: string) => {
 
 /** How a page or a snapshot can write the value back: raw, JSON-escaped, URL- or form-encoded. */
 const encodedForms = (value: string) =>
-  // The snapshot drops zero-width characters and collapses whitespace in the text it shows.
+  // The snapshot drops zero-width characters and collapses whitespace; a fetch only collapses it.
   [
     value,
     value
       .replace(/[\u200b\u00ad]/g, "")
       .trim()
       .replace(/\s+/g, " "),
+    value.replace(/\s+/g, " ").trim(),
   ]
     .flatMap((each) => [
       each,

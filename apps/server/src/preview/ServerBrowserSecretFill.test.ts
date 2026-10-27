@@ -244,9 +244,11 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   const control = "long\u0001password";
   // Playwright's snapshot drops zero-width characters and collapses whitespace.
   const spaced = "word  with\u200bspaces";
+  // A fetch collapses whitespace but keeps zero-width characters.
+  const fetchSpaced = "alpha  beta\u200bgamma";
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 7; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 8; i++) await fill.fill(tab, fillRequest, later(), record);
       const text = [
         `${first}6cdefghijklmnopqrstuvwxyz`,
         encodeURIComponent(second).toLowerCase(),
@@ -255,17 +257,18 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
         `%2${hexStart}`,
         String.raw`- textbox: "long\x01password"`,
         "- text: word withspaces",
+        "alpha beta\u200bgamma",
       ].join("\n");
       const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
       expect(outcome).toEqual({
         ok: true,
         result: {
-          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"\n- text: [secret]',
+          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"\n- text: [secret]\n[secret]',
         },
       });
     },
     undefined,
-    [first, second, unpaired, trailingPercent, hexStart, control, spaced],
+    [first, second, unpaired, trailingPercent, hexStart, control, spaced, fetchSpaced],
   );
 });
 
