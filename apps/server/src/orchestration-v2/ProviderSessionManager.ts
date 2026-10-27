@@ -75,6 +75,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
+import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -734,6 +735,7 @@ export const layerWithOptions = (
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
                 });
+                const withUrlOpener = yield* instanceUrlOpener(serverSettings, providerInstanceId);
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -768,7 +770,10 @@ export const layerWithOptions = (
                     )
                   ) {
                     yield* mcpSessions.set(
-                      yield* withNativeSubagentLimit(threadId, withTurnSkills(existing)),
+                      yield* withNativeSubagentLimit(
+                        threadId,
+                        withUrlOpener(withTurnSkills(existing)),
+                      ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -809,7 +814,10 @@ export const layerWithOptions = (
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
                 yield* mcpSessions.set(
-                  yield* withNativeSubagentLimit(threadId, withTurnSkills(credential.config)),
+                  yield* withNativeSubagentLimit(
+                    threadId,
+                    withUrlOpener(withTurnSkills(credential.config)),
+                  ),
                 );
                 yield* Ref.update(
                   sessions,

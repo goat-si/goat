@@ -1,9 +1,13 @@
+import type { ProviderInstanceId } from "@goat/contracts";
+import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import type * as ServerSettings from "../serverSettings.ts";
 import { URL_OPENER_COMMAND } from "./urlOpenerCli.ts";
 
 const SHIM_NAME = "goat-browser";
@@ -48,3 +52,30 @@ export const ensureUrlOpenerShim = Effect.fn("UrlOpenerShim.ensure")(
     ),
   ),
 );
+
+/**
+ * A BROWSER in the provider instance's environment settings is the user's choice too. Adapters
+ * that add GOAT's variables as an overlay cannot see it, so the opener is dropped here.
+ */
+export const instanceUrlOpener = Effect.fn("UrlOpenerShim.instanceUrlOpener")(function* (
+  serverSettings: Option.Option<
+    Pick<ServerSettings.ServerSettingsService["Service"], "getSettings">
+  >,
+  providerInstanceId: ProviderInstanceId,
+) {
+  const settings = Option.isSome(serverSettings)
+    ? yield* serverSettings.value.getSettings.pipe(Effect.option)
+    : Option.none();
+  const chosen = Option.match(settings, {
+    onNone: () => false,
+    onSome: (value) =>
+      value.providerInstances[providerInstanceId]?.environment?.some(
+        (variable) => variable.name === "BROWSER",
+      ) === true,
+  });
+  return (config: McpProviderSessionConfig): McpProviderSessionConfig => {
+    if (!chosen || config.urlOpener === undefined) return config;
+    const { urlOpener: _, ...rest } = config;
+    return rest;
+  };
+});

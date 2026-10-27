@@ -1,7 +1,12 @@
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { describe, expect, it } from "vite-plus/test";
 
-import { runUrlOpener, URL_OPENER_FALLBACK_ENV, type UrlOpenerIo } from "./urlOpenerCli.ts";
+import {
+  openInPreview,
+  runUrlOpener,
+  URL_OPENER_FALLBACK_ENV,
+  type UrlOpenerIo,
+} from "./urlOpenerCli.ts";
 
 const SHIM = "/tmp/goat-threads-fixture/goat-browser";
 const THREAD_ENV = {
@@ -123,5 +128,48 @@ describe("GOAT's BROWSER for a thread", () => {
     };
     expect(await runUrlOpener(["https://example.com/"], loopingIo)).toBe(1);
     expect(runs).toBe(1);
+  });
+});
+
+describe("the preview call's deadline", () => {
+  it("ends a stalled tool call and a stalled session cleanup as an unknown outcome", async () => {
+    const deadline = new AbortController();
+    const requests: Array<string> = [];
+    const { promise: toolCallSent, resolve: markToolCallSent } = Promise.withResolvers<void>();
+    // A server that never answers: only the request's abort signal ends the wait.
+    const stall = (signal: AbortSignal | null | undefined) =>
+      new Promise<Response>((_, reject) => {
+        if (signal?.aborted) return reject(signal.reason);
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    const fetchImplementation = async (_url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        requests.push("DELETE");
+        return stall(init.signal);
+      }
+      const message = JSON.parse(String(init?.body)) as { method: string; id?: string };
+      requests.push(message.method);
+      if (message.method === "initialize")
+        return Response.json(
+          { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18" } },
+          { headers: { "mcp-session-id": "session-1" } },
+        );
+      if (message.method === "notifications/initialized")
+        return new Response(null, { status: 202 });
+      markToolCallSent();
+      return stall(init?.signal);
+    };
+
+    const pending = openInPreview(
+      "https://example.com/",
+      { endpoint: "http://127.0.0.1:43123/mcp", authorization: "Bearer thread-token" },
+      deadline.signal,
+      fetchImplementation,
+    );
+    await toolCallSent;
+    deadline.abort();
+
+    expect(await pending).toMatchObject({ status: "error", error: { code: "unknown_outcome" } });
+    expect(requests).toEqual(["initialize", "notifications/initialized", "tools/call", "DELETE"]);
   });
 });

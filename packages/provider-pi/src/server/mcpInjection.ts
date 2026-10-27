@@ -3,8 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import {
-  withThreadMcpEnvironment,
-  withThreadUrlOpener,
+  withThreadAgentEnvironment,
   carriesScreenCodeSkill,
   type McpProviderSessionConfig,
 } from "@goat/provider-core/server/mcpSession";
@@ -293,10 +292,9 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const threadSession = hasGoatMcp ? input.mcpSession : undefined;
-  const environment = withThreadUrlOpener(
-    withThreadMcpEnvironment(input.environment, threadSession),
-    threadSession,
+  const environment = withThreadAgentEnvironment(
+    input.environment,
+    hasGoatMcp ? input.mcpSession : undefined,
   );
   // These values belong to the current GOAT session. Never let a Pi child reuse
   // credentials inherited from the server or a parent provider process.

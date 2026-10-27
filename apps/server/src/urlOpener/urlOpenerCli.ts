@@ -1,21 +1,16 @@
 /**
- * `goat __open-url <url>`, the command GOAT's BROWSER shim runs (UrlOpenerShim.ts). A URL a
- * thread's tools open goes to that thread's browser preview through its own credential; what the
- * preview cannot take goes to the system opener. Loaded by bin.ts before the full CLI, since the
- * caller waits on it.
- *
- * @module urlOpenerCli
+ * `goat __open-url <url>`, run by GOAT's BROWSER shim (UrlOpenerShim.ts): a web URL opens in the
+ * thread's browser preview through its own credential; anything else goes to the system opener.
+ * Loaded by bin.ts before the full CLI, since the caller waits on it.
  */
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeChildProcess from "node:child_process";
 
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
-import * as Duration from "effect/Duration";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 
 import { callOrigin } from "../cli/agentSurfaceCli.ts";
-import { failureResult } from "../cli/agentSurfaceCommand.ts";
 import { threadEnvironmentFrom } from "../cli/cliCredential.ts";
 
 export const URL_OPENER_COMMAND = "__open-url";
@@ -24,9 +19,9 @@ export const URL_OPENER_FALLBACK_ENV = "GOAT_URL_OPENER_FALLBACK";
 
 // preview.open's url bound.
 const MAX_PREVIEW_URL_LENGTH = 2048;
-const PREVIEW_OPEN_TIMEOUT = Duration.seconds(20);
+const PREVIEW_OPEN_TIMEOUT_MS = 20_000;
 const SYSTEM_OPENER_SETTLE_MS = 3_000;
-const THREAD_CREDENTIAL_VARIABLE = /^(?:GOAT|T3|T3CODE|T3_CODE)_(?:ACP_MCP|MCP|CUA_LEASE)_/;
+const THREAD_CREDENTIAL_VARIABLE = /^(?:GOAT|T3|T3CODE|T3_CODE)_(?:ACP_MCP|MCP|CUA_LEASE)_/; // goat-rename: legacy
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -122,7 +117,18 @@ export async function runUrlOpener(args: ReadonlyArray<string>, io: UrlOpenerIo)
   );
 }
 
-const openInPreview: UrlOpenerIo["openInPreview"] = (url, credential) =>
+type FetchImplementation = (url: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Every request of the call, including the session DELETE its scope sends on close, ends at
+ * `deadline`: an answer lost after dispatch is unknown_outcome, one lost before is unavailable.
+ */
+export const openInPreview = (
+  url: string,
+  credential: { readonly endpoint: string; readonly authorization: string },
+  deadline: AbortSignal,
+  fetchImplementation: FetchImplementation = fetch,
+): Promise<AgentSurfaceResult> =>
   Effect.runPromise(
     callOrigin(
       { source: "thread", ...credential },
@@ -137,24 +143,18 @@ const openInPreview: UrlOpenerIo["openInPreview"] = (url, credential) =>
         entryPath: "preview.open",
       },
       "destructive",
-      undefined,
-    ).pipe(
-      Effect.timeoutOption(PREVIEW_OPEN_TIMEOUT),
-      Effect.map(
-        Option.getOrElse(() =>
-          failureResult(
-            { phase: "dispatch", kind: "transport", message: "GOAT did not answer in time." },
-            "destructive",
-          ),
-        ),
-      ),
+      (target, init) =>
+        fetchImplementation(target, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
+        }),
     ),
   );
 
 /** Started detached; a launcher that fails within a few seconds counts as not opened. */
 const openWithSystem: UrlOpenerIo["openWithSystem"] = async (url, env) => {
   const { buildBrowserLaunch } = await import("../process/externalLauncher.ts");
-  const launch = buildBrowserLaunch(url, process.platform, env);
+  const launch = buildBrowserLaunch(url, HostProcess.Platform.defaultValue(), env);
   return new Promise<boolean>((resolve) => {
     const child = NodeChildProcess.spawn(launch.command, [...launch.args], {
       detached: launch.options.detached === true,
@@ -182,6 +182,7 @@ export const runUrlOpenerCli = (args: ReadonlyArray<string>): Promise<number> =>
     env: process.env,
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
-    openInPreview,
+    openInPreview: (url, credential) =>
+      openInPreview(url, credential, AbortSignal.timeout(PREVIEW_OPEN_TIMEOUT_MS)),
     openWithSystem,
   });

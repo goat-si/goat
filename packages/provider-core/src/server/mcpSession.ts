@@ -236,10 +236,27 @@ export function withThreadMcpEnvironment(
 }
 
 /** A BROWSER the user or provider settings already chose wins over GOAT's opener. */
-export function withThreadUrlOpener(
+function withThreadUrlOpener(
   base: NodeJS.ProcessEnv,
   config: Pick<McpProviderSessionConfig, "urlOpener"> | undefined,
 ): NodeJS.ProcessEnv {
   if (config?.urlOpener === undefined || base.BROWSER !== undefined) return base;
   return { ...base, BROWSER: config.urlOpener };
+}
+
+/** A provider's own processes: the thread MCP environment plus GOAT's URL opener. */
+export function withThreadAgentEnvironment(
+  base: NodeJS.ProcessEnv,
+  config:
+    | Pick<
+        McpProviderSessionConfig,
+        | "endpoint"
+        | "authorizationHeader"
+        | "temporaryDirectory"
+        | "systemTemporaryDirectory"
+        | "urlOpener"
+      >
+    | undefined,
+): NodeJS.ProcessEnv {
+  return withThreadUrlOpener(withThreadMcpEnvironment(base, config), config);
 }
