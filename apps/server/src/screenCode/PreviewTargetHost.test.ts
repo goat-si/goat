@@ -8,7 +8,6 @@ import {
   ProviderInstanceId,
   ThreadId,
   PreviewTabId,
-  PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   type PreviewAutomationError,
   type ScreenObservation,
@@ -124,8 +123,17 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
   if (!binding || binding.outcome !== "ok") throw new Error("Expected exact tab binding");
   const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
   let callId = 1;
+  // A failed call halts its cell, so the next call starts a new cell as an agent would.
+  let cellId = "cell";
+  let cells = 0;
   const dispatch = (method: ScreenHostCall["method"], args: ScreenHostCall["args"] = {}) =>
-    bridge.handle(call(method, ++callId, args, ref), context);
+    bridge.handle({ ...call(method, ++callId, args, ref), cellId }, { ...context, cellId }).pipe(
+      Effect.tap((reply) =>
+        Effect.sync(() => {
+          if (reply?.outcome === "error") cellId = `cell-${++cells}`;
+        }),
+      ),
+    );
   const observe = Effect.fn("PreviewTargetHostTest.observe")(function* (
     args: ScreenHostCall["args"] = {},
   ) {
@@ -155,10 +163,14 @@ it.effect("a cell reads page text from an unclaimed tab within the reply budget"
     for (const invalid of [{ expand: true }, { offset: -2 }, { format: "oops" }, { tabId: "x" }])
       expect((yield* fixture.dispatch("read_page", invalid))?.error?.code).toBe("invalid_argument");
     expect((yield* fixture.dispatch("read_page", { maxChars: 500 }))?.outcome).toBe("ok");
-    const tiny = yield* fixture.bridge.handle(call("read_page", 90, {}, fixture.ref), {
-      ...context,
-      limits: { ...DEFAULT_SCREEN_RUN_LIMITS, returnBytes: 900 },
-    });
+    const tiny = yield* fixture.bridge.handle(
+      { ...call("read_page", 90, {}, fixture.ref), cellId: "cell-tiny" },
+      {
+        ...context,
+        cellId: "cell-tiny",
+        limits: { ...DEFAULT_SCREEN_RUN_LIMITS, returnBytes: 900 },
+      },
+    );
     expect(tiny?.error?.code).toBe("output_limit");
     expect(fixture.requests.filter((entry) => entry.operation === "read")).toHaveLength(2);
   }),
