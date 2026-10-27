@@ -195,6 +195,8 @@ export function makeConnectedLeaseMonitor(input: {
       // The web and desktop foreground probe allows a busy host 15 seconds,
       // and a busy host can answer a fresh request before a queued probe.
       const armSilentSocketCheck = Effect.fnUntraced(function* (signal: SupervisorSignal) {
+        // Local silence can be a busy event loop even when the descriptor answers first.
+        if (loopback) return;
         if (signal._tag === "Wakeup" && signal.reason === "application-active") return;
         if (silentSocket !== undefined) {
           recheck = true;
