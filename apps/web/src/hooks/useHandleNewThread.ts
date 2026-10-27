@@ -9,7 +9,7 @@ import {
   type ScopedProjectRef,
   type ThreadId,
 } from "@goat/contracts";
-import { useRouter } from "@tanstack/react-router";
+import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import {
   composerDraftHasUserContent,
   markPromotedDraftThreadByRef,
@@ -48,7 +48,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { useClientSettings } from "./useSettings";
+import { getClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 
@@ -114,8 +114,12 @@ function branchPickedSince(
 const PROJECT_FILE_READ_TIMEOUT_MS = 30_000;
 
 export function useNewThreadHandler() {
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const router = useRouter();
+  return createNewThreadHandler(useRouter());
+}
+
+export type NewThreadHandler = ReturnType<typeof createNewThreadHandler>;
+
+export function createNewThreadHandler(router: AnyRouter) {
   const getCurrentRouteTarget = () => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
     return resolveThreadRouteTarget(currentRouteParams);
@@ -137,6 +141,7 @@ export function useNewThreadHandler() {
     // up again and finding whichever draft it happens to hold.
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
+    const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
     // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
@@ -496,6 +501,41 @@ export function useNewThreadHandler() {
   };
 }
 
+export function resolveDefaultProjectRef(
+  projects: ReturnType<typeof readProjects>,
+  projectOrder: readonly string[],
+): ScopedProjectRef | null {
+  const [defaultProject] = orderItemsByPreferredIds({
+    items: projects,
+    preferredIds: projectOrder,
+    getId: getProjectOrderKey,
+    getPreferenceIds: (project) => [
+      getProjectOrderKey(project),
+      legacyProjectCwdPreferenceKey(project.workspaceRoot),
+    ],
+  });
+  return defaultProject ? scopeProjectRef(defaultProject.environmentId, defaultProject.id) : null;
+}
+
+export function readNewThreadContext(router: AnyRouter) {
+  const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+  const drafts = useComposerDraftStore.getState();
+  return {
+    activeThread:
+      target?.kind === "server" ? (readThreadShell(target.threadRef) ?? undefined) : undefined,
+    activeDraftThread: target
+      ? target.kind === "server"
+        ? drafts.getDraftThread(target.threadRef)
+        : drafts.getDraftSession(target.draftId)
+      : null,
+    defaultProjectRef: resolveDefaultProjectRef(
+      readProjects(),
+      useUiStateStore.getState().projectOrder,
+    ),
+    handleNewThread: createNewThreadHandler(router),
+  };
+}
+
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useThreadRouteTarget();
@@ -512,18 +552,7 @@ export function useHandleNewThread() {
   );
   const projects = useProjects();
   const handleNewThread = useNewThreadHandler();
-  const [defaultProject] = orderItemsByPreferredIds({
-    items: projects,
-    preferredIds: projectOrder,
-    getId: getProjectOrderKey,
-    getPreferenceIds: (project) => [
-      getProjectOrderKey(project),
-      legacyProjectCwdPreferenceKey(project.workspaceRoot),
-    ],
-  });
-  const defaultProjectRef = defaultProject
-    ? scopeProjectRef(defaultProject.environmentId, defaultProject.id)
-    : null;
+  const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder);
 
   return {
     activeDraftThread,

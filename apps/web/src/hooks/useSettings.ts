@@ -485,6 +485,14 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   return resolveEnvironmentIdentificationMode({ mode, settingsHydrated });
 }
 
+export function getLegacySidebarEnabled(): boolean | null {
+  return resolveSidebarViewIsProjects({
+    status: getClientSettingsHydrationStatusSnapshot(),
+    value: getClientSettings().projectsSidebarEnabled,
+    synchronousValue: getSidebarViewMirrorSnapshot(),
+  });
+}
+
 export function useLegacySidebarEnabled(): boolean | null {
   const status = useClientSettingsHydrationStatus();
   const projectsSidebarEnabled = useClientSettings((settings) => settings.projectsSidebarEnabled);

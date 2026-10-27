@@ -37,6 +37,7 @@ import {
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
 import { startDesktopTray } from "./desktopTray";
 import { getRouter, type AppRouter } from "./router";
+import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
 import { resolveThreadRouteTarget } from "./threadRoutes";
@@ -158,6 +159,7 @@ export function startAppServices(): AppRouter {
   if (isElectron) startElectronBrowserHost();
   startThreadOverlayRetention(router);
   startMainAppLocationTracking(router);
+  installChatRouteCommands(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
   startThreadVisitedMigration(appAtomRegistry);
   startSshPasswordPromptQueue();
