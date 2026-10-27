@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Scheduler from "effect/Scheduler";
 
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { takesScreen, scopeVerdict, type ListedApp } from "./ComputerUseScope.ts";
 import { type Envelope, replyPlacement } from "./ComputerUseLeaseProtocol.ts";
@@ -67,8 +68,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
   if (verdict === "proof") input.setProven(current);
 });
 
-/** Shared admission decision for provider and reverse-channel calls. */
-export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (input: {
+interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
   readonly finished: () => LeaseEnd | undefined;
@@ -83,7 +83,14 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   readonly tokenFirstRefuses: () => boolean;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;
   readonly listApps: Effect.Effect<void>;
-}) {
+  /** macOS: an Apple Events route's refusal names its app, so its pid is listed before it runs. */
+  readonly automationTargets?: boolean;
+}
+
+/** Shared admission decision for provider and reverse-channel calls. */
+export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
+  input: ProxyCallCheck,
+) {
   const judge = () =>
     scopeVerdict({
       name: input.message.params?.name,
@@ -155,5 +162,28 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       "foreground_not_approved",
       FOREGROUND_NOT_APPROVED,
     );
+  return yield* listAutomationTarget(input);
+});
+
+/**
+ * After every other check: a call that will run and may send Apple Events gets its pid listed,
+ * so an Automation refusal can name the app. The lease can end or pause while it waits.
+ */
+const listAutomationTarget = Effect.fn("ComputerUseLeaseProxy.listAutomationTarget")(function* (
+  input: ProxyCallCheck,
+) {
+  const params = input.message.params;
+  if (
+    input.automationTargets !== true ||
+    !sendsAppleEvents(params?.name, params?.arguments, input.listed)
+  )
+    return undefined;
+  yield* input.listApps;
+  const finished = input.finished();
+  if (finished !== undefined)
+    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+  const paused = input.paused();
+  if (paused !== undefined)
+    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
   return undefined;
 });
