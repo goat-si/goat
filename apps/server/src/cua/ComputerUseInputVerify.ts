@@ -17,7 +17,7 @@ import type { ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import { targetOf } from "./computerUseTarget.ts";
 
 /** Input whose effect a tree diff can show. */
-export const VERIFIABLE_INPUT_TOOLS: ReadonlySet<string> = new Set([
+const VERIFIABLE_INPUT_TOOLS: ReadonlySet<string> = new Set([
   "click",
   "double_click",
   "right_click",
@@ -36,7 +36,7 @@ const SCOPE_KEYS = ["session", "query", "max_elements", "max_depth"] as const;
 const MAX_DIFF_CHARS = 6000;
 
 /** How long the read-back may take before the input's answer goes out without it. */
-export const VERIFY_READ_TIMEOUT_MS = 4000;
+const VERIFY_READ_TIMEOUT_MS = 4000;
 
 export type TreeRead = Readonly<Record<string, unknown>> & {
   readonly pid: number;
@@ -57,7 +57,7 @@ const parse = (line: string): Readonly<Record<string, unknown>> | undefined => {
 };
 
 /** The scope of an agent's get_window_state that read a tree, or undefined. */
-export function treeReadOf(args: unknown): TreeRead | undefined {
+function treeReadOf(args: unknown): TreeRead | undefined {
   const given = record(args);
   const target = targetOf(args);
   if (target === undefined || given?.include_accessibility_tree === false) return undefined;
@@ -67,7 +67,7 @@ export function treeReadOf(args: unknown): TreeRead | undefined {
 }
 
 /** Whether a driver reply to an input call left its effect unverified. */
-export function replyUnverified(line: string): boolean {
+function replyUnverified(line: string): boolean {
   const result = record(parse(line)?.result);
   return (
     result !== undefined &&
@@ -77,7 +77,7 @@ export function replyUnverified(line: string): boolean {
 }
 
 /** The proxy's own diff read of a window the agent read before. */
-export function diffReadLine(id: string, read: TreeRead): string {
+function diffReadLine(id: string, read: TreeRead): string {
   return JSON.stringify({
     jsonrpc: "2.0",
     id,
@@ -101,7 +101,7 @@ const textOf = (result: Readonly<Record<string, unknown>> | undefined) =>
  * failed. Only "diff" and "too_much_changed" confirm; "no_change" says nothing moved in the tree;
  * a fallback full read only names the new snapshot.
  */
-export function withTreeDiff(line: string, diff: unknown): string {
+function withTreeDiff(line: string, diff: unknown): string {
   const message = parse(line);
   const result = record(message?.result);
   const diffResult = record(record(diff)?.result);
@@ -152,7 +152,7 @@ export function withTreeDiff(line: string, diff: unknown): string {
 export const makeInputVerifier = (input: {
   readonly enabled: boolean;
   readonly ownAnswers: Map<string, Deferred.Deferred<Envelope | undefined>>;
-  readonly ended: Deferred.Deferred<unknown>;
+  readonly ended: Effect.Effect<unknown>;
   readonly nextId: () => string;
   readonly scope: Scope.Scope;
   readonly live: (child: Running) => boolean;
@@ -165,7 +165,7 @@ export const makeInputVerifier = (input: {
     yield* child.driver.send(diffReadLine(id, read));
     const reply = yield* Effect.raceFirst(
       Deferred.await(answered),
-      Deferred.await(input.ended).pipe(Effect.as(undefined)),
+      input.ended.pipe(Effect.as(undefined)),
     ).pipe(Effect.timeoutOption(VERIFY_READ_TIMEOUT_MS));
     input.ownAnswers.delete(id);
     return Option.getOrUndefined(reply);

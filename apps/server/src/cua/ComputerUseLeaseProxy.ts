@@ -122,7 +122,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const verifier = makeInputVerifier({
     enabled: options.verifyInputByTreeDiff === true,
     ownAnswers,
-    ended,
+    ended: Deferred.await(ended),
     nextId: () => `${OWN_ID}verify:${ownRequests++}`,
     scope,
     live: (child) => lifecycle.current === child && active(),

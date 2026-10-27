@@ -157,7 +157,7 @@ export type ResolvedKey =
   | { readonly error: string };
 
 /** One key press resolved to a key the driver can press and its modifiers. */
-export function resolveKey(key: string, modifiers: ReadonlyArray<string>): ResolvedKey {
+function resolveKey(key: string, modifiers: ReadonlyArray<string>): ResolvedKey {
   const resolved: Array<string> = [];
   const add = (modifier: string) => {
     if (!resolved.includes(modifier)) resolved.push(modifier);
