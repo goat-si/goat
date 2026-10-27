@@ -46,6 +46,10 @@ them do at that keyboard.
 
 ## Ask an agent to work across the browser and apps
 
+Agents read and use web pages in GOAT's built-in browser by default, including
+pages that build their content with scripts. To have an agent use another
+browser tool instead, name that tool in your request.
+
 Ask an agent to use a page in GOAT's built-in browser and an app on the computer
 running that GOAT environment in the same task. Point it to a specific tab or
 app when you start the turn. In the web or desktop composer, type `@` and pick
