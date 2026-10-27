@@ -229,31 +229,43 @@ const encodedForms = (value: string) =>
     new URLSearchParams({ v: value }).toString().slice(2),
   ].flatMap((form) => [form, form.replaceAll("'", "''")]);
 
-/** A form as a pattern whose percent escapes match in either case, as servers write both. */
-const formPattern = (form: string) =>
-  new RegExp(
-    form
-      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      .replace(/%[0-9A-F]{2}/g, (escape) =>
-        escape.replace(/[A-F]/g, (digit) => `[${digit}${digit.toLowerCase()}]`),
-      ),
-    "g",
-  );
+/** Servers write percent escapes in either case; uppercasing them keeps every index in place. */
+const upperEscapes = (text: string) =>
+  text.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
+
+/**
+ * Where `form` occurs in `text`, overlaps included, merged into spans. Knuth-Morris-Pratt keeps
+ * this linear, so a long or repetitive secret neither builds a huge pattern nor stalls the loop.
+ */
+const spansOf = (text: string, form: string) => {
+  const fallback = new Int32Array(form.length);
+  for (let i = 1, k = 0; i < form.length; i++) {
+    while (k > 0 && form.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
+    if (form.charCodeAt(i) === form.charCodeAt(k)) k++;
+    fallback[i] = k;
+  }
+  const spans: Array<[number, number]> = [];
+  for (let i = 0, k = 0; i < text.length; i++) {
+    while (k > 0 && text.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
+    if (text.charCodeAt(i) === form.charCodeAt(k)) k++;
+    if (k < form.length) continue;
+    const start = i + 1 - k;
+    const last = spans.at(-1);
+    if (last !== undefined && start <= last[1]) last[1] = i + 1;
+    else spans.push([start, i + 1]);
+    k = fallback[k - 1] ?? 0;
+  }
+  return spans;
+};
 
 /** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
 const maskWith = (values: ReadonlySet<string>) => {
-  const patterns = [...new Set([...values].flatMap(encodedForms))]
-    .filter((form) => form !== "")
-    .map(formPattern);
+  const forms = [...new Set([...values].flatMap(encodedForms).map(upperEscapes))].filter(
+    (form) => form !== "",
+  );
   return (text: string) => {
-    const spans: Array<readonly [number, number]> = [];
-    for (const pattern of patterns) {
-      pattern.lastIndex = 0;
-      for (let found = pattern.exec(text); found !== null; found = pattern.exec(text)) {
-        spans.push([found.index, found.index + found[0].length]);
-        pattern.lastIndex = found.index + 1;
-      }
-    }
+    const searched = upperEscapes(text);
+    const spans = forms.flatMap((form) => spansOf(searched, form));
     if (spans.length === 0) return text;
     let masked = "";
     let shown = 0;
@@ -450,8 +462,9 @@ export const make = Effect.gen(function* () {
       else if (state !== "hidden") unconfirmed = true;
     }
     fences.set(tab.page, kept);
-    // A text snapshot hides password inputs itself, so only a value shown as plain text stops it.
-    if (textSnapshot ? !shown : !holding) return;
+    // A text snapshot hides password inputs itself; a value shown as plain text, or a field GOAT
+    // cannot check, stops it.
+    if (textSnapshot ? !shown && !unconfirmed : !holding) return;
     throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
   };
 

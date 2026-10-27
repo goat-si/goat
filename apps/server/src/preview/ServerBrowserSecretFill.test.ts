@@ -126,6 +126,10 @@ it.live("keeps the fence when GOAT cannot check the filled field", () => {
     await expect(fill.guard(tab, request("recordingStart", {}))).rejects.toThrow(
       "cannot confirm the password it filled is gone",
     );
+    // The field may now show part of the value as plain text, which the mask cannot find.
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "cannot confirm the password it filled is gone",
+    );
   });
 });
 
@@ -241,6 +245,23 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
     },
     undefined,
     [first, second, unpaired],
+  );
+});
+
+it.live("masks a very long filled value without failing the answer", () => {
+  const { tab } = makeTab();
+  const long = "a".repeat(40_000);
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const text = `${"a".repeat(100_000)} tail`;
+      expect(fill.mask(request("fetch", {}))({ ok: true, result: { text } })).toEqual({
+        ok: true,
+        result: { text: "[secret] tail" },
+      });
+    },
+    undefined,
+    [long],
   );
 });
 
