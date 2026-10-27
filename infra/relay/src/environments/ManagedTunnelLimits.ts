@@ -1,4 +1,5 @@
-import { and, count, eq, isNull, ne } from "drizzle-orm";
+import { AccountLimits } from "../accounts/AccountLimits.ts";
+import { and, count, eq, isNull } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,12 +7,9 @@ import * as Schema from "effect/Schema";
 
 import * as RelayDb from "../db.ts";
 import {
-  relayEnvironmentLinks,
   relayManagedEndpointAllocations,
   relayManagedTunnelLimits,
 } from "../persistence/schema.ts";
-
-export const DEFAULT_MANAGED_TUNNEL_LIMIT = 3;
 
 export class ManagedTunnelLimitPersistenceError extends Schema.TaggedError<ManagedTunnelLimitPersistenceError>()(
   "ManagedTunnelLimitPersistenceError",
@@ -52,9 +50,33 @@ export class ManagedTunnelLimits extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const limits = yield* AccountLimits;
 
   return ManagedTunnelLimits.of({
     ensureCapacity: Effect.fn("relay.managed_tunnel_limits.ensure_capacity")(function* (input) {
+      const current = yield* db
+        .select({ id: relayManagedEndpointAllocations.incarnationId })
+        .from(relayManagedEndpointAllocations)
+        .where(
+          and(
+            eq(relayManagedEndpointAllocations.userId, input.userId),
+            eq(relayManagedEndpointAllocations.environmentId, input.environmentId),
+            isNull(relayManagedEndpointAllocations.capacityReleasedAt),
+            isNull(relayManagedEndpointAllocations.deletedAt),
+          ),
+        )
+        .limit(1)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ManagedTunnelLimitPersistenceError({
+                operation: "count-tunnels",
+                userId: input.userId,
+                cause,
+              }),
+          ),
+        );
+      if (current.length > 0) return;
       const overrides = yield* db
         .select({ maxTunnels: relayManagedTunnelLimits.maxTunnels })
         .from(relayManagedTunnelLimits)
@@ -70,25 +92,15 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-      const maxTunnels = overrides[0]?.maxTunnels ?? DEFAULT_MANAGED_TUNNEL_LIMIT;
+      const maxTunnels = overrides[0]?.maxTunnels ?? limits.tunnels;
 
-      // Exclude this environment so relinking remains idempotent at the account limit.
       const counted = yield* db
         .select({ activeTunnels: count() })
         .from(relayManagedEndpointAllocations)
-        .innerJoin(
-          relayEnvironmentLinks,
-          and(
-            eq(relayEnvironmentLinks.userId, relayManagedEndpointAllocations.userId),
-            eq(relayEnvironmentLinks.environmentId, relayManagedEndpointAllocations.environmentId),
-          ),
-        )
         .where(
           and(
             eq(relayManagedEndpointAllocations.userId, input.userId),
-            ne(relayManagedEndpointAllocations.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-            eq(relayEnvironmentLinks.managedTunnelsEnabled, true),
+            isNull(relayManagedEndpointAllocations.capacityReleasedAt),
           ),
         )
         .pipe(

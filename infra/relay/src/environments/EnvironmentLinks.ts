@@ -1,3 +1,7 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentLinkProofPayload,
@@ -108,7 +112,10 @@ export class EnvironmentLinks extends Context.Service<
       readonly request: RelayEnvironmentLinkRequest;
       readonly proof: RelayEnvironmentLinkProofPayload;
       readonly endpoint: RelayManagedEndpoint;
-    }) => Effect.Effect<void, EnvironmentLinkUpsertPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      EnvironmentLinkUpsertPersistenceError | EnvironmentOwnership.OwnershipError
+    >;
     readonly listDeliveryUsersForEnvironment: (input: {
       readonly environmentId: string;
       readonly environmentPublicKey: string;
@@ -129,7 +136,7 @@ export class EnvironmentLinks extends Context.Service<
     /** Narrow by user or proven key: a public environment id alone does not authorize access to its links. */
     readonly findActiveManagedForEnvironment: (input: {
       readonly environmentId: string;
-      readonly userId?: string;
+      readonly userId: string;
       readonly environmentPublicKey?: string;
     }) => Effect.Effect<
       ReadonlyArray<
@@ -141,10 +148,14 @@ export class EnvironmentLinks extends Context.Service<
       EnvironmentLinkEnvironmentLookupPersistenceError
     >;
     readonly setHoldWebhooksWhileOffline: (input: {
+      readonly userId: string;
       readonly environmentId: string;
       readonly environmentPublicKey: string;
       readonly holdWebhooksWhileOffline: boolean;
-    }) => Effect.Effect<void, EnvironmentLinkEnvironmentLookupPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      EnvironmentLinkEnvironmentLookupPersistenceError | EnvironmentOwnership.OwnershipError
+    >;
     readonly revokeForUser: (input: {
       readonly userId: string;
       readonly environmentId: string;
@@ -169,69 +180,91 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const access = yield* AccountAccess.AccountAccess;
+  const transactions = yield* AccountTransactions.AccountTransactions;
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
 
   return EnvironmentLinks.of({
     upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.proof.environmentId,
-      });
-      const now = DateTime.formatIso(yield* DateTime.now);
-      const { request, proof } = input;
-      const environmentId = proof.environmentId;
-      // Inherit opt-in only from links proven by the same key; anyone can claim the public environment id.
-      const inheritedHoldWebhooks = sql<boolean>`EXISTS (
-        SELECT 1 FROM ${relayEnvironmentLinks} AS other
-        WHERE other.environment_id = ${environmentId}
-          AND other.environment_public_key = ${proof.environmentPublicKey}
-          AND other.revoked_at IS NULL
-          AND other.hold_webhooks_while_offline
-      )`;
-      const { endpoint } = input;
-      yield* db
-        .insert(relayEnvironmentLinks)
-        .values({
-          userId: input.userId,
-          environmentId,
-          holdWebhooksWhileOffline: inheritedHoldWebhooks,
-          environmentLabel: proof.descriptor.label,
-          environmentPublicKey: proof.environmentPublicKey,
-          endpointHttpBaseUrl: endpoint.httpBaseUrl,
-          endpointWsBaseUrl: endpoint.wsBaseUrl,
-          endpointProviderKind: endpoint.providerKind,
-          notificationsEnabled: request.notificationsEnabled,
-          liveActivitiesEnabled: request.liveActivitiesEnabled,
-          managedTunnelsEnabled: request.managedTunnelsEnabled,
-          createdByDeviceId: request.deviceId ?? null,
-          revokedAt: null,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
-          set: {
-            environmentPublicKey: proof.environmentPublicKey,
-            environmentLabel: proof.descriptor.label,
-            endpointHttpBaseUrl: endpoint.httpBaseUrl,
-            endpointWsBaseUrl: endpoint.wsBaseUrl,
-            endpointProviderKind: endpoint.providerKind,
-            notificationsEnabled: request.notificationsEnabled,
-            liveActivitiesEnabled: request.liveActivitiesEnabled,
-            managedTunnelsEnabled: request.managedTunnelsEnabled,
-            createdByDeviceId: request.deviceId ?? null,
-            revokedAt: null,
-            updatedAt: now,
-            holdWebhooksWhileOffline: inheritedHoldWebhooks,
-          },
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkUpsertPersistenceError({
+      const admitted = yield* access.admit(input.userId);
+      return yield* transactions
+        .run(
+          { userIds: [input.userId], environmentPublicKey: input.proof.environmentPublicKey },
+          Effect.gen(function* () {
+            yield* ownership.claim({
+              ...admitted,
+              environmentId: input.proof.environmentId,
+              environmentPublicKey: input.proof.environmentPublicKey,
+            });
+            yield* Effect.annotateCurrentSpan({
+              "relay.environment_id": input.proof.environmentId,
+            });
+            const now = DateTime.formatIso(yield* DateTime.now);
+            const { request, proof } = input;
+            const environmentId = proof.environmentId;
+            const inheritedHoldWebhooks = sql<boolean>`EXISTS (SELECT 1 FROM ${relayEnvironmentLinks} AS other WHERE other.user_id=${input.userId} AND other.environment_id=${environmentId} AND other.environment_public_key=${proof.environmentPublicKey} AND other.revoked_at IS NULL AND other.hold_webhooks_while_offline)`;
+            const { endpoint } = input;
+            yield* db
+              .insert(relayEnvironmentLinks)
+              .values({
                 userId: input.userId,
+                accountEpoch: admitted.accountEpoch,
                 environmentId,
-                ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
-                cause,
-              }),
+                holdWebhooksWhileOffline: inheritedHoldWebhooks,
+                environmentLabel: proof.descriptor.label,
+                environmentPublicKey: proof.environmentPublicKey,
+                endpointHttpBaseUrl: endpoint.httpBaseUrl,
+                endpointWsBaseUrl: endpoint.wsBaseUrl,
+                endpointProviderKind: endpoint.providerKind,
+                notificationsEnabled: request.notificationsEnabled,
+                liveActivitiesEnabled: request.liveActivitiesEnabled,
+                managedTunnelsEnabled: request.managedTunnelsEnabled,
+                createdByDeviceId: request.deviceId ?? null,
+                revokedAt: null,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .onConflictDoUpdate({
+                target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
+                set: {
+                  accountEpoch: admitted.accountEpoch,
+                  environmentPublicKey: proof.environmentPublicKey,
+                  environmentLabel: proof.descriptor.label,
+                  endpointHttpBaseUrl: endpoint.httpBaseUrl,
+                  endpointWsBaseUrl: endpoint.wsBaseUrl,
+                  endpointProviderKind: endpoint.providerKind,
+                  notificationsEnabled: request.notificationsEnabled,
+                  liveActivitiesEnabled: request.liveActivitiesEnabled,
+                  managedTunnelsEnabled: request.managedTunnelsEnabled,
+                  createdByDeviceId: request.deviceId ?? null,
+                  revokedAt: null,
+                  updatedAt: now,
+                  holdWebhooksWhileOffline: inheritedHoldWebhooks,
+                },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EnvironmentLinkUpsertPersistenceError({
+                      userId: input.userId,
+                      environmentId,
+                      ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
+                      cause,
+                    }),
+                ),
+              );
+            yield* db.$client`UPDATE relay_environment_owners SET state='active',updated_at=now() WHERE user_id=${input.userId} AND environment_public_key=${input.proof.environmentPublicKey}`;
+            yield* db.$client`DELETE FROM relay_agent_activity_rows WHERE environment_id=${input.proof.environmentId} AND environment_public_key=${input.proof.environmentPublicKey} AND (owner_user_id IS DISTINCT FROM ${input.userId} OR account_epoch IS DISTINCT FROM ${admitted.accountEpoch})`;
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                })
+              : error,
           ),
         );
     }),
@@ -386,7 +419,7 @@ const make = Effect.gen(function* () {
             isNull(relayEnvironmentLinks.revokedAt),
             eq(relayEnvironmentLinks.endpointProviderKind, "cloudflare_tunnel"),
             eq(relayEnvironmentLinks.managedTunnelsEnabled, true),
-            input.userId === undefined ? undefined : eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.userId, input.userId),
             input.environmentPublicKey === undefined
               ? undefined
               : eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
@@ -423,24 +456,43 @@ const make = Effect.gen(function* () {
     setHoldWebhooksWhileOffline: Effect.fn(
       "relay.environment_links.set_hold_webhooks_while_offline",
     )(function* (input) {
-      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-      yield* db
-        .update(relayEnvironmentLinks)
-        .set({ holdWebhooksWhileOffline: input.holdWebhooksWhileOffline })
-        .where(
-          and(
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
+      const admitted = yield* access.admit(input.userId);
+      return yield* transactions
+        .run(
+          { userIds: [input.userId], environmentPublicKey: input.environmentPublicKey },
+          Effect.gen(function* () {
+            yield* ownership.assertActive({ ...admitted, ...input });
+            yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+            yield* db
+              .update(relayEnvironmentLinks)
+              .set({ holdWebhooksWhileOffline: input.holdWebhooksWhileOffline })
+              .where(
+                and(
+                  eq(relayEnvironmentLinks.userId, input.userId),
+                  eq(relayEnvironmentLinks.environmentId, input.environmentId),
+                  eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
+                  isNull(relayEnvironmentLinks.revokedAt),
+                ),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EnvironmentLinkEnvironmentLookupPersistenceError({
+                      environmentId: input.environmentId,
+                      cause,
+                    }),
+                ),
+              );
+          }),
         )
         .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkEnvironmentLookupPersistenceError({
-                environmentId: input.environmentId,
-                cause,
-              }),
+          Effect.mapError((e) =>
+            e._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "unavailable",
+                })
+              : e,
           ),
         );
     }),

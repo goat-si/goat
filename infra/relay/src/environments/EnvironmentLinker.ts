@@ -1,3 +1,8 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkProofInvalidReason,
@@ -63,6 +68,8 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
 }
 
 export type EnvironmentLinkError =
+  | EnvironmentOwnership.OwnershipError
+  | RelayRateLimits.RateLimitError
   | EnvironmentLinkProofExpired
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
@@ -136,6 +143,10 @@ function isLoopbackManagedTunnelOrigin(
 }
 
 const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const transactions = yield* AccountTransactions.AccountTransactions;
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -145,6 +156,7 @@ const make = Effect.gen(function* () {
 
   return EnvironmentLinker.of({
     link: Effect.fn("relay.environment_linker.link")(function* (input) {
+      const admitted = yield* access.admit(input.userId);
       const now = yield* DateTime.now;
       const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
       const unverified = yield* Effect.try({
@@ -242,6 +254,11 @@ const make = Effect.gen(function* () {
           stage: "verify_challenge",
         });
       }
+      yield* access.requireAllowed({
+        userId: input.userId,
+        accountEpoch: challenge.account_epoch,
+        credentialKind: "link_challenge",
+      });
       const expiresAt = DateTime.make(verified.exp * 1_000);
       if (expiresAt._tag === "None") {
         return yield* new EnvironmentLinkProofInvalid({
@@ -287,6 +304,13 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
+      yield* ownership.claim({
+        ...admitted,
+        environmentId: verified.environmentId,
+        environmentPublicKey: verified.environmentPublicKey,
+      });
+      if (!input.request.managedTunnelsEnabled)
+        yield* rates.charge({ userId: input.userId, operation: "link" });
       // Non-tunnel links must release provisioned tunnel/DNS resources; best-effort deprovision is idempotent.
       if (!input.request.managedTunnelsEnabled) {
         yield* managedEndpointProvider
@@ -321,11 +345,34 @@ const make = Effect.gen(function* () {
           stage: "validate_endpoint",
         });
       }
-      yield* links.upsert({ ...input, proof: verified, endpoint });
-      const environmentCredential = yield* credentials.create({
-        environmentId: verified.environmentId,
-        environmentPublicKey: verified.environmentPublicKey,
-      });
+      const environmentCredential = yield* transactions
+        .run(
+          { userIds: [input.userId], environmentPublicKey: verified.environmentPublicKey },
+          Effect.gen(function* () {
+            yield* access.requireAllowed(admitted);
+            yield* ownership.claim({
+              ...admitted,
+              environmentId: verified.environmentId,
+              environmentPublicKey: verified.environmentPublicKey,
+            });
+            yield* links.upsert({ ...input, proof: verified, endpoint });
+            return yield* credentials.create({
+              ...admitted,
+              environmentId: verified.environmentId,
+              environmentPublicKey: verified.environmentPublicKey,
+            });
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                })
+              : error,
+          ),
+        );
       return {
         environmentId: verified.environmentId,
         endpoint,
