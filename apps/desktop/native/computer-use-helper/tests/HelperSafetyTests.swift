@@ -24,6 +24,12 @@ struct HelperSafetyTests {
     check("a secure field in another app leaves the target capturable", !HelperSafety.isPrivate(.secure(pid: 8, windowId: 3), targetPid: 7))
     check("no secure field leaves the target capturable", !HelperSafety.isPrivate(.none, targetPid: 7))
 
+    // #1695: an unreadable focus that paused agents stalled the whole host on every tick.
+    check("an unreadable focus pauses no agent", HelperSafety.pausingWindow(.unknown) == nil)
+    check("nothing focused pauses no agent", HelperSafety.pausingWindow(.none) == nil)
+    check("a focused secure field pauses agents for its own window",
+      HelperSafety.pausingWindow(.secure(pid: 7, windowId: 3)).map { $0.pid == 7 && $0.windowId == 3 } == true)
+
     check("a listed window set is not refused", HelperSafety.shareableContentRefusal(contentPresent: true, errorCode: nil) == nil)
     check("a Screen Recording refusal says so, not that the window closed",
       HelperSafety.shareableContentRefusal(contentPresent: false, errorCode: -3801) == "screenRecordingNotGranted")
