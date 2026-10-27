@@ -213,7 +213,7 @@ export function redactComputerUseTypedText(
 }
 
 /** What a call's output shows in place of a value its input typed. */
-export const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
+const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
 /** Shorter typed values are masked only as a whole output string, so "a" leaves other text alone. */
 const MIN_EMBEDDED_TYPED_LENGTH = 4;
 
@@ -234,7 +234,7 @@ export function redactComputerUseTypedOutput(
   if (typed.size === 0 || output === undefined) return output;
   const embedded = [...typed]
     .filter((value) => value.length >= MIN_EMBEDDED_TYPED_LENGTH)
-    .toSorted((a, b) => b.length - a.length);
+    .sort((a, b) => b.length - a.length);
   const mask = (text: string) =>
     typed.has(text)
       ? COMPUTER_USE_TYPED_OUTPUT
