@@ -42,12 +42,18 @@ const maxDate = (a: DateTime.Utc | null | undefined, b: DateTime.Utc | null | un
     : b == null || DateTime.toEpochMillis(a) >= DateTime.toEpochMillis(b)
       ? a
       : b;
+// The projection owns the unread cursor: a thread payload seeds it only when it creates the
+// projection, and only completions move it afterwards. Payloads echo older values, so replaying
+// them must not bring back a cursor a completion rule or repair has since corrected.
 export const preserveThreadNotification = (
   current: OrchestrationV2AppThread | undefined,
   next: OrchestrationV2AppThread,
 ): OrchestrationV2AppThread => ({
   ...next,
-  notificationCompletedAt: maxDate(current?.notificationCompletedAt, next.notificationCompletedAt),
+  notificationCompletedAt:
+    current === undefined
+      ? (next.notificationCompletedAt ?? null)
+      : (current.notificationCompletedAt ?? null),
   ...(next.markedUnreadCompletionAt !== undefined || current?.markedUnreadCompletionAt !== undefined
     ? {
         markedUnreadCompletionAt: maxDate(
@@ -56,6 +62,14 @@ export const preserveThreadNotification = (
         ),
       }
     : {}),
+});
+
+export const advanceNotificationCursor = (
+  thread: OrchestrationV2AppThread,
+  completedAt: DateTime.Utc,
+): OrchestrationV2AppThread => ({
+  ...thread,
+  notificationCompletedAt: maxDate(thread.notificationCompletedAt, completedAt),
 });
 
 /** GOAT's own idle compactions stay out of unread unless they fail, like the shell's latest run. */
@@ -116,10 +130,9 @@ export const runNotificationPayload = (sql: SqlClient.SqlClient) => sql`
   CASE WHEN ${runNotificationUpdate(sql)} IS NULL THEN json_remove(excluded.payload_json,'$.completionNotification')
     ELSE json_set(excluded.payload_json,'$.completionNotification',${runNotificationUpdate(sql)}) END`;
 export const threadNotificationPayload = (sql: SqlClient.SqlClient) => {
-  const automatic = sql`json_set(excluded.payload_json,'$.notificationCompletedAt', CASE
-    WHEN json_extract(orchestration_v2_projection_threads.payload_json,'$.notificationCompletedAt') > COALESCE(json_extract(excluded.payload_json,'$.notificationCompletedAt'),'')
-    THEN json_extract(orchestration_v2_projection_threads.payload_json,'$.notificationCompletedAt')
-    ELSE json_extract(excluded.payload_json,'$.notificationCompletedAt') END)`;
+  // Mirrors preserveThreadNotification: an existing row keeps its own cursor.
+  const automatic = sql`json_set(excluded.payload_json,'$.notificationCompletedAt',
+    json_extract(orchestration_v2_projection_threads.payload_json,'$.notificationCompletedAt'))`;
   return sql`CASE WHEN json_type(excluded.payload_json,'$.markedUnreadCompletionAt') IS NULL
     AND json_type(orchestration_v2_projection_threads.payload_json,'$.markedUnreadCompletionAt') IS NULL
     THEN ${automatic} ELSE json_set(${automatic},'$.markedUnreadCompletionAt',CASE

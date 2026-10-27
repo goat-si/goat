@@ -949,14 +949,13 @@ export function applyToProjection(
         [event],
         notificationCursorContext(next, [event]),
       ).get(event.threadId);
+  const thread = RunNotification.preserveThreadNotification(projection.thread, next.thread);
   return {
     ...next,
-    thread: RunNotification.preserveThreadNotification(
-      projection.thread,
+    thread:
       completedAt === undefined
-        ? next.thread
-        : { ...next.thread, notificationCompletedAt: completedAt },
-    ),
+        ? thread
+        : RunNotification.advanceNotificationCursor(thread, completedAt),
   };
 }
 
@@ -7309,10 +7308,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             if (projection)
               state.projections.set(threadId, {
                 ...projection,
-                thread: RunNotification.preserveThreadNotification(projection.thread, {
-                  ...projection.thread,
-                  notificationCompletedAt: at,
-                }),
+                thread: RunNotification.advanceNotificationCursor(projection.thread, at),
               });
           }
           return state;

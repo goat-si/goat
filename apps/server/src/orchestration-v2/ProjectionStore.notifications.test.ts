@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, RunAttemptId, TurnItemId, type OrchestrationV2Run } from "@goat/contracts";
+import {
+  EventId,
+  RunAttemptId,
+  TurnItemId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2Run,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -217,8 +223,9 @@ const withIdleCompactionRun = (
     readonly now: DateTime.Utc;
     readonly later: DateTime.Utc;
     readonly message: ThreadEvent;
+    readonly thread: OrchestrationV2AppThread;
   }) => ReadonlyArray<ReadonlyArray<ThreadEvent>>,
-  expected: "now" | "later",
+  expected: "now" | "later" | null,
 ) =>
   withWebhookService(
     ({ service, sink, projections }) =>
@@ -242,7 +249,7 @@ const withIdleCompactionRun = (
             creationSource: "server",
           },
         };
-        const written = batches({ run, now, later, message });
+        const written = batches({ run, now, later, message, thread: initial.thread });
         const memory = yield* ProjectionStore.ProjectionStoreV2.pipe(
           Effect.provide(ProjectionStore.layerMemory),
         );
@@ -261,7 +268,7 @@ const withIdleCompactionRun = (
             replay = applyToProjection(replay, event);
           }
         }
-        const cursor = expected === "now" ? now : later;
+        const cursor = expected === null ? null : expected === "now" ? now : later;
         assert.deepStrictEqual(
           (yield* projections.getThreadShell(run.threadId))?.notificationCompletedAt,
           cursor,
@@ -362,4 +369,25 @@ it.effect(
       ],
       "later",
     ),
+);
+
+it.effect("a replayed thread update cannot restore the cursor an idle compaction once set", () =>
+  withIdleCompactionRun(
+    ({ run, later, message, thread }) => [
+      [
+        message,
+        runEvent("idle-completed", later, { ...run, status: "completed", completedAt: later }),
+      ],
+      [
+        {
+          id: EventId.make("idle-stale-thread"),
+          type: "thread.metadata-updated",
+          threadId: run.threadId,
+          occurredAt: later,
+          payload: { ...thread, notificationCompletedAt: later },
+        },
+      ],
+    ],
+    null,
+  ),
 );
