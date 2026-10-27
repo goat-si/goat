@@ -67,7 +67,7 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const text = (value: unknown) =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 
-const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
+export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
   const pid = args?.pid ?? record(args?.target)?.pid;
   return typeof pid === "number" && Number.isInteger(pid) ? pid : undefined;
 };

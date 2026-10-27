@@ -27,6 +27,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
+import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
@@ -281,7 +282,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             // The marked line is the driver's reply from here on, screenshot rule included.
             if (request.method === "tools/call") {
               tool = request.tool;
-              line = tokenFirst.reply(request, message, line);
+              const marked = tokenFirst.reply(request, message, line);
+              line = typeAutomationRefusal(marked, options.automationHolder, request.args, listed);
               delivered = line;
             }
             yield* agentInput.ended(key);
@@ -607,6 +609,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),
       foreground: () => foreground,
       listApps,
+      automationTargets: options.automationHolder !== undefined,
     }),
     deadline: () => deadline,
     expire: end("expired"),

@@ -604,6 +604,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           process.stdout.write(guide(listed, context) + "\n");
         }),
       answersCursorTools: drawsOverlay,
+      ...(platform === "darwin" ? { automationHolder: drawsOverlay ? "helper" : "app" } : {}),
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its
       // overlay and input feed only when the proxy opens their channel.

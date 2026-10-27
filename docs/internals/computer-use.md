@@ -464,6 +464,14 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - **Usage strings.** The helper's `Info.plist` carries the Accessibility, Screen Recording and
   Apple Events usage descriptions. GOAT.app has the Screen Recording one today and lacks the
   other two (#1175).
+- **Automation.** A few driver routes, such as a background save or a Finder rename, send the
+  target app Apple Events, which macOS allows per app and asks about on first use. The driver
+  refuses with `automation_denied` when the person turned it off and `automation_timeout` when
+  the app did not answer, which is how an unanswered prompt shows; the lease proxy hands those to
+  the agent as `permissionsNotGranted` and `permissionsPending` with the app's bundle id and a
+  block whose `missing` is `automation` (`apps/server/src/cua/ComputerUseAutomationRefusal.ts`).
+  Readiness does not report Automation. Refusing a not yet consented app without a prompt in
+  unattended runs needs the driver's own preflight.
 - **Development builds.** Ad-hoc signatures change the code hash on every build, and TCC keys
   grants to it, so a rebuilt development helper asks again. Sign development helpers with a stable
   local certificate to avoid it; builds never run `tccutil reset`.

@@ -85,6 +85,12 @@ one. An agent waits up to ten minutes for your answer, or until the request
 expires if sooner. If it stops waiting, answering later wakes the thread so it
 can continue.
 
+On a Mac, a few actions, such as saving a document while its app stays in the
+background or renaming a file through Finder, also need macOS Automation
+permission for that app. macOS asks once per app. Until someone at the Mac
+answers, or while it is off in **System Settings > Privacy & Security >
+Automation**, the agent stops that action and tells you which app it needs.
+
 Your pointer stays where you put it. By default agents never move it: they
 click through an element's accessibility action, the keyboard, or a background
 click that shows only their own cursor, and a call that would move your pointer

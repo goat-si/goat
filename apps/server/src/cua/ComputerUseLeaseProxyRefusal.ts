@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Scheduler from "effect/Scheduler";
 
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { takesScreen, scopeVerdict, type ListedApp } from "./ComputerUseScope.ts";
 import { type Envelope, replyPlacement } from "./ComputerUseLeaseProtocol.ts";
@@ -83,6 +84,8 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   readonly tokenFirstRefuses: () => boolean;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;
   readonly listApps: Effect.Effect<void>;
+  /** macOS: an Apple Events route's refusal names its app, so its pid is listed before it runs. */
+  readonly automationTargets?: boolean;
 }) {
   const judge = () =>
     scopeVerdict({
@@ -101,6 +104,13 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     yield* input.listApps;
     verdict = judge();
   }
+  if (
+    input.automationTargets === true &&
+    sendsAppleEvents(input.message.params?.name, input.message.params?.arguments, input.listed) &&
+    input.finished() === undefined &&
+    input.paused() === undefined
+  )
+    yield* input.listApps;
   const finished = input.finished();
   const paused = input.paused();
   if (finished !== undefined)
