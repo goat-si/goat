@@ -126,11 +126,18 @@ describe("read-back confirms only a change around the element the input aimed at
 
 describe("read-back after input the driver could not verify", () => {
   it.effect(
-    "drops a read-back that answers after the lease stream dropped, keeping the input's own answer",
+    "a lease stream that drops during the read-back cuts the input off as possibly applied, unread back",
     () =>
       Effect.gen(function* () {
         let held = false;
-        const h = yield* harness({ verifyInputByTreeDiff: true, transportHeld: () => held });
+        let drop: (() => void) | undefined;
+        const h = yield* harness({
+          verifyInputByTreeDiff: true,
+          transportHeld: () => held,
+          onTransportDropReceiver: (receive) => {
+            drop = receive;
+          },
+        });
         yield* h.push(active());
         yield* h.send(call(1, "get_window_state", { ...window, query: "Dark", session: "s" }));
         yield* h.nextToDriver;
@@ -141,6 +148,8 @@ describe("read-back after input the driver could not verify", () => {
         yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
         const reread = yield* h.nextToDriver;
         held = true;
+        drop?.();
+        const answer = (yield* h.nextToProvider) as unknown as Answer;
         yield* h.reply(
           result(
             reread.id,
@@ -148,12 +157,8 @@ describe("read-back after input the driver could not verify", () => {
             "~ [3] secret window text",
           ),
         );
-        const answer = (yield* h.nextToProvider) as unknown as Answer;
         assert.equal(answer.id, 2);
-        assert.deepEqual(answer.result.structuredContent, {
-          effect: "unverifiable",
-          safety: unknownWriteSafety,
-        });
+        assert.include(JSON.stringify(answer), "may already have acted");
         assert.notInclude(JSON.stringify(answer), "secret window text");
       }),
   );

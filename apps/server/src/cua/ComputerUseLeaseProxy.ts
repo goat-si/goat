@@ -253,115 +253,114 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
-    const handle = (line: string) =>
-      Effect.gen(function* () {
-        if (finished !== undefined || lifecycle.current !== current) return;
-        const message = parse(line);
-        let delivered = line;
-        let tool: string | undefined;
-        let sink = providerSink;
-        if (message?.id !== undefined && message.id !== null && message.method === undefined) {
-          const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
-          // Only the answer to a list_apps request still waiting for it says which app a pid is.
-          const listing = own
-            ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
-            : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-          learnApps(message.result, listed, listing, options.executableOf);
-          if (own) {
-            const waiter = ownAnswers.get(message.id);
-            ownAnswers.delete(message.id);
-            if (waiter !== undefined) yield* Deferred.succeed(waiter, message);
-            return;
-          }
-          const key = JSON.stringify(message.id);
-          const request = outstanding.get(key);
-          // A reply to a request the provider cancelled, or never made, is stale.
-          if (request === undefined) return;
-          // Stopped, ended, or answered by a pause or cancellation meanwhile.
-          const gone = () =>
-            finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
-          sink = request.sink;
-          // The marked line is the driver's reply from here on, screenshot rule included.
-          if (request.method === "tools/call") {
-            tool = request.tool;
-            if (captureStalled(line)) stalled = current;
-            const marked = tokenFirst.reply(request, message, line);
-            line = typeManifestRefusal(
-              typeAutomationRefusal(marked, options.automationHolder, request.args, listed),
-            );
-            delivered = line;
-          }
-          yield* agentInput.ended(key);
-          if (request.cancelled) {
-            yield* drawOverlay({ type: "reply", id: key, failed: true });
-            yield* release(request, true);
-            if (gone() || paused !== undefined || idle) return;
-            outstanding.delete(key);
-            options.onCancelledRequestSettled?.(key);
-            return;
-          }
-          const session = message.result?.structuredContent?.session;
-          if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
-          if (request.method === "tools/call") {
-            const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
-            // Stopped, paused or cancelled while it was checked: that already answered it.
-            if (gone()) return;
-            // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
-            if (options.screenshots && verdict !== "other" && verdict !== "unknown") {
-              const admitted = yield* Effect.raceFirst(
-                options.screenshots.admit({ ...request, line }),
-                Effect.as(Deferred.await(exited), undefined),
-              );
-              if (admitted === undefined) return;
-              delivered = admitted;
-            }
-            // Every answered call updates the overlay; a display refusal counts as failed. It is
-            // drawn while the call is still outstanding, so a stop or pause that lands during
-            // the draw answers the call itself, and the check below drops this reply. A pause
-            // still hiding the overlay has not answered it yet, but will.
-            const failed =
-              message.error !== undefined ||
-              message.result?.isError === true ||
-              verdict === "other" ||
-              verdict === "unknown";
-            const image = failed ? undefined : replyImageSize(message.result);
-            yield* drawOverlay({
-              type: "reply",
-              id: key,
-              ...(image ? { image } : {}),
-              ...(failed ? { failed: true } : {}),
-            });
-            // A reply that shows the screen waits out a drop; the cut-off answers its call.
-            const heldReply = () =>
-              Transport.heldByTransport(options.transportHeld, request.method, request.tool);
-            if (gone() || paused !== undefined || heldReply()) return;
-            yield* release(request, true);
-            const latest = outstanding.get(key);
-            if (gone() || paused !== undefined || idle || latest === undefined || heldReply())
-              return;
-            outstanding.delete(key);
-            if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
-            if (verdict === "other") {
-              yield* request.sink.answer(
-                offScreenAnswer(request.id, request.method, request.tool, "other"),
-                "settled",
-              );
-              return yield* end("wrong_display");
-            }
-            if (verdict === "unknown")
-              return yield* request.sink.answer(
-                offScreenAnswer(request.id, request.method, request.tool, "unknown"),
-                "settled",
-              );
-            if (verdict === "proof") proven = current;
-          } else {
-            handshakeAnswers.remember(request.method, message);
-            outstanding.delete(key);
-          }
+    // Runs for every driver line, so it opens no span of its own.
+    const handle = Effect.fnUntraced(function* (line: string) {
+      if (finished !== undefined || lifecycle.current !== current) return;
+      const message = parse(line);
+      let delivered = line;
+      let tool: string | undefined;
+      let sink = providerSink;
+      if (message?.id !== undefined && message.id !== null && message.method === undefined) {
+        const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
+        // Only the answer to a list_apps request still waiting for it says which app a pid is.
+        const listing = own
+          ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
+          : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
+        learnApps(message.result, listed, listing, options.executableOf);
+        if (own) {
+          const waiter = ownAnswers.get(message.id);
+          ownAnswers.delete(message.id);
+          if (waiter !== undefined) yield* Deferred.succeed(waiter, message);
+          return;
         }
-        if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
-        yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
-      });
+        const key = JSON.stringify(message.id);
+        const request = outstanding.get(key);
+        // A reply to a request the provider cancelled, or never made, is stale.
+        if (request === undefined) return;
+        // Stopped, ended, or answered by a pause or cancellation meanwhile.
+        const gone = () =>
+          finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
+        sink = request.sink;
+        // The marked line is the driver's reply from here on, screenshot rule included.
+        if (request.method === "tools/call") {
+          tool = request.tool;
+          if (captureStalled(line)) stalled = current;
+          const marked = tokenFirst.reply(request, message, line);
+          line = typeManifestRefusal(
+            typeAutomationRefusal(marked, options.automationHolder, request.args, listed),
+          );
+          delivered = line;
+        }
+        yield* agentInput.ended(key);
+        if (request.cancelled) {
+          yield* drawOverlay({ type: "reply", id: key, failed: true });
+          yield* release(request, true);
+          if (gone() || paused !== undefined || idle) return;
+          outstanding.delete(key);
+          options.onCancelledRequestSettled?.(key);
+          return;
+        }
+        const session = message.result?.structuredContent?.session;
+        if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
+        if (request.method === "tools/call") {
+          const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
+          // Stopped, paused or cancelled while it was checked: that already answered it.
+          if (gone()) return;
+          // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
+          if (options.screenshots && verdict !== "other" && verdict !== "unknown") {
+            const admitted = yield* Effect.raceFirst(
+              options.screenshots.admit({ ...request, line }),
+              Effect.as(Deferred.await(exited), undefined),
+            );
+            if (admitted === undefined) return;
+            delivered = admitted;
+          }
+          // Every answered call updates the overlay; a display refusal counts as failed. It is
+          // drawn while the call is still outstanding, so a stop or pause that lands during
+          // the draw answers the call itself, and the check below drops this reply. A pause
+          // still hiding the overlay has not answered it yet, but will.
+          const failed =
+            message.error !== undefined ||
+            message.result?.isError === true ||
+            verdict === "other" ||
+            verdict === "unknown";
+          const image = failed ? undefined : replyImageSize(message.result);
+          yield* drawOverlay({
+            type: "reply",
+            id: key,
+            ...(image ? { image } : {}),
+            ...(failed ? { failed: true } : {}),
+          });
+          // A reply that shows the screen waits out a drop; the cut-off answers its call.
+          const heldReply = () =>
+            Transport.heldByTransport(options.transportHeld, request.method, request.tool);
+          if (gone() || paused !== undefined || heldReply()) return;
+          yield* release(request, true);
+          const latest = outstanding.get(key);
+          if (gone() || paused !== undefined || idle || latest === undefined || heldReply()) return;
+          outstanding.delete(key);
+          if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
+          if (verdict === "other") {
+            yield* request.sink.answer(
+              offScreenAnswer(request.id, request.method, request.tool, "other"),
+              "settled",
+            );
+            return yield* end("wrong_display");
+          }
+          if (verdict === "unknown")
+            return yield* request.sink.answer(
+              offScreenAnswer(request.id, request.method, request.tool, "unknown"),
+              "settled",
+            );
+          if (verdict === "proof") proven = current;
+        } else {
+          handshakeAnswers.remember(request.method, message);
+          outstanding.delete(key);
+        }
+      }
+      if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
+      yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
+    });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
       Stream.buffer({ capacity: "unbounded" }),
@@ -876,7 +875,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && options.answersCursorTools && Cursor.isWindowCursorMove(name, args)) {
       const answer = yield* Cursor.answerWindowCursorMove(id, args, overlay, drawOverlay);
-      yield* release({ reservationId, connectionId: current.connectionId }, true);
+      if (reservationId !== undefined)
+        yield* release({ reservationId, connectionId: current.connectionId }, true);
       return yield* sink.answer(answer, "settled", { tool: "move_cursor" });
     }
 
