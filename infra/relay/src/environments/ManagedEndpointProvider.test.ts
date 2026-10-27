@@ -46,6 +46,13 @@ describe("ManagedEndpointProvider", () => {
       });
 
       expect(result).toEqual({
+        allocationClaim: {
+          incarnationId: "10000000-0000-4000-8000-000000000001",
+          generation: 3,
+          accountEpoch: 1,
+          endpointGeneration: 0,
+          tunnelId: "tunnel-id",
+        },
         endpoint: {
           httpBaseUrl: `https://${hostname}/`,
           wsBaseUrl: `wss://${hostname}/ws`,

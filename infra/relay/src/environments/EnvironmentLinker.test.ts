@@ -1,3 +1,4 @@
+import type { ManagedEndpointAllocation } from "./ManagedEndpointAllocations.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
 import * as NodeCrypto from "node:crypto";
@@ -109,6 +110,8 @@ const makeRequest = Effect.gen(function* () {
 });
 
 function layerTest(input?: {
+  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
+  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
@@ -140,18 +143,20 @@ function layerTest(input?: {
         }),
         Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
           reconcileOrigin: () => Effect.succeed("ready"),
-          prepareDeprovision: () => Effect.succeed(null),
+          prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
           deprovision: input?.deprovision ?? (() => Effect.succeed(true)),
           release: () => Effect.succeed(true),
-          provision: () =>
-            Effect.succeed({
-              endpoint: {
-                httpBaseUrl: "https://managed.example.test/",
-                wsBaseUrl: "wss://managed.example.test/ws",
-                providerKind: "cloudflare_tunnel",
-              },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
-            }),
+          provision:
+            input?.provision ??
+            (() =>
+              Effect.succeed({
+                endpoint: {
+                  httpBaseUrl: "https://managed.example.test/",
+                  wsBaseUrl: "wss://managed.example.test/ws",
+                  providerKind: "cloudflare_tunnel",
+                },
+                runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
+              })),
         }),
       ),
     ),
@@ -308,3 +313,71 @@ describe("EnvironmentLinker", () => {
     }).pipe(Effect.provide(layerTest({ consume: () => Effect.succeed(false) }))),
   );
 });
+
+it.effect.each([true, false])(
+  "failed finalization compensates only the captured allocation (matching=%s)",
+  (matching) => {
+    let removed: ManagedEndpointAllocation | undefined;
+    const target: ManagedEndpointAllocation = {
+      userId: "user_123",
+      environmentId: "env-link-test",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
+      hostname: "managed.example.test",
+      tunnelId: "fixture-tunnel",
+      tunnelName: "fixture-name",
+      dnsRecordId: "fixture-dns",
+      readyAt: "1970-01-01T00:00:00.000Z",
+      origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      generation: 3,
+      tunnelReleasedAt: null,
+    };
+    return Effect.gen(function* () {
+      const { request } = yield* makeRequest;
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const failure = yield* Effect.flip(
+        linker.link({ userId: "user_123", request: { ...request, managedTunnelsEnabled: true } }),
+      );
+      expect(failure._tag).toBe("EnvironmentLinkUpsertPersistenceError");
+      expect(removed?.generation).toBe(matching ? 3 : undefined);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          upsert: () =>
+            Effect.fail(
+              new EnvironmentLinks.EnvironmentLinkUpsertPersistenceError({
+                userId: "user_123",
+                environmentId: "env-link-test",
+                cause: new Error("fixture finalization failure"),
+              }),
+            ),
+          provision: () =>
+            Effect.succeed({
+              endpoint: {
+                httpBaseUrl: "https://managed.example.test/",
+                wsBaseUrl: "wss://managed.example.test/ws",
+                providerKind: "cloudflare_tunnel",
+              },
+              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "fixture-connector" },
+              allocationClaim: {
+                incarnationId: target.incarnationId,
+                generation: 3,
+                accountEpoch: 1,
+                endpointGeneration: 0,
+                tunnelId: "fixture-tunnel",
+              },
+            }),
+          prepareDeprovision: () => Effect.succeed({ ...target, generation: matching ? 3 : 4 }),
+          deprovision: (input) =>
+            Effect.sync(() => {
+              removed = input.target ?? undefined;
+              return true;
+            }),
+        }),
+      ),
+    );
+  },
+);

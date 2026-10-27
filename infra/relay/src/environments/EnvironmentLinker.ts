@@ -73,6 +73,7 @@ export type EnvironmentLinkError =
   | EnvironmentLinkProofExpired
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
+  | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
   | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
   | ManagedEndpointProvider.ManagedEndpointProviderError;
@@ -328,6 +329,10 @@ const make = Effect.gen(function* () {
             Effect.ignore,
           );
       }
+      const previousLink = yield* links.getForUser({
+        userId: input.userId,
+        environmentId: verified.environmentId,
+      });
       const provisioned = input.request.managedTunnelsEnabled
         ? yield* managedEndpointProvider.provision({
             userId: input.userId,
@@ -364,6 +369,64 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(
+          Effect.tapError(() =>
+            Effect.gen(function* () {
+              const claim = provisioned?.allocationClaim;
+              if (previousLink !== null || !claim) return;
+              yield* Effect.gen(function* () {
+                const captured = yield* transactions.run(
+                  { userIds: [input.userId], environmentPublicKey: verified.environmentPublicKey },
+                  Effect.gen(function* () {
+                    if (
+                      (yield* links.getForUser({
+                        userId: input.userId,
+                        environmentId: verified.environmentId,
+                      })) !== null
+                    )
+                      return null;
+                    const target = yield* managedEndpointProvider.prepareDeprovision({
+                      userId: input.userId,
+                      environmentId: verified.environmentId,
+                    });
+                    if (
+                      !target ||
+                      target.incarnationId !== claim.incarnationId ||
+                      target.generation !== claim.generation ||
+                      target.accountEpoch !== claim.accountEpoch ||
+                      target.endpointGeneration !== claim.endpointGeneration ||
+                      target.tunnelId !== claim.tunnelId
+                    )
+                      return null;
+                    const claims = yield* ownership.beginRelease({
+                      userId: input.userId,
+                      environmentId: verified.environmentId,
+                    });
+                    return { target, claims };
+                  }),
+                );
+                if (
+                  captured &&
+                  (yield* managedEndpointProvider.deprovision({
+                    userId: input.userId,
+                    environmentId: verified.environmentId,
+                    target: captured.target,
+                  }))
+                )
+                  yield* ownership.finishRelease({
+                    userId: input.userId,
+                    environmentId: verified.environmentId,
+                    claims: captured.claims,
+                  });
+              }).pipe(
+                Effect.tapError(() =>
+                  Effect.logWarning("Failed link retains fenced cleanup for retry", {
+                    environmentId: verified.environmentId,
+                  }),
+                ),
+                Effect.ignore,
+              );
+            }),
+          ),
           Effect.mapError((error) =>
             error._tag === "SqlError"
               ? new RelayAuthorizationUnavailableError({

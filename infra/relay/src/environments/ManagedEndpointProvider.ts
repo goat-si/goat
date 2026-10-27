@@ -159,6 +159,13 @@ export type ManagedEndpointProviderError =
   | ManagedTunnelLimits.ManagedTunnelLimitExceeded;
 
 export interface ManagedEndpointProvisioningResult {
+  readonly allocationClaim?: {
+    readonly incarnationId: string;
+    readonly generation: number;
+    readonly accountEpoch: number;
+    readonly endpointGeneration: number;
+    readonly tunnelId: string;
+  };
   readonly endpoint: RelayManagedEndpoint;
   readonly runtime: RelayManagedEndpointRuntimeConfig;
 }
@@ -546,10 +553,6 @@ export const make = Effect.gen(function* () {
     return { ...allocation, generation, dnsRecordId: recordId };
   });
 
-  // Hosts ask for recovery whenever their connector cannot register, mostly
-  // for local reasons a fresh provision cannot fix. Those requests outnumber
-  // every other Cloudflare caller, so a tunnel that is ready for the same
-  // origin costs two reads instead of a full provision.
   const reuseReadyTunnel = Effect.fnUntraced(function* (
     initialAllocation: ManagedEndpointAllocations.ManagedEndpointAllocation,
     origin: RelayManagedEndpointOrigin,
@@ -606,6 +609,13 @@ export const make = Effect.gen(function* () {
           .pipe(
             Effect.as(
               Option.some<ManagedEndpointProvisioningResult>({
+                allocationClaim: {
+                  incarnationId: allocation.incarnationId,
+                  generation: allocation.generation,
+                  accountEpoch: admitted.accountEpoch,
+                  endpointGeneration: allocation.endpointGeneration,
+                  tunnelId,
+                },
                 endpoint: managedEndpointForHostname(allocation.hostname),
                 runtime: {
                   providerKind: "cloudflare_tunnel",
@@ -1465,6 +1475,13 @@ export const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.as({
+                allocationClaim: {
+                  incarnationId: allocation.incarnationId,
+                  generation: dnsGeneration + 1,
+                  accountEpoch: admitted.accountEpoch,
+                  endpointGeneration: allocation.endpointGeneration,
+                  tunnelId: tunnel.id,
+                },
                 endpoint: managedEndpointForHostname(hostname),
                 runtime: {
                   providerKind: "cloudflare_tunnel",
