@@ -61,7 +61,10 @@ describe("read-back after input the driver could not verify", () => {
         );
         const answer = (yield* h.nextToProvider) as unknown as Answer;
         assert.equal(answer.id, 2);
-        assert.deepEqual(answer.result.structuredContent, { effect: "unverifiable" });
+        assert.deepEqual(answer.result.structuredContent, {
+          effect: "unverifiable",
+          safety: unknownWriteSafety,
+        });
         assert.notInclude(JSON.stringify(answer), "secret window text");
       }),
   );

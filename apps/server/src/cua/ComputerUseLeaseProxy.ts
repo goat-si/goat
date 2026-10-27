@@ -269,7 +269,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               ? String(message.id).startsWith(`${OWN_ID}apps:`) &&
                 ownAnswers.has(String(message.id))
               : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-            learnApps(message.result, listed, listing);
+            learnApps(message.result, listed, listing, options.executableOf);
             if (own) {
               const waiter = ownAnswers.get(message.id);
               ownAnswers.delete(message.id);
@@ -623,7 +623,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       idle: () => idle,
       apps: () => apps,
       listed,
-      bundleIds: options.bundleIds,
+      host: options,
       shared: sharedNow,
       toFile: () => refuseCaptureFileArguments(message.params?.arguments),
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),
@@ -863,7 +863,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
         foreground,
-        listed,
+        scope: { listed, apps },
       });
       selectedForeground = admission.selectedForeground;
       reservationId = admission.reservationId;
