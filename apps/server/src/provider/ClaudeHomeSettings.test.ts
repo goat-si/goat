@@ -45,14 +45,14 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
   resolveSettings: vi.fn(),
 }));
 /** The policy tier Claude Code would read on this machine; nothing else in the cascade. */
-const managedTier = (env: Record<string, string> | undefined) =>
+const managedTier = (settings: ClaudeSdk.Settings | undefined) =>
   vi
     .mocked(ClaudeSdk.resolveSettings)
     .mockReset()
     .mockResolvedValue({
       effective: {},
       provenance: {},
-      sources: env === undefined ? [] : [{ source: "managed", settings: { env } }],
+      sources: settings === undefined ? [] : [{ source: "managed", settings }],
     });
 
 const HOME = "http://127.0.0.1:10100/v1";
@@ -335,29 +335,40 @@ it.effect("pins Home in the Claude text generation and capability probe launches
 it.effect.each([
   {
     name: "an administrator policy",
-    policy: { ANTHROPIC_BASE_URL: "https://corp.example" },
+    policy: { env: { ANTHROPIC_BASE_URL: "https://corp.example" } },
     cached: undefined,
   },
   {
     name: "cached server-managed settings",
     policy: undefined,
-    cached: { CLAUDE_CODE_USE_BEDROCK: "1" },
+    cached: { env: { CLAUDE_CODE_USE_BEDROCK: "1" } },
   },
-])("refuses Home routing when $name sets Claude's endpoint or backend", ({ policy, cached }) => {
-  const calls: Array<Runner.ProcessRunInput> = [];
-  return Effect.gen(function* () {
-    managedTier(policy);
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const user = yield* fs.makeTempDirectoryScoped({ prefix: "claude-managed-home-" });
-    if (cached !== undefined)
-      yield* fs.writeFileString(
-        path.join(user, "remote-settings.json"),
-        JSON.stringify({ env: cached }),
-      );
-    const result = yield* routedEnvironment(user).pipe(Effect.result);
-    assert.equal(result._tag, "Failure");
-    if (result._tag === "Failure") assert.include(result.failure.message, "managed settings");
-    assert.equal(calls.length, 0);
-  }).pipe(Effect.provide(layerOpenCodex(calls)), Effect.scoped);
-});
+  // Claude runs the helper at startup and applies its output above the flag tier.
+  {
+    name: "an administrator policy helper",
+    policy: { policyHelper: { path: "/opt/corp/claude-policy" } },
+    cached: undefined,
+  },
+  {
+    name: "a cached server-managed policy helper",
+    policy: undefined,
+    cached: { policyHelper: { path: "/opt/corp/claude-policy" } },
+  },
+])(
+  "refuses Home routing when $name can change Claude's endpoint or backend",
+  ({ policy, cached }) => {
+    const calls: Array<Runner.ProcessRunInput> = [];
+    return Effect.gen(function* () {
+      managedTier(policy);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const user = yield* fs.makeTempDirectoryScoped({ prefix: "claude-managed-home-" });
+      if (cached !== undefined)
+        yield* fs.writeFileString(path.join(user, "remote-settings.json"), JSON.stringify(cached));
+      const result = yield* routedEnvironment(user).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") assert.include(result.failure.message, "managed settings");
+      assert.equal(calls.length, 0);
+    }).pipe(Effect.provide(layerOpenCodex(calls)), Effect.scoped);
+  },
+);

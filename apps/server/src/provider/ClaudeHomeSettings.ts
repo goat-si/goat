@@ -57,6 +57,7 @@ class ClaudeHomeOverriddenError extends Schema.TaggedError<ClaudeHomeOverriddenE
 ) {}
 const RemoteSettings = Schema.Struct({
   env: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  policyHelper: Schema.optionalKey(Schema.Unknown),
 });
 const decodeRemoteSettings = Schema.decodeUnknownOption(Schema.fromJsonString(RemoteSettings));
 const pinnedKeys = (env: Readonly<Record<string, unknown>> | undefined) =>
@@ -65,6 +66,8 @@ const pinnedKeys = (env: Readonly<Record<string, unknown>> | undefined) =>
 /**
  * Refuses a Home route that Claude Code would not honor: managed settings, including the cached
  * server-managed copy in this instance's Claude home, outrank the flag tier.
+ * A managed policy helper computes more managed settings at Claude's startup; resolveSettings
+ * does not run it, so its output cannot be checked and the route is refused.
  */
 export const assertClaudeHomeEnforceable = Effect.fn("ClaudeHomeSettings.assertEnforceable")(
   function* (claudeHome: string) {
@@ -83,6 +86,16 @@ export const assertClaudeHomeEnforceable = Effect.fn("ClaudeHomeSettings.assertE
           }),
       ),
     );
+    const helper =
+      remote?.policyHelper !== undefined ||
+      resolved.sources.some(
+        ({ source, settings }) => source === "managed" && settings.policyHelper !== undefined,
+      );
+    if (helper)
+      return yield* new ClaudeHomeOverriddenError({
+        detail:
+          "Claude Code managed settings on this machine run a policy helper at startup, which can override OpenCodex Home and cannot be checked beforehand. Keep this instance on its own route, or ask the administrator to remove the helper.",
+      });
     const managed = [
       ...pinnedKeys(remote?.env),
       ...resolved.sources
