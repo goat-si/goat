@@ -370,7 +370,7 @@ patchedDependencies:
   expo-modules-core@58.0.22: 78812dcdef2c07aabb5e0d66b9762618cc4f7dae5e2b1cd4e06918027034473b
   expo-network@58.0.3: cd09b6d1744dde4efa081b5619ebcff38877d98f7502a51cab121629dece8237
   expo-notifications@58.1.5: 1c9e957eb1387b71982a6fe617d9a484905c9cb3498fecd2962b63c8aeb6b8c6
-  expo-sharing@58.0.19: 61a9741dc6166fdbb5baa2e489275a65dd21aa11d2c915f490a1b337a4468e76
+  expo-sharing@58.0.19: dcdc534eeb18eb9fb0919c0ff7da1f7a75076b5b38b57f231cad32bb17c9dda3
   expo-video@58.0.11: e80ec3ef8c4af50a607beea1c0917e71ba679844efdb702b45d17a5f03cf466c
   expo-widgets@58.0.20: 8bf49067f93742855e15f29559ac75c8b50230b47069060993c9ea01dac11171
   mdast-util-math@3.0.0: afe6b2c89e1eaddfd3c90cf2723f12c9a17d513e65beff51653781486013251c
@@ -722,7 +722,7 @@ importers:
         version: 58.0.4(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))
       expo-sharing:
         specifier: 58.0.19
-        version: 58.0.19(patch_hash=61a9741dc6166fdbb5baa2e489275a65dd21aa11d2c915f490a1b337a4468e76)(@tsc-rs/typescript@0.8.0)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1)
+        version: 58.0.19(patch_hash=dcdc534eeb18eb9fb0919c0ff7da1f7a75076b5b38b57f231cad32bb17c9dda3)(@tsc-rs/typescript@0.8.0)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1)
       expo-splash-screen:
         specifier: ~58.0.10
         version: 58.0.10(@tsc-rs/typescript@0.8.0)(expo@58.0.14)(supports-color@8.1.1)
@@ -19136,7 +19136,7 @@ snapshots:
 
   expo-server@58.0.5: {}
 
-  expo-sharing@58.0.19(patch_hash=61a9741dc6166fdbb5baa2e489275a65dd21aa11d2c915f490a1b337a4468e76)(@tsc-rs/typescript@0.8.0)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1):
+  expo-sharing@58.0.19(patch_hash=dcdc534eeb18eb9fb0919c0ff7da1f7a75076b5b38b57f231cad32bb17c9dda3)(@tsc-rs/typescript@0.8.0)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)(supports-color@8.1.1):
     dependencies:
       '@expo/config-plugins': 58.0.9(@tsc-rs/typescript@0.8.0)(supports-color@8.1.1)
       '@expo/config-types': 58.0.3
