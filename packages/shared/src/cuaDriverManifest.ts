@@ -169,7 +169,7 @@ export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<CuaDriverAdmittedApp> {
-  const host = new Set(hostBundleIds.map(identityKey));
+  const host = new Set(hostBundleIds.map(cuaAppKey));
   const admitted = new Set<string>();
   const executables = new Map<string, Set<string>>();
   for (const app of apps) {
@@ -201,7 +201,7 @@ function excludedCuaApplication(
   host: ReadonlySet<string>,
 ): boolean {
   return (
-    host.has(identityKey(id)) ||
+    host.has(cuaAppKey(id)) ||
     EXCLUDED_BUNDLE_IDS.has(id.toLowerCase()) ||
     EXCLUDED_NAME.test(app.name ?? "") ||
     EXCLUDED_NAME.test(id) ||
@@ -226,7 +226,7 @@ export function cuaRequestableApps(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const host = new Set(hostBundleIds.map(identityKey));
+  const host = new Set(hostBundleIds.map(cuaAppKey));
   const requestable = new Set<string>();
   for (const app of apps) {
     const bundle = app.bundle_id?.trim() ?? "";
@@ -274,15 +274,17 @@ async function withLinuxExecutables(
 }
 
 /**
- * One spelling per identity for comparing ids: a Windows path the way the driver compares it
- * (session_manifest.rs normalize_windows_executable_path: \\?\ and \\?\UNC\ prefixes off, / as
- * \, repeated separators collapsed, case folded); anything else lowercased. GOAT can run from a
- * path spelled with a prefix while the helper lists the plain form, and must still be excluded.
+ * One spelling per app identity, for every comparison of ids and approvals: a Windows path the
+ * way the driver compares it (session_manifest.rs normalize_windows_executable_path: \\?\ and
+ * \\?\UNC\ prefixes off, / as \, repeated separators collapsed, case folded); any other absolute
+ * path exactly, since Linux paths differ by case; a bundle id or name lowercased.
  */
-function identityKey(id: string): string {
-  let path = id.trim().replaceAll("/", "\\");
+export function cuaAppKey(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return trimmed;
+  let path = trimmed.replaceAll("/", "\\");
   const windowsPath = /^[A-Za-z]:\\/u.test(path) || path.startsWith("\\\\");
-  if (!windowsPath) return id.trim().toLowerCase();
+  if (!windowsPath) return trimmed.toLowerCase();
   if (path.toLowerCase().startsWith("\\\\?\\unc\\")) path = "\\\\" + path.slice(8);
   else if (path.startsWith("\\\\?\\")) path = path.slice(4);
   const unc = path.startsWith("\\\\");
@@ -327,8 +329,8 @@ export function missingCuaDriverApplications(
   approved: ReadonlyArray<string>,
   admitted: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const present = new Set(admitted.map(identityKey));
-  return approved.filter((id) => !present.has(identityKey(id)));
+  const present = new Set(admitted.map(cuaAppKey));
+  return approved.filter((id) => !present.has(cuaAppKey(id)));
 }
 
 /**

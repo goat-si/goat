@@ -110,4 +110,29 @@ describe("an app approved by its executable path", () => {
       assert.include(JSON.stringify(refused), "app_not_approved");
     }),
   );
+
+  it.effect(
+    "on Linux is refused when the binary cannot be read again, even after a listing read it",
+    () =>
+      Effect.gen(function* () {
+        // The proxy's listing, its first check, the fresh listing, its second check.
+        const reads: Array<string | undefined> = [
+          "/opt/good/notes",
+          undefined,
+          "/opt/good/notes",
+          undefined,
+        ];
+        const executableOf = () => reads.shift();
+        const listed = new Map<number, ListedApp>();
+        learnApps(listing(undefined), listed, true, executableOf);
+        const refused = yield* click({
+          listed,
+          approved: ["/opt/good/notes"],
+          executableOf,
+          listApps: Effect.sync(() => learnApps(listing(undefined), listed, true, executableOf)),
+        });
+        assert.include(JSON.stringify(refused), "app_not_approved");
+        assert.deepEqual(reads, []);
+      }),
+  );
 });

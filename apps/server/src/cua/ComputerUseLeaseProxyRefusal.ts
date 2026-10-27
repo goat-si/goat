@@ -108,13 +108,15 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       bundleIds: input.host.bundleIds,
     });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
-  // now. Linux reads it again; elsewhere only a listing taken for this call confirms it.
+  // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
+  // only a listing taken for this call confirms it.
   const confirmed = (verdict: ScopeVerdict, relisted: (pid: number) => boolean) => {
     if (verdict._tag !== "allow" || verdict.byExecutable === undefined) return true;
     const { pid, executable } = verdict.byExecutable;
-    const running = input.host.executableOf?.(pid);
-    if (running !== undefined) return appKey(running) === appKey(executable);
-    return relisted(pid);
+    const read = input.host.executableOf;
+    if (read === undefined) return relisted(pid);
+    const running = read(pid);
+    return running !== undefined && appKey(running) === appKey(executable);
   };
   let verdict = judge();
   if (

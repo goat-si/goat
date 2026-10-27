@@ -13,6 +13,7 @@ import {
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
   cuaRequestableApps,
+  cuaAppKey,
   isExcludedCuaApplication,
   cuaDriverCapabilityManifest,
   cuaDriverManifestApplications,
@@ -425,6 +426,14 @@ describe("cuaDriverManifest", () => {
       cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications: [] })),
     ).toEqual([]);
     expect(() => cuaDriverManifestApplications("    - bundle_id: invalid")).toThrow();
+  });
+
+  it("finds a Linux executable approval missing when only a path differing by case is admitted", () => {
+    expect(missingCuaDriverApplications(["/opt/Notes", "/opt/notes"], ["/opt/notes"])).toEqual([
+      "/opt/Notes",
+    ]);
+    expect(cuaAppKey("/opt/Notes")).toBe("/opt/Notes");
+    expect(cuaAppKey("\\\\?\\C:\\Apps\\Notes.exe")).toBe(cuaAppKey("c:/apps//NOTES.exe"));
   });
 
   it("finds missing approvals using the same bundle and Windows path identities as admission", () => {
