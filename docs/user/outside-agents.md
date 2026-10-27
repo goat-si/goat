@@ -57,7 +57,7 @@ Then choose what the agent may do:
 ## Claude Code
 
 ```sh
-claude mcp add --transport http goat https://<environment-address>/mcp
+claude mcp add --transport http goat https://<environment-address>/mcp --header "x-goat-tool-listing: core"
 claude mcp login goat
 ```
 
@@ -72,6 +72,9 @@ once you approve.
 codex mcp add goat --url https://<environment-address>/mcp
 codex mcp login goat
 ```
+
+Then add `http_headers = { "x-goat-tool-listing" = "core" }` under `[mcp_servers.goat]` in
+`~/.codex/config.toml`; `codex mcp add` has no header option.
 
 `codex mcp login --no-browser` prints the sign-in URL instead of opening it.
 `codex mcp list` shows `goat` with OAuth once you approve.
@@ -95,6 +98,10 @@ Agents without OAuth support can use a client token instead.
 
 The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
 `goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
+An agent that sends the `x-goat-tool-listing: core` header, as the Claude Code,
+Codex and client token settings on this page do, is listed only those two tools:
+about 2 KB of tool definitions instead of about 210 KB. Every tool stays callable by
+name either way.
 
 ## Set up a client with the goat-mcp skill
 
@@ -137,16 +144,16 @@ Keep the token in an environment variable, such as
 and let the client read it when it starts, so the token stays out of its
 config file. Replace `<url>` with the MCP URL:
 
-| Client               | Setting                                                                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude Code          | `claude mcp add-json --scope user goat '{"type":"http","url":"<url>","headers":{"Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'`               |
-| Codex                | `codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN`                                                                       |
-| Cursor               | `"url": "<url>"` and `"headers": { "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }` in `mcp.json`                                          |
-| VS Code              | `"type": "http"`, `"url": "<url>"` and the same `headers` under `servers` in `mcp.json`                                                      |
-| OpenCode             | `"type": "remote"`, `"oauth": false` and `"headers": { "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }`                                     |
-| Gemini CLI           | `gemini mcp add --scope user --transport http --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat <url>`                                 |
-| Clients without HTTP | `npx -y mcp-remote <url> --header "Authorization:${GOAT_MCP_AUTH}"`, with `GOAT_MCP_AUTH` set to `Bearer <token>` (Node.js 20.18.1 or newer) |
-| xAI API              | `"authorization": "Bearer <token>"` in an `mcp` tool; the URL must be public `https`                                                         |
+| Client               | Setting                                                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code          | `claude mcp add-json --scope user goat '{"type":"http","url":"<url>","headers":{"x-goat-tool-listing":"core","Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'`                      |
+| Codex                | `codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN`, then the `http_headers` line above in `config.toml`                                                      |
+| Cursor               | `"url": "<url>"` and `"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }` in `mcp.json`                                               |
+| VS Code              | `"type": "http"`, `"url": "<url>"` and the same `headers` under `servers` in `mcp.json`                                                                                          |
+| OpenCode             | `"type": "remote"`, `"oauth": false` and `"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }`                                          |
+| Gemini CLI           | `gemini mcp add --scope user --transport http --header 'x-goat-tool-listing: core' --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat <url>`                                |
+| Clients without HTTP | `npx -y mcp-remote <url> --header "x-goat-tool-listing:core" --header "Authorization:${GOAT_MCP_AUTH}"`, with `GOAT_MCP_AUTH` set to `Bearer <token>` (Node.js 20.18.1 or newer) |
+| xAI API              | `"authorization": "Bearer <token>"` in an `mcp` tool; the URL must be public `https`                                                                                             |
 
 Restart the client after changing the variable. The
 [goat-mcp skill](#set-up-a-client-with-the-goat-mcp-skill) has full config files
