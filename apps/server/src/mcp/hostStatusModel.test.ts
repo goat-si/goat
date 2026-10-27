@@ -8,12 +8,18 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
 } from "@goat/contracts";
-import { GoatHostStatusResult, type RuntimeProtocolRanges } from "@goat/contracts";
+import {
+  GoatHostStatusResult,
+  type HostStatusEntry,
+  type RuntimeProtocolRanges,
+} from "@goat/contracts";
 import { ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+
+const encodeHostStatus = Schema.encodeUnknownSync(GoatHostStatusResult);
 import {
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   clipHostStatusMessage,
@@ -22,6 +28,7 @@ import {
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
   markHostCompatibility,
+  omitUnencodableMetrics,
   quotaRefreshDue,
   tagRemoteHostStatus,
   unreachableHostStatus,
@@ -353,5 +360,80 @@ describe("older host-status payloads", () => {
       hosts: [{ host: "box", reachability: "ok", compatibility: "partially-compatible" }],
     }).hosts[0];
     expect(entry).toEqual({ host: "box", reachability: "ok" });
+  });
+});
+
+describe("omitUnencodableMetrics", () => {
+  const metrics = {
+    sampledAt: 1,
+    cpuUtilization: 0.1,
+    cpuCount: 8,
+    availableMemoryBytes: 1,
+    totalMemoryBytes: 2,
+    loadAvg: { oneMinute: 0, fiveMinutes: 0, fifteenMinutes: 0 },
+    disk: { path: "/", availableBytes: 1, totalBytes: 2 },
+    threads: { running: 0, waiting: 0, queued: 0 },
+    quotas: [],
+  };
+  const entry = {
+    host: null,
+    reachability: "ok" as const,
+    metrics,
+  } satisfies HostStatusEntry;
+
+  it("leaves an encodable host untouched", () => {
+    expect(omitUnencodableMetrics(entry)).toBe(entry);
+    encodeHostStatus({ hosts: [entry] });
+  });
+
+  it("drops the bad section, names it, and still encodes the host", () => {
+    const bad: HostStatusEntry = {
+      ...entry,
+      metrics: {
+        ...metrics,
+        platform: "darwin",
+        opencodex: {
+          installed: true,
+          binaries: [],
+          ownership: "none",
+          service: { available: false },
+          runtime: { port: 10100, healthy: true, ready: true },
+          link: {
+            role: "home",
+            available: true,
+            links: [
+              {
+                id: "mini",
+                alias: "mini",
+                tunnelPort: 10100,
+                state: "connected",
+                lastApplyAt: undefined,
+              },
+            ],
+            childSettingsApplied: false,
+          },
+        },
+      },
+    };
+    const clean = omitUnencodableMetrics(bad);
+    expect(clean.metrics?.platform).toBe("darwin");
+    expect(clean.metrics?.opencodex).toBeUndefined();
+    expect(clean.omittedMetrics).toEqual([
+      { section: "opencodex", message: "opencodex.link.links.0.lastApplyAt is undefined" },
+    ]);
+    encodeHostStatus({ hosts: [clean] });
+  });
+
+  it("drops metrics entirely when a required field is not JSON", () => {
+    const bad: HostStatusEntry = {
+      ...entry,
+      metrics: { ...metrics, cpuUtilization: Number.NaN },
+    };
+    const clean = omitUnencodableMetrics(bad);
+    expect(clean.metrics).toBeUndefined();
+    expect(clean.reachability).toBe("ok");
+    expect(clean.omittedMetrics?.[0]?.section).toBe("metrics");
+    expect(clean.omittedMetrics?.[0]?.message).toContain("cpuUtilization");
+    encodeHostStatus({ hosts: [clean] });
   });
 });

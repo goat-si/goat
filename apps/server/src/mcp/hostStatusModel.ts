@@ -1,6 +1,7 @@
 import type {
   HostCompatibility,
   HostStatusEntry,
+  HostStatusMetrics,
   HostStatusProvider,
   HostStatusQuota,
   HostThreadCounts,
@@ -74,6 +75,88 @@ export function isUnsupportedHostStatusMessage(message: string): boolean {
 
 export function clipHostStatusMessage(message: string): string {
   return Array.from(message).slice(0, 500).join("");
+}
+
+const OPTIONAL_METRIC_SECTIONS = [
+  "platform",
+  "providers",
+  "quotaPool",
+  "computerUse",
+  "opencodex",
+  "storage",
+  "strays",
+] as const satisfies ReadonlyArray<keyof HostStatusMetrics>;
+
+/** First reason `value` is not a JSON value, or undefined when it is. */
+function jsonProblem(value: unknown, path: string): string | undefined {
+  const seen = new WeakSet<object>();
+  const visit = (current: unknown, at: string): string | undefined => {
+    if (current === null || typeof current === "string" || typeof current === "boolean") {
+      return undefined;
+    }
+    if (typeof current === "number") {
+      return Number.isFinite(current) ? undefined : `${at} is not a finite number`;
+    }
+    if (typeof current === "undefined") return `${at} is undefined`;
+    if (typeof current === "bigint") return `${at} is a bigint`;
+    if (typeof current !== "object") return `${at} is ${typeof current}`;
+    if (seen.has(current)) return `${at} is cyclic`;
+    const prototype = Object.getPrototypeOf(current);
+    if (
+      !Array.isArray(current) &&
+      prototype !== null &&
+      prototype !== Object.prototype &&
+      Object.getPrototypeOf(prototype) !== null
+    ) {
+      return `${at} is not a plain object`;
+    }
+    seen.add(current);
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        const problem = visit(current[index], `${at}.${index}`);
+        if (problem !== undefined) return problem;
+      }
+      return undefined;
+    }
+    for (const key of Object.keys(current)) {
+      const problem = visit(
+        (current as Record<string, unknown>)[key],
+        at.length === 0 ? key : `${at}.${key}`,
+      );
+      if (problem !== undefined) return problem;
+    }
+    return undefined;
+  };
+  return visit(value, path);
+}
+
+/**
+ * Drops metrics sections that are not JSON and names them on `omittedMetrics`. One bad section
+ * must not make the tool refuse the host. A required field that is still not JSON drops `metrics`.
+ */
+export function omitUnencodableMetrics(entry: HostStatusEntry): HostStatusEntry {
+  const metrics = entry.metrics;
+  if (metrics === undefined) return entry;
+  const dropped: Array<{ section: string; message: string }> = [];
+  const next: Record<string, unknown> = { ...metrics };
+  for (const section of OPTIONAL_METRIC_SECTIONS) {
+    if (!Object.hasOwn(metrics, section)) continue;
+    const problem = jsonProblem(metrics[section], section);
+    if (problem === undefined) continue;
+    delete next[section];
+    dropped.push({ section, message: clipHostStatusMessage(problem) });
+  }
+  const restProblem = jsonProblem(next, "metrics");
+  if (dropped.length === 0 && restProblem === undefined) return entry;
+  if (restProblem !== undefined) {
+    dropped.push({ section: "metrics", message: clipHostStatusMessage(restProblem) });
+  }
+  const { metrics: _metrics, ...withoutMetrics } = entry;
+  return {
+    ...(restProblem === undefined ? entry : withoutMetrics),
+    ...(restProblem === undefined ? { metrics: next as HostStatusMetrics } : {}),
+    omittedMetrics: [...(entry.omittedMetrics ?? []), ...dropped],
+  };
 }
 
 const UNSUPPORTED_MESSAGE = (host: string) =>
