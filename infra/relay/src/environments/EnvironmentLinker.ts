@@ -343,7 +343,9 @@ const make = Effect.gen(function* () {
             }
           });
           yield* assertOwner;
-          yield* reservations.recover(input.userId, (environmentId) => cleanup(environmentId));
+          yield* reservations.recover(input.userId, assertOwner, (environmentId) =>
+            cleanup(environmentId),
+          );
           let cleanupTarget:
             | ManagedEndpointProvider.ManagedEndpointDeprovisionTarget
             | null

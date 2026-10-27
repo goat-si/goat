@@ -62,6 +62,7 @@ export class ConnectLinkReservations extends Context.Service<
     ) => Effect.Effect<A, E | RelayInternalError, R>;
     readonly recover: <E, R>(
       userId: string,
+      assertOwner: Effect.Effect<void, RelayInternalError>,
       cleanup: (environmentId: string) => Effect.Effect<void, E, R>,
     ) => Effect.Effect<void, E | RelayInternalError, R>;
     readonly reserve: <E, R>(
@@ -286,20 +287,33 @@ const make = Effect.gen(function* () {
   });
   const recover: ConnectLinkReservations["Service"]["recover"] = Effect.fn(
     "ConnectLinkReservations.recover",
-  )(function* (userId, cleanup) {
+  )(function* (userId, assertOwner, cleanup) {
+    const candidates = yield* db.$client<{
+      challenge_id: string;
+      environment_id: string;
+      attempt_id: string | null;
+    }>`SELECT challenge_id, environment_id, attempt_id FROM relay_connect_link_reservations
+      WHERE user_id = ${userId} AND status IN ('running', 'recovering', 'withdrawn')`.pipe(
+      Effect.mapError(unavailable),
+    );
+    // Only recover identities captured while this execution still owns the account.
+    yield* assertOwner;
     // Fence completion durably before touching resources; failed cleanup continues to hold capacity.
     const rows = yield* db.$client
       .withTransaction(
         Effect.gen(function* () {
           yield* lock(userId);
-          return yield* db.$client<{
-            challenge_id: string;
-            environment_id: string;
-            attempt_id: string | null;
-          }>`UPDATE relay_connect_link_reservations
-          SET status = CASE WHEN status = 'running' THEN 'recovering' ELSE status END
-          WHERE user_id = ${userId} AND status IN ('running', 'recovering', 'withdrawn')
-          RETURNING challenge_id, environment_id, attempt_id`.pipe(Effect.mapError(unavailable));
+          const claimed = yield* Effect.forEach(candidates, (row) =>
+            db.$client<typeof row>`UPDATE relay_connect_link_reservations
+              SET status = CASE WHEN status = 'running' THEN 'recovering' ELSE status END
+              WHERE user_id = ${userId} AND challenge_id = ${row.challenge_id}
+                AND attempt_id IS NOT DISTINCT FROM ${row.attempt_id}
+                AND status IN ('running', 'recovering', 'withdrawn')
+              RETURNING challenge_id, environment_id, attempt_id`.pipe(
+              Effect.mapError(unavailable),
+            ),
+          );
+          return claimed.flat();
         }),
       )
       .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));

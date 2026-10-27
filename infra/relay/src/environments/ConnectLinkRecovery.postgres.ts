@@ -303,6 +303,73 @@ it.effect("an obsolete checkpoint cannot adopt a replacement allocation at gener
   }),
 );
 
+it.effect("an obsolete recovery cannot fence a replacement attempt using the same proof", () =>
+  Effect.gen(function* () {
+    const recoveryPaused = yield* Deferred.make<void>();
+    const resumeRecovery = yield* Deferred.make<void>();
+    const replacementCreated = yield* Deferred.make<void>();
+    const resumeReplacement = yield* Deferred.make<void>();
+    const test = fixture({
+      at: "create",
+      wait: Deferred.succeed(replacementCreated, undefined).pipe(
+        Effect.andThen(Deferred.await(resumeReplacement)),
+      ),
+    });
+    return yield* Effect.gen(function* () {
+      const { request, reservation } = yield* abandoned;
+      const db = yield* RelayDb.RelayDb;
+      yield* db.$client`INSERT INTO relay_managed_tunnel_limits (user_id, max_tunnels, created_at, updated_at) VALUES ('user_123', 1, '2026-01-01', '2026-01-01')`;
+      const linker = yield* Linker.EnvironmentLinker;
+      let paused = false;
+      const obsolete = yield* linker.link({ userId: "user_123", request }).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) => {
+          if (!paused && statement.compile()[0].includes("SELECT pg_advisory_xact_lock")) {
+            paused = true;
+            return Deferred.succeed(recoveryPaused, undefined).pipe(
+              Effect.andThen(Deferred.await(resumeRecovery)),
+              Effect.as(statement),
+            );
+          }
+          return Effect.succeed(statement);
+        }),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(recoveryPaused);
+      yield* loseExecution;
+      const replacement = yield* linker
+        .link({ userId: "user_123", request })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(replacementCreated);
+      const before =
+        yield* db.$client`SELECT status, attempt_id FROM relay_connect_link_reservations`;
+      expect(before).toHaveLength(1);
+      expect(before[0]?.status).toBe("running");
+      expect(before[0]?.attempt_id).not.toBe(reservation.attemptId);
+      yield* Deferred.succeed(resumeRecovery, undefined);
+      expect((yield* Fiber.await(obsolete))._tag).toBe("Failure");
+      expect(
+        yield* db.$client`SELECT status, attempt_id FROM relay_connect_link_reservations`,
+      ).toEqual(before);
+      yield* Deferred.succeed(resumeReplacement, undefined);
+      const result = yield* Fiber.join(replacement);
+      const allocation = yield* (yield* Allocations.ManagedEndpointAllocations).get(reservation);
+      expect(result.endpointRuntime?.connectorToken).toBe(`connector:${allocation?.tunnelId}`);
+      expect(
+        (yield* (yield* Credentials.EnvironmentCredentials).authenticate(
+          result.environmentCredential,
+        ))._tag,
+      ).toBe("Some");
+      expect(yield* (yield* Links.EnvironmentLinks).getForUser(reservation)).not.toBeNull();
+      expect(test.tunnels.size).toBe(1);
+      expect(test.tunnels.has(allocation?.tunnelId ?? "")).toBe(true);
+      expect(test.dns.size).toBe(1);
+      expect(
+        yield* db.$client`SELECT * FROM relay_connect_link_reservations WHERE status IN ('running', 'recovering', 'withdrawn')`,
+      ).toHaveLength(0);
+    }).pipe(Effect.provide(test.layer));
+  }),
+);
+
 it.effect(
   "recovery fences completion before cleanup and retains capacity until cleanup finishes",
   () => {
@@ -315,8 +382,8 @@ it.effect(
       const releaseCleanup = yield* Deferred.make<void>();
       const reservations = yield* Reservations.ConnectLinkReservations;
       const recovery = yield* reservations
-        .exclusive("user_123", () =>
-          reservations.recover("user_123", (environmentId) =>
+        .exclusive("user_123", (assertOwner) =>
+          reservations.recover("user_123", assertOwner, (environmentId) =>
             Effect.gen(function* () {
               yield* Deferred.succeed(cleanupEntered, undefined);
               yield* Deferred.await(releaseCleanup);
@@ -396,7 +463,7 @@ it.effect(
           .exclusive("user_123", (assertOwner) => loseExecution.pipe(Effect.andThen(assertOwner)))
           .pipe(Effect.exit))._tag,
       ).toBe("Failure");
-      const result = yield* reservations.exclusive("user_123", () =>
+      const result = yield* reservations.exclusive("user_123", (assertOwner) =>
         Effect.gen(function* () {
           const db = yield* RelayDb.RelayDb;
           const lock = yield* db.$client.withTransaction(
@@ -408,7 +475,7 @@ it.effect(
           const recoveryEntered = yield* Deferred.make<void>();
           const releaseCleanup = yield* Deferred.make<void>();
           const recovery = yield* reservations
-            .recover("user_123", (environmentId) =>
+            .recover("user_123", assertOwner, (environmentId) =>
               provider
                 .deprovision({ userId: "user_123", environmentId })
                 .pipe(
