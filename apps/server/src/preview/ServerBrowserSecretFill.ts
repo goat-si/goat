@@ -8,7 +8,7 @@ import {
   PreviewAutomationFillSecretInput,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
-  type ThreadId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -16,6 +16,14 @@ import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { rememberSecret } from "./pageSecrets.ts";
+import {
+  compileSecretForms,
+  compileSkeletonForms,
+  longestForm,
+  secretSpans,
+  skeletonSpans,
+} from "./secretForms.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -41,7 +49,9 @@ const USED_UP =
 const UNCERTAIN =
   "GOAT could not confirm whether the password was typed, and the secretRef is used up. Take a text snapshot before asking the person again.";
 const FENCED =
-  "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates.";
+  "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates, or the field is cleared.";
+const SHOWN =
+  "This tab shows a password GOAT filled as plain text. Snapshots stay off until the field hides or clears it, or the page navigates.";
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
@@ -88,15 +98,17 @@ const FILL = `function (value, origin) {
   if (active === this) this.blur();
   return true;
 }`;
-const STILL_FILLED = "function (value) { return this.isConnected && this.value === value; }";
+// Any value left in the field counts: an edit must not lift the fence on most of the password.
+// An empty or detached field keeps its entry until its document goes, so a page that puts the
+// value or the node back is fenced again. Revealed, even unchanged, it shows as plain text.
+const STILL_FILLED = `function () {
+  if (!this.isConnected || this.value === "") return "empty";
+  return this.type === "password" ? "hidden" : "shown";
+}`;
 
 interface Target {
   readonly session: CDPSession;
   readonly objectId: string;
-}
-
-interface Fence extends Target {
-  readonly value: string;
 }
 
 const isWebOrigin = (origin: unknown): origin is string =>
@@ -203,18 +215,55 @@ const settledPrivate = (control: SessionControl) =>
       })
     : Promise.resolve(false);
 
-const maskWith = (values: ReadonlySet<string>) => (text: string) => {
-  let masked = text;
-  for (const value of values) masked = masked.split(value).join(MASK);
-  return masked;
+/** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
+const maskWith = (values: ReadonlySet<string>) => {
+  const forms = compileSecretForms(values);
+  const skeletons = compileSkeletonForms(values);
+  const mask = (text: string, cut = false) => {
+    const spans = [...secretSpans(text, forms, cut), ...skeletonSpans(text, skeletons, cut)];
+    if (spans.length === 0) return text;
+    let masked = "";
+    let shown = 0;
+    let end = -1;
+    for (const [start, stop] of spans.toSorted((a, b) => a[0] - b[0])) {
+      if (start > end) {
+        if (end >= 0) masked += MASK;
+        masked += text.slice(shown, start);
+      }
+      end = Math.max(end, stop);
+      shown = end;
+    }
+    return masked + MASK + text.slice(shown);
+  };
+  // An echo can be wider than its form (escapes triple it); four times leaves room for that.
+  return Object.assign(mask, {
+    slack: 4 * longestForm(forms, skeletons.raw, skeletons.decoded),
+  });
 };
+
+/** Fields GOAT itself fills in its answers; masking one would only corrupt the answer's shape. */
+const SERVER_KEYS = new Set([
+  "_tag",
+  "reason",
+  "phase",
+  "status",
+  "level",
+  "requestId",
+  "tabId",
+  "id",
+  "ref",
+]);
 
 const walk = (value: unknown, mask: (text: string) => string, keys: boolean): unknown => {
   if (typeof value === "string") return mask(value);
   if (Array.isArray(value)) return value.map((each) => walk(each, mask, keys));
   if (value === null || typeof value !== "object") return value;
+  // Page-made JSON (`keys`) is the page's throughout; only server-built shapes keep their fields.
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [keys ? mask(key) : key, walk(each, mask, keys)]),
+    Object.entries(value).map(([key, each]) => [
+      keys ? mask(key) : key,
+      !keys && SERVER_KEYS.has(key) && typeof each === "string" ? each : walk(each, mask, keys),
+    ]),
   );
 };
 
@@ -222,7 +271,7 @@ const walk = (value: unknown, mask: (text: string) => string, keys: boolean): un
 const maskResult = (
   operation: PreviewAutomationRequest["operation"],
   result: unknown,
-  mask: (text: string) => string,
+  mask: (text: string, cut?: boolean) => string,
 ): unknown => {
   if (operation === "evaluate") return walk(result, mask, true);
   if (result === null || typeof result !== "object" || Array.isArray(result))
@@ -231,6 +280,8 @@ const maskResult = (
   const masked = walk(record, mask, false) as Record<string, unknown>;
   if (operation === "scrollCollect" && Array.isArray(record.items))
     masked.items = walk(record.items, mask, true);
+  if (operation === "fetch" && record.truncated === true && typeof record.text === "string")
+    masked.text = mask(record.text, true);
   const screenshot = record.screenshot as { readonly data?: unknown } | undefined;
   // Chromium encodes these pixels; text replacement would only corrupt them.
   if (operation === "snapshot" && typeof screenshot?.data === "string")
@@ -253,7 +304,7 @@ export const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const filledValues = new Map<ThreadId, Set<string>>();
-  const fences = new WeakMap<Page, Array<Fence>>();
+  const fences = new WeakMap<Page, Array<Target>>();
 
   const consume = (input: {
     readonly ref: PreviewAutomationFillSecretInput["secretRef"];
@@ -307,10 +358,11 @@ export const make = Effect.gen(function* () {
             const values = filledValues.get(request.threadId) ?? new Set<string>();
             values.add(value);
             filledValues.set(request.threadId, values);
+            rememberSecret(tab.page, value);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
-            const entry: Fence = { ...target, value };
+            const entry: Target = { ...target };
             const outstanding = fences.get(tab.page) ?? [];
             outstanding.push(entry);
             fences.set(tab.page, outstanding);
@@ -350,36 +402,48 @@ export const make = Effect.gen(function* () {
     return { filled: true, origin, privateMode: await settledPrivate(tab.control) };
   };
 
-  /** Refuses the agent's own script, pixels and recordings while a filled field holds its value. */
+  /**
+   * Refuses the agent's own script, pixels and recordings while a filled field holds a value, and
+   * text snapshots too once that value shows as plain text.
+   */
   const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
+    const textSnapshot =
+      request.operation === "snapshot" &&
+      (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
     const guarded =
       request.operation === "evaluate" ||
       request.operation === "recordingStart" ||
-      (request.operation === "snapshot" &&
-        (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage !== false);
+      (request.operation === "snapshot" && !textSnapshot);
     const outstanding = fences.get(tab.page);
-    if (!guarded || outstanding === undefined || outstanding.length === 0) return;
+    if ((!guarded && !textSnapshot) || outstanding === undefined || outstanding.length === 0)
+      return;
     let unconfirmed = false;
-    const holding: Array<Fence> = [];
+    let shown = false;
+    let holding = false;
+    const kept: Array<Target> = [];
     for (const entry of outstanding) {
       const state = await entry.session
         .send("Runtime.callFunctionOn", {
           objectId: entry.objectId,
           functionDeclaration: STILL_FILLED,
-          arguments: [{ value: entry.value }],
           returnByValue: true,
         })
         .then(
-          (answer) =>
-            answer.exceptionDetails ? "unknown" : answer.result.value === true ? "held" : "gone",
+          (answer): unknown => (answer.exceptionDetails ? "unknown" : answer.result.value),
           (cause: unknown) => (GONE.test(String(cause)) ? "gone" : "unknown"),
         );
       if (state === "gone") void release(entry);
-      else holding.push(entry);
-      if (state === "unknown") unconfirmed = true;
+      else kept.push(entry);
+      if (state === "gone" || state === "empty") continue;
+      holding = true;
+      if (state === "shown") shown = true;
+      else if (state !== "hidden") unconfirmed = true;
     }
-    fences.set(tab.page, holding);
-    if (holding.length > 0) throw refused(unconfirmed ? UNCONFIRMED : FENCED);
+    fences.set(tab.page, kept);
+    // A text snapshot hides password inputs itself; a value shown as plain text, or a field GOAT
+    // cannot check, stops it.
+    if (textSnapshot ? !shown && !unconfirmed : !holding) return;
+    throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
   };
 
   /** Masks the thread's filled values in everything the tab answers. */
@@ -396,5 +460,18 @@ export const make = Effect.gen(function* () {
       ) as O;
     };
 
-  return { fill, guard, mask };
+  /** Masks the thread's filled values in one text, for collectors that cut what they keep. */
+  /**
+   * Masks the thread's filled values in one text. With `limit`, a text the caller will cut there is
+   * cut first a little past it and masked as cut, so a huge page text is never scanned whole.
+   */
+  const maskText = (threadId: string) => (text: string, limit?: number) => {
+    const values = filledValues.get(ThreadId.make(threadId));
+    if (values === undefined || values.size === 0) return text;
+    const masker = maskWith(values);
+    if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
+    return masker(text.slice(0, limit + masker.slack), true);
+  };
+
+  return { fill, guard, mask, maskText };
 });
