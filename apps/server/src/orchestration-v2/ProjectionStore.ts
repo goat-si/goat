@@ -5277,10 +5277,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     )(
       function* (node) {
         const payloadJson = yield* encodeNodePayload(node);
-        const rows = yield* sql<PayloadRow>`
-          SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
+        // Compared in SQLite so each streamed delta does not copy the stored payload into JS.
+        const rows = yield* sql<{ readonly stored: number }>`
+          SELECT 1 AS stored
+          FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
+            AND payload_json = ${payloadJson}
         `;
-        return rows[0]?.payload_json === payloadJson;
+        return rows.length > 0;
       },
       (effect, node) => effect.pipe(Effect.mapError(controlReadError(node.threadId))),
     );

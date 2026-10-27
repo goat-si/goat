@@ -2427,8 +2427,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             return emitGoalUpdate(nativeThreadId);
           });
 
-        // Only new model output proves recovery; local item/completed can arrive during upstream retries.
-        const completeProviderRetry = Effect.fn("CodexAdapterV2.completeProviderRetry")(function* (
+        // Only model output proves recovery (item/completed arrives mid-retry). Untraced: per delta.
+        const completeProviderRetry = Effect.fnUntraced(function* (
           context: ActiveCodexTurnContext,
           updatedAt: DateTime.Utc,
           recordOutput = true,
