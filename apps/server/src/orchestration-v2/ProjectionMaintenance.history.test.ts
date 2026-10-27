@@ -1,7 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
@@ -25,71 +27,171 @@ const layer = ProjectionMaintenance.layer.pipe(
   Layer.provide(NodeServices.layer),
 );
 
-for (const receiptCount of [200, 800]) {
-  it.effect(
-    `skips modern receipt sweep when no imported legacy receipt is eligible (${receiptCount} receipts)`,
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
-        yield* sql`WITH RECURSIVE n(i) AS (
+it.effect.each([200, 800])(
+  "skips modern receipt sweep when no imported legacy receipt is eligible (%i receipts)",
+  (receiptCount) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      yield* sql`WITH RECURSIVE n(i) AS (
           SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${receiptCount}
         ) INSERT INTO orchestration_command_receipts
           (command_id, aggregate_kind, aggregate_id, accepted_at,
            result_sequence, status, command_type)
           SELECT 'modern-' || i, 'thread', 'thread-' || i,
             '2026-10-01', i, 'accepted', 'thread.settle' FROM n`;
-        const queries: string[] = [];
-        const record: Statement.Transformer = (statement) => {
-          queries.push(statement.compile()[0]);
-          return Effect.succeed(statement);
-        };
-        const compact = maintenance
-          .compactEventStore()
-          .pipe(Effect.provideService(Statement.CurrentTransformer, record));
-        const retained = yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
+      const queries: string[] = [];
+      const record: Statement.Transformer = (statement) => {
+        queries.push(statement.compile()[0]);
+        return Effect.succeed(statement);
+      };
+      const compact = maintenance
+        .compactEventStore()
+        .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+      const retained =
+        yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
 
-        assert.equal((yield* compact).deletedReceiptCount, 0);
-        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
-        assert.deepEqual(
-          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
-          retained,
-        );
+      assert.equal((yield* compact).deletedReceiptCount, 0);
+      assert.deepEqual(
+        queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)),
+        [],
+      );
+      assert.deepEqual(
+        yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+        retained,
+      );
+      const boundsQuery = queries.find((query) => query.includes("AS receipt_row_id"));
+      assert.isDefined(boundsQuery);
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${boundsQuery}`,
+      );
+      assert.isTrue(
+        plan.some((row) =>
+          /SEARCH receipt USING INDEX idx_orch_command_receipts_aggregate/u.test(row.detail),
+        ),
+      );
 
-        yield* sql`INSERT INTO orchestration_v2_legacy_imports
+      yield* sql`INSERT INTO orchestration_v2_legacy_imports
           (thread_id, source_updated_at, shell_imported_at, transcript_imported_at)
           VALUES ('thread-1', '2026-01-01', '2026-01-01', '2026-01-01'),
             ('pending', '2026-01-01', '2026-01-01', NULL)`;
-        yield* sql`INSERT INTO orchestration_command_receipts
+      yield* sql`INSERT INTO orchestration_command_receipts
           (command_id, aggregate_kind, aggregate_id, accepted_at,
            result_sequence, status, command_type)
           VALUES ('pending-command', 'thread', 'pending', '2026-01-01', 0, 'accepted', 'legacy'),
             ('project-command', 'project', 'thread-1', '2026-01-01', 0, 'accepted', 'legacy')`;
-        const ineligible = yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
-        queries.length = 0;
-        assert.equal((yield* compact).deletedReceiptCount, 0);
-        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
-        assert.deepEqual(
-          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
-          ineligible,
-        );
+      const ineligible =
+        yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
+      queries.length = 0;
+      assert.equal((yield* compact).deletedReceiptCount, 0);
+      assert.deepEqual(
+        queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)),
+        [],
+      );
+      assert.deepEqual(
+        yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+        ineligible,
+      );
 
-        yield* sql`UPDATE orchestration_v2_legacy_imports
+      yield* sql`UPDATE orchestration_v2_legacy_imports
           SET transcript_imported_at = '2026-01-01' WHERE thread_id = 'pending'`;
-        queries.length = 0;
-        assert.equal((yield* compact).deletedReceiptCount, 1);
-        assert.isAbove(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)).length, 0);
-        assert.deepEqual(
-          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
-          ineligible.filter((row) => row.command_id !== 'pending-command'),
-        );
+      queries.length = 0;
+      assert.equal((yield* compact).deletedReceiptCount, 1);
+      assert.isAbove(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)).length, 0);
+      assert.deepEqual(
+        yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+        ineligible.filter((row) => row.command_id !== "pending-command"),
+      );
 
-        queries.length = 0;
-        assert.equal((yield* compact).deletedReceiptCount, 0);
-        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
-      }).pipe(Effect.provide(layer)),
-  );
-}
+      queries.length = 0;
+      assert.equal((yield* compact).deletedReceiptCount, 0);
+      assert.deepEqual(
+        queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)),
+        [],
+      );
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("reports compaction pages and closes observation on interruption", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    yield* sql`WITH RECURSIVE n(i) AS (
+      SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 120
+    ) INSERT INTO orchestration_command_receipts
+      (command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type)
+      SELECT 'modern-' || i, 'thread', 'thread-' || i, '2026-10-01', i, 'accepted', 'thread.settle' FROM n`;
+    yield* sql`WITH RECURSIVE n(i) AS (
+      SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 70
+    ) INSERT INTO orchestration_events
+      (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+       actor_kind, payload_json, metadata_json, application_event_version)
+      SELECT 'event-' || i, 'thread', 'thread-' || i, 1, 'thread.created', '2026-10-01',
+        'user', '{}', '{}', 2 FROM n`;
+    yield* sql`INSERT INTO orchestration_v2_legacy_imports
+      (thread_id, source_updated_at, shell_imported_at, transcript_imported_at)
+      VALUES ('old', '2026-01-01', '2026-01-01', '2026-01-01')`;
+    yield* sql`INSERT INTO orchestration_command_receipts
+      (command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type)
+      VALUES ('old-command', 'thread', 'old', '2026-01-01', 0, 'accepted', 'legacy')`;
+
+    let active = 0;
+    const pages: Array<readonly [string, number]> = [];
+    const ended: boolean[] = [];
+    const observed = maintenance.compactEventStore().pipe(
+      Effect.provideService(ProjectionMaintenance.ProjectionMaintenanceObserver, {
+        onStart: () => {
+          active++;
+          return {
+            onPage: (kind, processedRows) => pages.push([kind, processedRows]),
+            onEnd: (succeeded) => {
+              active--;
+              ended.push(succeeded);
+            },
+          };
+        },
+      }),
+    );
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const hold: Statement.Transformer = (statement) =>
+      /receipt\.rowid AS row_id/u.test(statement.compile()[0])
+        ? Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(statement),
+          )
+        : Effect.succeed(statement);
+    const fiber = yield* observed.pipe(
+      Effect.provideService(Statement.CurrentTransformer, hold),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(entered);
+    assert.equal(active, 1);
+    assert.deepEqual(pages, [
+      ["events", 50],
+      ["events", 20],
+    ]);
+    yield* Fiber.interrupt(fiber);
+    assert.equal(active, 0);
+    assert.deepEqual(ended, [false]);
+
+    pages.length = 0;
+    assert.equal((yield* observed).deletedReceiptCount, 1);
+    assert.equal(active, 0);
+    assert.deepEqual(ended, [false, true]);
+    assert.deepEqual(pages, [
+      ["events", 50],
+      ["events", 20],
+      ["receipts", 50],
+      ["receipts", 50],
+      ["receipts", 21],
+    ]);
+    const captured = pages.slice();
+    assert.equal((yield* maintenance.compactEventStore()).deletedReceiptCount, 0);
+    assert.deepEqual(pages, captured);
+    assert.deepEqual(ended, [false, true]);
+  }).pipe(Effect.provide(layer)),
+);
 
 // Every command item has a full projection row, an in-progress event and a final event, each
 // with output well above the trim size, plus one long assistant message that must survive.
