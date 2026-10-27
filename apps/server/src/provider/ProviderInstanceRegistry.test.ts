@@ -89,6 +89,7 @@ const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPol
 const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   modelRoute: "default",
   opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+  opencodexAuth: "openai",
   enabled: false,
   binaryPath: "codex",
   homePath: "",

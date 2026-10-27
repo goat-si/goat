@@ -6,8 +6,134 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
+import { parse } from "smol-toml";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import { fixture } from "./OpenCodexRoute.testkit.ts";
+// Recorded from the pinned Codex 0.156.1 config/read; Codex reports unset provider keys as null.
+import nativeConfigRead from "./testFixtures/codexHomeConfigRead.0.156.1.json" with { type: "json" };
+
+const recordedTables = Object.entries(nativeConfigRead.captures).map(([name, capture]) => ({
+  name,
+  capture: { model_provider: capture.model_provider, opencodex: capture.opencodex } as {
+    readonly model_provider: string;
+    readonly opencodex: Readonly<Record<string, unknown>>;
+  },
+  accepted: name === "clean" || name === "missing_requires_openai_auth",
+}));
+it.effect.each([
+  { setupMode: "existing" as const, opencodexAuth: "openai" as const },
+  { setupMode: "existing" as const, opencodexAuth: "none" as const },
+  { setupMode: "managed" as const, opencodexAuth: "none" as const },
+])(
+  "launches $setupMode Codex with the $opencodexAuth Home provider and verifies only that provider",
+  ({ setupMode, opencodexAuth }) =>
+    Effect.gen(function* () {
+      const { service, input, catalog } = yield* fixture();
+      const selected = { ...input, settings: { ...input.settings, setupMode, opencodexAuth } };
+      const args = yield* service.launchArgs(selected);
+      const config = Object.assign(
+        {},
+        ...args.filter((_, index) => args[index - 1] === "-c").map((value) => parse(value)),
+      );
+      const clean = nativeConfigRead.captures.clean;
+      const authless = {
+        model_provider: clean.model_provider,
+        model_catalog_json: catalog,
+        model_providers: { opencodex: clean.opencodex },
+      };
+      const openai = {
+        model_provider: "openai",
+        openai_base_url: input.settings.opencodexBaseUrl,
+        model_catalog_json: catalog,
+      };
+      if (opencodexAuth === "none")
+        assert.deepStrictEqual(config, {
+          model_provider: "opencodex",
+          model_providers: {
+            opencodex: {
+              name: "OpenCodex",
+              base_url: input.settings.opencodexBaseUrl,
+              wire_api: "responses",
+              requires_openai_auth: false,
+            },
+          },
+          model_catalog_json: catalog,
+        });
+      else assert.deepStrictEqual(config, openai);
+      const [expected, other] = opencodexAuth === "none" ? [authless, openai] : [openai, authless];
+      yield* HomeRoute.verifyEffectiveCodexRoute(selected, expected, catalog);
+      for (const mismatch of [other, { ...expected, model_provider: "hostile" }])
+        assert.equal(
+          (yield* HomeRoute.verifyEffectiveCodexRoute(selected, mismatch, catalog).pipe(
+            Effect.result,
+          ))._tag,
+          "Failure",
+        );
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+it.effect.each([
+  ...recordedTables,
+  {
+    name: "aws (Codex refuses it for this provider itself)",
+    capture: {
+      model_provider: "opencodex",
+      opencodex: { ...nativeConfigRead.captures.clean.opencodex, aws: {} },
+    },
+    accepted: false,
+  },
+])("accepts None only for an authless recorded provider table: $name", ({ capture, accepted }) =>
+  Effect.gen(function* () {
+    const { input, catalog } = yield* fixture();
+    const selected = { ...input, settings: { ...input.settings, opencodexAuth: "none" as const } };
+    const result = yield* HomeRoute.verifyEffectiveCodexRoute(
+      selected,
+      {
+        model_provider: capture.model_provider,
+        model_catalog_json: catalog,
+        model_providers: { opencodex: capture.opencodex },
+      },
+      catalog,
+    ).pipe(Effect.result);
+    assert.equal(result._tag, accepted ? "Success" : "Failure");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+it.effect("does not reuse another authentication mode's positive route observation", () =>
+  Effect.gen(function* () {
+    const { service, input, calls } = yield* fixture();
+    yield* service.requireAvailable(input);
+    yield* service.requireAvailable({
+      ...input,
+      settings: { ...input.settings, opencodexAuth: "none" },
+    });
+    assert.equal(calls.filter((call) => call.endsWith("/models")).length, 2);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+it.effect("does not coalesce concurrent Home route inspections across authentication modes", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const bothEntered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let requests = 0;
+    const { service, input } = yield* fixture({
+      onModelsRequest: Effect.gen(function* () {
+        requests++;
+        yield* Deferred.succeed(entered, undefined);
+        if (requests === 2) yield* Deferred.succeed(bothEntered, undefined);
+        yield* Deferred.await(release);
+      }),
+    });
+    const first = yield* service.requireAvailable(input).pipe(Effect.forkScoped);
+    yield* Deferred.await(entered);
+    const second = yield* service
+      .requireAvailable({ ...input, settings: { ...input.settings, opencodexAuth: "none" } })
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(bothEntered);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    assert.equal(requests, 2);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 const isRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 it.effect.each(["missing", "changed"])(
   "accepts a source-derived disconnected Home with %s client credentials through actual route verification",

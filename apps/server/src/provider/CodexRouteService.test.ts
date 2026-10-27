@@ -45,54 +45,72 @@ const seed = Effect.gen(function* () {
   );
   return routes;
 });
-it.effect("rejects route changes with provider_instance_busy while a Codex session is active", () =>
-  Effect.gen(function* () {
-    const routes = yield* seed;
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* Config.ServerConfig;
-    const before = yield* fs.readFileString(config.settingsPath);
-    const scope = yield* Scope.make();
-    yield* routes.reserveUse(instanceId).pipe(Effect.provideService(Scope.Scope, scope));
-    const result = yield* routes
-      .mutateProviderInstance(
-        {
-          mutation: {
-            operation: "upsert",
-            instanceId,
-            instance: { ...base, config: { ...base.config, modelRoute: "opencodex" } },
-          },
-        },
-        caller,
-      )
-      .pipe(Effect.result);
-    assert.equal(result._tag, "Failure");
-    if (result._tag === "Failure") {
-      assert.equal(result.failure.code, "provider_instance_busy");
-      assert.equal(
-        result.failure.message,
-        "Wait for this instance's active turns to finish before changing its model route.",
-      );
-    }
-    assert.equal(yield* fs.readFileString(config.settingsPath), before);
-    yield* Scope.close(scope, Exit.void);
-    const saved = yield* commitAndApply(
-      routes.mutateProviderInstance(
-        {
-          mutation: {
-            operation: "upsert",
-            instanceId,
-            instance: {
-              ...base,
-              displayName: "Home with the same home",
-              config: { ...base.config, modelRoute: "opencodex" },
+it.effect.each([
+  { change: "model route", from: {}, to: { modelRoute: "opencodex" as const } },
+  {
+    change: "Home authentication",
+    from: { modelRoute: "opencodex" as const, opencodexAuth: "openai" as const },
+    to: { modelRoute: "opencodex" as const, opencodexAuth: "none" as const },
+  },
+])(
+  "rejects $change changes with provider_instance_busy while a Codex session is active",
+  ({ from, to }) =>
+    Effect.gen(function* () {
+      const routes = yield* seed;
+      const current = { ...base, config: { ...base.config, ...from } };
+      if (Object.keys(from).length > 0)
+        yield* commitAndApply(
+          routes.mutateProviderInstance(
+            { mutation: { operation: "upsert", instanceId, instance: current } },
+            caller,
+          ),
+        );
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* Config.ServerConfig;
+      const before = yield* fs.readFileString(config.settingsPath);
+      const scope = yield* Scope.make();
+      yield* routes.reserveUse(instanceId).pipe(Effect.provideService(Scope.Scope, scope));
+      const result = yield* routes
+        .mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: { ...current, config: { ...current.config, ...to } },
             },
           },
-        },
-        caller,
-      ),
-    );
-    assert.equal(saved.providerInstances[instanceId]?.displayName, "Home with the same home");
-  }).pipe(Effect.provide(layer)),
+          caller,
+        )
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "provider_instance_busy");
+        assert.equal(
+          result.failure.message,
+          "Wait for this instance's active turns to finish before changing its model route.",
+        );
+      }
+      assert.equal(yield* fs.readFileString(config.settingsPath), before);
+      yield* Scope.close(scope, Exit.void);
+      const saved = yield* commitAndApply(
+        routes.mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: {
+                ...current,
+                displayName: "Home with the same home",
+                config: { ...current.config, ...to },
+              },
+            },
+          },
+          caller,
+        ),
+      );
+      assert.equal(saved.providerInstances[instanceId]?.displayName, "Home with the same home");
+      assert.deepInclude(decode(saved.providerInstances[instanceId]?.config ?? {}), to);
+    }).pipe(Effect.provide(layer)),
 );
 it.effect(
   "checks the private approval precondition under the settings lock before no-op and secret writes",

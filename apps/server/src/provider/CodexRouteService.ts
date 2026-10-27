@@ -68,10 +68,11 @@ const routeKey = (instance: ProviderInstanceConfig | undefined) => {
   const config = decodeCodex(instance.config ?? {});
   if (Option.isNone(config)) return "invalid";
   const base = config.value.opencodexBaseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL;
+  const route = `${config.value.modelRoute}:${config.value.opencodexAuth}`;
   try {
-    return `${config.value.modelRoute}:${new URL(base).toString().replace(/\/+$/, "")}`;
+    return `${route}:${new URL(base).toString().replace(/\/+$/, "")}`;
   } catch {
-    return `${config.value.modelRoute}:invalid:${base}`;
+    return `${route}:invalid:${base}`;
   }
 };
 /** Internal coordination port. Settings owns persistence; the facade owns authorization.

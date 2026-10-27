@@ -1,5 +1,6 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as HomeRoute from "./OpenCodexRoute.ts";
+import { decodeCodexHomeCatalogArg as decodeCatalogArg } from "./CodexHomeRouteConfig.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -57,7 +58,6 @@ import {
 } from "./codexUsageLimits.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
-const decodeCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const isHomeRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
