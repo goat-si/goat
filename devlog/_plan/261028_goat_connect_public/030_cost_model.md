@@ -26,7 +26,7 @@
 - 사용자 1명 = GOAT 머신 1.5대(현 설계는 머신마다 터널 1개).
 - relay HTTP 호출 100회/사용자/일, 푸시 20건/사용자/일, 보관 웹훅 1건/사용자/일(Cloudflare 레인 가정과 같음).
 - DO relay 시나리오: 사용자당 DO 1개, 호스트와 클라이언트가 모두 DO로 들어오는 연결(accepted socket)로 붙고 hibernation API를 씁니다. DO가 깨어 있는(non-hibernating) 시간을 하루 합계 7,200초로 둡니다(128MB × 초 단위 과금). 과금 기준은 앱을 연 시간이 아니라 DO가 메시지 처리·타이머·미완료 I/O로 깨어 있는 시간입니다. 연결을 유지한 채 잠들 수 있고, 프로토콜 ping과 auto-response는 깨우지 않을 수 있습니다. 반대로 바깥으로 나가는 소켓은 잠들지 못합니다. 들어오는 WebSocket 메시지(양방향 합계)는 20개당 요청 1회, 월 10만 개/사용자로 둡니다.
-- Cloudflare의 Workers·Queues·DO 기본 사용량은 Cloudflare 레인 계산을 그대로 씁니다(10/100명 $5, 1,000명 약 $6, 1만 명 약 $32).
+- Cloudflare 기본 사용량(Workers·Queues·웹훅 DO)은 Cloudflare 레인 계산을 그대로 씁니다(10/100명 $5, 1,000명 약 $6, 1만 명 약 $32). 이 값에는 Workers 기본료 $5가 이미 들어 있습니다.
 
 ### 결과
 
@@ -37,7 +37,7 @@
 | 1,000  | 1,500개 → **$2,250** + Pro 존 $25            | 1,000개 → $0(여유 0) + Pro 존 $25                | 2,765만 GB-s → **$350** + 요청 $0.60          |
 | 10,000 | 15,000개 → **$63,000** + Enterprise DNS 견적 | 10,000개 → **$40,500** + 다중 존 또는 Enterprise | 2억 7,648만 GB-s → **$3,462.50** + 요청 $7.35 |
 
-여기에 각 열 공통으로 Workers 기본 사용량과 위 고정비가 더해집니다.
+월 총액 = Cloudflare 외 고정비(DB, Clerk 등) + Cloudflare 기본 사용량(Workers 기본료 $5 한 번 포함) + 터널·DNS 비용 + 아래 C의 relay DO 증분. Workers $5를 고정비 표와 기본 사용량에 두 번 더하지 않습니다.
 
 계산식:
 
@@ -47,7 +47,8 @@ B 터널 = 4.50 × max(0, U − 1,000)
 C DO 시간(GB-s) = U × 7,200초 × 30일 × 0.128GB
 C 시간 요금 = 12.50 × ceil(max(0, GB-s − 400,000) / 1,000,000)
 C 요청 요금 = 0.15 × ceil(max(0, U × 100,000 / 20 + 연결 생성 횟수 + 기타 DO 요청 − 남은 무료량) / 1,000,000)
-   (표는 연결 생성과 웹훅 DO 요청을 뺀 값. 사용자당 하루 2회 연결을 더하면 1,000명 $0.75, 1만 명 $7.50)
+   (표는 relay 메시지만 따로 계산한 예시. 정확한 합계는 웹훅 DO 요청과 relay 요청을 먼저 더한 뒤 계정 무료량 100만 회를 한 번만 빼고 올림합니다.
+    예: 1만 명에서 메시지 환산 5,000만 + 연결 60만 + 웹훅 90만 → $7.65. 연결만 더한 단독 예시는 1,000명 $0.75, 1만 명 $7.50)
 ```
 
 단가 출처: [Tunnels for Platforms](https://developers.cloudflare.com/tunnel/features/tunnels-for-platforms/), [Durable Objects 가격](https://developers.cloudflare.com/durable-objects/platform/pricing/), 모두 2026-10-28 확인.
