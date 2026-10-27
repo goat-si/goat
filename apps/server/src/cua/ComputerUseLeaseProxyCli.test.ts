@@ -27,9 +27,15 @@ const runDriverFixture = Effect.fn("ComputerUseLeaseProxyCli.testDriver")(functi
   readonly lines: ReadonlyArray<string>;
   readonly ready: boolean;
   readonly writable?: false;
+  /** Holds the first report's response until the driver has exited. */
+  readonly holdFirstReport?: true;
 }) {
   const reports = yield* Queue.unbounded<DriverWatchReport>();
   const collected: Array<DriverWatchReport> = [];
+  let releaseFirst = () => {};
+  const firstHeld = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
   const stdin = new NodeStream.PassThrough();
   const stdout = new NodeStream.PassThrough();
   const providerInput = new NodeStream.PassThrough();
@@ -52,6 +58,7 @@ const runDriverFixture = Effect.fn("ComputerUseLeaseProxyCli.testDriver")(functi
     const body = JSON.parse(String(init.body)) as DriverWatchReport;
     collected.push(body);
     Queue.offerUnsafe(reports, body);
+    if (input.holdFirstReport && collected.length === 1) await firstHeld;
     return new Response(null, { status: 204 });
   });
   using _proxy = vi
@@ -85,6 +92,11 @@ const runDriverFixture = Effect.fn("ComputerUseLeaseProxyCli.testDriver")(functi
         stdout.end();
         yield* Fiber.join(reader);
         child.emit("exit", 77, null);
+        if (input.holdFirstReport) {
+          // The crash waits behind the working report still in flight, so it cannot be cleared.
+          assert.equal(collected.length, 1);
+          releaseFirst();
+        }
         yield* Queue.take(reports);
         const ending = { driverEnded: { reason: "helper_refused", exitCode: 77 } };
         assert.deepEqual(collected, input.ready ? [{ driverEnded: false }, ending] : [ending]);
@@ -171,6 +183,16 @@ describe("driver readiness (#1699)", () => {
       chunks: [reply + "\n"],
       lines: [reply],
       ready: false,
+    });
+  });
+  it.effect("a crash right after a working report is posted after it, never before", () => {
+    const reply = initializeReply("ordered");
+    return runDriverFixture({
+      request: initializeRequest("ordered"),
+      chunks: [reply + "\n"],
+      lines: [reply],
+      ready: true,
+      holdFirstReport: true,
     });
   });
   it.effect("a borrowed handshake driver reports ready using its rewritten initialize ID", () => {

@@ -337,8 +337,17 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         drivers.add(child);
         const watch = makeDriverWatch();
         // Fire and forget: a lost report only delays the host's record, never this connection.
-        const send = (body: DriverWatchReport | undefined) =>
-          body === undefined ? undefined : void report(url, authorization, body);
+        // One at a time, so a working report still in flight cannot clear the crash after it.
+        let reported = Promise.resolve();
+        const send = (body: DriverWatchReport | undefined) => {
+          if (body === undefined) return;
+          reported = reported
+            .then(() => report(url, authorization, body))
+            .then(
+              () => undefined,
+              () => undefined,
+            );
+        };
         child.once("exit", (code) => {
           drivers.delete(child);
           send(watch.exited(code ?? undefined));

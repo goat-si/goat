@@ -50,7 +50,9 @@ export const makeDriverWatch = () => {
       )
         return;
       if (message.method === "tools/call") {
-        if (initialized && calls.size < MAX_TRACKED_CALLS) calls.add(JSON.stringify(message.id));
+        // A resumed child replays its handshake without waiting for it, so calls follow at once.
+        if ((initialized || pending.size > 0) && calls.size < MAX_TRACKED_CALLS)
+          calls.add(JSON.stringify(message.id));
         return;
       }
       if (
@@ -69,7 +71,8 @@ export const makeDriverWatch = () => {
       if (!requestId(message.id) || Object.hasOwn(message, "method")) return undefined;
       const key = JSON.stringify(message.id);
       if (calls.delete(key)) {
-        if (message.jsonrpc !== "2.0" || !Object.hasOwn(message, "result")) return undefined;
+        if (!initialized || message.jsonrpc !== "2.0" || !Object.hasOwn(message, "result"))
+          return undefined;
         working = true;
         calls.clear();
         return { driverEnded: false };

@@ -72,6 +72,14 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     assert.isUndefined(watch.exited(134));
   });
 
+  it("a call sent while a replayed handshake is pending counts once that handshake succeeds", () => {
+    const watch = makeDriverWatch();
+    watch.sent(initialize("goat-proxy:resume:1"));
+    watch.sent(toolCall(3));
+    assert.isUndefined(watch.received(success("goat-proxy:resume:1")));
+    assert.deepEqual(watch.received(toolReply(3)), { driverEnded: false });
+  });
+
   it("a tool call answered before the child's own handshake proves nothing", () => {
     const watch = makeDriverWatch();
     assert.isUndefined(answersCall(watch));
