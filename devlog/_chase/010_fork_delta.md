@@ -191,6 +191,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
 
+### `settings-page` 설정은 모달이 아니라 전체 페이지
+
+- 경로: `apps/web/src/routes/_chat.settings.tsx`, `apps/web/src/routes/_chat.tsx`, `apps/web/src/components/settings/{SettingsPageShell,SettingsSidebarNav}.tsx`, `apps/web/src/components/AppSidebarLayout.tsx`, `apps/web/src/components/sidebar/{mainAppLocation.ts,SidebarChrome.tsx}`
+- 정책: upstream은 사이클 261026(#1767)에서 설정을 채팅 위에 뜨는 `AppRouteModal`로 바꿨다. GOAT는 받지 않는다. `/settings/*`는 메인 화면을 바꾸는 전체 페이지이고, 섹션 목록(`SettingsSidebarNav placement="app-sidebar"`)은 앱 사이드바 자리에 들어가며, 닫기·Escape·사이드바 Back은 설정을 연 페이지로 돌아간다. 페이지 틀은 GOAT 모듈 `SettingsPageShell`에 있고 `_chat.settings.tsx`에는 그 호출만 둔다. upstream이 설정 라우트, scope 처리, 새 설정 페이지를 바꾸면 받고 모달 대신 이 틀을 다시 얹는다. `isAppModalPage`는 Usage만, `isSettingsPage`가 설정을 가리킨다. Usage는 upstream 모달 그대로다. 설정 위에서 연 Usage를 닫으면 설정 이전 페이지로 간다(복귀 위치는 설정을 기록하지 않는다). 모바일은 #1767에서 시트가 아니라 페이지로 옮겨졌으므로 해당 없다.
+
 ### `ssh-runtime` SSH 런타임 공급과 원격 디스패치
 
 - 커밋: `aa2eaf2ff` `480ed90da` `b32fe81d1` `b6a829960` `716f27dac`

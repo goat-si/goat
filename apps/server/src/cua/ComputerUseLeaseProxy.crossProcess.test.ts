@@ -195,13 +195,13 @@ describe("lease proxy cross-process primitive gate", () => {
           process.execPath,
           [
             "--experimental-strip-types",
-            NodePath.resolve("apps/server/src/bin.ts"),
+            NodePath.join(import.meta.dirname, "..", "bin.ts"),
             "cua-lease-proxy",
             "--thread",
             threadId,
           ],
           {
-            cwd: NodePath.resolve("apps/server"),
+            cwd: NodePath.join(import.meta.dirname, "..", ".."),
             env: {
               ...process.env,
               GOAT_CUA_LEASE_URL: url,

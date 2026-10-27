@@ -22,6 +22,7 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { nextPointerSequence } from "./ServerBrowserScreen.ts";
@@ -157,6 +158,7 @@ const layer = ServerBrowser.layer.pipe(
         pointer: () => Effect.void,
       }),
       PreviewAgentActivity.layer,
+      Layer.mock(SecretRequests.SecretRequests)({}),
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-screen-" })),
       Layer.provideMerge(NodeServices.layer),

@@ -16,6 +16,7 @@ import {
   type PreviewAutomationSelectResult,
   type PreviewAutomationSetColorSchemeResult,
   type PreviewAutomationFetchResult,
+  type PreviewAutomationFillSecretResult,
   type PreviewAutomationScrollCollectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
@@ -84,6 +85,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "snapshot",
       "logs",
       "fetch",
+      "fillSecret",
     ].includes(operation)
   )
     return { result };
@@ -260,6 +262,11 @@ const handlers = {
   ),
   preview_type: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) => invokeTargeted<object>("type", input, input.timeoutMs)),
+  ),
+  goat_preview_fill_secret: McpToolAccess.destructive(
+    McpToolAccess.actsAsCaller((input) =>
+      invokeTargeted<PreviewAutomationFillSecretResult>("fillSecret", input, input.timeoutMs),
+    ),
   ),
   preview_hover: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<object>("hover", input, input.timeoutMs),

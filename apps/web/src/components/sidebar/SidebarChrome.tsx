@@ -22,7 +22,12 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
+import {
+  isSettingsPage,
+  isSidebarUtilityPage,
+  useCloseAppModal,
+  useNavigateToMainApp,
+} from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -252,10 +257,17 @@ function SidebarUtilityItem({
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
+  const closeSettings = useCloseAppModal();
   const { isMobile, setOpenMobile } = useSidebar();
-  const isOnUtilityPage = useLocation({
-    select: (location) => isSidebarUtilityPage(location.pathname),
+  const utilityPage = useLocation({
+    select: (location) =>
+      isSettingsPage(location.pathname)
+        ? "settings"
+        : isSidebarUtilityPage(location.pathname)
+          ? "other"
+          : null,
   });
+  const isOnUtilityPage = utilityPage !== null;
   const pullRequestsSupported = usePullRequestsSupported();
   // The destination rail carries Home, Settings, Pull requests, Usage and the update button.
   const railVisible = useDestinationRailVisible();
@@ -285,7 +297,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   const handleBackClick = () => {
     closeMobileSidebar();
-    void navigateToMainApp();
+    // Settings goes back where it was opened, as its close button and Escape do.
+    void (utilityPage === "settings" ? closeSettings() : navigateToMainApp());
   };
 
   if (railVisible) return null;

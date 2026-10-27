@@ -41,8 +41,13 @@ import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSearchShortcut } from "./settings/SettingsSearchShortcut";
-import { SidebarBrandWidthProbe, SidebarCollapsedBrand } from "./sidebar/SidebarChrome";
-import { isAppModalPage } from "./sidebar/mainAppLocation";
+import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import {
+  SidebarBrandWidthProbe,
+  SidebarChromeHeader,
+  SidebarCollapsedBrand,
+} from "./sidebar/SidebarChrome";
+import { isAppModalPage, isSettingsPage } from "./sidebar/mainAppLocation";
 import { DestinationRail, DestinationRailVisibleContext } from "./sidebar/DestinationRail";
 import { DESTINATION_RAIL_WIDTH_PX } from "./sidebar/destinationRail.logic";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
@@ -210,7 +215,10 @@ function registerThreadUndoCommands(
   router: AnyRouter,
   readSidebarVisible: () => boolean,
 ): () => void {
-  const threadSidebarShown = () => !isAppModalPage(router.state.location.pathname);
+  const threadSidebarShown = () => {
+    const { pathname } = router.state.location;
+    return !isAppModalPage(pathname) && !isSettingsPage(pathname);
+  };
   const unregister = registerCommands(
     {},
     {
@@ -464,7 +472,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             collapsible="offcanvas"
             data-app-sidebar=""
             role="navigation"
-            aria-label="Threads"
+            aria-label={isOnSettings ? "Settings" : "Threads"}
             resizable={{
               maxWidth: sidebarMaximumWidth,
               minWidth: sidebarMinimumWidth,
@@ -477,7 +485,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             // The narrow-window sidebar is a sheet, portaled outside the provider's styles.
             style={windowControlsInsetStyle}
           >
-            {legacySidebarEnabled === null ? null : legacySidebarEnabled ? (
+            {isOnSettings ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} />
+                <SettingsSidebarNav pathname={pathname} placement="app-sidebar" />
+              </>
+            ) : legacySidebarEnabled === null ? null : legacySidebarEnabled ? (
               <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
             ) : (
               <ThreadSidebar routeReveal={sidebarRouteReveal} />

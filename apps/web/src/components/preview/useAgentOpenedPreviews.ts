@@ -1,41 +1,24 @@
 import type { DeviceServiceState, ScopedThreadRef } from "@goat/contracts";
-import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { useEffect, useRef } from "react";
-import { useClientSettings } from "../../hooks/useSettings";
 import {
-  browserMiniPlayerSource,
   usePreviewMiniPlayerStore,
   type PreviewMiniPlayerState,
 } from "../../previewMiniPlayerStore";
-import type { ThreadPreviewState } from "../../previewStateStore";
-import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
-import { openPreviewSessionStack } from "./sessions/previewSessionStackStore";
+import { floatPreview } from "./floatPreview";
 
-const selectAutoShowFloatingPreview = (settings: { browserAutoShowFloatingPreview: boolean }) =>
-  settings.browserAutoShowFloatingPreview;
-
+/**
+ * Shows the devices an agent starts for the open thread. Browser tabs an agent opens are shown for
+ * every thread by startAgentOpenedPreviews, so this hook leaves them alone.
+ */
 export function useAgentOpenedPreviews(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly deviceState: DeviceServiceState;
   readonly deviceStateLoaded: boolean;
-  readonly previewState: ThreadPreviewState;
-  readonly serverBrowserAvailable: boolean;
-  readonly panelSurfaces: ReadonlyArray<RightPanelSurface>;
   readonly miniPlayerSource: PreviewMiniPlayerState["source"] | null;
   // Sheet layouts show neither floating previews nor auto-opened device tabs.
   readonly sheetLayout: boolean;
 }) {
-  const {
-    threadRef,
-    deviceState,
-    deviceStateLoaded,
-    previewState,
-    serverBrowserAvailable,
-    panelSurfaces,
-    miniPlayerSource,
-    sheetLayout,
-  } = input;
-  const autoShowFloatingPreview = useClientSettings(selectAutoShowFloatingPreview);
+  const { threadRef, deviceState, deviceStateLoaded, miniPlayerSource, sheetLayout } = input;
   // Baseline sessions to preserve dismissals on reload; missing device summaries must remain eligible to open
   // later.
   const previousDeviceSessions = useRef(new Map<string, Set<string>>());
@@ -60,84 +43,20 @@ export function useAgentOpenedPreviews(input: {
       if (previous.has(key(session))) continue;
       const device = deviceFor(session);
       if (!device) continue;
-      const target = {
-        hostId: session.hostId,
-        deviceId: session.deviceId,
-        platform: device.platform,
-        name: device.name,
-      };
-      if (autoShowFloatingPreview) {
-        usePreviewMiniPlayerStore.getState().open(threadRef, { kind: "device", ...target });
-        continue;
-      }
-      const existing = useRightPanelStore
-        .getState()
-        .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.some(
-          (surface) =>
-            surface.kind === "device" &&
-            surface.target?.hostId === session.hostId &&
-            surface.target.deviceId === session.deviceId,
-        );
-      if (existing) continue;
-      useRightPanelStore.getState().openDevice(threadRef, target, true);
-    }
-  }, [
-    threadRef,
-    autoShowFloatingPreview,
-    deviceStateLoaded,
-    sheetLayout,
-    deviceState.sessions,
-    deviceState.devices,
-  ]);
-  // Baseline loaded tabs so reloads never reopen previews the user dismissed.
-  const previousServerPreviewTabs = useRef(new Map<string, Map<string, string | undefined>>());
-  useEffect(() => {
-    if (!threadRef || !serverBrowserAvailable || !previewState.listLoaded) return;
-    const threadKey = scopedThreadKey(threadRef);
-    const serverSessions = Object.values(previewState.sessions).filter(
-      (session) => session.runtime === "server",
-    );
-    const previous = previousServerPreviewTabs.current.get(threadKey);
-    previousServerPreviewTabs.current.set(
-      threadKey,
-      new Map(serverSessions.map((session) => [session.tabId, session.revealRequest?.id])),
-    );
-    if (!previous) return;
-    for (const session of serverSessions) {
-      const requested = session.revealRequest;
-      const fresh = requested
-        ? previous.get(session.tabId) !== requested.id
-        : !previous.has(session.tabId);
-      if (!fresh || session.reveal !== true) continue;
-      if (!autoShowFloatingPreview && requested?.force !== true) continue;
-      const surface = panelSurfaces.find(
-        (surface) => surface.kind === "preview" && surface.resourceId === session.tabId,
+      floatPreview(
+        threadRef,
+        {
+          kind: "device",
+          hostId: session.hostId,
+          deviceId: session.deviceId,
+          platform: device.platform,
+          name: device.name,
+        },
+        { by: "agent" },
       );
-      if (surface && requested?.force === true) {
-        useRightPanelStore.getState().activateSurface(threadRef, surface.id);
-      } else if (!surface && session.automationOwner !== undefined) {
-        // An agent's tab opens as the large agents-on-screen card, where computer use shows too.
-        // A tab this desktop draws shows its own webview in that card.
-        openPreviewSessionStack({
-          environmentId: threadRef.environmentId,
-          focus: { kind: "browser", threadId: threadRef.threadId, tabId: session.tabId },
-          expand: true,
-          automatic: requested?.force !== true,
-        });
-      } else if (!surface) {
-        usePreviewMiniPlayerStore
-          .getState()
-          .open(threadRef, browserMiniPlayerSource(session.tabId));
-      }
     }
-  }, [
-    serverBrowserAvailable,
-    previewState.listLoaded,
-    previewState.sessions,
-    threadRef,
-    autoShowFloatingPreview,
-    panelSurfaces,
-  ]);
+  }, [threadRef, deviceStateLoaded, sheetLayout, deviceState.sessions, deviceState.devices]);
+
   // A floating device follows its session: once the agent or another client
   // closes the device there is nothing left to stream.
   useEffect(() => {

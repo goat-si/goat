@@ -216,6 +216,30 @@ export const previewEntries = {
       openWorldHint: true,
     },
   }),
+  "preview.fill_secret": entry({
+    resource: "preview",
+    verb: "fill_secret",
+    name: "goat_preview_fill_secret",
+    toolkit: "preview",
+    summary: "Fill a saved password into a sign-in page",
+    description:
+      "Type a password the person saved through request_secret into a password field on the page's origin, without the value reaching you.",
+    guide:
+      "Requires the thread's preview MCP capability and a server browser tab. First call request_secret with origin set to the sign-in page's origin; the card shows that site to the person. Then click the password field (or let the page focus it) and call this tool without a selector, or pass a CSS selector matching exactly one password input. It works while the tab is private because a password field has focus. Only an enabled input of type password in a document whose security origin equals the card's origin is filled; another origin is refused and the ref stays usable there. A person controlling or stopping the tab, an active or starting recording, or Playwright debug logging refuses it. The ref is used once; a refusal after it was used says so. While the filled field still holds the value, goat_preview_evaluate, image snapshots and recordings in that tab are refused; navigate or submit first. Text snapshots stay available. privateMode=true means a secret field still has focus.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason: "Consumes a one-use secretRef; a retry needs a new request_secret answer.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Fill a saved password",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
   "preview.hover": entry({
     resource: "preview",
     verb: "hover",

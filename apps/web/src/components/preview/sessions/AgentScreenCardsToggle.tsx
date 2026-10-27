@@ -8,7 +8,11 @@ import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewSessions";
 
-import { selectAgentCardsShown, usePreviewSessionStack } from "./previewSessionStackStore";
+import {
+  selectAgentCardsShown,
+  stackThreadKey,
+  usePreviewSessionStack,
+} from "./previewSessionStackStore";
 import {
   useAgentScreenSessions,
   useHiddenLiveAgentSessions,
@@ -16,11 +20,9 @@ import {
 } from "./useAgentScreenCards";
 
 /**
- * The thread header's agents-on-screen controls, among its buttons: Aside's list button
- * shows or hides the cards (in a narrow pane it shows them over the thread), and Stop all ends
- * every agent on the screen without opening them. They exist only while there is a card to show.
- * A card the person closed while its agent works counts: showing the cards brings it back.
- * The route names the environment and thread, as it does for the cards themselves.
+ * The header's list button shows or hides this thread's cards, including ones the person closed,
+ * while the thread has any. Stop all is the host's kill switch: it shows in every thread while any
+ * agent on the host can be stopped, even in a thread with no card of its own.
  */
 export function AgentScreenCardsToggle() {
   const threadTarget = useThreadRouteTarget();
@@ -28,12 +30,17 @@ export function AgentScreenCardsToggle() {
   const threadRef = threadTarget?.kind === "server" ? threadTarget.threadRef : null;
   const environmentId = threadRef?.environmentId ?? primaryEnvironmentId;
   const sessions = useAgentScreenSessions(environmentId, threadRef);
-  const closed = useHiddenLiveAgentSessions(environmentId).length;
-  // Stop all reaches every agent on the host, including a tab shown in the mini player instead of a card.
+  const closed = useHiddenLiveAgentSessions(environmentId, threadRef).length;
+  // Stop all reaches every agent on the host: other threads' and a tab shown in the mini player.
   const stoppable = usePreviewSessions(environmentId).some((session) =>
     session.capabilities.controls.includes("stop"),
   );
-  const shown = usePreviewSessionStack(selectAgentCardsShown) && closed === 0;
+  const shown =
+    usePreviewSessionStack(
+      selectAgentCardsShown(
+        threadRef ? stackThreadKey(threadRef.environmentId, threadRef.threadId) : null,
+      ),
+    ) && closed === 0;
   const setShown = usePreviewSessionStack((state) => state.setShown);
   const stopAll = useStopAllAgents(environmentId);
   const canControl = useAtomValue(previewSessionsEnvironment.control.permissionAtom(environmentId));
@@ -65,7 +72,7 @@ export function AgentScreenCardsToggle() {
             <Toggle
               className="shrink-0 [-webkit-app-region:no-drag]"
               pressed={shown}
-              onPressedChange={setShown}
+              onPressedChange={(next) => setShown(next, threadRef)}
               aria-label="Agents on screen"
               variant="ghost"
               size="sm"

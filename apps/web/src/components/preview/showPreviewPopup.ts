@@ -1,8 +1,9 @@
 import type { ScopedThreadRef } from "@goat/contracts";
 
-import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { whenPreviewTabKnown } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
+
+import { floatBrowserTab } from "./floatPreview";
 
 export function showPreviewPopup(
   threadRef: ScopedThreadRef,
@@ -11,7 +12,8 @@ export function showPreviewPopup(
 ): void {
   whenPreviewTabKnown(threadRef, popupTabId, () => {
     if (from === "floating") {
-      usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(popupTabId));
+      // The page opened it, so a popup an agent drives follows its tab into the agent's card.
+      floatBrowserTab(threadRef, popupTabId, { by: "agent" });
     } else {
       useRightPanelStore.getState().openBrowser(threadRef, popupTabId);
     }

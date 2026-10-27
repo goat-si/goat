@@ -28,6 +28,13 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
   consume_failed: "Could not use that secretRef. Try again.",
   not_a_file_request:
     'The user did not save this secret for shell use. Ask again with goat_handoff_create and delivery: "file".',
+  origin_required:
+    "That secretRef was not saved for a sign-in page. Ask again with origin set to the page's origin.",
+  origin_mismatch:
+    "That secretRef is for another site, so nothing was filled. It still works on its own site.",
+  origin_bound:
+    "That secretRef is for a sign-in page. Use it with goat_preview_fill_secret on that site.",
+  too_short_for_sign_in: "A sign-in password needs at least 4 characters.",
 } as const;
 
 export const SecretRequestFailureReason = Schema.Literals(
@@ -36,6 +43,19 @@ export const SecretRequestFailureReason = Schema.Literals(
   >,
 );
 export type SecretRequestFailureReason = typeof SecretRequestFailureReason.Type;
+
+/** The http(s) origin of a URL or origin string, or undefined for anything else. */
+export const normalizeSecretOrigin = (value: string): string | undefined => {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Shorter sign-in values are refused: exact masking of a few characters would hide unrelated text. */
+export const SIGN_IN_SECRET_MIN_LENGTH = 4;
 
 export class SecretRequestError extends Schema.TaggedError<SecretRequestError>()(
   "SecretRequestError",

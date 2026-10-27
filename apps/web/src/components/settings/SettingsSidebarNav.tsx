@@ -33,6 +33,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarInput,
+  useSidebar,
 } from "../ui/sidebar";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
 import { cn } from "../../lib/utils";
@@ -93,8 +94,21 @@ function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
 }
 
-export function SettingsSidebarNav({ pathname }: { pathname: string }) {
+export function SettingsSidebarNav({
+  pathname,
+  placement = "page",
+}: {
+  pathname: string;
+  /** GOAT renders the sections in the app sidebar beside the full Settings page. */
+  placement?: "page" | "app-sidebar";
+}) {
   const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const inAppSidebar = placement === "app-sidebar";
+  // The app sidebar is a sheet on narrow windows; leave it once a section is picked.
+  const closeMobileSheet = () => {
+    if (inAppSidebar && isMobile) setOpenMobile(false);
+  };
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
@@ -114,6 +128,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const results = searchSettings(query, searchableItems);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
+  const compactRail = !inAppSidebar && !compactSearchOpen;
   const maxResultIndex = Math.max(results.length - 1, 0);
   // Persist the clamp so a shrink-then-recover of results keeps the clamped highlight.
   if (activeResultIndex > maxResultIndex) {
@@ -121,6 +136,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   }
 
   const handleSectionClick = (to: SettingsPath) => {
+    closeMobileSheet();
     void navigate({
       to,
       hash: "",
@@ -136,6 +152,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const handleSearchResultClick = (item: SettingsSearchItem) => {
     clearSearch();
     setCompactSearchOpen(false);
+    closeMobileSheet();
     const targetId = item.targetId ?? item.id;
     revealSettingsSearchTarget(targetId);
     if (pathname === item.to && currentHash.replace(/^#/, "") === targetId) {
@@ -179,12 +196,16 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   return (
     <nav
       aria-label="Settings sections"
-      data-glass-pane="rail"
-      className={cn(
-        "flex w-60 shrink-0 flex-col border-e bg-sidebar text-sidebar-foreground max-md:w-14",
-        compactSearchOpen &&
-          "max-md:absolute max-md:inset-y-0 max-md:start-0 max-md:z-10 max-md:w-full",
-      )}
+      data-glass-pane={inAppSidebar ? undefined : "rail"}
+      className={
+        inAppSidebar
+          ? "flex min-h-0 flex-1 flex-col"
+          : cn(
+              "flex w-60 shrink-0 flex-col border-e bg-sidebar text-sidebar-foreground max-md:w-14",
+              compactSearchOpen &&
+                "max-md:absolute max-md:inset-y-0 max-md:start-0 max-md:z-10 max-md:w-full",
+            )
+      }
     >
       <SidebarContent className="overflow-x-hidden">
         <SidebarGroup>
@@ -192,7 +213,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
             <div
               className={cn(
                 "flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                !compactSearchOpen && "max-md:hidden",
+                compactRail && "max-md:hidden",
               )}
             >
               <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />

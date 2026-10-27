@@ -114,8 +114,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
-// A service provided here shadows a test's own mock, so tests that stub the
-// provider registry start from this layer.
+// A service here shadows a test's mock, so registry stubs start from this layer.
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
@@ -235,6 +234,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_permission_profile_get",
     "goat_preview_close",
     "goat_preview_fetch",
+    "goat_preview_fill_secret",
     "goat_preview_list",
     "goat_preview_scroll_collect",
     "goat_project_clone",
@@ -326,7 +326,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(185);
+  expect(names.size).toBe(186);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("t3_thread_start")).toBe(false);
   for (const [tool, questionDelivery] of [

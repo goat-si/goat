@@ -190,7 +190,11 @@ const sendFrame = (event: PreviewSessionFrameEvent | null) =>
     for (const listener of state.frameListeners) listener();
   });
 
-function setup(sessions: ReadonlyArray<PreviewSession>) {
+/** The route shows the first session's thread unless a test names another one. */
+function setup(
+  sessions: ReadonlyArray<PreviewSession>,
+  routeThread: string | null = sessions[0]?.threadId ?? null,
+) {
   state.sessions = sessions;
   state.control.mockReset();
   state.control.mockResolvedValue({ _tag: "Success", value: { applied: true } });
@@ -200,7 +204,7 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
   state.frameRequests = [];
   state.surfaceControl = null;
   state.surfaceCalls = [];
-  state.routeThread = null;
+  state.routeThread = routeThread;
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   window.sessionStorage.removeItem(HIDDEN_KEY);
   usePreviewSessionStack.setState({
@@ -209,7 +213,8 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
     revealedWhileNarrow: false,
     dismissed: new Set(),
     hiddenLive: new Map(),
-    expanded: null,
+    expanded: new Map(),
+    revealedThreads: new Set(),
     focus: null,
     focusRequest: 0,
   });
@@ -285,13 +290,13 @@ const pictureRatio = (card: Locator) => {
 };
 
 it("gives browser tabs and desktop threads the same card, with no session counter", async () => {
-  setup([browserTab(), desktopApp()]);
+  setup([browserTab(), desktopApp({ threadId: ThreadId.make("thread-1") })]);
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
   await using screen = await render(<Cards />);
   const browser = screen.getByRole("article", { name: "GOAT (Dev): Agent controlling" });
   // A desktop card is named by the thread driving it, never one merged "Whole screen".
-  const desktop = screen.getByRole("article", { name: "Thread thread-desk: Agent controlling" });
+  const desktop = screen.getByRole("article", { name: "Thread thread-1: Agent controlling" });
   await expect.element(browser).toBeVisible();
   await expect.element(desktop).toBeVisible();
   for (const card of [browser, desktop])
@@ -304,7 +309,7 @@ it("gives browser tabs and desktop threads the same card, with no session counte
   expect(screen.container.textContent).not.toMatch(/Agents on screen|helper|Agent controlling/);
 });
 
-it("shows one card per thread, and a stopped control gives way to the thread's newer session", async () => {
+it("shows one desktop card for the thread, and a stopped control gives way to its newer session", async () => {
   const thread = ThreadId.make("thread-desk");
   setup([
     desktopApp({ id: "desktop-old", status: "stopped", threadId: thread }),
@@ -317,10 +322,7 @@ it("shows one card per thread, and a stopped control gives way to the thread's n
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-desk: Permission needed" }))
     .toBeVisible();
-  await expect
-    .element(screen.getByRole("article", { name: "Thread thread-two: Agent controlling" }))
-    .toBeVisible();
-  expect(screen.container.querySelectorAll("article")).toHaveLength(2);
+  expect(document.querySelectorAll("article")).toHaveLength(1);
 });
 
 it("hides the cards in a pane too narrow for them, and the header toggle shows them anyway", async () => {
@@ -793,7 +795,7 @@ it("keeps a stopped session's dimmed card until the person closes it", async () 
 });
 
 it("closes a working browser tab's card while its agent works, and the header brings it back", async () => {
-  setup([browserTab(), desktopApp()]);
+  setup([browserTab(), desktopApp({ threadId: ThreadId.make("thread-1") })]);
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
   await using screen = await render(<Cards />);
@@ -807,7 +809,7 @@ it("closes a working browser tab's card while its agent works, and the header br
   // The agent was not stopped; only its card was put away.
   expect(state.control).not.toHaveBeenCalled();
   // The other card stays, and the list button says a card is put away.
-  await expect.element(screen.getByRole("article", { name: /Thread thread-desk/ })).toBeVisible();
+  await expect.element(screen.getByRole("article", { name: /Thread thread-1/ })).toBeVisible();
   await expect.element(list).toHaveAttribute("aria-pressed", "false");
   await userEvent.click(list);
   await expect.element(screen.getByRole("article", { name: /GOAT \(Dev\)/ })).toBeVisible();

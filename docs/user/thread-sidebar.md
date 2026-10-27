@@ -146,6 +146,11 @@ Choose **Mark all as read** from Priority's menu to acknowledge unread completio
 unacknowledged wakes on connections you can change. Those rows leave Priority. Work in progress
 and pending requests stay. The activity bell shows the same count as Priority.
 
+When Priority holds threads you already read, or unread completions and wakes on connections you
+can change, **Clear read threads** appears beside its menu. It marks those unread threads read and
+moves all of them out of Priority at once. Work in progress, pending requests, and unread threads
+on connections you cannot change stay. Nothing is archived or deleted.
+
 ### Answer waiting decisions
 
 Open **Decisions** at the top of the thread sidebar, or search for it in the command palette,

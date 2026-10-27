@@ -53,7 +53,6 @@ import {
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
 
 import {
-  EllipsisIcon,
   ChevronDownIcon,
   FolderIcon,
   ListFilterIcon,
@@ -128,7 +127,6 @@ import {
 import {
   readThreadShell,
   readThreadShells,
-  readEnvironmentSupportsVisitedTracking,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
   useServerConfigs,
@@ -141,19 +139,15 @@ import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
-import {
-  readEnvironmentScope,
-  useEnvironmentScope,
-  useEnvironmentsWithScope,
-} from "../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { excludeGlobalAgentThreads } from "../globalAgentRoute";
 import { useAtomCommand } from "../state/use-atom-command";
 import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
 import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import { usePromoteThread } from "./promoteThread";
-import { SortableSidebarMarker } from "./sidebar/SidebarListMarkers";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { SidebarPriorityHeader } from "./sidebar/SidebarPriorityHeader";
+import { useSidebarPriorityRead } from "./sidebar/useSidebarPriorityRead";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
@@ -185,7 +179,6 @@ import {
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   firstValidTimestampMs,
-  selectSidebarMarkReadTargets,
   isSidebarNestedLinkClick,
   holdSidebarPriorityRank,
   publishSidebarPriorityCount,
@@ -368,18 +361,6 @@ function sameHolds(left: SidebarPriorityHolds, right: SidebarPriorityHolds): boo
     if (!right.has(key) || right.get(key) !== settledOverride) return false;
   }
   return true;
-}
-
-function rawWokeAtByThreadKey(
-  threads: readonly EnvironmentThreadShell[],
-  now: string,
-): ReadonlyMap<string, string | null> {
-  return new Map(
-    threads.map((thread) => [
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      threadWokeAt(thread, { now }),
-    ]),
-  );
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -980,7 +961,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  const localLastVisitedAtByKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -1330,58 +1310,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
 
   useEffect(() => subscribeSidebarSearchFocus(() => threadSearchInputRef.current?.focus()), []);
-  const operablePriorityEnvironments = useEnvironmentsWithScope(
+  const priorityRead = useSidebarPriorityRead({
     priorityThreads,
-    AuthOrchestrationOperateScope,
-  );
-  const priorityWokeAtByKey = rawWokeAtByThreadKey(priorityThreads, snoozeNow);
-  const priorityReadTargets = selectSidebarMarkReadTargets({
-    threads: priorityThreads,
-    localLastVisitedAtByKey,
-    wokeAtByKey: priorityWokeAtByKey,
-    canOperate: (thread) => operablePriorityEnvironments.has(thread.environmentId),
+    wokeAtByThreadKey,
+    attentionByOwnerKey: subagentIndex.attentionByOwnerKey,
+    snoozeNow,
+    releasePriorityThreads,
+    restorePriorityThread,
   });
-  const visitPriorityThread = useOrchestrationCommand(threadEnvironment.visit, {
-    reportFailure: false,
-  });
-  const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
-  const markPriorityRead = () => {
-    const targets = selectSidebarMarkReadTargets({
-      threads: priorityThreads,
-      localLastVisitedAtByKey,
-      wokeAtByKey: priorityWokeAtByKey,
-      canOperate: (thread) => canOperateThreads([thread]),
-    });
-    releasePriorityThreads(
-      targets.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-    );
-    const visitedAt = new Date().toISOString();
-    void (async () => {
-      for (const thread of targets) {
-        if (!canOperateThreads([thread])) continue;
-        const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-        if (!readEnvironmentSupportsVisitedTracking(thread.environmentId)) {
-          markThreadVisited(scopedThreadKey(threadRef), visitedAt);
-          continue;
-        }
-        const result = await visitPriorityThread({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, visitedAt },
-        });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          restorePriorityThread(scopedThreadKey(threadRef));
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to mark thread as read",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-      }
-    })();
-  };
 
   // Ranked across environments as the palette ranks them, so one
   // environment's list does not sit above another's better matches; rows
@@ -3557,37 +3493,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             break;
                           case "priority-header":
                             items.push(
-                              <SortableSidebarMarker
+                              <SidebarPriorityHeader
                                 key="priority-header"
-                                marker="priority-header"
-                                data-testid="sidebar-priority-header"
-                                className="mx-0.5 flex h-8 items-center justify-between px-2"
-                              >
-                                <span className="text-xs font-medium text-sidebar-foreground">
-                                  Priority ({priorityThreads.length})
-                                </span>
-                                <Menu>
-                                  <MenuTrigger
-                                    render={
-                                      <Button
-                                        variant="ghost-muted"
-                                        size="icon-micro"
-                                        aria-label="Priority actions"
-                                      />
-                                    }
-                                  >
-                                    <EllipsisIcon className="size-3" />
-                                  </MenuTrigger>
-                                  <MenuPopup side="bottom" align="end">
-                                    <MenuItem
-                                      disabled={priorityReadTargets.length === 0}
-                                      onClick={markPriorityRead}
-                                    >
-                                      Mark all as read
-                                    </MenuItem>
-                                  </MenuPopup>
-                                </Menu>
-                              </SortableSidebarMarker>,
+                                count={priorityThreads.length}
+                                canMarkAllRead={priorityRead.canMarkAllRead}
+                                onMarkAllRead={priorityRead.markAllRead}
+                                canClearRead={priorityRead.canClearRead}
+                                onClearRead={priorityRead.clearRead}
+                              />,
                             );
                             break;
                           case "working-header":
