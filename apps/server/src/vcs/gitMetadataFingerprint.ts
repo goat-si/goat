@@ -63,6 +63,13 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
         path.join(dirs.gitDir, "config.worktree"),
         path.join(dirs.commonDir, "config"),
       ];
+      // Remote-tracking refs change on fetch and push without touching the branch or config.
+      const remotes =
+        branch === undefined
+          ? []
+          : yield* fs
+              .readDirectory(path.join(dirs.commonDir, "refs", "remotes"))
+              .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([])));
       const refFiles =
         branch === undefined
           ? []
@@ -70,6 +77,12 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
               path.join(dirs.commonDir, "packed-refs"),
               path.join(dirs.commonDir, "reftable", "tables.list"),
               path.join(dirs.commonDir, "refs", "heads", branch),
+              ...remotes
+                .toSorted()
+                .flatMap((remote) => [
+                  path.join(dirs.commonDir, "refs", "remotes", remote, branch),
+                  path.join(dirs.commonDir, "refs", "remotes", remote, "HEAD"),
+                ]),
             ];
       const stamps = yield* Effect.forEach([...repositoryFiles, ...refFiles], stamp, {
         concurrency: "unbounded",
