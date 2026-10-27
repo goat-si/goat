@@ -22,6 +22,7 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
@@ -119,6 +120,7 @@ const layer = ServerBrowser.layer.pipe(
     Layer.mergeAll(
       Broker.layer,
       PreviewAgentActivity.layer,
+      Layer.mock(SecretRequests.SecretRequests)({}),
       Manager.layer,
       Layer.succeed(ServerEnvironment.ServerEnvironment, {
         getEnvironmentId: Effect.succeed(scope.environmentId),

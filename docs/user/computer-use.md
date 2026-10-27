@@ -63,6 +63,8 @@ computer. The agent checks the screen again after you hand control back. A
 password or passkey step in a browser tab pauses its view and input. In desktop
 apps this is switched off for now; see
 [Work that runs on its own](#work-that-runs-on-its-own).
+When an agent asks for a password for a sign-in page, the card shows the site.
+GOAT types the password into that site's password field, and the agent gets only a reference.
 
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target

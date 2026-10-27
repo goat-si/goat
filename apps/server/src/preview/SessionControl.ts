@@ -20,6 +20,23 @@ const settle = (work: Promise<unknown>) =>
 const PRIVATE_MESSAGE =
   "A password, one-time code or passkey prompt has focus, so this tab is private until a person leaves it.";
 const STOPPED_MESSAGE = "A person stopped agent control of this browser tab.";
+const HUMAN_MESSAGE = "A human controls this tab.";
+
+/** Narrows a request whose agent session the broker should always have supplied. */
+export function requireAgentSession<R extends { readonly agentSessionId?: string | undefined }>(
+  request: R,
+): asserts request is R & { readonly agentSessionId: string } {
+  if (!request.agentSessionId)
+    throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
+}
+
+/** What a secret fill may do from inside its queued turn. */
+export interface SecretFence {
+  /** Throws once a person took control or stopped agents since the fill was requested. */
+  readonly assertMayDispatch: () => void;
+  /** Keeps the tab private, for observers and recordings, until the fill ends. */
+  readonly hold: () => void;
+}
 
 /** Reserves control immediately, but drains running work before the new owner can act. */
 export class SessionControl {
@@ -33,6 +50,11 @@ export class SessionControl {
   private epoch = 0;
   private closed = false;
   private privateMode = false;
+  /** Private mode is on while the page reports a secret field or a secret fill holds it. */
+  private watcherPrivate = false;
+  private privateHolds = 0;
+  /** Counts takeovers, Stops and closing; a secret fill's permit ends at the next one. */
+  private authority = 0;
   /** Counts private periods, so a read that overlapped one is withheld even after it ended. */
   private privateEpoch = 0;
   private agentStopped = false;
@@ -85,6 +107,12 @@ export class SessionControl {
 
   /** Entering private mode ends whatever an agent is doing and expires every ref it holds. */
   setPrivate(on: boolean) {
+    this.watcherPrivate = on;
+    this.applyPrivate();
+  }
+
+  private applyPrivate() {
+    const on = this.watcherPrivate || this.privateHolds > 0;
     if (this.closed || on === this.privateMode) return;
     this.privateMode = on;
     if (on) this.privateEpoch++;
@@ -97,6 +125,7 @@ export class SessionControl {
   stopAgents() {
     if (this.closed || this.agentStopped) return;
     this.agentStopped = true;
+    this.authority++;
     this.epoch++;
     this.onGenerationChange();
     this.cut(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
@@ -197,6 +226,7 @@ export class SessionControl {
 
   private changeOwner(owner: string | null) {
     this.owner = owner;
+    this.authority++;
     this.epoch++;
     this.onGenerationChange();
     this.activeAgentAction?.abort(
@@ -277,6 +307,58 @@ export class SessionControl {
 
   agentCanActNow(agentId: string) {
     return this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked();
+  }
+
+  assertNoHumanControl() {
+    if (this.owner !== null) throw new BrowserControlInterrupted(HUMAN_MESSAGE, "humanControl");
+  }
+
+  /**
+   * Host work that types a secret the agent never sees. Unlike `agent`, it may run while the tab
+   * is private, because a focused password field is what it fills; a person's control or Stop
+   * still refuses it, and a cut from private mode does not end it.
+   */
+  secret<A>(agentId: string, run: (fence: SecretFence) => Promise<A>, deadlineMs?: number) {
+    if (!this.agentMayAct(agentId))
+      return Promise.reject(
+        new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
+      );
+    if (this.owner !== null)
+      return Promise.reject(new BrowserControlInterrupted(HUMAN_MESSAGE, "humanControl"));
+    if (this.agentStopped)
+      return Promise.reject(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
+    const authority = this.authority;
+    const assertMayDispatch = () => {
+      this.assertOpen();
+      if (this.agentStopped) throw new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
+      if (this.owner !== null || this.authority !== authority)
+        throw new BrowserControlInterrupted(
+          "A person took control of this tab, so nothing was filled.",
+          "humanControl",
+        );
+    };
+    return this.action(
+      () => this.agentMayAct(agentId) && this.owner === null && !this.agentStopped,
+      async () => {
+        let held = false;
+        const hold = () => {
+          if (held) return;
+          held = true;
+          this.privateHolds++;
+          this.applyPrivate();
+        };
+        try {
+          assertMayDispatch();
+          return await run({ assertMayDispatch, hold });
+        } finally {
+          if (held) {
+            this.privateHolds--;
+            this.applyPrivate();
+          }
+        }
+      },
+      deadlineMs,
+    );
   }
 
   /**

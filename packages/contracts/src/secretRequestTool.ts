@@ -15,6 +15,10 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
     description:
       'secretRef (default) for a GOAT tool. file for a shell CLI: read the path in your command, e.g. TOKEN="$(cat <file>)" wrangler whoami.',
   }),
+  origin: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))).annotate({
+    description:
+      "For a browser sign-in: the page's origin, such as https://github.com (a URL is reduced to its origin). The card shows it, and only goat_preview_fill_secret can use the ref, on that origin. Not with delivery file.",
+  }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
   ).annotate({ description: "Default 10 min." }),

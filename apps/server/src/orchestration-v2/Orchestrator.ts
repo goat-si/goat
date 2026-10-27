@@ -2,6 +2,7 @@ import { markThreadUnread } from "./ProjectionRunNotification.ts";
 import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
+import { secretRequestOptionalFields } from "./goat/secretRequestFields.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import type {
   GuestShareId,
@@ -8278,8 +8279,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "secret_request",
             label: command.label,
             reason: command.reason,
-            ...(command.placeholder === undefined ? {} : { placeholder: command.placeholder }),
-            ...(command.delivery === undefined ? {} : { delivery: command.delivery }),
+            ...secretRequestOptionalFields(command, existing),
             secretStatus: closed ? "cancelled" : command.secretStatus,
             ...(handoff === undefined
               ? {}
