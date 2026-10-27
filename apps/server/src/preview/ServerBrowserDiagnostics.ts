@@ -31,7 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
-import { maskSecrets, redactValue, tabCookies } from "./pageSecrets.ts";
+import { maskSecrets, tabCookies } from "./pageSecrets.ts";
 import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
@@ -284,11 +284,40 @@ export class ServerBrowserDiagnostics {
     };
   }
 
-  /** A read for an agent: page text the console or a URL echoed has the tab's cookie values masked. */
+  /**
+   * A read for an agent: the page's own text in it, console output, error messages and request
+   * URLs, has the tab's cookie values masked. Field names and levels are never page text.
+   */
   async readMasked(input: PreviewAutomationLogsInput): Promise<PreviewAutomationLogs> {
-    const logs = this.read(input);
-    const cookies = await tabCookies(this.page);
-    return redactValue(logs, maskSecrets(undefined, cookies)) as PreviewAutomationLogs;
+    const { console, errors, network } = this.read(input);
+    const mask = maskSecrets(undefined, await tabCookies(this.page));
+    const optional = (text: string | undefined) => (text === undefined ? text : mask(text));
+    return {
+      console: {
+        ...console,
+        entries: console.entries.map((entry) => ({
+          ...entry,
+          text: mask(entry.text),
+          source: optional(entry.source),
+        })),
+      },
+      errors: {
+        ...errors,
+        entries: errors.entries.map((entry) => ({
+          ...entry,
+          message: mask(entry.message),
+          stack: optional(entry.stack),
+        })),
+      },
+      network: {
+        ...network,
+        entries: network.entries.map((entry) => ({
+          ...entry,
+          url: mask(entry.url),
+          errorText: optional(entry.errorText),
+        })),
+      },
+    };
   }
 
   readonly dispose = () => {
