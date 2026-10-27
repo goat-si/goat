@@ -149,15 +149,15 @@ it.effect("a cell reads page text from an unclaimed tab within the reply budget"
       DEFAULT_SCREEN_RUN_LIMITS.returnBytes,
     );
     expect(request?.exact).not.toHaveProperty("controlGeneration");
-    expect((yield* fixture.dispatch("read_page", { expand: true }))?.error?.code).toBe(
-      "invalid_argument",
-    );
+    for (const invalid of [{ expand: true }, { offset: -2 }, { format: "oops" }, { tabId: "x" }])
+      expect((yield* fixture.dispatch("read_page", invalid))?.error?.code).toBe("invalid_argument");
+    expect((yield* fixture.dispatch("read_page", { maxChars: 500 }))?.outcome).toBe("ok");
     const tiny = yield* fixture.bridge.handle(call("read_page", 90, {}, fixture.ref), {
       ...context,
       limits: { ...DEFAULT_SCREEN_RUN_LIMITS, returnBytes: 900 },
     });
     expect(tiny?.error?.code).toBe("output_limit");
-    expect(fixture.requests.filter((entry) => entry.operation === "read")).toHaveLength(1);
+    expect(fixture.requests.filter((entry) => entry.operation === "read")).toHaveLength(2);
   }),
 );
 

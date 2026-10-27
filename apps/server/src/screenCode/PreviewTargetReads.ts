@@ -1,14 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off - Image identifiers and reply sizes are owned by this host.
 import * as NodeCrypto from "node:crypto";
-import type {
-  PreviewAutomationSnapshot,
-  ScreenHostCall,
-  ScreenImage,
-  ScreenImageMetadata,
-  ScreenRunError,
-  ScreenTargetRef,
+import {
+  PreviewAutomationReadInput,
+  type PreviewAutomationSnapshot,
+  type ScreenHostCall,
+  type ScreenImage,
+  type ScreenImageMetadata,
+  type ScreenRunError,
+  type ScreenTargetRef,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { observationReplyBudget, type ScreenHostContext } from "./ScreenHostBridge.ts";
 import type { ScreenObservations } from "./ScreenObservations.ts";
 
@@ -40,29 +43,28 @@ export const cellScope = (
   return fail("invalid_argument", "Pass scope as {selector} or {ref}.");
 };
 
-const READ_OPTIONS = ["format", "offset", "revision", "settleMs", "timeoutMs", "maxBytes"] as const;
+const decodeReadInput = Schema.decodeUnknownOption(PreviewAutomationReadInput, {
+  onExcessProperty: "error",
+});
 
 /** Read options for the broker, with the page budget lowered to what one cell reply can carry. */
 export const cellReadInput = (
   arg: Record<string, unknown>,
   replyBytes: number,
-): { readonly input: Record<string, unknown> } | { readonly error: ScreenRunError } => {
-  const unknown = Object.keys(arg).filter(
-    (key) =>
-      key !== "targetRef" &&
-      key !== "scope" &&
-      !(READ_OPTIONS as ReadonlyArray<string>).includes(key),
-  );
-  if (unknown.length > 0)
-    return { error: fail("invalid_argument", `Unknown read options: ${unknown.join(", ")}.`) };
-  const requested = typeof arg.maxBytes === "number" ? arg.maxBytes : 32_000;
-  const maxBytes = Math.min(requested, 48_000, replyBytes);
+): { readonly input: PreviewAutomationReadInput } | { readonly error: ScreenRunError } => {
+  const { targetRef: _targetRef, scope: _scope, ...options } = arg;
+  const decoded = "tabId" in options ? Option.none() : decodeReadInput(options);
+  if (Option.isNone(decoded))
+    return {
+      error: fail(
+        "invalid_argument",
+        "Read options: format, offset, revision, maxChars, maxBytes, settleMs, timeoutMs.",
+      ),
+    };
+  const maxBytes = Math.min(decoded.value.maxBytes ?? 32_000, replyBytes);
   if (maxBytes < 1_000)
     return { error: fail("output_limit", "Raise returnBytes to read page text.") };
-  const input: Record<string, unknown> = { maxBytes };
-  for (const key of READ_OPTIONS)
-    if (key !== "maxBytes" && arg[key] !== undefined) input[key] = arg[key];
-  return { input };
+  return { input: { ...decoded.value, maxBytes } };
 };
 
 export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(function* (input: {
