@@ -12,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderInstanceMutation,
   TurnItemId,
+  type ProviderInstanceConfig,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -116,6 +117,79 @@ it.effect.each([
       );
       assert.equal(saved.providerInstances[instanceId]?.displayName, "Home with the same home");
       assert.deepInclude(decode(saved.providerInstances[instanceId]?.config ?? {}), to);
+    }).pipe(Effect.provide(layer)),
+);
+type LeasedInstance = ProviderInstanceConfig;
+it.effect.each([
+  {
+    change: "Claude Code model route",
+    driver: "claudeAgent",
+    next: (instance: LeasedInstance) => ({ ...instance, config: { modelRoute: "opencodex" } }),
+  },
+  {
+    change: "OpenCode Home address",
+    driver: "opencode",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      config: { modelRoute: "default", opencodexBaseUrl: "http://127.0.0.1:10101/v1" },
+    }),
+  },
+  {
+    change: "Claude Code endpoint variable",
+    driver: "claudeAgent",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      environment: [
+        { name: "ANTHROPIC_BASE_URL", value: "http://127.0.0.1:10100", sensitive: false },
+      ],
+    }),
+  },
+  {
+    change: "Pi driver replacement",
+    driver: "pi",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      driver: ProviderDriverKind.make("cursor"),
+    }),
+  },
+])(
+  "refuses a $change while the instance is in use and still accepts a label edit",
+  ({ driver, next }) =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.start;
+      const routes = yield* Routes.CodexRouteService;
+      const instance: LeasedInstance = {
+        driver: ProviderDriverKind.make(driver),
+        displayName: "Leased",
+        config: { modelRoute: "default" },
+      };
+      const upsert = (value: LeasedInstance) =>
+        routes.mutateProviderInstance(
+          { mutation: { operation: "upsert", instanceId, instance: value } },
+          caller,
+        );
+      yield* commitAndApply(
+        routes.mutateProviderInstance(
+          { mutation: { operation: "create", instanceId, instance } },
+          caller,
+        ),
+      );
+      const relabelled = { ...instance, displayName: "Renamed while busy" };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* routes.reserveUse(instanceId);
+          const before = yield* routes.capture(instanceId);
+          const result = yield* upsert(next(instance)).pipe(Effect.result);
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure")
+            assert.equal(result.failure.code, "provider_instance_busy");
+          assert.deepStrictEqual(yield* routes.capture(instanceId), before);
+          const saved = yield* commitAndApply(upsert(relabelled));
+          assert.equal(saved.providerInstances[instanceId]?.displayName, "Renamed while busy");
+        }),
+      );
+      yield* commitAndApply(upsert(next(relabelled)));
     }).pipe(Effect.provide(layer)),
 );
 it.effect(
