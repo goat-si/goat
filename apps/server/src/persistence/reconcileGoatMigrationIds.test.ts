@@ -94,6 +94,7 @@ const laterGoatMigrations = [
   [108, "HubProvisionedLinks"],
   [109, "ScheduledTaskRuns"],
   [110, "ScheduledTaskNotificationPolicy"],
+  [111, "NotificationCursorRepair"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -391,6 +392,7 @@ const GOAT_SINCE_256 = [
   "HubProvisionedLinks",
   "ScheduledTaskRuns",
   "ScheduledTaskNotificationPolicy",
+  "NotificationCursorRepair",
 ].map(currentGoatRow);
 
 describe("upgrading a nightly 256 ledger past upstream 068", () => {

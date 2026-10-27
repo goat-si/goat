@@ -18,6 +18,7 @@ it.effect(
       assert.deepStrictEqual(yield* runMigrations(), [
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT DISTINCT last_firing_id FROM scheduled_tasks`, [
         { last_firing_id: null },
