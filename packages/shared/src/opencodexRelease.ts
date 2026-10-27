@@ -37,7 +37,24 @@ export const resolveOpenCodexRelease = (
   catalog: OpenCodexReleaseCatalog = OPEN_CODEX_RELEASES,
 ): OpenCodexRelease | undefined => catalog[version]?.[`${platform}-${arch}`];
 
-/** OpenCodex's remoteOcxArgv order: Desktop and system installs win over PATH shims. */
+/**
+ * The pinned Windows x64 release whose Remote Link accepts a Windows Child. Windows Child setup
+ * stays refused until this GOAT build pins one.
+ */
+export const windowsRemoteLinkRelease = (
+  catalog: OpenCodexReleaseCatalog = OPEN_CODEX_RELEASES,
+  version: string = OPEN_CODEX_PINNED_VERSION,
+) => {
+  const release = resolveOpenCodexRelease("win32", "x64", version, catalog);
+  return release?.remoteLinkWindows === true ? release : undefined;
+};
+export const WINDOWS_REMOTE_LINK_UNPINNED =
+  "Windows Child setup needs a GOAT build that pins an OpenCodex release with Windows Remote Link support.";
+
+/**
+ * OpenCodex's remoteOcxArgv order: Desktop and system installs win over PATH shims. On Windows it
+ * is Remote Link's own resolver order, so GOAT selects the ocx.exe a Home's link would run.
+ */
 export function openCodexCandidates(
   platform: string,
   home: string,
@@ -48,8 +65,26 @@ export function openCodexCandidates(
     readonly resolve: (...parts: Array<string>) => string;
   },
 ): ReadonlyArray<string> {
+  if (platform === "win32")
+    return [
+      ...new Set([
+        path.join(home, ".opencodex-desktop", "bin", "ocx.exe"),
+        path.join(home, ".local", "share", "goat", "opencodex", "current", "ocx.exe"),
+        path.join(home, ".local", "bin", "ocx.exe"),
+        ...(environment.LOCALAPPDATA
+          ? [path.join(environment.LOCALAPPDATA, "Programs", "OpenCodex", "ocx.exe")]
+          : []),
+        ...(environment.ProgramFiles
+          ? [path.join(environment.ProgramFiles, "OpenCodex", "ocx.exe")]
+          : []),
+        ...(environment.PATH ?? "")
+          .split(";")
+          .filter(Boolean)
+          .map((directory) => path.resolve(cwd, directory, "ocx.exe")),
+      ]),
+    ];
   const directories = [
-    ...(environment.PATH ?? "").split(platform === "win32" ? ";" : ":"),
+    ...(environment.PATH ?? "").split(":"),
     path.join(home, ".bun", "bin"),
     path.join(home, ".local", "bin"),
     "/opt/homebrew/bin",
@@ -60,13 +95,7 @@ export function openCodexCandidates(
       path.join(home, ".opencodex-desktop", "bin", "ocx"),
       "/Applications/OpenCodex.app/Contents/MacOS/ocx",
       "/usr/bin/ocx",
-      ...directories.flatMap((directory) =>
-        platform === "win32"
-          ? ["ocx.exe", "ocx.cmd", "ocx.bat", "ocx"].map((name) =>
-              path.resolve(cwd, directory || ".", name),
-            )
-          : [path.resolve(cwd, directory || ".", "ocx")],
-      ),
+      ...directories.map((directory) => path.resolve(cwd, directory || ".", "ocx")),
     ]),
   ];
 }

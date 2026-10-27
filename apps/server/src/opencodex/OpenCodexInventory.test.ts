@@ -262,6 +262,9 @@ it.effect("Windows unsupported link status preserves a running Hub client", () =
     const { inventory } = yield* setup({
       fixture: fleet["mac-studio"],
       platform: "win32",
+      binaries: [
+        { path: "/fixture/.opencodex-desktop/bin/ocx.exe", output: fleet["mac-studio"].version },
+      ],
       config: { port: 10100, runtimeRole: "client", client: { transport: "https" } },
       connect: {
         state: "connected",
@@ -295,14 +298,17 @@ it.effect("Windows unsupported link status preserves a running Hub client", () =
   }),
 );
 
-it.effect("Windows discovers an ocx command shim in the fallback binary directories", () =>
+it.effect("Windows discovers only ocx.exe, where OpenCodex's Remote Link looks for it", () =>
   Effect.gen(function* () {
     const { inventory, commands } = yield* setup({
       platform: "win32",
-      binaries: [{ path: "/fixture/.bun/bin/ocx.cmd", output: "2.89.0" }],
+      binaries: [
+        { path: "/fixture/.bun/bin/ocx.cmd", output: "2.88.0" },
+        { path: "/fixture/.local/bin/ocx.exe", output: "2.89.0" },
+      ],
     });
     expect((yield* inventory.read).binaries).toEqual([
-      { path: "/fixture/.bun/bin/ocx.cmd", version: "2.89.0" },
+      { path: "/fixture/.local/bin/ocx.exe", version: "2.89.0" },
     ]);
     expect(commands[0]?.args).toEqual(["--version"]);
   }),

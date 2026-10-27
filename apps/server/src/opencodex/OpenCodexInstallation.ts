@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest or lstat.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
@@ -43,6 +44,30 @@ const decodeMarker = Schema.decodeUnknownEffect(Schema.fromJsonString(Marker), {
   onExcessProperty: "error",
 });
 const encodeMarker = Schema.encodeSync(Schema.fromJsonString(Marker));
+
+/**
+ * The Windows `current` junction swap in flight. Recovery restores the previous junction until
+ * the record says committed, then only removes this operation's leftover entries.
+ */
+const WindowsActivation = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  operationId: Schema.String.check(Schema.isPattern(/^[0-9a-f]{32}$/u)),
+  previous: Schema.NullOr(Schema.String),
+  next: Schema.String,
+  phase: Schema.Literals(["pending", "committed"]),
+});
+type WindowsActivation = typeof WindowsActivation.Type;
+const decodeActivation = Schema.decodeUnknownEffect(Schema.fromJsonString(WindowsActivation), {
+  onExcessProperty: "error",
+});
+const encodeActivation = Schema.encodeSync(Schema.fromJsonString(WindowsActivation));
+const ACTIVATION = ".activation.json";
+/** Windows paths compare without case and with one separator form. */
+const windowsIdentity = (value: string) => NodePath.win32.resolve(value).toLowerCase();
+const sameWindowsPath = (left: string | undefined, right: string | undefined) =>
+  left === undefined || right === undefined
+    ? left === right
+    : windowsIdentity(left) === windowsIdentity(right);
 
 /** The reviewed pins; tests replace it at the acquisition boundary, users never can. */
 export const ReleaseCatalog = Context.Reference<OpenCodexReleaseCatalog>(
@@ -122,26 +147,44 @@ export class OpenCodexInstallation extends Context.Service<
   }
 >()("goat/opencodex/OpenCodexInstallation") {}
 
+/**
+ * A member name as a forward-slash path. Windows release zips name members with backslashes, so
+ * those are normalized only after refusing drive, UNC and absolute names; elsewhere a backslash
+ * is refused outright.
+ */
+const memberName = (name: string, windows: boolean) =>
+  windows
+    ? /^(?:[\\/]|[A-Za-z]:)/u.test(name)
+      ? undefined
+      : name.replaceAll("\\", "/")
+    : name.includes("\\")
+      ? undefined
+      : name;
+
 /** Names from `tar -tf` and lines from `tar -tvf` describe only the standalone layout. */
-const safeListing = (
+export const safeListing = (
   asset: OpenCodexRelease,
   names: ReadonlyArray<string>,
   lines: ReadonlyArray<string>,
+  windows = false,
 ) => {
-  const clean = names.map((name) => name.replace(/^\.\//u, "").replace(/\/$/u, ""));
+  const normalized = names.map((name) => memberName(name, windows));
+  if (normalized.some((name) => name === undefined)) return false;
+  const clean = normalized.map((name = "") => name.replace(/^\.\//u, "").replace(/\/$/u, ""));
   const roots = [asset.layout.executable, "gui", "keyring"];
+  // NTFS folds case, so two names that differ only in case would land on one file there.
+  const keys = clean.map((name) => (windows ? name.toLowerCase() : name));
   return (
     names.length > 0 &&
     names.length <= MAX_MEMBERS &&
     names.length === lines.length &&
-    new Set(clean).size === clean.length &&
+    new Set(keys).size === keys.length &&
     // Only plain files and directories: no symlink, hard link or device.
     lines.every((line) => ["-", "d"].includes(line[0] ?? "") && !/ (?:->|link to) /u.test(line)) &&
     clean.every(
       (name) =>
         name !== "" &&
         !name.startsWith("/") &&
-        !name.includes("\\") &&
         !name.includes(":") &&
         !name.split("/").includes("..") &&
         roots.includes(name.split("/")[0] ?? ""),
@@ -176,6 +219,16 @@ const make = Effect.gen(function* () {
   });
   const prefixOf = (create: boolean) =>
     resolvedDirectory(create, ".local", "share", "goat", "opencodex");
+  /** Windows' launcher is the `current` junction in the prefix, the path Remote Link selects. */
+  const windowsLauncher = path.join(
+    rawHome,
+    ".local",
+    "share",
+    "goat",
+    "opencodex",
+    "current",
+    "ocx.exe",
+  );
   /** A path with its directories resolved and its last component kept, to compare entries. */
   const entry = (file: string) =>
     fs
@@ -280,7 +333,8 @@ const make = Effect.gen(function* () {
         Option.isNone(own) ||
         !own.value.file ||
         Number(stat.size) === 0 ||
-        (stat.mode & 0o111) === 0 ||
+        // Windows has no execute bit: a nonempty file whose --version answers is the test.
+        (platform !== "win32" && (stat.mode & 0o111) === 0) ||
         gui.type !== "File" ||
         !keyring.some((name) => name.endsWith(".node")) ||
         parseOpenCodexVersion(yield* command(executable, ["--version"])) !== asset.version
@@ -329,7 +383,7 @@ const make = Effect.gen(function* () {
       );
     const names = yield* listing(["-tf", archive]);
     const lines = yield* listing(["-tvf", archive]);
-    if (!safeListing(asset, names, lines)) return yield* fail("archive");
+    if (!safeListing(asset, names, lines, platform === "win32")) return yield* fail("archive");
     yield* command(tar, ["-xf", archive, "-C", runtime]).pipe(
       Effect.mapError(() => fail("archive")),
     );
@@ -346,6 +400,201 @@ const make = Effect.gen(function* () {
       { flag: "wx", mode: 0o600 },
     );
     yield* fs.rename(runtime, destination);
+  });
+
+  /** Where a junction points; undefined when absent. Anything but a link is never treated as one. */
+  const junctionTarget = Effect.fn("OpenCodexInstallation.junctionTarget")(function* (
+    file: string,
+  ) {
+    const found = yield* identify(file);
+    if (Option.isNone(found)) return undefined;
+    if (found.value.link === undefined) return yield* fail("activation");
+    return yield* fs.realPath(file);
+  });
+  /** Removes only the junction entry, and only while it still points at `target`. */
+  const removeJunction = Effect.fn("OpenCodexInstallation.removeJunction")(function* (
+    file: string,
+    target: string,
+  ) {
+    const actual = yield* junctionTarget(file);
+    if (actual === undefined) return;
+    if (!sameWindowsPath(actual, target)) return yield* fail("activation");
+    yield* Effect.tryPromise(() => NodeFSP.unlink(file));
+  });
+  /** A marked release in the prefix that the trusted pins vouch for; never a path alone. */
+  const checkWindowsRelease = Effect.fn("OpenCodexInstallation.checkWindowsRelease")(function* (
+    prefix: string,
+    root: string,
+  ) {
+    if (!sameWindowsPath(path.dirname(root), prefix)) return yield* fail("activation");
+    const markerPath = path.join(root, MARKER);
+    const stat = yield* fs.stat(markerPath);
+    if (stat.type !== "File" || Number(stat.size) > MAX_MARKER_BYTES)
+      return yield* fail("activation");
+    const marker = yield* decodeMarker(yield* fs.readFileString(markerPath));
+    const asset = resolveOpenCodexRelease(platform, arch, marker.version, catalog);
+    if (
+      asset === undefined ||
+      !(yield* inspect(path.join(root, asset.layout.executable), marker.version))
+    )
+      return yield* fail("activation");
+  });
+  const activationPaths = (prefix: string, id: string) => ({
+    current: path.join(prefix, "current"),
+    next: path.join(prefix, `.current-${id}.next`),
+    backup: path.join(prefix, `.current-${id}.previous`),
+  });
+  const writeActivation = Effect.fn("OpenCodexInstallation.writeActivation")(function* (
+    prefix: string,
+    record: WindowsActivation,
+  ) {
+    const file = path.join(prefix, ACTIVATION);
+    const temporary = `${file}.${record.operationId}.${record.phase}.tmp`;
+    yield* Effect.tryPromise(async () => {
+      const handle = await NodeFSP.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(encodeActivation(record), "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    });
+    yield* fs.rename(temporary, file);
+  });
+  const readActivation = Effect.fn("OpenCodexInstallation.readActivation")(function* (
+    prefix: string,
+  ) {
+    const file = path.join(prefix, ACTIVATION);
+    const found = yield* identify(file);
+    if (Option.isNone(found)) return undefined;
+    if (!found.value.file || Number((yield* fs.stat(file)).size) > MAX_MARKER_BYTES)
+      return yield* fail("activation");
+    const record = yield* decodeActivation(yield* fs.readFileString(file));
+    yield* checkWindowsRelease(prefix, record.next);
+    if (record.previous !== null) yield* checkWindowsRelease(prefix, record.previous);
+    return record;
+  });
+
+  /**
+   * Finishes or undoes an interrupted Windows activation under the install lock: before commit
+   * the previous junction comes back (or this operation's first junction goes), after it only
+   * leftovers go. A foreign or ambiguous state is refused untouched; no version directory is
+   * ever removed.
+   */
+  const recoverWindows = Effect.fn("OpenCodexInstallation.recoverWindows")(
+    function* (prefix: string) {
+      const record = yield* readActivation(prefix);
+      if (record === undefined) return;
+      const names = activationPaths(prefix, record.operationId);
+      const previous = record.previous ?? undefined;
+      const current = yield* junctionTarget(names.current);
+      const backup = yield* junctionTarget(names.backup);
+      if (record.phase === "committed") {
+        if (!sameWindowsPath(current, record.next)) return yield* fail("activation");
+        if (backup !== undefined) {
+          if (!sameWindowsPath(backup, previous)) return yield* fail("activation");
+          yield* removeJunction(names.backup, backup);
+        }
+      } else {
+        if (
+          current !== undefined &&
+          !sameWindowsPath(current, record.next) &&
+          !sameWindowsPath(current, previous)
+        )
+          return yield* fail("activation");
+        if (current !== undefined && sameWindowsPath(current, record.next))
+          yield* removeJunction(names.current, record.next);
+        const now = yield* junctionTarget(names.current);
+        if (previous !== undefined && now === undefined) {
+          if (!sameWindowsPath(backup, previous)) return yield* fail("activation");
+          yield* fs.rename(names.backup, names.current);
+        } else if (!sameWindowsPath(now, previous) || backup !== undefined)
+          return yield* fail("activation");
+        if (!sameWindowsPath(yield* junctionTarget(names.current), previous))
+          return yield* fail("activation");
+      }
+      yield* removeJunction(names.next, record.next);
+      yield* fs.remove(path.join(prefix, ACTIVATION));
+    },
+    Effect.mapError((cause) => (isInstallationError(cause) ? cause : fail("activation", cause))),
+  );
+
+  /**
+   * Points the `current` junction at a verified release: journal, swap, confirm OpenCodex's
+   * resolution selects it, then commit. Any failure before the commit restores the previous
+   * junction; a crash leaves the journal for the next install to recover. Junctions need no
+   * administrator or Developer Mode, unlike file symlinks.
+   */
+  const activateWindows = Effect.fn("OpenCodexInstallation.activateWindows")(
+    function* (
+      prefix: string,
+      destination: string,
+      executable: string,
+      before: OpenCodexExecutable | undefined,
+    ) {
+      if (before?.ownership === "managed" && sameWindowsPath(before.realPath, executable))
+        return before;
+      const previous = before?.ownership === "managed" ? path.dirname(before.realPath) : undefined;
+      yield* checkWindowsRelease(prefix, destination);
+      if (previous !== undefined) yield* checkWindowsRelease(prefix, previous);
+      if ((yield* readActivation(prefix)) !== undefined) return yield* fail("activation");
+      const record: WindowsActivation = {
+        schemaVersion: 1,
+        operationId: NodeCrypto.randomUUID().replaceAll("-", ""),
+        previous: previous ?? null,
+        next: destination,
+        phase: "pending",
+      };
+      const names = activationPaths(prefix, record.operationId);
+      if (!sameWindowsPath(yield* junctionTarget(names.current), previous))
+        return yield* fail("not-managed");
+      yield* Effect.tryPromise(() => NodeFSP.symlink(destination, names.next, "junction"));
+      if (!sameWindowsPath(yield* junctionTarget(names.next), destination))
+        return yield* fail("activation");
+      yield* writeActivation(prefix, record);
+      const published = yield* Effect.gen(function* () {
+        if (previous !== undefined) yield* fs.rename(names.current, names.backup);
+        yield* fs.rename(names.next, names.current);
+        const checked = yield* selected();
+        if (
+          checked?.ownership !== "managed" ||
+          !sameWindowsPath(checked.realPath, executable) ||
+          !sameWindowsPath(checked.path, windowsLauncher)
+        )
+          return yield* fail("activation");
+        return checked;
+      }).pipe(Effect.result);
+      if (published._tag === "Failure") {
+        yield* recoverWindows(prefix);
+        return yield* isInstallationError(published.failure)
+          ? published.failure
+          : fail("activation", published.failure);
+      }
+      yield* writeActivation(prefix, { ...record, phase: "committed" });
+      yield* recoverWindows(prefix);
+      return published.success;
+    },
+    Effect.uninterruptible,
+    Effect.mapError((cause) => (isInstallationError(cause) ? cause : fail("activation", cause))),
+  );
+
+  /**
+   * Whether `before` keeps GOAT from activating its release. On Windows only an ocx Remote Link
+   * would select ahead of the `current` junction shadows it; a managed one must be that junction.
+   */
+  const blocksActivation = Effect.fn("OpenCodexInstallation.blocksActivation")(function* (
+    before: OpenCodexExecutable,
+    launcher: string,
+    managedOnly: boolean,
+  ) {
+    if (platform !== "win32")
+      return before.ownership !== "managed" || (yield* entry(before.path)) !== launcher;
+    const order = openCodexCandidates(platform, rawHome, cwd, environment, path).map(
+      windowsIdentity,
+    );
+    const at = order.indexOf(windowsIdentity(before.path));
+    const managed = order.indexOf(windowsIdentity(windowsLauncher));
+    return before.ownership === "managed" ? at !== managed : managedOnly || at <= managed;
   });
 
   const created = (effect: Effect.Effect<void, PlatformError.PlatformError>) =>
@@ -472,22 +721,28 @@ const make = Effect.gen(function* () {
         supportedOpenCodexVersion(current.version)
       )
         return current;
-      if (platform === "win32") return yield* fail("unsupported");
       const version = input.managedVersion ?? OPEN_CODEX_PINNED_VERSION;
       const asset = resolveOpenCodexRelease(platform, arch, version, catalog);
-      if (asset === undefined || !supportedOpenCodexVersion(version))
+      // Windows installs only a pinned x64 release whose Remote Link accepts a Windows Child.
+      if (
+        asset === undefined ||
+        !supportedOpenCodexVersion(version) ||
+        (platform === "win32" && (arch !== "x64" || !asset.remoteLinkWindows))
+      )
         return yield* fail("unsupported");
       return yield* gate.withPermits(1)(
         Effect.scoped(
           Effect.gen(function* () {
             const prefix = yield* prefixOf(true);
-            const bin = yield* resolvedDirectory(true, ".local", "bin");
+            const bin =
+              platform === "win32" ? prefix : yield* resolvedDirectory(true, ".local", "bin");
             const launcher = path.join(bin, "ocx");
             yield* acquireInstallLock(
               path.join(prefix, INSTALL_LOCK_FILE),
               () => fail("busy"),
               (cause) => fail("io", cause),
             );
+            if (platform === "win32") yield* recoverWindows(prefix);
             // Selected again under the lock: this identity is what activation may replace.
             const before = yield* selected();
             if (
@@ -498,7 +753,7 @@ const make = Effect.gen(function* () {
               return before;
             if (
               before !== undefined &&
-              (before.ownership !== "managed" || (yield* entry(before.path)) !== launcher)
+              (yield* blocksActivation(before, launcher, input.managedVersion !== undefined))
             )
               return yield* fail(input.managedVersion === undefined ? "shadowed" : "not-managed");
             const destination = path.join(prefix, `${version}-${asset.target}`);
@@ -507,6 +762,13 @@ const make = Effect.gen(function* () {
             if (!(yield* fs.exists(destination))) yield* acquire(asset, prefix, destination);
             else yield* verifyRelease(destination, asset);
             if (!(yield* inspect(executable, version))) return yield* fail("verify");
+            if (platform === "win32")
+              return yield* activateWindows(
+                prefix,
+                destination,
+                executable,
+                before?.ownership === "managed" ? before : undefined,
+              );
             const selectedLauncher = yield* identify(launcher);
             if (
               Option.isSome(selectedLauncher) &&

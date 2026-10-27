@@ -15,6 +15,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Installation from "./OpenCodexInstallation.ts";
 
 export const TARGET = "bun-linux-x64";
+export const WINDOWS_TARGET = "bun-windows-x64";
 export const urlOf = (version: string) => `https://fixture.invalid/ocx-${version}.tar.gz`;
 export const fakeOcx = (version: string) =>
   `#!/bin/sh\n[ "$1" = --version ] && echo 'opencodex ${version}'\nexit 0\n`;
@@ -65,20 +66,23 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
     options: {
       readonly edit?: (stage: string) => Effect.Effect<void, PlatformError.PlatformError>;
       readonly members?: ReadonlyArray<string>;
+      /** `ocx.exe` for a Windows layout; the fixture still runs it as a shell script. */
+      readonly executable?: string;
     } = {},
   ) =>
     Effect.gen(function* () {
       const stage = path.join(root, `stage-${archives}`, "tree");
       const output = path.join(root, `stage-${archives++}`, "ocx.tar.gz");
+      const executable = options.executable ?? "ocx";
       yield* fs.makeDirectory(path.join(stage, "gui", "dist"), { recursive: true });
       yield* fs.makeDirectory(path.join(stage, "keyring"));
-      yield* fs.writeFileString(path.join(stage, "ocx"), fakeOcx(version), { mode: 0o755 });
+      yield* fs.writeFileString(path.join(stage, executable), fakeOcx(version), { mode: 0o755 });
       yield* fs.writeFileString(path.join(stage, "gui", "dist", "index.html"), "<html></html>");
       yield* fs.writeFileString(path.join(stage, "keyring", "keyring.node"), "native");
       if (options.edit) yield* options.edit(stage);
       const tar = yield* runner.run({
         command: "tar",
-        args: ["-czPf", output, ...(options.members ?? ["ocx", "gui", "keyring"])],
+        args: ["-czPf", output, ...(options.members ?? [executable, "gui", "keyring"])],
         cwd: stage,
       });
       if (tar.code !== 0) return yield* Effect.die(tar.stderr);
@@ -90,22 +94,31 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
     version: string,
     built: Archive,
     change: { sha256?: string; bytes?: number } = {},
+    /** A test-only `win32-x64` row; no real GOAT pin has one yet. */
+    windows?: { readonly remoteLinkWindows: boolean },
   ) => ({
     [version]: {
-      "linux-x64": {
+      [windows === undefined ? "linux-x64" : "win32-x64"]: {
         version,
-        target: TARGET,
+        target: windows === undefined ? TARGET : WINDOWS_TARGET,
         url: urlOf(version),
         sha256: change.sha256 ?? built.sha256,
         archiveBytes: change.bytes ?? built.bytes.byteLength,
         publishedAt: "2026-10-24T00:00:00Z",
-        layout: { executable: "ocx", gui: "gui/dist/index.html", keyring: "keyring" },
-        remoteLinkWindows: false,
+        layout: {
+          executable: windows === undefined ? "ocx" : "ocx.exe",
+          gui: "gui/dist/index.html",
+          keyring: "keyring",
+        },
+        remoteLinkWindows: windows?.remoteLinkWindows ?? false,
       },
     },
   });
   const downloads: Array<string> = [];
-  /** The installer as production builds it, with the download and catalog at the boundary. */
+  /**
+   * The installer as production builds it, with the download and catalog at the boundary. As
+   * `win32` it keeps this host's filesystem, but its System32 tar resolves to the host's tar.
+   */
   const installer = (
     catalog: OpenCodexReleaseCatalog,
     served: Readonly<Record<string, Uint8Array>>,
@@ -113,12 +126,15 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
       readonly beforeDownload?: Effect.Effect<void>;
       readonly extract?: Effect.Effect<never>;
       readonly fs?: FileSystemHooks;
+      readonly platform?: "linux" | "win32";
+      readonly arch?: NodeJS.Architecture;
     } = {},
   ) =>
     Effect.gen(function* () {
       const real = yield* FileSystem.FileSystem;
       const realRunner = yield* ProcessRunner.ProcessRunner;
       const fsHooks = hooks.fs ?? {};
+      const platform = hooks.platform ?? "linux";
       const sandboxed: FileSystem.FileSystem = {
         ...real,
         exists: (file) => (file.startsWith(root) ? real.exists(file) : Effect.succeed(false)),
@@ -156,20 +172,24 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
                 run: (input) =>
                   extract !== undefined && input.args[0] === "-xf"
                     ? extract
-                    : realRunner.run(input),
+                    : realRunner.run(
+                        input.command.endsWith("\\System32\\tar.exe")
+                          ? { ...input, command: "tar" }
+                          : input,
+                      ),
               }),
             ),
           ),
           Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
           Layer.provide(Layer.succeed(Installation.ReleaseCatalog, catalog)),
           Layer.provide(Layer.succeed(HostProcess.HomeDirectory, home)),
-          Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
-          Layer.provide(Layer.succeed(HostProcess.Architecture, "x64")),
+          Layer.provide(Layer.succeed(HostProcess.Platform, platform)),
+          Layer.provide(Layer.succeed(HostProcess.Architecture, hooks.arch ?? "x64")),
           Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, root)),
           Layer.provide(
             Layer.succeed(HostProcess.Environment, {
               HOME: home,
-              PATH: `${userBin}:/usr/bin:/bin`,
+              PATH: platform === "win32" ? userBin : `${userBin}:/usr/bin:/bin`,
             }),
           ),
         ),
