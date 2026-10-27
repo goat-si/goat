@@ -16,6 +16,7 @@ import { HostStatusToolkit } from "./tools.ts";
 import * as HubParity from "../../../hub/HubParity.ts";
 import * as HubMembership from "../../../hub/HubMembership.ts";
 import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
+import * as ChildReady from "../../../opencodex/OpenCodexChildReady.ts";
 
 /** Fan-out and a named host use this machine's SSH keys. local:true does not. */
 const reachesAnotherHost = (input: GoatHostStatusInput) => input.local !== true;
@@ -52,6 +53,25 @@ const openCodexSync = McpToolAccess.writes((input: GoatHubOpenCodexSyncInput) =>
 );
 
 export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
+  // Only a Home-issued Child setup purpose passes childSetupWrite; ordinary sessions never do.
+  goat_hub_child_prepare: McpToolAccess.childSetupWrite((input) =>
+    Effect.gen(function* () {
+      const service = yield* ChildReady.OpenCodexChildReady;
+      return yield* service.prepare(input, yield* McpInvocationContext.McpInvocationContext);
+    }),
+  ),
+  goat_hub_child_connection: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const service = yield* ChildReady.OpenCodexChildReady;
+      return yield* service.connection(input, yield* McpInvocationContext.McpInvocationContext);
+    }),
+  ),
+  goat_hub_child_status: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* ChildReady.OpenCodexChildReady;
+      return yield* service.status(input, yield* McpInvocationContext.McpInvocationContext);
+    }),
+  ),
   goat_hub_device_join: membership("join"),
   goat_hub_device_leave: McpToolAccess.destructive(membership("leave")),
   goat_hub_device_repair: membership("repair"),

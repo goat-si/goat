@@ -2,6 +2,11 @@ import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
+  ChildReadyAddress,
+  ChildReadyConnectionInput,
+  ChildReadyConnectionResult,
+  ChildReadyPrepareInput,
+  ChildReadyResult,
   GoatHostStatusInput,
   GoatHostStatusResult,
   GoatHubOpenCodexSyncInput,
@@ -21,6 +26,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as HubParity from "../../../hub/HubParity.ts";
 import * as HubMembership from "../../../hub/HubMembership.ts";
 import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
+import * as ChildReady from "../../../opencodex/OpenCodexChildReady.ts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -80,11 +86,45 @@ const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].n
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.opencodex_sync"]));
 
+const ChildPrepareTool = Tool.make(agentSurfaceRegistry["hub.child_prepare"].name, {
+  description: agentSurfaceRegistry["hub.child_prepare"].description,
+  parameters: ChildReadyPrepareInput,
+  success: ChildReadyResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [McpInvocationContext.McpInvocationContext, ChildReady.OpenCodexChildReady],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.child_prepare"]));
+
+const ChildConnectionTool = Tool.make(agentSurfaceRegistry["hub.child_connection"].name, {
+  description: agentSurfaceRegistry["hub.child_connection"].description,
+  parameters: ChildReadyConnectionInput,
+  success: ChildReadyConnectionResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ChildReady.OpenCodexChildReady,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.child_connection"]));
+
+const ChildStatusTool = Tool.make(agentSurfaceRegistry["hub.child_status"].name, {
+  description: agentSurfaceRegistry["hub.child_status"].description,
+  parameters: ChildReadyAddress,
+  success: ChildReadyResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [McpInvocationContext.McpInvocationContext, ChildReady.OpenCodexChildReady],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.child_status"]));
+
 export const HostStatusToolkit = Toolkit.make(
   HostStatusTool,
   VerifyTool,
   membershipTool("hub.device_join"),
   membershipTool("hub.device_leave"),
   membershipTool("hub.device_repair"),
+  ChildPrepareTool,
+  ChildConnectionTool,
+  ChildStatusTool,
   OpenCodexSyncTool,
 );

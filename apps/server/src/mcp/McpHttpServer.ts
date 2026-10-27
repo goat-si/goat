@@ -62,6 +62,11 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as OpenCodexInstallation from "../opencodex/OpenCodexInstallation.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
+import * as OpenCodexChildReady from "../opencodex/OpenCodexChildReady.ts";
+import * as ChildReadyJournal from "../opencodex/ChildReadyJournal.ts";
+import * as ChildSetupAuthority from "../opencodex/ChildSetupAuthority.ts";
+import * as CodexReadyProbe from "../opencodex/CodexReadyProbe.ts";
+import * as ChildOpenCodexStartup from "../opencodex/ChildOpenCodexStartup.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
@@ -1223,6 +1228,17 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   ),
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
+  ),
+  // The Child side of a Home's setup, served by goat_hub_child_* on this machine.
+  Layer.provideMerge(
+    OpenCodexChildReady.layer.pipe(
+      Layer.provide(ChildReadyJournal.layer),
+      Layer.provide(ChildSetupAuthority.layer),
+      Layer.provide(CodexReadyProbe.layer),
+      Layer.provide(ChildOpenCodexStartup.layer.pipe(Layer.provide(ProcessRunner.layer))),
+      Layer.provide(ProcessRunner.layer),
+      Layer.provide(Profiles.layer),
+    ),
   ),
   Layer.provide(RepositoryInventory.layer),
   Layer.provideMerge(OpenCodexManagedUpdate.layerService),
