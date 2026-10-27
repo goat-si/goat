@@ -228,6 +228,51 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     expect((await framed("left:0;top:0;width:900px;height:700px", hidden)).blocking).toBeNull();
   });
 
+  it("counts a frame's modal by what the browser really draws: escaping, scaled, clipped or covered", async () => {
+    const wall =
+      '<div role="dialog" aria-modal="true" aria-label="Framed wall" style="position:fixed;inset:0;background:#fff">Sign in</div>';
+    await page.route("https://draw.test/inner", (route) =>
+      route.fulfill({ contentType: "text/html", body: wall }),
+    );
+    await page.route("https://draw.test/outer", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://draw.test/inner" style="position:absolute;left:-500px;top:0;border:0;width:1000px;height:800px"></iframe></body>',
+      }),
+    );
+    const show = async (body: string, nested = false) => {
+      await page.route("https://draw.test/", (route) =>
+        route.fulfill({ contentType: "text/html", body: article + body }),
+      );
+      await page.goto("https://draw.test/");
+      const frame = nested
+        ? page.frameLocator("#f").frameLocator("iframe")
+        : page.frameLocator("#f");
+      await frame.getByText("Sign in").waitFor({ state: "attached" });
+      await page.unroute("https://draw.test/");
+      return (await describeLayers(page, control)).blocking;
+    };
+    // A fixed frame escapes the zero-size box that clips its overflow and covers the page.
+    const escaped = await show(
+      '<div style="position:absolute;top:0;left:0;width:0;height:0;overflow:hidden"><iframe id="f" src="https://draw.test/inner" style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe></div>',
+    );
+    expect(escaped?.name).toBe("Framed wall");
+    expect(escaped?.coverage).toBeGreaterThan(0.9);
+    // A frame scaled to half shows a quarter of its inner frame: 250 x 400 of 1000 x 800.
+    const scaled = await show(
+      '<iframe id="f" src="https://draw.test/outer" style="position:absolute;left:0;top:0;border:0;width:1000px;height:800px;transform:scale(.5);transform-origin:0 0"></iframe>',
+      true,
+    );
+    expect(scaled?.coverage).toBeGreaterThan(0.1);
+    expect(scaled?.coverage).toBeLessThan(0.16);
+    // A frame under an opaque cover draws nothing.
+    expect(
+      await show(
+        '<iframe id="f" src="https://draw.test/inner" style="position:absolute;left:0;top:0;border:0;width:400px;height:300px"></iframe><div style="position:absolute;left:0;top:0;width:400px;height:300px;background:#000;z-index:5"></div>',
+      ),
+    ).toBeNull();
+  });
+
   it("names a consent wall whose message lives in a cross-origin frame by that frame's title", async () => {
     const report = await layers(
       article +
