@@ -1,0 +1,78 @@
+# 020 대안 비교
+
+확인일 2026-10-28. 외부 근거 원문은 각 연구 레인 보고서(아래 "출처")에 URL과 확인일로 남겼고, 여기에는 결정에 쓰인 수치와 대표 URL만 옮깁니다. 구현량은 코드 분석에 따른 판단입니다(S: 기존 HTTP/WS를 그대로 쓰고 설정만 추가, M: 새 커넥터나 서비스 하나, L: 서버·공유 클라이언트·모바일에 걸친 새 전송, XL: L + 테넌트 운영).
+
+## 먼저 나눠야 할 것
+
+Connect가 하는 일은 셋입니다(010 마지막 절). 대안은 대부분 **도달(reachability)** 하나만 바꿉니다.
+
+| 기능                             | 터널 필요    | 지금 GOAT의 대체 경로                                                               |
+| -------------------------------- | ------------ | ----------------------------------------------------------------------------------- |
+| 어디서나 도달                    | 예(현 설계)  | Tailscale 페어링과 허브(docs/user/remote-access.md:20-57, :574-599), SSH, 서버 링크 |
+| 고정 공개 URL(웹훅, 게스트 링크) | 현 설계는 예 | 없음                                                                                |
+| 모바일 백그라운드 알림           | 아니오       | 없음(docs/user/mobile-notifications.md:1-8)                                         |
+
+어떤 전송도 잠든 머신을 깨우거나 푸시·오프라인 웹훅을 대신하지 못합니다. 그래서 relay의 계정·푸시·웹훅 부분은 어느 대안을 고르든 남습니다.
+
+## 도달 방식 비교
+
+| 방식                                                     | 사용자 1만 명 비용(가정 포함)                                                                                                                         | 평문을 볼 수 있는 쪽                                                                       | 클라이언트                                                                         | 운영 부담                                           | 구현량                                                                                           |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **현 설계: 환경마다 관리형 Cloudflare Tunnel**           | 터널 1,000개까지 무료, 이후 **$4.50/터널/월**. 1.5환경/사용자면 **약 $63,000/월** + Enterprise DNS 견적. 잠든 머신도 슬롯을 차지                      | Cloudflare 엣지(TLS 종단). relay 서명 키는 모든 환경에 bootstrap 자격을 받을 수 있음       | 브라우저·Electron·RN·CLI 모두 HTTPS 그대로                                         | 터널·DNS·회수·Cloudflare API 한도(1,200회/5분) 관리 | 이미 있음                                                                                        |
+| **같은 터널, 사용자당 1개(허브로)**                      | 1,000명까지 $0, 1만 명 **약 $40,500/월**                                                                                                              | 위와 같음. 허브는 노드 자격을 쥐고 평문을 봄(remote-access.md:598)                         | 위와 같음. 노드는 허브 프록시로 도달                                               | 위보다 적음                                         | S(제한값 3→1, 허브에만 링크)                                                                     |
+| **사용자 소유 Tailscale + Serve** (이미 구현)            | GOAT 비용 $0. 사용자 Personal 무료(6명, 기기 무제한)                                                                                                  | WireGuard 종단 간. 조정 서버는 메타데이터                                                  | 접속 기기마다 Tailscale 앱 필요                                                    | 우리 운영 없음, 사용자 지원 부담                    | 이미 있음(apps/server/src/cli/pair.ts:374-556)                                                   |
+| **Tailscale Funnel**                                     | $0, 모든 플랜. 베타, 대역폭 상한 비공개                                                                                                               | 릴레이는 복호화 못 함                                                                      | 방문자는 일반 HTTPS                                                                | 낮음                                                | S. 사용자 선택지로는 좋고, 서비스 기반으로는 약함                                                |
+| **Tailscale 내장(tsnet)·사용자별 tailnet**               | 플랫폼용 다중 tailnet은 "Contact sales"                                                                                                               | WireGuard                                                                                  | Go 사이드카 필요, RN 1st-party SDK 없음                                            | 계약·등록                                           | L/XL                                                                                             |
+| **Headscale 자체 운영**                                  | 고정 단가 없음(호스팅+DERP+운영)                                                                                                                      | 종단 WireGuard, 우리가 키·정책 통제                                                        | 공식 iOS/Android 클라이언트를 커스텀 서버로                                        | 높음. 원래 "개인·소규모 단일 tailnet"용             | XL                                                                                               |
+| **BYO Cloudflare Tunnel(사용자 계정)**                   | GOAT 비용 $0. 사용자 계정당 1,000개 무료, 도메인 필요                                                                                                 | Cloudflare 엣지                                                                            | HTTPS 그대로                                                                       | 우리 운영 없음, 설정 지원                           | S(공개 URL을 입력받기) / M(자동화)                                                               |
+| **Durable Object WebSocket relay(양쪽이 바깥으로 연결)** | Workers $5 기본, 전송량 요금 없음. 메시지 20개=요청 1회 과금. 1만 명이 하루 2시간 활성이면 **약 $3,500/월**, 메시지 단위로 잠들면 수십 달러(030 계산) | 응용 계층 E2EE가 없으면 relay와 Cloudflare가 평문을 봄. E2EE를 넣으면 relay는 메타데이터만 | 모든 클라이언트가 WS 지원. HTTP 요청·파일도 실어야 함                              | 할당량, 재연결, backpressure                        | M(RPC만) / L(전체 + E2EE). 허브 프록시의 byte relay(apps/server/src/hubProxy/relay.ts:15)가 선례 |
+| **WebRTC + TURN**                                        | 직결 시 0. Cloudflare TURN $0.05/GB(월 1,000GB 무료)                                                                                                  | DTLS 종단 간. 시그널링이 신원을 속이지 못하게 페어링에 묶어야 함                           | 브라우저 OK, RN은 react-native-webrtc(네이티브 빌드), Node 서버에 WebRTC 구현 필요 | 시그널링, ICE 재시작, 모바일 복귀                   | L                                                                                                |
+| **iroh**                                                 | n0 Pro $19/월+$0.09/GB, 커뮤니티 릴레이 무료(SLA 없음)                                                                                                | 종단 QUIC                                                                                  | Node·Swift·Kotlin 공식, 브라우저 WASM은 **항상 릴레이**, RN은 알파                 | 중간                                                | L                                                                                                |
+| **libp2p**                                               | 릴레이·시그널링 직접 운영                                                                                                                             | DTLS/Noise                                                                                 | RN 드롭인 없음                                                                     | 높음                                                | L/XL                                                                                             |
+| **ngrok 관리형**                                         | 상시 엔드포인트 하나 $14.40/월 → 사용자당                                                                                                             | ngrok 엣지(옵션으로 종단 TLS)                                                              | HTTPS 그대로                                                                       | 계정·비용                                           | M                                                                                                |
+
+## 비교 대상 제품이 하는 방식
+
+| 제품                                                     | 방식                                                                                   | GOAT에 주는 교훈                                   |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| VS Code Remote Tunnels                                   | Microsoft dev tunnels, 양쪽이 바깥으로 연결, 터널 안에 SSH로 E2EE. 계정당 10개, 월 5GB | 사용량 상한을 낮게 두고 공짜로 줌. 개발용으로 명시 |
+| Happy                                                    | Socket.IO relay, 기기 키로 내용 암호화, relay는 암호화된 blob만 저장. 자체 호스팅 가능 | E2EE relay가 소규모 팀에서도 가능하다는 선례       |
+| Claude Code Remote Control                               | 로컬 실행, 바깥으로 HTTPS 폴링/스트리밍, 대화 기록은 Anthropic 서버에 저장             | E2EE가 아니어도 출시됨. 대신 신뢰 주체가 명확      |
+| Codex·Cursor Cloud                                       | 실행을 클라우드로 옮김                                                                 | 도달 문제를 다른 방식으로 회피                     |
+| Codex 모바일 원격, Cursor iOS Remote Control(2026-10-06) | 데스크톱 승인 페어링 + 벤더 relay. 전송 방식 비공개                                    | 페어링은 데스크톱에서 시작                         |
+| Zed                                                      | SSH                                                                                    | GOAT의 SSH 경로와 같은 자리                        |
+
+## 판단
+
+1. **환경마다 관리형 터널을 무료로 주는 모델은 공개 서비스로 성립하지 않습니다.** 비용이 사용량이 아니라 "등록된 머신 수"에 비례하고, 1,000개를 넘는 순간 사용자당 월 $4.05~$6.30이 고정으로 붙습니다. Cloudflare 약관 2.2.1(j)의 VPN·프록시 제한 해석도 확인되지 않았습니다(030, 040).
+2. **GOAT에는 이미 허브가 있습니다.** 휴대폰이 허브 하나에 붙으면 노드는 허브가 대신 연결합니다(remote-access.md:574-599). 관리형 터널을 쓰더라도 **사용자당 1개, 허브로만**이 GOAT에 맞는 단위입니다. 그러면 무료 구간이 1,000명이 되고, 비공개 운영과 초대 베타는 터널 비용 $0으로 끝납니다.
+3. **공개 단계의 도달 수단은 Durable Object WebSocket relay + E2EE가 가장 GOAT다운 선택입니다.** 양쪽이 바깥으로만 연결하므로 포트·DNS·터널 프로비저닝이 없고, 비용이 사용량에 비례하며, 같은 Cloudflare Worker 안에서 운영됩니다. 페어링 때 교환한 기기 키로 내용을 암호화하면 relay 서명 키가 "모든 사용자 머신의 마스터 키" 역할을 하지 않게 만들 수 있습니다. 구현량은 가장 크므로 공개 단계에 맞춰 준비합니다.
+4. **공개 URL은 도달과 따로 풉니다.** 웹훅은 relay Durable Object가 받아 보관하고, 호스트가 바깥으로 연결해 가져가면 됩니다(이미 있는 hold 구조, goat-connect.md:28-45의 방향만 바꿈). 게스트 링크는 relay 경로가 생기면 그 위로 갑니다. 사용자 소유 터널·Funnel URL을 공개 주소로 입력받는 선택지도 둡니다.
+5. **Tailscale은 계속 1급 경로로 둡니다.** 이미 구현돼 있고 비용이 0이며 종단 간 암호화됩니다. Connect는 "Tailscale을 설치하기 싫은 사람"과 "푸시·웹훅이 필요한 사람"을 위한 것으로 범위를 좁힙니다.
+
+## 출처
+
+모두 2026-10-28 확인(Aside 브라우저로 읽음). 원문 메모는 연구 레인 보고서에 있습니다.
+
+- Cloudflare Tunnels for Platforms(1,000개 무료, 추가 $4.50/월): https://developers.cloudflare.com/tunnel/features/tunnels-for-platforms/
+- 출시 공지(2026-10-16): https://developers.cloudflare.com/changelog/post/2026-10-16-tunnels-for-platforms-and-50k-routes/
+- Cloudflare API 한도(1,200회/5분): https://developers.cloudflare.com/fundamentals/api/reference/limits/
+- Cloudflare Self-Serve Subscription Agreement(2.2.1(j) 프록시·VPN 제한): https://www.cloudflare.com/terms/
+- Tailscale 가격: https://tailscale.com/pricing
+- Tailscale Funnel: https://tailscale.com/docs/features/tailscale-funnel
+- tsnet: https://tailscale.com/docs/features/tsnet
+- Headscale 범위: https://headscale.net/stable/about/faq/
+- Durable Objects 가격: https://developers.cloudflare.com/durable-objects/platform/pricing/
+- Durable Objects WebSocket hibernation: https://developers.cloudflare.com/durable-objects/best-practices/websockets/
+- Workers 가격: https://developers.cloudflare.com/workers/platform/pricing/
+- Cloudflare Realtime/TURN 가격: https://developers.cloudflare.com/realtime/sfu/platform/pricing/
+- react-native-webrtc: https://github.com/react-native-webrtc/react-native-webrtc
+- iroh 가격: https://www.iroh.computer/pricing , 브라우저 제약: https://docs.iroh.computer/languages/wasm-browser
+- ngrok 가격: https://ngrok.com/pricing
+- VS Code Remote Tunnels: https://code.visualstudio.com/docs/remote/tunnels
+- Microsoft dev tunnels 한도: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#dev-tunnels-limits
+- Happy 보안: https://happy.engineering/docs/security/
+- Claude Code Remote Control: https://code.claude.com/docs/en/remote-control
+- OpenAI 원격 연결: https://developers.openai.com/codex/remote-connections
+- Cursor 로컬 에이전트 원격 제어: https://cursor.com/changelog/remote-control-local-agents
+- Zed 원격 개발: https://zed.dev/docs/remote-development
