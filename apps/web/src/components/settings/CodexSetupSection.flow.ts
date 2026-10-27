@@ -46,8 +46,11 @@ export function useCodexSetupOperation() {
   const abortOperation = () => operation.current?.abort();
   // oxlint-disable-next-line goat/react-effect-budget -- Unmount must abort pending install and authorization continuations.
   useEffect(() => () => operation.current?.abort(), []);
-  const getOperationSignal = () => operation.current?.signal;
-  return { beginOperation, abortOperation, getOperationSignal };
+  const getOrBeginOperation = () =>
+    operation.current && !operation.current.signal.aborted
+      ? operation.current.signal
+      : beginOperation();
+  return { beginOperation, abortOperation, getOrBeginOperation };
 }
 
 export function readCodexReturnUrl(environmentId: EnvironmentId, instanceId: ProviderInstanceId) {

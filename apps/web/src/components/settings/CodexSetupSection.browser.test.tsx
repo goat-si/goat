@@ -420,3 +420,57 @@ it("does not submit a cancelled desktop page manually opened from shared auth st
   await act(() => response.resolve("http://localhost/callback?code=cancelled"));
   expect(mocks.completeAuth).not.toHaveBeenCalled();
 });
+
+it.each(["new shared flow", "failed cancellation"])(
+  "completes a manually reopened desktop sign-in after %s",
+  async (recovery) => {
+    const state = setup();
+    const cancelled = deferred<string>();
+    const reopened = deferred<string>();
+    const receive = vi
+      .fn()
+      .mockReturnValueOnce(cancelled.promise)
+      .mockReturnValueOnce(reopened.promise);
+    using _desktop = stubGlobal("desktopBridge", {
+      receiveProviderAuthCallback: receive,
+      cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
+    });
+    if (recovery === "failed cancellation")
+      mocks.cancelAuth.mockRejectedValueOnce(new Error("Connection interrupted"));
+    await using screen = await render(ui());
+    await screen.getByRole("button", { name: "Continue with ChatGPT" }).click();
+    await publish(state.auth, waiting());
+    await screen.getByRole("button", { name: "Cancel", exact: true }).click();
+    if (recovery === "new shared flow") {
+      await publish(state.auth, authState({ flowId: "ours", phase: "cancelled" }));
+      await publish(state.auth, waiting("other-client"));
+    }
+    const flowId = recovery === "new shared flow" ? "other-client" : "ours";
+    await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+    expect(receive).toHaveBeenLastCalledWith(`https://example.com/${flowId}`);
+    await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+    expect(receive).toHaveBeenCalledTimes(2);
+    await act(() => cancelled.resolve("http://localhost/callback?code=cancelled"));
+    expect(mocks.completeAuth).not.toHaveBeenCalled();
+    await act(() => reopened.resolve("http://localhost/callback?code=reopened"));
+    expect(mocks.completeAuth).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { instanceId, flowId, callbackUrl: "http://localhost/callback?code=reopened" },
+    });
+  },
+);
+
+it("does not submit a manually opened shared desktop sign-in after unmount", async () => {
+  const state = setup();
+  const response = deferred<string>();
+  using _desktop = stubGlobal("desktopBridge", {
+    receiveProviderAuthCallback: vi.fn().mockReturnValue(response.promise),
+    cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
+  });
+  await using screen = await render(ui());
+  await publish(state.auth, waiting("other-client"));
+  await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+  await screen.unmount();
+  await act(() => response.resolve("http://localhost/callback?code=unmounted"));
+  expect(mocks.completeAuth).not.toHaveBeenCalled();
+});

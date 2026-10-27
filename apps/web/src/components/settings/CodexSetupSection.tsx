@@ -272,7 +272,7 @@ function ManagedCodexSetup({
   const [awaitingProvider, setAwaitingProvider] = useState<"sign-in" | "handoff" | null>(null);
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const { beginOperation, abortOperation, getOperationSignal } = useCodexSetupOperation();
+  const { beginOperation, abortOperation, getOrBeginOperation } = useCodexSetupOperation();
   const [autoStartHandled, setAutoStartHandled] = useState(false);
   const installed = installation?.installedVersion != null;
   const authenticated = provider?.auth.status === "authenticated";
@@ -395,7 +395,7 @@ function ManagedCodexSetup({
     authorizationUrl: string,
     flowId: string | null,
     viaClientCallback: boolean,
-    signal = getOperationSignal(),
+    signal = getOrBeginOperation(),
   ) => {
     try {
       const receive = window.desktopBridge?.receiveProviderAuthCallback;
