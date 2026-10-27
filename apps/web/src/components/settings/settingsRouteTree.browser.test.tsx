@@ -85,17 +85,13 @@ async function openSettingsFromHome() {
     defaultErrorComponent: ({ error }) => <p role="alert">{error.message}</p>,
   });
   await router.load();
-  const stopTracking = startMainAppLocationTracking(router);
-  const screen = await render(<RouterProvider router={router} />, { router: false });
+  await using stack = new AsyncDisposableStack();
+  stack.defer(startMainAppLocationTracking(router));
+  stack.use(await render(<RouterProvider router={router} />, { router: false }));
   await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
   await router.navigate({ to: "/settings/general" });
-  return {
-    router,
-    async [Symbol.asyncDispose]() {
-      stopTracking();
-      await screen[Symbol.asyncDispose]();
-    },
-  };
+  const owned = stack.move();
+  return { router, [Symbol.asyncDispose]: () => owned.disposeAsync() };
 }
 
 it("shows Settings as a full page in place of the main view, not a modal over it", async () => {
