@@ -64,6 +64,7 @@ import {
   type LeaseEnd,
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
+  RECONNECTING,
   SCREEN_SHARED,
   TURN_ENDED,
   WRONG_DISPLAY,
@@ -334,10 +335,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 ...(image ? { image } : {}),
                 ...(failed ? { failed: true } : {}),
               });
-              if (gone() || paused !== undefined) return;
+              // A reply that shows the screen waits out a drop; the cut-off answers its call.
+              const heldReply = () =>
+                Transport.heldByTransport(options.transportHeld, request.method, request.tool);
+              if (gone() || paused !== undefined || heldReply()) return;
               yield* release(request, true);
               const latest = outstanding.get(key);
-              if (gone() || paused !== undefined || idle || latest === undefined) return;
+              if (gone() || paused !== undefined || idle || latest === undefined || heldReply())
+                return;
               outstanding.delete(key);
               if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
               if (verdict === "other") {
@@ -377,7 +382,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const lifecycle = yield* makeLeaseProxyLifecycle({
     connectionId: options.connectionId,
     firstGeneration: options.firstGeneration,
-    startDriver: options.startDriver,
+    startDriver: Transport.guardDriver(
+      options.startDriver,
+      options.transportHeld,
+      Transport.settleProbe(ownAnswers, OWN_ID),
+    ),
     manifestStamp: options.manifestStamp,
     active,
     deadline: () => deadline,
@@ -764,12 +773,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         );
       if (needsProof && (lifecycle.current === undefined || proven !== lifecycle.current))
         return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "wrong_display",
-            finished === "wrong_display" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
-          ),
+          finished === undefined && options.transportHeld?.() === true
+            ? refusal(id, message.method, "reconnecting", RECONNECTING)
+            : refusal(
+                id,
+                message.method,
+                "wrong_display",
+                finished === "wrong_display"
+                  ? LEASE_END_MESSAGES.wrong_display
+                  : UNCONFIRMED_DISPLAY,
+              ),
         );
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);

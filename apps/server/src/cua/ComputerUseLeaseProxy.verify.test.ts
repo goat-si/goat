@@ -60,23 +60,32 @@ describe("read-back after input the driver could not verify", () => {
       }),
   );
 
-  it.effect("does not read the window back after input while the lease stream reconnects", () =>
-    Effect.gen(function* () {
-      let held = false;
-      const h = yield* harness({ verifyInputByTreeDiff: true, transportHeld: () => held });
-      yield* h.push(active());
-      yield* h.send(call(1, "get_window_state", window));
-      yield* h.nextToDriver;
-      yield* h.reply(result(1, { snapshot_id: "s1" }));
-      yield* h.nextToProvider;
-      yield* h.send(call(2, "click", { ...window, x: 3, y: 4 }));
-      yield* h.nextToDriver;
-      held = true;
-      yield* h.reply(result(2, { effect: "unverifiable" }));
-      const answer = (yield* h.nextToProvider) as unknown as Answer;
-      assert.deepEqual(answer.result.structuredContent, { effect: "unverifiable" });
-      assert.equal(yield* h.driverQueued, 0);
-    }),
+  it.effect(
+    "an input reply while the lease stream reconnects waits for the cut-off, unread back",
+    () =>
+      Effect.gen(function* () {
+        let held = false;
+        const h = yield* harness({ verifyInputByTreeDiff: true, transportHeld: () => held });
+        yield* h.push(active());
+        yield* h.send(call(1, "get_window_state", window));
+        yield* h.nextToDriver;
+        yield* h.reply(result(1, { snapshot_id: "s1" }));
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "click", { ...window, x: 3, y: 4 }));
+        yield* h.nextToDriver;
+        held = true;
+        yield* h.reply(result(2, { effect: "unverifiable" }));
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        const answer = (yield* h.nextToProvider) as unknown as Answer;
+        assert.equal(answer.id, 2);
+        assert.include(JSON.stringify(answer), "may already have acted");
+        // Only the pause's own cancellation may follow; the window is never read back.
+        while ((yield* h.driverQueued) > 0)
+          assert.notEqual(
+            ((yield* h.nextToDriver) as { params?: { name?: unknown } }).params?.name,
+            "get_window_state",
+          );
+      }),
   );
 
   it.effect(
