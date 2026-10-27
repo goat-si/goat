@@ -1,3 +1,9 @@
+import {
+  boundSnapshotMetadata,
+  cutText,
+  MAX_SNAPSHOT_IDENTIFIER_CHARS,
+  type SnapshotMetadata,
+} from "./toolkits/preview/snapshotTransport.ts";
 import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
@@ -334,170 +340,8 @@ export const layerLlmsTxtRoute = Layer.unwrap(
   ),
 );
 
-/**
- * Claude Code moves an MCP result above its output limit to a file and hands
- * the agent a notice instead, so a snapshot that carries the full accessibility
- * tree and page text loses its locators too. Claude Code also shows the model
- * `structuredContent` in place of the text blocks when a result has both, so
- * both carry the same bounded snapshot.
- */
-export const MAX_SNAPSHOT_TEXT_BYTES = 20_000;
-const MAX_SNAPSHOT_VISIBLE_TEXT_CHARS = 8_000;
-const MAX_SNAPSHOT_ELEMENT_NAME_CHARS = 200;
-const MAX_SNAPSHOT_LOG_ENTRIES = 40;
-const MAX_SNAPSHOT_LOG_TEXT_CHARS = 500;
-const MAX_SNAPSHOT_IDENTIFIER_CHARS = 2_048;
-
+export { MAX_SNAPSHOT_TEXT_BYTES } from "./toolkits/preview/snapshotTransport.ts";
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const utf8Length = (text: string) => Buffer.byteLength(text, "utf8");
-const cutText = (text: string, max: number) =>
-  text.length > max ? `${text.slice(0, max)}…` : text;
-
-const cutEntryStrings = <A>(entry: A): A =>
-  typeof entry === "object" && entry !== null
-    ? (Object.fromEntries(
-        Object.entries(entry).map(([key, value]) => [
-          key,
-          typeof value === "string" ? cutText(value, MAX_SNAPSHOT_LOG_TEXT_CHARS) : value,
-        ]),
-      ) as A)
-    : entry;
-
-const hasLongString = (entry: unknown, max: number) =>
-  typeof entry === "object" &&
-  entry !== null &&
-  Object.values(entry).some((value) => typeof value === "string" && value.length > max);
-
-type SnapshotMetadata = {
-  readonly url: string;
-  readonly title: string;
-  readonly visibleText: string;
-  readonly interactiveElements: ReadonlyArray<{
-    readonly name: string;
-    readonly [key: string]: unknown;
-  }>;
-  readonly consoleEntries: ReadonlyArray<unknown>;
-  readonly networkEntries: ReadonlyArray<unknown>;
-  readonly actionTimeline: ReadonlyArray<unknown>;
-  readonly [key: string]: unknown;
-};
-
-const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
-  const omitted: Array<string> = [];
-  const { accessibilityTree, ...withoutTree } = metadata;
-  const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
-  if (accessibilityTree !== undefined && ariaTree === undefined) {
-    omitted.push("accessibilityTree (use interactiveElements locators or goat_preview_evaluate)");
-  }
-  const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
-    if (entries.length > MAX_SNAPSHOT_LOG_ENTRIES) {
-      omitted.push(`${entries.length - MAX_SNAPSHOT_LOG_ENTRIES} older ${label}`);
-    }
-    const kept = entries.slice(-MAX_SNAPSHOT_LOG_ENTRIES);
-    if (kept.some((entry) => hasLongString(entry, MAX_SNAPSHOT_LOG_TEXT_CHARS))) {
-      omitted.push(`${label} text after ${MAX_SNAPSHOT_LOG_TEXT_CHARS} characters`);
-    }
-    return kept.map(cutEntryStrings);
-  };
-  if (
-    metadata.url.length > MAX_SNAPSHOT_IDENTIFIER_CHARS ||
-    metadata.title.length > MAX_SNAPSHOT_IDENTIFIER_CHARS
-  ) {
-    omitted.push(`url or title after ${MAX_SNAPSHOT_IDENTIFIER_CHARS} characters`);
-  }
-  if (
-    metadata.interactiveElements.some(
-      (element) => element.name.length > MAX_SNAPSHOT_ELEMENT_NAME_CHARS,
-    )
-  ) {
-    omitted.push(`element names longer than ${MAX_SNAPSHOT_ELEMENT_NAME_CHARS} characters`);
-  }
-  const bounded = {
-    ...withoutTree,
-    url: cutText(metadata.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-    title: cutText(metadata.title, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-    interactiveElements: metadata.interactiveElements.map((element) => ({
-      ...element,
-      name: cutText(element.name, MAX_SNAPSHOT_ELEMENT_NAME_CHARS),
-    })),
-    consoleEntries: tail(metadata.consoleEntries, "console entries"),
-    networkEntries: tail(metadata.networkEntries, "network entries"),
-    actionTimeline: tail(metadata.actionTimeline, "action timeline entries"),
-  };
-
-  // Per-field character caps can still exceed the total byte ceiling.
-  const shedOrder = [
-    "actionTimeline",
-    "networkEntries",
-    "consoleEntries",
-    "interactiveElements",
-  ] as const;
-  const lists: Record<(typeof shedOrder)[number], ReadonlyArray<unknown>> = {
-    interactiveElements: bounded.interactiveElements,
-    consoleEntries: bounded.consoleEntries,
-    networkEntries: bounded.networkEntries,
-    actionTimeline: bounded.actionTimeline,
-  };
-  const dropped: Record<(typeof shedOrder)[number], number> = {
-    interactiveElements: 0,
-    consoleEntries: 0,
-    networkEntries: 0,
-    actionTimeline: 0,
-  };
-  let visibleTextChars = Math.min(metadata.visibleText.length, MAX_SNAPSHOT_VISIBLE_TEXT_CHARS);
-  let ariaTreeChars = Math.min(ariaTree?.length ?? 0, 20_000);
-  const value = () => ({
-    ...bounded,
-    ...(ariaTree === undefined ? {} : { accessibilityTree: cutText(ariaTree, ariaTreeChars) }),
-    visibleText: cutText(metadata.visibleText, visibleTextChars),
-    ...lists,
-  });
-  let text = encodeJsonText(value());
-  while (utf8Length(text) > MAX_SNAPSHOT_TEXT_BYTES) {
-    // Elements carry the locators, so they go last; logs shed newest-last.
-    const key =
-      shedOrder.find(
-        (candidate) => candidate !== "interactiveElements" && lists[candidate].length > 0,
-      ) ??
-      (visibleTextChars > 0
-        ? "visibleText"
-        : lists.interactiveElements.length > 0
-          ? "interactiveElements"
-          : ariaTreeChars > 0
-            ? "accessibilityTree"
-            : undefined);
-    if (key === undefined) break;
-    if (key === "visibleText") {
-      visibleTextChars = Math.floor(visibleTextChars / 2);
-    } else if (key === "accessibilityTree") {
-      ariaTreeChars = Math.floor(ariaTreeChars / 2);
-    } else {
-      const keep = Math.floor(lists[key].length / 2);
-      dropped[key] += lists[key].length - keep;
-      lists[key] =
-        keep === 0
-          ? []
-          : key === "interactiveElements"
-            ? lists[key].slice(0, keep)
-            : lists[key].slice(-keep);
-    }
-    text = encodeJsonText(value());
-  }
-  if (visibleTextChars < metadata.visibleText.length) {
-    omitted.push(
-      `visibleText after ${visibleTextChars} characters (use goat_preview_evaluate for more)`,
-    );
-  }
-  if (ariaTree !== undefined && ariaTreeChars < ariaTree.length) {
-    omitted.push(`accessibilityTree after ${ariaTreeChars} characters`);
-  }
-  for (const key of shedOrder) {
-    if (dropped[key] > 0) {
-      omitted.push(`${dropped[key]} of ${bounded[key].length} ${key}`);
-    }
-  }
-  return { value: value(), text, omitted };
-};
 
 export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreenshotSaveError>()(
   "PreviewScreenshotSaveError",
@@ -620,10 +464,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                 ...(includeImage
                   ? {}
                   : {
-                      structuredContent:
-                        bounded.omitted.length === 0
-                          ? bounded.value
-                          : { ...bounded.value, omitted: bounded.omitted },
+                      structuredContent: bounded.value,
                     }),
                 content: [
                   {
@@ -765,17 +606,7 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
   );
 });
 
-/**
- * Runs tool registrations so that every tool they add refuses top-level
- * arguments it does not declare, before it runs.
- *
- * Effect's tool decoder drops unknown keys, so a misspelled or unsupported
- * routing argument (`hostId` for `host`, or `host` on a tool without one)
- * ran the call in this environment and answered with local data as if it came
- * from another machine. Nested values, such as a modelSelection copied from
- * another result, keep lenient decoding. The refusal is an ordinary
- * invalid_request result, which SshRemoteDispatch also reads back from a remote.
- */
+// Top-level unknown arguments must fail before a misspelled host target can run locally.
 const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -1341,11 +1172,7 @@ export const layer = Layer.mergeAll(
   layerLlmsTxtRoute,
   layerListingChanges,
 ).pipe(
-  // LaunchWatchService and RemoteDispatchCoordinator are left to the caller:
-  // the server provides one of each for these tools and the remote-launch
-  // catalog, since both follow runs and wake launchers.
-  // One report service for the launch binding and the report tools, so a
-  // report wakes the origin's waiting collector.
+  // The caller shares launch watchers; one report service wakes their origin collectors.
   Layer.provide(RemoteReportService.layer),
   // Run results for the report tool and the thread read and wait tools.
   Layer.provide(ThreadResultService.layer),

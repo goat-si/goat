@@ -141,7 +141,7 @@ export const openReaders = async (page: Page, cdp: CDPSession) => {
         node.frame.id,
         ...(node.childFrames ?? []).flatMap(ids),
       ];
-      // A frame Playwright knows but this session doesn't would go unread.
+      // Every frame listed by the tab must belong to a readable session.
       if (ids(frameTree).length !== owned.length) throw pageChanged();
       return Promise.all(
         ids(frameTree).map(async (frameId) => {
@@ -212,7 +212,7 @@ export const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
-      // Playwright writes control characters like JSON does, with \xNN for the unnamed ones.
+      // Tree values encode unnamed control characters as hexadecimal escapes.
       const quoted = value.replace(/[\\"\p{Cc}]/gu, (char) =>
         '\\"\b\f\n\r\t'.includes(char)
           ? JSON.stringify(char).slice(1, -1)

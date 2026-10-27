@@ -23,7 +23,12 @@ import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwrigh
 import { pointerInterception } from "./pointerInterception.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { resolvePageScope } from "./pageScope.ts";
-import { narrowTree, resetSnapshotDiff, snapshotOptionsResult } from "./snapshotOptions.ts";
+import {
+  narrowTree,
+  resetSnapshotDiff,
+  snapshotOptionsResult,
+  snapshotPageMetadata,
+} from "./snapshotOptions.ts";
 import { readLayersHeader } from "./blockingLayers.ts";
 import {
   frameUrls,
@@ -235,16 +240,6 @@ const targetPoint = async (
   const viewport = page.viewportSize();
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
 };
-
-const SNAPSHOT_SCRIPT = `(() => {
-  return {
-    url: location.href,
-    title: document.title,
-    loading: document.readyState !== "complete",
-    visibleText: document.body?.innerText || "",
-    interactiveElements: [],
-  };
-})()`;
 
 /**
  * A `data:` URL carries its content, which can be a whole file, and URLs and diagnostics
@@ -514,20 +509,7 @@ const capture = async (
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    (scoped
-      ? scoped.evaluate((node) => ({
-          url: node.ownerDocument.location.href,
-          title: node.ownerDocument.title,
-          loading: node.ownerDocument.readyState !== "complete",
-          visibleText: (node as { innerText?: string }).innerText || "",
-          interactiveElements: [],
-        }))
-      : input.page.evaluate(SNAPSHOT_SCRIPT)) as Promise<
-      Pick<
-        PreviewAutomationSnapshot,
-        "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-      >
-    >,
+    snapshotPageMetadata(input.page, scoped),
     readLayersHeader(input.page),
     input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),

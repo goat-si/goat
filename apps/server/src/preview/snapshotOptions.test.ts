@@ -43,6 +43,10 @@ it("narrows snapshots before budgeting, preserves actionable refs and isolates d
       added: [],
       removed: [],
     });
+    expect(
+      (await take({ scope: { selector: "main" }, interactiveOnly: true, diff: true })).diff?.base,
+    ).toBe("none");
+    expect((await take({ scope: { selector: "main" }, diff: true })).diff?.base).toBe("none");
     await page.getByRole("button").click();
     const added = await take({ scope: { selector: "main" }, diff: true });
     expect(added.diff?.added.filter((line) => line.includes("Added paragraph"))).toHaveLength(1);

@@ -1,5 +1,5 @@
 import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "@goat/contracts";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 
 const interactive =
   /^\s*- '?(?:button|link|textbox|searchbox|combobox|checkbox|radio|switch|tab|menuitem|option|slider|spinbutton|treeitem)(?=[\s"':])/;
@@ -71,4 +71,21 @@ export const snapshotOptionsResult = (
         ? { next: "Close the blocking layer first." }
         : {}),
   };
+};
+
+export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
+  const metadata = (await page.evaluate(
+    `({ url: location.href, title: document.title, loading: document.readyState !== "complete", visibleText: document.body?.innerText || "", interactiveElements: [] })`,
+  )) as Pick<
+    PreviewAutomationSnapshot,
+    "url" | "title" | "loading" | "visibleText" | "interactiveElements"
+  >;
+  return scope
+    ? {
+        ...metadata,
+        visibleText: await scope.evaluate(
+          (node) => (node as { innerText?: string }).innerText || "",
+        ),
+      }
+    : metadata;
 };

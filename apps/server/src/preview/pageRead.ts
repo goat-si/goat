@@ -188,6 +188,10 @@ export const pageRead = (
           if (tracker.state().network !== "busy" || Date.now() >= deadline) break;
           await tracker.changed(Math.max(1, deadline - Date.now()));
         }
+        const head = (await page.evaluate(
+          `({ url: location.href, title: document.title, loading: document.readyState !== "complete" })`,
+        )) as Pick<Rendered, "url" | "title" | "loading">;
+        rendered = { ...rendered, ...head, loading: rendered.loading || head.loading };
         const after = await read(before).catch(() => {
           throw readFailure("pageChanged");
         });
