@@ -86,41 +86,46 @@ export function memoryEvidenceSources(
 
 /**
  * The contract-shaped (still undecoded) result. Null references become absent keys, and an
- * entry whose origin and message ids match exactly one source takes that source's references:
- * models miscopy long opaque event ids, and validation accepts nothing but the source's own
- * values anyway. Validation still decides whether the result cites only supplied evidence.
+ * entry whose messages a source holds takes that source's references: models miscopy long opaque
+ * event ids, and validation accepts nothing but a source's own values anyway. Several sources can
+ * hold the same message (a consolidation rereads messages its previous summary cites), and any of
+ * them proves the entry, so the first wins. An entry citing messages from several sources becomes
+ * one entry per source. Validation still decides whether the result cites only supplied evidence.
  */
 export function memoryResultFromModelOutput(
   output: MemorySummaryModelOutput | MemoryConflictModelOutput,
   sources: ReadonlyArray<M.MemoryEvidence>,
 ): unknown {
+  const holds = (source: M.MemoryEvidence, id: string) =>
+    (source.messageIds as ReadonlyArray<string>).includes(id);
+  const fromSource = <E>(entry: E, source: M.MemoryEvidence) => ({
+    ...entry,
+    ...(source.sourceThread ? { sourceThread: source.sourceThread } : {}),
+    ...(source.watermark ? { watermark: source.watermark } : {}),
+    ...(source.importSourceId === undefined ? {} : { importSourceId: source.importSourceId }),
+  });
   return {
     ...output,
-    evidence: output.evidence.map(({ sourceThread, watermark, importSourceId, ...rest }) => {
-      const matches =
-        rest.origin === "model" || rest.messageIds.length === 0
-          ? []
-          : sources.filter(
-              (source) =>
-                source.origin === rest.origin &&
-                rest.messageIds.every((id) =>
-                  (source.messageIds as ReadonlyArray<string>).includes(id),
-                ),
-            );
-      const [source] = matches;
-      if (matches.length === 1 && source)
-        return {
-          ...rest,
-          ...(source.sourceThread ? { sourceThread: source.sourceThread } : {}),
-          ...(source.watermark ? { watermark: source.watermark } : {}),
-          ...(source.importSourceId === undefined ? {} : { importSourceId: source.importSourceId }),
-        };
-      return {
+    evidence: output.evidence.flatMap(({ sourceThread, watermark, importSourceId, ...rest }) => {
+      const asWritten = {
         ...rest,
         ...(sourceThread === null ? {} : { sourceThread }),
         ...(watermark === null ? {} : { watermark }),
         ...(importSourceId === null ? {} : { importSourceId }),
       };
+      if (rest.origin === "model" || rest.messageIds.length === 0) return [asWritten];
+      const candidates = sources.filter((source) => source.origin === rest.origin);
+      const covering = candidates.find((source) =>
+        rest.messageIds.every((id) => holds(source, id)),
+      );
+      if (covering) return [fromSource(rest, covering)];
+      const groups = new Map<M.MemoryEvidence, string[]>();
+      for (const id of rest.messageIds) {
+        const source = candidates.find((candidate) => holds(candidate, id));
+        if (!source) return [asWritten];
+        groups.set(source, [...(groups.get(source) ?? []), id]);
+      }
+      return [...groups].map(([source, messageIds]) => fromSource({ ...rest, messageIds }, source));
     }),
   };
 }
