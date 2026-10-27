@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
 
-export const MAX_BACKDROP_SOURCE_BYTES = 25 * 1024 * 1024;
+const MAX_BACKDROP_SOURCE_BYTES = 25 * 1024 * 1024;
 export const MAX_BACKDROP_EDGE = 2560;
 export type BackdropSaveError = "not-image" | "too-large" | "unreadable";
 

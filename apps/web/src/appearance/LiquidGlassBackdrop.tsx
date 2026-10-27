@@ -74,13 +74,15 @@ export function LiquidGlassBackdrop() {
       return;
     }
     let active = true;
-    let generation = 0;
+    // A mutable box keeps the request counter React Compiler-friendly inside the closures.
+    const generation = { current: 0 };
     let currentUrl: string | null = null;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const rebuild = () => {
-      const requested = ++generation;
+      generation.current += 1;
+      const requested = generation.current;
       void buildBackdrop(glassBackdrop === "custom").then((blob) => {
-        if (!blob || !active || requested !== generation) return;
+        if (!blob || !active || requested !== generation.current) return;
         const url = URL.createObjectURL(blob);
         root.style.setProperty("--lg-backdrop", `url("${url}")`);
         if (currentUrl) URL.revokeObjectURL(currentUrl);
@@ -98,7 +100,7 @@ export function LiquidGlassBackdrop() {
     rebuild();
     return () => {
       active = false;
-      generation += 1;
+      generation.current += 1;
       observer.disconnect();
       window.removeEventListener("resize", onResize);
       if (resizeTimer) clearTimeout(resizeTimer);
