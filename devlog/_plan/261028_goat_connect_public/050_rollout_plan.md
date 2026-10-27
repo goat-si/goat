@@ -5,8 +5,8 @@
 ## 0단계: 방향 결정(코드 전에)
 
 1. **Connect를 셋으로 나눕니다.** 계정 + 모바일 푸시, 고정 공개 URL(웹훅·게스트 링크), 어디서나 도달. 푸시는 이미 터널 없이 동작하는 "publish-only" 링크 모드가 있습니다(apps/server/src/cloud/CloudLink.ts:895, infra/relay/src/environments/EnvironmentLinker.ts:290-311). 이것을 먼저 켤 수 있습니다.
-2. **관리형 터널 단위를 "사용자당 1개, 허브로"로 바꿉니다.** 기본 제한 3(infra/relay/src/environments/ManagedTunnelLimits.ts:14)을 1로 낮추고, 휴대폰은 허브 프록시로 다른 머신에 붙습니다(docs/user/remote-access.md:574-599). 그러면 1,000명까지 터널 비용이 $0입니다.
-3. **공개 단계의 도달 수단은 Durable Object WebSocket relay + 종단 간 암호화로 준비합니다**(020 판단 3). 관리형 터널은 베타 동안만 쓰거나 유료·옵션으로 남깁니다.
+2. **관리형 터널 단위를 "사용자당 1개, 허브로"로 바꿉니다.** 기본 제한 3(infra/relay/src/environments/ManagedTunnelLimits.ts:14)을 1로 낮추고, 휴대폰은 허브 프록시로 다른 머신에 붙습니다(docs/user/remote-access.md:574-599). 그러면 1,000명까지 터널 비용이 $0입니다. 지금 Connect 세션은 표준 권한만 받아 허브 프록시가 403을 돌려주므로(apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:183-184), 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급하는 경로가 필요합니다. 허브 경유는 채팅 작업까지만 되며, 노드의 터미널·설정·게스트 링크·웹훅은 노드 자신의 경로를 쓰거나 베타에서 유예한다고 정합니다.
+3. **공개 단계의 도달 수단은 Durable Object WebSocket relay + 종단 간 암호화와 로컬 기기 승인을 유력 후보로 준비합니다**(020 판단 3). 베타 실측으로 노드별 유료 터널·BYO 터널과 다시 비교합니다.
 4. **운영 Cloudflare 계정과 개발 계정을 나눕니다.** preview stage도 같은 계정의 터널 1,000개를 나눠 씁니다(infra/relay/src/previewTunnelSweep.ts:105).
 
 ## 1단계: 나만 쓰는 비공개 운영
@@ -19,8 +19,8 @@
 | DB 크기   | IaC의 `PS_80` + 레플리카 2를 PS-5 단일 노드로                                                  | infra/relay/src/db.ts:49-55             |
 | 설정 문서 | Clerk 리디렉트·Android 콜백·패스키 App ID를 `si.goat.*`로 고치고 실제 Clerk 앱에 등록          | docs/operations/connect-setup.md:75-112 |
 | 문서 정정 | "유휴 터널도 과금"을 "1,000개까지 무료, 이후 $4.50/월"로                                       | docs/internals/goat-connect.md:89-110   |
-| 터널      | 기본 제한 1, 허브만 링크, 회수 `dry-run` → `enabled`                                           | .env.example:8-16                       |
-| 모니터    | Axiom 알림 대상 설정 후 실제 알림 수신 확인                                                    | infra/relay/src/monitoring.ts:55        |
+| 터널 | 회수 `dry-run` → `enabled`. 직접 쓸 때는 머신마다 터널이어도 무료 구간 안 | infra/relay/.env.example:8-16 |
+| 모니터 | Axiom 알림 대상 설정 후 실제 알림 수신 확인 | infra/relay/src/monitoring.ts:358-361 |
 | 측정      | 사용자당 relay 요청 수, CPU ms, DB 크기, 푸시 건수                                             | 030의 가정 검증                         |
 
 비용: 월 약 $10(Workers $5 + DB $5) + Apple $99/년 + 도메인 등록비. Clerk Hobby $0.
@@ -42,7 +42,8 @@
 
 | 작업                                                                                      | 심각도 | 근거                                     |
 | ----------------------------------------------------------------------------------------- | ------ | ---------------------------------------- |
-| 터널 제한을 원자적으로(사용자 단위 잠금, 진행 중 할당 포함)                               | 차단   | 040 표                                   |
+| 허브 프록시 권한: 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급. 수용 조건은 Connect 로그인만 한 휴대폰, 기존 세션 갱신, 철회, 연결된 노드 등록. 터널 제한 1로 변경 | 차단 | apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:183-184, apps/server/src/hubProxy/http.test.ts:296-309 |
+| 터널 제한을 원자적으로(사용자 단위 잠금, 진행 중 할당 포함) | 차단 | 040 표 |
 | 사용자당 환경·기기 개수 상한                                                              | 차단   | 040 표                                   |
 | 링크·DPoP 교환·mint·기기 등록·푸시 발행에 계정 단위 레이트 리밋(엄격 상한은 DO)           | 차단   | 040 표                                   |
 | Clerk Pro, MFA·패스키 필수, 링크·새 기기·복구 변경에 재인증. CLI·device grant 경로도 확인 | 차단   | 040 첫 절                                |
@@ -75,9 +76,11 @@
 
 | 작업                                                                                             | 이유                                                                                              |
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| Durable Object WebSocket relay(양쪽이 바깥으로 연결) + 페어링 키로 종단 간 암호화                | 터널 비용이 등록 머신 수에 비례하는 문제와 relay 서명 키의 마스터 키 문제를 함께 줄임(020, 030)   |
-| 웹훅을 relay DO가 받아 보관하고 호스트가 바깥으로 연결해 가져가기                                | 공개 URL에 터널이 필요 없어짐. 기존 hold 구조(docs/internals/goat-connect.md:28-45)의 방향만 바꿈 |
-| 게스트 링크를 relay 경로 위로                                                                    | docs/user/guest-links.md:9-11                                                                     |
+| Durable Object WebSocket relay(양쪽이 바깥으로 연결) + 페어링 키로 종단 간 암호화 | 터널 비용이 등록 머신 수에 비례하는 문제를 줄임(020, 030) |
+| 로컬 기기 승인: 환경이 승인한 기기 공개키·권한을 보관, 새 기기·복구는 relay 로그인과 독립된 승인, 기존 mint 경로를 끄거나 약한 옵션으로 격리, 기존 세션 이전·철회. 서명 키만으로 만든 새 기기가 거부되는지 검증 | relay 서명 키의 마스터 키 문제는 암호화가 아니라 이 권한 변경으로 줄어듦(CloudLink.ts:1597-1634) |
+| 브라우저 웹 앱 배포와 버전 호환, 브라우저·네이티브 키 보관과 최초 페어링, HTTP·WS·파일 경로 대응 | 지금 웹 자산은 환경 서버가 제공(apps/server/src/http.ts:740-758). 서명 키 유출, relay 코드 침해, 웹 자산 배포 침해를 구분해 보장 범위를 적음 |
+| 새 웹훅 전달 프로토콜: 터널과 독립된 endpoint ID와 소유권, 환경 인증 fetch/ack, 재전달·순서·삭제, 발신자 응답(202 또는 동기), 기본 저장 여부 | 공개 URL에 터널이 필요 없어짐. 보관 저장소·제한·delivery ID는 재사용(infra/relay/src/hooks/HookInboxStore.ts), 조회는 터널에서 분리(HeldHooks.ts:60-100) |
+| 게스트 링크를 relay 경로 위로: 무계정 게스트의 권한 전달, 만료·철회, 첨부 파일 | 지금은 환경의 Connect 주소에 묶임(docs/user/guest-links.md:9-11, apps/server/src/guest/GuestShareService.ts:313-326) |
 | 관리형 터널은 유료·옵션으로 남기거나 제거                                                        | 1,000개 초과 시 $4.50/개/월                                                                       |
 | relay 서명 키 교체 경로(환경이 새 키를 받는 방법)                                                | 040                                                                                               |
 | 외부 보안 검토: mint 권한, 계정·환경 분리, OAuth·device 승인 피싱, 서명 키와 Cloudflare API 토큰 | 040                                                                                               |
