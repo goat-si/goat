@@ -72,10 +72,13 @@ export class ConnectLinkReservations extends Context.Service<
       input: Reservation,
       commit: Effect.Effect<Outcome, E, R>,
     ) => Effect.Effect<Outcome, E | ReservationError, R>;
-    readonly withdraw: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-    }) => Effect.Effect<void, RelayInternalError>;
+    readonly withdraw: <A, E, R>(
+      input: {
+        readonly userId: string;
+        readonly environmentId: string;
+      },
+      revoke: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | RelayInternalError, R>;
     readonly failed: (input: Reservation) => Effect.Effect<void, RelayInternalError>;
   }
 >()("goat-relay/environments/ConnectLinkReservations") {}
@@ -175,7 +178,7 @@ const make = Effect.gen(function* () {
               return yield* strengthRequired("unsupported_authentication_flow");
           }
           const busy = yield* db.$client`SELECT 1 FROM relay_connect_link_reservations
-        WHERE user_id = ${input.userId} AND environment_id = ${input.environmentId} AND status IN ('running', 'withdrawn')`.pipe(
+        WHERE user_id = ${input.userId} AND environment_id = ${input.environmentId} AND status IN ('running', 'recovering', 'withdrawn')`.pipe(
             Effect.mapError(unavailable),
           );
           if (busy.length > 0) return yield* strengthRequired("unsupported_authentication_flow");
@@ -185,7 +188,7 @@ const make = Effect.gen(function* () {
             SELECT environment_id FROM relay_environment_links WHERE user_id = ${input.userId}
               AND revoked_at IS NULL AND managed_tunnels_enabled = true
             UNION SELECT environment_id FROM relay_connect_link_reservations WHERE user_id = ${input.userId}
-              AND status IN ('running', 'withdrawn')
+              AND status IN ('running', 'recovering', 'withdrawn')
           ) AS occupied WHERE environment_id <> ${input.environmentId}) AS total,
           COALESCE((SELECT max_tunnels FROM relay_managed_tunnel_limits WHERE user_id = ${input.userId}), 3) AS maximum`.pipe(
               Effect.mapError(unavailable),
@@ -284,52 +287,63 @@ const make = Effect.gen(function* () {
   const recover: ConnectLinkReservations["Service"]["recover"] = Effect.fn(
     "ConnectLinkReservations.recover",
   )(function* (userId, cleanup) {
-    const rows = yield* db.$client<{
-      challenge_id: string;
-      environment_id: string;
-      attempt_id: string | null;
-    }>`
-        SELECT challenge_id, environment_id, attempt_id FROM relay_connect_link_reservations
-        WHERE user_id = ${userId} AND status IN ('running', 'withdrawn')`.pipe(
-      Effect.mapError(unavailable),
-    );
+    // Fence completion durably before touching resources; failed cleanup continues to hold capacity.
+    const rows = yield* db.$client
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* lock(userId);
+          return yield* db.$client<{
+            challenge_id: string;
+            environment_id: string;
+            attempt_id: string | null;
+          }>`UPDATE relay_connect_link_reservations
+          SET status = CASE WHEN status = 'running' THEN 'recovering' ELSE status END
+          WHERE user_id = ${userId} AND status IN ('running', 'recovering', 'withdrawn')
+          RETURNING challenge_id, environment_id, attempt_id`.pipe(Effect.mapError(unavailable));
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
     for (const row of rows) {
       yield* cleanup(row.environment_id);
       yield* db.$client`UPDATE relay_connect_link_reservations
           SET status = CASE WHEN status = 'withdrawn' THEN 'cancelled' ELSE 'failed' END
           WHERE user_id = ${userId} AND challenge_id = ${row.challenge_id}
-            AND attempt_id IS NOT DISTINCT FROM ${row.attempt_id} AND status IN ('running', 'withdrawn')`.pipe(
+            AND attempt_id IS NOT DISTINCT FROM ${row.attempt_id} AND status IN ('recovering', 'withdrawn')`.pipe(
         Effect.mapError(unavailable),
       );
     }
   });
+  const withdraw: ConnectLinkReservations["Service"]["withdraw"] = Effect.fn(
+    "ConnectLinkReservations.withdraw",
+  )((input, revoke) =>
+    db.$client
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* lock(input.userId);
+          yield* db
+            .update(relayConnectLinkReservations)
+            .set({
+              status: sql`CASE WHEN status IN ('running', 'recovering', 'withdrawn') THEN 'withdrawn' ELSE 'cancelled' END`,
+              outcome: null,
+            })
+            .where(
+              and(
+                eq(relayConnectLinkReservations.userId, input.userId),
+                eq(relayConnectLinkReservations.environmentId, input.environmentId),
+              ),
+            )
+            .pipe(Effect.mapError(unavailable));
+          return yield* revoke;
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) })),
+  );
   return ConnectLinkReservations.of({
     exclusive,
     recover,
     reserve,
     complete,
-    withdraw: Effect.fn("ConnectLinkReservations.withdraw")((input) =>
-      db.$client
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* lock(input.userId);
-            yield* db
-              .update(relayConnectLinkReservations)
-              .set({
-                status: sql`CASE WHEN status IN ('running', 'withdrawn') THEN 'withdrawn' ELSE 'cancelled' END`,
-                outcome: null,
-              })
-              .where(
-                and(
-                  eq(relayConnectLinkReservations.userId, input.userId),
-                  eq(relayConnectLinkReservations.environmentId, input.environmentId),
-                ),
-              )
-              .pipe(Effect.mapError(unavailable));
-          }),
-        )
-        .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) })),
-    ),
+    withdraw,
     failed: Effect.fn("ConnectLinkReservations.failed")((input) =>
       db
         .update(relayConnectLinkReservations)

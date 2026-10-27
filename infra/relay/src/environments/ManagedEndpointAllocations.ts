@@ -94,23 +94,27 @@ interface ReserveManagedEndpointAllocationInput extends ManagedEndpointAllocatio
 }
 
 interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
 }
 
 interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly dnsRecordId: string;
   readonly tunnelId: string;
   readonly generation: number;
 }
 
 interface MarkManagedEndpointReadyInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
   readonly origin: RelayManagedEndpointOrigin;
 }
 
 interface ClaimManagedEndpointReleaseInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
   readonly markReleased?: boolean;
@@ -169,7 +173,6 @@ export class ManagedEndpointAllocations extends Context.Service<
     readonly withClaimedTunnel: <A, E, R>(
       input: Omit<ClaimManagedEndpointReleaseInput, "tunnelId"> & {
         readonly tunnelId: string | null;
-        readonly incarnationId?: string;
       },
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<Option.Option<A>, E | ManagedEndpointAllocationPersistenceError, R>;
@@ -329,6 +332,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
         )
@@ -359,6 +363,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -392,6 +397,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -542,6 +548,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -567,7 +574,6 @@ export const make = Effect.gen(function* () {
       function* <A, E, R>(
         input: Omit<ClaimManagedEndpointReleaseInput, "tunnelId"> & {
           readonly tunnelId: string | null;
-          readonly incarnationId?: string;
         },
         effect: Effect.Effect<A, E, R>,
       ): Effect.fn.Return<Option.Option<A>, E | ManagedEndpointAllocationPersistenceError, R> {
@@ -591,9 +597,7 @@ export const make = Effect.gen(function* () {
                   input.tunnelId === null
                     ? isNull(relayManagedEndpointAllocations.tunnelId)
                     : eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
-                  input.incarnationId === undefined
-                    ? undefined
-                    : eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
+                  eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
                   eq(relayManagedEndpointAllocations.generation, input.generation),
                 ),
               )

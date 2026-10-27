@@ -66,7 +66,10 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "recordTunnel", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation
+        ) {
           return null;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -80,7 +83,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "recordDns", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation || current.tunnelId !== input.tunnelId) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation ||
+          current.tunnelId !== input.tunnelId
+        ) {
           return null;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -93,7 +100,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "markReady", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation || current.tunnelId !== input.tunnelId) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation ||
+          current.tunnelId !== input.tunnelId
+        ) {
           return false;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -128,7 +139,8 @@ export function makeAllocations(calls: AllocationCall[] = []) {
         if (
           allocation === undefined ||
           allocation.tunnelId !== input.tunnelId ||
-          allocation.generation !== input.generation
+          allocation.generation !== input.generation ||
+          allocation.incarnationId !== input.incarnationId
         ) {
           return null;
         }
@@ -138,7 +150,9 @@ export function makeAllocations(calls: AllocationCall[] = []) {
     withClaimedTunnel: (input, effect) =>
       Effect.suspend(() => {
         const current = allocations.get(allocationKey(input));
-        return current?.tunnelId === input.tunnelId && current.generation === input.generation
+        return current?.incarnationId === input.incarnationId &&
+          current.tunnelId === input.tunnelId &&
+          current.generation === input.generation
           ? Effect.asSome(effect)
           : Effect.succeedNone;
       }),

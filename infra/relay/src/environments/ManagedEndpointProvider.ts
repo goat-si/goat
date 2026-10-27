@@ -792,6 +792,7 @@ export const make = Effect.gen(function* () {
             environmentId: input.environmentId,
             tunnelId: input.tunnelId,
             generation: allocation.generation,
+            incarnationId: allocation.incarnationId,
           },
           tunnels
             .putConfiguration(input.tunnelId, {
@@ -818,6 +819,7 @@ export const make = Effect.gen(function* () {
                     .markReady({
                       ...input,
                       generation: allocation.generation,
+                      incarnationId: allocation.incarnationId,
                     })
                     .pipe(
                       Effect.map((updated) =>
@@ -966,6 +968,7 @@ export const make = Effect.gen(function* () {
           environmentId: input.environmentId,
           tunnelId,
           generation: allocation.generation,
+          incarnationId: allocation.incarnationId,
         })
         .pipe(
           Effect.mapError(
@@ -1052,6 +1055,7 @@ export const make = Effect.gen(function* () {
             environmentId: input.environmentId,
             tunnelId,
             generation: claimedGeneration,
+            incarnationId: allocation.incarnationId,
           },
           Effect.gen(function* () {
             const finalGeneration = yield* allocations
@@ -1060,6 +1064,7 @@ export const make = Effect.gen(function* () {
                 environmentId: input.environmentId,
                 tunnelId,
                 generation: claimedGeneration,
+                incarnationId: allocation.incarnationId,
                 ...(input.markReleased === true ? { markReleased: true } : {}),
               })
               .pipe(
@@ -1236,6 +1241,7 @@ export const make = Effect.gen(function* () {
           environmentId: input.environmentId,
           tunnelId: tunnel.id,
           generation: allocation.generation,
+          incarnationId: allocation.incarnationId,
         })
         .pipe(
           Effect.mapError(
@@ -1271,6 +1277,7 @@ export const make = Effect.gen(function* () {
             environmentId: input.environmentId,
             tunnelId: tunnel.id,
             generation: tunnelGeneration,
+            incarnationId: allocation.incarnationId,
           },
           tunnels
             .putConfiguration(tunnel.id, {
@@ -1340,6 +1347,7 @@ export const make = Effect.gen(function* () {
             environmentId: input.environmentId,
             tunnelId: tunnel.id,
             generation: tunnelGeneration,
+            incarnationId: allocation.incarnationId,
           },
           Effect.gen(function* () {
             const dnsRecordId = yield* ensureDnsRecord(
@@ -1370,6 +1378,7 @@ export const make = Effect.gen(function* () {
                 dnsRecordId,
                 tunnelId: tunnel.id,
                 generation: tunnelGeneration,
+                incarnationId: allocation.incarnationId,
               })
               .pipe(
                 Effect.mapError(
@@ -1451,6 +1460,7 @@ export const make = Effect.gen(function* () {
           environmentId: input.environmentId,
           tunnelId: tunnel.id,
           generation: dnsGeneration,
+          incarnationId: allocation.incarnationId,
           origin: input.origin,
         })
         .pipe(

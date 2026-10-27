@@ -541,27 +541,25 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
+    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+    const { deprovisionTarget, unlinked } = yield* reservations.withdraw(
+      input,
+      Effect.gen(function* () {
+        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision(input);
+        const link = yield* links.getForUser(input);
+        const unlinked =
+          link !== null
+            ? yield* revokeEnvironmentLinkRecord({
+                ...input,
+                environmentPublicKey: link.environmentPublicKey,
+              })
+            : false;
+        return { deprovisionTarget, unlinked };
+      }),
+    );
     return yield* reservations.exclusive(input.userId, (assertOwner) =>
       Effect.gen(function* () {
         yield* assertOwner;
-        yield* reservations.withdraw(input);
-        const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
-          userId: input.userId,
-          environmentId: input.environmentId,
-        });
-        const link = yield* links.getForUser({
-          userId: input.userId,
-          environmentId: input.environmentId,
-        });
-        const unlinked =
-          link === null
-            ? false
-            : yield* revokeEnvironmentLinkRecord({
-                userId: input.userId,
-                environmentId: link.environmentId,
-                environmentPublicKey: link.environmentPublicKey,
-              });
         // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
         const deprovisioned = yield* managedEndpointProvider.deprovision({
           userId: input.userId,
@@ -587,9 +585,11 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
           );
         }
         if (!deprovisioned) {
+          yield* assertOwner;
           const key = { userId: input.userId, environmentId: input.environmentId };
           const retryTarget = yield* managedEndpointProvider.prepareDeprovision(key);
           if (retryTarget !== null && (yield* links.getForUser(key)) === null) {
+            yield* assertOwner;
             yield* managedEndpointProvider.deprovision({ ...key, target: retryTarget });
           }
         }

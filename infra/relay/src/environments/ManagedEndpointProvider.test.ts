@@ -863,6 +863,7 @@ describe("ManagedEndpointProvider", () => {
                 environmentId: input.environmentId,
                 tunnelId: "replacement-tunnel",
                 generation: claimedGeneration,
+                incarnationId: input.incarnationId,
               })
               .pipe(Effect.asVoid);
           }),

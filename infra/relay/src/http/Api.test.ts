@@ -101,7 +101,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
             exclusive: (_userId, use) => use(Effect.void),
-            withdraw: () => Effect.void,
+            withdraw: (_input, revoke) => revoke,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
@@ -226,7 +226,7 @@ describe("device listing compatibility", () => {
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
             exclusive: (_userId, use) => use(Effect.void),
-            withdraw: () => Effect.void,
+            withdraw: (_input, revoke) => revoke,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
@@ -319,7 +319,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
             exclusive: (_userId, use) => use(Effect.void),
-            withdraw: () => Effect.void,
+            withdraw: (_input, revoke) => revoke,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
@@ -478,7 +478,7 @@ function layerRelayUnlinkTest(input?: {
   return Layer.mergeAll(
     Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
       exclusive: (_userId, use) => use(Effect.void),
-      withdraw: () => Effect.void,
+      withdraw: (_input, revoke) => revoke,
     }),
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
