@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./model-short-name": {
+      "types": "./src/modelShortName.ts",
+      "default": "./src/modelShortName.ts"
+    },
     "./built-in-skill-settings": {
       "types": "./src/builtInSkillSettings.ts",
       "default": "./src/builtInSkillSettings.ts"

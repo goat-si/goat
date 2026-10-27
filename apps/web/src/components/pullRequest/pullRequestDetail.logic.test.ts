@@ -673,7 +673,7 @@ describe("fix findings handoff", () => {
     const handoff = buildFixFindingsHandoff({
       ...base,
       title: "Add the page",
-      url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/42",
+      url: "https://gitlab.com/goat-si/goat/-/merge_requests/42",
       reviewThreads: [],
       checks: [],
     });
@@ -876,7 +876,7 @@ describe("asking about a change rather than working on it", () => {
     const handoff = buildExplainPullRequestHandoff({
       ...base,
       title: "Add the page",
-      url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/42",
+      url: "https://gitlab.com/goat-si/goat/-/merge_requests/42",
     });
     expect(handoff.prompt).toBe("Explain this merge request.");
     expect(handoff.reviewComments[0]?.text).toContain("The merge request is #42");
@@ -884,7 +884,7 @@ describe("asking about a change rather than working on it", () => {
     expect(
       buildResolveConflictsPrompt({
         ...base,
-        url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/42",
+        url: "https://gitlab.com/goat-si/goat/-/merge_requests/42",
       }),
     ).toMatch(/^MR #42 /u);
   });

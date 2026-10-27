@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
+import { driverOutcomeSafety } from "./ComputerUseDriverOutcome.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { PRIMITIVE_ID, type ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
@@ -131,7 +132,7 @@ function withTreeDiff(line: string, diff: unknown): string {
       : "GOAT re-read the window after this input as a full read.";
   const note = `${lead} The window's snapshot is now ${snapshotId}: earlier element tokens are stale, use ${snapshotId}:N.`;
   const content = Array.isArray(result.content) ? result.content : [];
-  return JSON.stringify({
+  const verified = {
     ...message,
     result: {
       ...result,
@@ -146,6 +147,16 @@ function withTreeDiff(line: string, diff: unknown): string {
         snapshot_id: snapshotId,
         since_status: status,
       },
+    },
+  };
+  if (!changed) return JSON.stringify(verified);
+  // The safety marked before the read-back said may-have-applied; the input is now confirmed.
+  const safety = driverOutcomeSafety(undefined, verified);
+  return JSON.stringify({
+    ...verified,
+    result: {
+      ...verified.result,
+      structuredContent: { ...verified.result.structuredContent, safety },
     },
   });
 }

@@ -9,6 +9,11 @@ Nightly builds `dev`; stable rebuilds a nightly that has soaked for 24 hours. Th
 must be enabled before it publishes. Install and update GOAT from those archives
 or with `goat update <version>`.
 
+Linux ARM64 CLI executables must build on a Linux ARM64 host. They temporarily use
+postject instead of `--build-sea` so they load on 16 and 64 KiB page kernels
+([nodejs/node#67048](https://github.com/nodejs/node/issues/67048)). Archive assembly
+rejects incompatible ELF layouts. Development runtime archives still use the selected Node runtime.
+
 <a id="what-the-workflow-does"></a>
 
 ## Upstream reference (disabled)

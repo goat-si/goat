@@ -5,8 +5,12 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
@@ -57,6 +61,58 @@ it.effect("completes finalization when the post-checkpoint workspace refresh fai
     assert.deepEqual(captured, ["checkpoint", "refresh"]);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("finishes a durable checkpoint when display refresh never answers", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:refresh-deadline");
+    const runId = RunId.make("run:refresh-deadline");
+    const scopeId = CheckpointScopeId.make("scope:refresh-deadline");
+    const entered = yield* Deferred.make<void>();
+    const interrupted = yield* Deferred.make<void>();
+    const finished = yield* Deferred.make<void>();
+    let captures = 0;
+    const layer = RunFinalization.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
+            execute: () =>
+              Effect.sync(() => {
+                captures += 1;
+              }),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getCheckpointContext: () =>
+              Effect.succeed({
+                runs: [],
+                checkpointScopes: [{ id: scopeId, runId, kind: "root_run" as const, cwd: "/repo" }],
+                checkpoints: [],
+              }),
+          }),
+          Layer.succeed(RunFinalization.RunFinalizationObserver, {
+            refreshAfterTurn: () => Effect.void,
+            refresh: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+              ),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* RunFinalization.RunFinalizationService;
+      const fiber = yield* service
+        .finalize({ threadId, runId, scopeId })
+        .pipe(Effect.ensuring(Deferred.succeed(finished, undefined)), Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("11 seconds");
+      assert.isTrue(yield* Deferred.isDone(finished));
+      assert.isTrue(yield* Deferred.isDone(interrupted));
+      assert.isTrue(Exit.isSuccess(yield* Fiber.await(fiber)));
+      assert.equal(captures, 1);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.scoped),
+);
 
 it.effect.each(
   (
