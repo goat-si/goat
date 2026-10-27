@@ -365,12 +365,24 @@ export default defineConfig({
           projects: [
             ...TEST_CONFIG_PACKAGES,
             {
+              // The ssh job's timeouts: fixture tests start real shells and servers, and a few
+              // take over a minute on CI runners even when they pass there.
+              extends: true,
+              test: {
+                name: "ssh",
+                include: ["packages/ssh/**/*.test.ts"],
+                hookTimeout: 180_000,
+                testTimeout: 180_000,
+              },
+            },
+            {
               extends: true,
               test: {
                 name: "root",
                 exclude: [
                   ...TEST_EXCLUDE,
                   ...TEST_CONFIG_PACKAGES.map((dir) => `${dir}/**`),
+                  "packages/ssh/**",
                   "native/kde-snap-shot/**",
                 ],
               },
