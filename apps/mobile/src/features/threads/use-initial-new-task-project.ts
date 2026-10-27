@@ -19,32 +19,39 @@ export function useInitialNewTaskProject(
     readonly onMissingProject: (missing: boolean) => void;
   },
 ) {
-  const { flow, servesRoute, projects } = props;
+  const {
+    flow,
+    servesRoute,
+    projects,
+    initialProjectRef,
+    pendingTaskId,
+    draftId,
+    incomingShareId,
+    onMissingProject,
+  } = props;
   const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const goBack = useWorkspaceBackNavigation("threads");
   const environments = useWorkspaceEnvironments();
   const environmentLoading = useNewTaskEnvironmentLoading(
-    props.initialProjectRef?.environmentId
-      ? EnvironmentId.make(props.initialProjectRef.environmentId)
-      : null,
+    initialProjectRef?.environmentId ? EnvironmentId.make(initialProjectRef.environmentId) : null,
   );
   const appliedInitialProjectKeyRef = useRef<string | null>(null);
   const initialPickerRef = useRef<"opening" | "open" | "dismissed" | null>(null);
-  const lastInitialProjectRefRef = useRef(props.initialProjectRef);
+  const lastInitialProjectRefRef = useRef(initialProjectRef);
 
   // oxlint-disable-next-line goat/react-effect-budget -- Applies route selection and coordinates the initial project picker.
   useEffect(() => {
-    if (!servesRoute || props.pendingTaskId || props.draftId) {
+    if (!servesRoute || pendingTaskId || draftId) {
       return;
     }
-    if (lastInitialProjectRefRef.current !== props.initialProjectRef) {
-      lastInitialProjectRefRef.current = props.initialProjectRef;
+    if (lastInitialProjectRefRef.current !== initialProjectRef) {
+      lastInitialProjectRefRef.current = initialProjectRef;
       appliedInitialProjectKeyRef.current = null;
     }
-    const initialEnvironmentId = props.initialProjectRef?.environmentId;
-    const initialProjectId = props.initialProjectRef?.projectId;
+    const initialEnvironmentId = initialProjectRef?.environmentId;
+    const initialProjectId = initialProjectRef?.projectId;
     if (initialEnvironmentId && initialProjectId) {
       const directProject =
         projects.find(
@@ -58,7 +65,7 @@ export function useInitialNewTaskProject(
         if (appliedInitialProjectKeyRef.current === directProjectKey) {
           return;
         }
-        if (props.initialProjectRef?.branch) {
+        if (initialProjectRef?.branch) {
           if (
             selectedProject?.environmentId !== directProject.environmentId ||
             selectedProject.id !== directProject.id
@@ -71,8 +78,8 @@ export function useInitialNewTaskProject(
           updateComposerDraftSettings(flow.draftKey, {
             workspaceSelection: {
               mode: "local",
-              branch: props.initialProjectRef.branch,
-              worktreePath: props.initialProjectRef.worktreePath ?? null,
+              branch: initialProjectRef.branch,
+              worktreePath: initialProjectRef.worktreePath ?? null,
               startFromOrigin: false,
             },
           });
@@ -89,15 +96,14 @@ export function useInitialNewTaskProject(
       }
 
       if (!environmentLoading) {
-        // oxlint-disable-next-line react/set-state-in-effect -- Route-driven project resolution starts the return-to-picker flow when no project matches.
-        props.onMissingProject(true);
+        onMissingProject(true);
       }
       return;
     }
 
     if (initialPickerRef.current === "opening" && !isFocused) initialPickerRef.current = "open";
     const selection = resolveDraftProjectSelection(selectedProjectKey, projects, projectScopes, {
-      incomingShareId: props.incomingShareId,
+      incomingShareId,
       pickerClosed: initialPickerRef.current === "open" && isFocused,
       connectedEnvironmentIds: new Set(
         environments
@@ -121,24 +127,21 @@ export function useInitialNewTaskProject(
     }
     if (initialPickerRef.current !== null) return;
     initialPickerRef.current = "opening";
-    navigation.dispatch(
-      CommonActions.navigate("NewTaskProject", { incomingShareId: props.incomingShareId }),
-    );
+    navigation.dispatch(CommonActions.navigate("NewTaskProject", { incomingShareId }));
   }, [
     servesRoute,
     isFocused,
     goBack,
     environments,
     environmentLoading,
-    props.onMissingProject,
+    onMissingProject,
     projectScopes,
     projects,
     flow.draftKey,
-    props.initialProjectRef,
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening a draft from a share, pending task, or draft id re-resolves its project.
-    props.incomingShareId,
-    props.pendingTaskId,
-    props.draftId,
+    initialProjectRef,
+    incomingShareId,
+    pendingTaskId,
+    draftId,
     navigation,
     selectedProject,
     selectedProjectKey,

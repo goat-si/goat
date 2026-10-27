@@ -278,14 +278,17 @@ export function NewTaskFlowProvider(
   const editor = useMemo(
     () => ({
       flowKey,
-      message: { current: null as QueuedThreadMessage | null },
+      message: React.createRef<QueuedThreadMessage | null>(),
       revision: { current: Promise.resolve(0) },
-      flush: { current: null as (() => void) | null },
+      flush: React.createRef<(() => void) | null>(),
     }),
     [flowKey],
   );
-  const editingPendingTaskRef = editor.message;
-  const editingRevisionRef = editor.revision;
+  const {
+    message: editingPendingTaskRef,
+    revision: editingRevisionRef,
+    flush: editingFlushRef,
+  } = editor;
 
   const projectsForEnvironment = pipe(
     projects,
@@ -407,7 +410,6 @@ export function NewTaskFlowProvider(
     ) {
       return;
     }
-    // oxlint-disable-next-line react/set-state-in-effect -- Creates the persistent draft once the project selection is ready; the key must exist before the composer mounts.
     setActiveDraftKey(
       createNewTaskDraft({
         environmentId: selectedProject.environmentId,
@@ -659,7 +661,10 @@ export function NewTaskFlowProvider(
   const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
   const setSwitchingToEnvironmentId = (switchingToEnvironmentId: EnvironmentId | null) =>
     updateFlow({ switchingToEnvironmentId });
-  const latestSwitchRef = useMemo(() => ({ flowKey, current: null as object | null }), [flowKey]);
+  const { request: latestSwitchRef } = useMemo(
+    () => ({ flowKey, request: React.createRef<object | null>() }),
+    [flowKey],
+  );
   const switchEnvironment = async (environmentId: EnvironmentId): Promise<boolean> => {
     if (environmentId === selectedEnvironmentId) {
       latestSwitchRef.current = null;
@@ -908,9 +913,8 @@ export function NewTaskFlowProvider(
     if (!stillQueued) {
       finishEditingPendingTask();
     }
-  }, [finishEditingPendingTask, queuedMessagesByThreadKey]);
+  }, [editingPendingTaskRef, finishEditingPendingTask, queuedMessagesByThreadKey]);
 
-  const editingFlushRef = editor.flush;
   useEffect(() => {
     editingFlushRef.current = () => {
       const editing = editingPendingTaskRef.current;
@@ -957,7 +961,13 @@ export function NewTaskFlowProvider(
           console.warn("[new-task] failed to save edited pending task", error);
         });
     };
-  }, [buildPendingTaskMessage]);
+  }, [
+    buildPendingTaskMessage,
+    editingFlushRef,
+    editingPendingTaskRef,
+    editingRevisionRef,
+    setEditingPendingTask,
+  ]);
   const cancelEditingPendingTask = useCallback(() => {
     editingFlushRef.current?.();
   }, [editingFlushRef]);
