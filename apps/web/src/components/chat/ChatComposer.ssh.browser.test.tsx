@@ -1,22 +1,22 @@
 import { state, setupSshComposer, id, store, result, deferred } from "~/test/sshComposerFixture";
 import { act } from "../../../test/render";
-import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
-vi.mock("./ChatComposer", async (original) => {
-  const actual = await original<typeof import("./ChatComposer")>();
-  return {
-    ...actual,
-    ChatComposer: (props: ComponentProps<typeof actual.ChatComposer>) => {
-      state.composer = props;
-      return <actual.ChatComposer {...props} />;
-    },
-  };
-});
+import { ChatComposer } from "./ChatComposer";
+const renderComposer = ChatComposer.type;
+// Records the real composer's props; the fixture restores this spy after each test.
+async function setupComposer() {
+  const fixture = await setupSshComposer(true);
+  vi.spyOn(ChatComposer, "type").mockImplementation((props) => {
+    state.composer = props;
+    return renderComposer(props);
+  });
+  return fixture;
+}
 it.each(["button", "keyboard"])(
   "allows an SSH %s send with a source-specific provider block",
   async (activation) => {
-    await using fixture = await setupSshComposer(true);
+    await using fixture = await setupComposer();
     const { mount, container } = fixture;
     const submitButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 
@@ -36,7 +36,7 @@ it.each(["button", "keyboard"])(
   },
 );
 it("retains the ordinary source-specific provider send block", async () => {
-  await using fixture = await setupSshComposer(true);
+  await using fixture = await setupComposer();
   const { mount, container } = fixture;
   const submitButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 
@@ -50,7 +50,7 @@ it("retains the ordinary source-specific provider send block", async () => {
   expect(state.launch).not.toHaveBeenCalled();
 });
 it("keeps typing and paste editable during SSH launch", async () => {
-  await using fixture = await setupSshComposer(true);
+  await using fixture = await setupComposer();
   const { mount, container } = fixture;
   const submitButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 
@@ -86,7 +86,7 @@ it("keeps typing and paste editable during SSH launch", async () => {
   expect(store().getComposerDraft(id)?.prompt).toContain("pasted");
 });
 it.each(["attachment", "fanout", "absent model"])("keeps SSH %s blocked", async (blocker) => {
-  await using fixture = await setupSshComposer(true);
+  await using fixture = await setupComposer();
   const { mount, container, primary } = fixture;
   const submitButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 
