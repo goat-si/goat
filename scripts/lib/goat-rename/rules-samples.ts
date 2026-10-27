@@ -64,6 +64,14 @@ const sampleRepo = (id: string, find: RegExp, replace: string): TextRule => ({
 
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "samples:github-fork-head-name",
+    category: "samples",
+    find: /(\bheadRepository:\s*\{[^{}\r\n]*\bname:\s*")t3code(?=")/g,
+    replace: "$1goat",
+    scope: (path) =>
+      path === "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
+  },
+  {
     id: "samples:palette-reference-query",
     category: "samples",
     find: /(?<![\w/])t3code(?=#\d)/g,

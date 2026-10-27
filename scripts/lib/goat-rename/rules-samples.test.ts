@@ -7,6 +7,27 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
+  it("keeps fork head names aligned with their renamed expectations (#1923)", () => {
+    const path = "packages/source-control-github/src/server/gitHubPullRequests.test.ts";
+    const source = [
+      'headRepository: { id: "R_1", name: "t3code" },',
+      'headRepositoryOwner: { login: "binbandit" },',
+      'headRepositoryNameWithOwner: "binbandit/t3code",',
+    ].join("\n");
+    const renamed = [
+      'headRepository: { id: "R_1", name: "goat" },',
+      'headRepositoryOwner: { login: "binbandit" },',
+      'headRepositoryNameWithOwner: "binbandit/goat",',
+    ].join("\n");
+    expect(apply(path, source)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    const unrelated = 'headRepository: { id: "R_1", name: "t3code" },';
+    expect(apply("a/b.test.ts", unrelated)).toBe(unrelated);
+    expect(apply(path, 'headRepository: { name: "t3code-fork" },')).toBe(
+      'headRepository: { name: "t3code-fork" },',
+    );
+  });
+
   it("keeps palette reference queries aligned with renamed repository fixtures", () => {
     const source = '"pingdotgg/t3code#22889" "t3code#22889" "t3code#2288"';
     expect(apply("packages/shared/src/paletteSearch.test.ts", source)).toBe(
