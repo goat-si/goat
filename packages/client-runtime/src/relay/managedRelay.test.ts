@@ -460,3 +460,42 @@ describe("ManagedRelayClient", () => {
     }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
   });
 });
+
+it.effect(
+  "readmission uses the retained signer only for the intended account and cannot leak into a later request",
+  () => {
+    const bodies: Array<{ readmitClientKey: boolean; subject_token: string }> = [];
+    const fetchFn = ((input, init) => {
+      const body = init?.body;
+      bodies.push(JSON.parse(String(body)));
+      return Promise.resolve(
+        Response.json({
+          access_token: "readmitted",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 1800,
+          scope: "environment:status",
+        }),
+      );
+    }) satisfies typeof globalThis.fetch;
+    return Effect.gen(function* () {
+      const client = yield* ManagedRelay.ManagedRelayClient;
+      expect(
+        (yield* client
+          .requestKeyReadmission({
+            accountId: "original",
+            clerkToken: clerkToken("other", "fresh"),
+          })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(bodies).toEqual([]);
+      yield* client.resetTokenCache;
+      yield* client.requestKeyReadmission({
+        accountId: "original",
+        clerkToken: clerkToken("original", "fresh-mfa"),
+      });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.readmitClientKey).toBe(true);
+    }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
+  },
+);

@@ -28,3 +28,23 @@ export async function runConnectSensitiveAction<A>(input: {
     return input.action();
   }
 }
+
+export async function readmitConnectKey(input: {
+  readonly accountId: string;
+  readonly currentAccountId: () => string | null;
+  readonly reverify?: () => Promise<void>;
+  readonly invalidate: () => Promise<void>;
+  readonly readmit: () => Promise<void>;
+}): Promise<void> {
+  const checkAccount = () => {
+    if (input.currentAccountId() !== input.accountId)
+      throw new Error("Connect account changed. Start again for the current account.");
+  };
+  checkAccount();
+  await input.reverify?.();
+  checkAccount();
+  await input.invalidate();
+  checkAccount();
+  await input.readmit();
+  checkAccount();
+}

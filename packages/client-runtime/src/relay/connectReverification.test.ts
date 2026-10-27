@@ -38,3 +38,34 @@ describe("explicit Connect reverification", () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 });
+
+it("explicit key recovery stops on cancellation, account switch or a second denial", async () => {
+  const { readmitConnectKey } = await import("./connectReverification.ts");
+  let accountId = "account";
+  const invalidate = vi.fn().mockResolvedValue(undefined);
+  const readmit = vi.fn().mockRejectedValue(denied());
+  const input = { accountId, currentAccountId: () => accountId, invalidate, readmit };
+  await expect(
+    readmitConnectKey({
+      ...input,
+      reverify: async () => {
+        throw new Error("cancelled");
+      },
+    }),
+  ).rejects.toThrow("cancelled");
+  expect(invalidate).not.toHaveBeenCalled();
+  await expect(
+    readmitConnectKey({
+      ...input,
+      reverify: async () => {
+        accountId = "other";
+      },
+    }),
+  ).rejects.toThrow("account changed");
+  expect(readmit).not.toHaveBeenCalled();
+  accountId = "account";
+  await expect(readmitConnectKey({ ...input, reverify: async () => {} })).rejects.toMatchObject({
+    code: "authentication_strength_required",
+  });
+  expect(readmit).toHaveBeenCalledTimes(1);
+});

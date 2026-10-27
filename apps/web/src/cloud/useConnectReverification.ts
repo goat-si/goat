@@ -1,6 +1,8 @@
 import { useReverification } from "@clerk/react";
 import {
   invalidateManagedRelaySessionToken,
+  managedRelaySessionAtom,
+  readmitConnectKey,
   ManagedRelay,
   runConnectSensitiveAction,
 } from "@goat/client-runtime/relay";
@@ -20,38 +22,62 @@ function useConnectVerificationPrompt() {
         },
       };
     }
-    return undefined;
+    return true;
   });
-  return () => request({ requested: false });
+  return async () => {
+    const completed = await request({ requested: false });
+    if (completed !== true) throw new Error("Connect verification cancelled.");
+  };
 }
 
 async function invalidateConnectCredentials() {
   invalidateManagedRelaySessionToken(appAtomRegistry);
+  const session = appAtomRegistry.get(managedRelaySessionAtom);
+  if (!session) throw new Error("Sign in with MFA before restoring Connect access.");
   await runtime.runPromise(
-    ManagedRelay.ManagedRelayClient.pipe(
-      Effect.flatMap((client) =>
-        client.resetTokenCache.pipe(Effect.andThen(client.requestKeyReadmission)),
-      ),
-    ),
+    Effect.gen(function* () {
+      const client = yield* ManagedRelay.ManagedRelayClient;
+      yield* client.resetTokenCache;
+      const clerkToken = yield* session.readClerkToken();
+      if (!clerkToken) throw new Error("Sign in with MFA before restoring Connect access.");
+      if (appAtomRegistry.get(managedRelaySessionAtom) !== session)
+        throw new Error("Connect account changed.");
+      yield* client.requestKeyReadmission({ accountId: session.accountId, clerkToken });
+    }),
   );
 }
 
 export function useConnectReverification() {
   const prompt = useConnectVerificationPrompt();
   return async () => {
-    await prompt();
-    await invalidateConnectCredentials();
+    const accountId = appAtomRegistry.get(managedRelaySessionAtom)?.accountId;
+    if (!accountId) throw new Error("Sign in before restoring Connect access.");
+    await readmitConnectKey({
+      accountId,
+      currentAccountId: () => appAtomRegistry.get(managedRelaySessionAtom)?.accountId ?? null,
+      reverify: async () => {
+        await prompt();
+      },
+      invalidate: async () => {
+        invalidateManagedRelaySessionToken(appAtomRegistry);
+      },
+      readmit: invalidateConnectCredentials,
+    });
   };
 }
 
 export function useConnectSensitiveAction() {
   const prompt = useConnectVerificationPrompt();
-  return <A>(action: () => Promise<A>) =>
-    runConnectSensitiveAction({
+  return <A>(action: () => Promise<A>) => {
+    const accountId = appAtomRegistry.get(managedRelaySessionAtom)?.accountId;
+    return runConnectSensitiveAction({
       action,
       reverify: async () => {
         await prompt();
+        if (!accountId || appAtomRegistry.get(managedRelaySessionAtom)?.accountId !== accountId)
+          throw new Error("Connect account changed. Start the action again.");
       },
       invalidate: invalidateConnectCredentials,
     });
+  };
 }

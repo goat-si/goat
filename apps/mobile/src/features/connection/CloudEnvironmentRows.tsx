@@ -1,3 +1,6 @@
+import * as Option from "effect/Option";
+import { RestoreConnectAccessButton } from "../cloud/RestoreConnectAccessButton";
+import { relayEnvironmentDiscovery } from "../../state/relay";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -60,8 +63,17 @@ export function CloudEnvironmentRows(props: CloudEnvironmentRowsProps) {
 
 function SignedInCloudEnvironmentRows(props: CloudEnvironmentRowsProps) {
   const { isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
+  const discovery = useAtomValue(relayEnvironmentDiscovery.stateValueAtom);
   if (!isSignedIn) return <ConnectedOnlyCloudEnvironmentRows {...props} />;
-  return <CloudEnvironmentRowsContent {...props} />;
+  const failed =
+    Option.isSome(discovery.error) ||
+    [...discovery.environments.values()].some((entry) => Option.isSome(entry.error));
+  return (
+    <>
+      <CloudEnvironmentRowsContent {...props} />
+      {failed ? <RestoreConnectAccessButton /> : null}
+    </>
+  );
 }
 
 function ConnectedOnlyCloudEnvironmentRows(props: CloudEnvironmentRowsProps) {

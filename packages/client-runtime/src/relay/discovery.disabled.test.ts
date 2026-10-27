@@ -40,7 +40,7 @@ describe("RelayEnvironmentDiscovery with Connect disabled", () => {
             unregisterDevice: unexpected,
             registerLiveActivity: unexpected,
             getAgentActivitySnapshot: unexpected,
-            requestKeyReadmission: Effect.void,
+            requestKeyReadmission: () => Effect.void,
             resetTokenCache: unexpected(),
           }),
           Effect.provideService(ClientCapabilities.CloudSession, {

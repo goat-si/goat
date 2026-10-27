@@ -54,7 +54,7 @@ describe("RemoteEnvironmentAuthorization with Connect disabled", () => {
             unregisterDevice: unexpected,
             registerLiveActivity: unexpected,
             getAgentActivitySnapshot: unexpected,
-            requestKeyReadmission: Effect.void,
+            requestKeyReadmission: () => Effect.void,
             resetTokenCache: unexpected(),
           }),
           Effect.provideService(Capabilities.CloudSession, {
@@ -135,7 +135,7 @@ describe("RemoteEnvironmentAuthorization with Connect disabled", () => {
           unregisterDevice: unused,
           registerLiveActivity: unused,
           getAgentActivitySnapshot: unused,
-          requestKeyReadmission: Effect.void,
+          requestKeyReadmission: () => Effect.void,
           resetTokenCache: unused(),
         }),
         Effect.provideService(Capabilities.CloudSession, {

@@ -13,6 +13,7 @@ import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useRelayEnvironmentDiscovery } from "../state/environments";
 import { CommandBlock } from "./CommandBlock";
 import { useGoatConnectAuthPrompt } from "./clerk/useGoatConnectAuthPrompt";
+import { RestoreConnectAccessButton } from "./cloud/RestoreConnectAccessButton";
 import { CloudEnvironmentConnectRows } from "./cloud/CloudEnvironmentConnectList";
 import { Button } from "./ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
@@ -97,6 +98,11 @@ function GoatConnectSteps() {
           </Button>
         )}
       </SetupStep>
+      {isSignedIn ? (
+        <li>
+          <RestoreConnectAccessButton />
+        </li>
+      ) : null}
       <SetupStep number={2}>
         <RunOnComputer command="goat connect" />
         {isSignedIn ? (
