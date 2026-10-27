@@ -176,6 +176,8 @@ export type ServerBrowserViewerOutput =
       readonly generation: number;
       /** A secret field has focus: only its controller still gets frames. */
       readonly private: boolean;
+      /** A person's hand back here was not recorded; the agent still waits for them. */
+      readonly handBackFailed?: true;
       readonly dialog: {
         readonly type: string;
         readonly message: string;
@@ -454,17 +456,8 @@ const make = Effect.gen(function* () {
       viewer.push({
         _tag: "control",
         canOperate: viewer.canOperate,
-        controller:
-          tab.control.controller === viewer.id
-            ? "you"
-            : tab.control.controller !== null
-              ? "another-viewer"
-              : tab.control.agentId !== null
-                ? "agent"
-                : "unclaimed",
-        generation: tab.control.generation,
+        ...ServerBrowserScreen.viewerControl(tab.control, viewer.id),
         dialog: dialogStatus(tab),
-        private: tab.control.isPrivate,
       });
   };
 

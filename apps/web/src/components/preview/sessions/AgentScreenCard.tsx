@@ -253,6 +253,13 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     surface.current?.takeControl();
   };
   const onStreamControl = (next: PreviewStreamControl | null) => {
+    // The server could not record this hand back; the tab still waits for the person.
+    if (next?.handBackFailed === true && stream?.handBackFailed !== true)
+      toastManager.add({
+        type: "error",
+        title: "Hand back did not go through",
+        description: "The agent still waits for you. Take over and hand it back again.",
+      });
     setStream(next);
     if (next === null) return;
     if (large && props.takeOverOnOpen && next.controller !== "you" && next.canOperate) {

@@ -32,6 +32,21 @@ export interface AuthorityChange {
 }
 export type AuthorityListener = (change: AuthorityChange) => void;
 
+/** Who controls a tab, as one viewer hears it. */
+export const viewerControl = (control: SessionControl, viewerId: string) => ({
+  controller:
+    control.controller === viewerId
+      ? ("you" as const)
+      : control.controller !== null
+        ? ("another-viewer" as const)
+        : control.agentId !== null
+          ? ("agent" as const)
+          : ("unclaimed" as const),
+  generation: control.generation,
+  private: control.isPrivate,
+  ...(control.handBackFailed ? { handBackFailed: true as const } : {}),
+});
+
 /** A person ended an agent's request on a tab. */
 export interface HandoffEnded {
   readonly threadId: string;
@@ -58,6 +73,11 @@ export interface SurfaceService {
     readonly tabId: string;
   }) => Effect.Effect<void>;
   readonly onHandoffEnd?: (listener: (ended: HandoffEnded) => void) => () => void;
+  /** Tells a tab's viewers that a person's hand back was not recorded, so they try again. */
+  readonly handBackFailed?: (input: {
+    readonly threadId: string;
+    readonly tabId: string;
+  }) => Effect.Effect<void>;
 }
 
 /** The trusted screen host supplies the exact tab after claim admission. */
@@ -244,6 +264,8 @@ export const makeSurface = <Tab extends ScreenTab>(
     });
   const endHandoff: NonNullable<SurfaceService["endHandoff"]> = (input) =>
     Effect.sync(() => findTab(input.threadId, input.tabId)?.control.endHandoff(null));
+  const handBackFailed: NonNullable<SurfaceService["handBackFailed"]> = (input) =>
+    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.handBackNotRecorded());
   const onHandoffEnd = (listener: (ended: HandoffEnded) => void) => {
     handoffListeners.add(listener);
     return () => void handoffListeners.delete(listener);
@@ -251,7 +273,14 @@ export const makeSurface = <Tab extends ScreenTab>(
   return {
     notify,
     nextPointer,
-    service: { onAuthorityChange, cursorState, requestHandoff, endHandoff, onHandoffEnd },
+    service: {
+      onAuthorityChange,
+      cursorState,
+      requestHandoff,
+      endHandoff,
+      onHandoffEnd,
+      handBackFailed,
+    },
   };
 };
 
