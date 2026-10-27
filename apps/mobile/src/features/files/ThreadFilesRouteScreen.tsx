@@ -566,19 +566,15 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
       <ScreenContent insetHorizontal={layout.usesSplitView}>
         <FileTreeBrowser
           key={JSON.stringify([environmentId, cwd])}
-          entries={entriesQuery.entries}
-          loadingDirectories={entriesQuery.loadingDirectories}
+          {...entriesQuery}
           onLoadDirectory={entriesQuery.loadDirectory}
-          error={entriesQuery.error}
-          isPending={entriesQuery.isPending}
-          isRefreshing={entriesQuery.isRefreshing}
           searchQuery={searchQuery}
-          searchResultPaths={entriesQuery.searchResultPaths}
-          searchTruncated={entriesQuery.searchTruncated}
-          selectedPath={null}
           onPreviewFile={handlePreviewFile}
           onRefresh={entriesQuery.refresh}
-          onSelectFile={handleSelectFile}
+          onSelectFile={(path) => {
+            entriesQuery.selectPath(path);
+            handleSelectFile(path);
+          }}
         />
         <FilesToolbarBottomFade />
       </ScreenContent>
@@ -768,7 +764,10 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         headerInset={headerInset}
         projectName={directoryPath ?? projectName}
         selectedPath={directoryPath === null ? relativePath : null}
-        onSelectFile={handleSelectFile}
+        onSelectFile={(path) => {
+          if (directoryPath !== null) entriesQuery.selectPath(path);
+          handleSelectFile(path);
+        }}
       />
     ) : undefined;
   const safeAreaInsets = useSafeAreaInsets();
@@ -946,18 +945,14 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         <ScreenContent>
           <FileTreeBrowser
             key={JSON.stringify([environmentId, directoryPath])}
-            entries={entriesQuery.entries}
-            loadingDirectories={entriesQuery.loadingDirectories}
+            {...entriesQuery}
             onLoadDirectory={entriesQuery.loadDirectory}
-            error={entriesQuery.error}
-            isPending={entriesQuery.isPending}
-            isRefreshing={entriesQuery.isRefreshing}
             searchQuery={searchQuery}
-            searchResultPaths={entriesQuery.searchResultPaths}
-            searchTruncated={entriesQuery.searchTruncated}
-            selectedPath={null}
             onRefresh={entriesQuery.refresh}
-            onSelectFile={handleSelectFile}
+            onSelectFile={(path) => {
+              entriesQuery.selectPath(path);
+              handleSelectFile(path);
+            }}
           />
           <FilesToolbarBottomFade />
         </ScreenContent>
