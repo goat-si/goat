@@ -41,7 +41,9 @@ const USED_UP =
 const UNCERTAIN =
   "GOAT could not confirm whether the password was typed, and the secretRef is used up. Take a text snapshot before asking the person again.";
 const FENCED =
-  "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates.";
+  "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates, or the field is cleared.";
+const SHOWN =
+  "This tab shows a password GOAT filled as plain text. Snapshots stay off until the field hides or clears it, or the page navigates.";
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
@@ -88,7 +90,11 @@ const FILL = `function (value, origin) {
   if (active === this) this.blur();
   return true;
 }`;
-const STILL_FILLED = "function (value) { return this.isConnected && this.value === value; }";
+// Any value left in the field counts: an edit must not lift the fence on most of the password.
+const STILL_FILLED = `function (value) {
+  if (!this.isConnected || this.value === "") return "gone";
+  return this.type === "password" || this.value === value ? "hidden" : "shown";
+}`;
 
 interface Target {
   readonly session: CDPSession;
@@ -203,10 +209,25 @@ const settledPrivate = (control: SessionControl) =>
       })
     : Promise.resolve(false);
 
-const maskWith = (values: ReadonlySet<string>) => (text: string) => {
-  let masked = text;
-  for (const value of values) masked = masked.split(value).join(MASK);
-  return masked;
+/** How a page or a snapshot can write the value back: raw, JSON-escaped, URL- or form-encoded. */
+const encodedForms = (value: string) =>
+  [
+    value,
+    JSON.stringify(value).slice(1, -1),
+    encodeURIComponent(value),
+    new URLSearchParams({ v: value }).toString().slice(2),
+  ].flatMap((form) => [form, form.replaceAll("'", "''")]);
+
+const maskWith = (values: ReadonlySet<string>) => {
+  // Longest first, so a form inside another never leaves the rest showing.
+  const forms = [...new Set([...values].flatMap(encodedForms))].toSorted(
+    (a, b) => b.length - a.length,
+  );
+  return (text: string) => {
+    let masked = text;
+    for (const form of forms) masked = masked.split(form).join(MASK);
+    return masked;
+  };
 };
 
 const walk = (value: unknown, mask: (text: string) => string, keys: boolean): unknown => {
@@ -350,16 +371,23 @@ export const make = Effect.gen(function* () {
     return { filled: true, origin, privateMode: await settledPrivate(tab.control) };
   };
 
-  /** Refuses the agent's own script, pixels and recordings while a filled field holds its value. */
+  /**
+   * Refuses the agent's own script, pixels and recordings while a filled field holds a value, and
+   * text snapshots too once that value shows as plain text.
+   */
   const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
+    const textSnapshot =
+      request.operation === "snapshot" &&
+      (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
     const guarded =
       request.operation === "evaluate" ||
       request.operation === "recordingStart" ||
-      (request.operation === "snapshot" &&
-        (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage !== false);
+      (request.operation === "snapshot" && !textSnapshot);
     const outstanding = fences.get(tab.page);
-    if (!guarded || outstanding === undefined || outstanding.length === 0) return;
+    if ((!guarded && !textSnapshot) || outstanding === undefined || outstanding.length === 0)
+      return;
     let unconfirmed = false;
+    let shown = false;
     const holding: Array<Fence> = [];
     for (const entry of outstanding) {
       const state = await entry.session
@@ -370,16 +398,18 @@ export const make = Effect.gen(function* () {
           returnByValue: true,
         })
         .then(
-          (answer) =>
-            answer.exceptionDetails ? "unknown" : answer.result.value === true ? "held" : "gone",
+          (answer): unknown => (answer.exceptionDetails ? "unknown" : answer.result.value),
           (cause: unknown) => (GONE.test(String(cause)) ? "gone" : "unknown"),
         );
       if (state === "gone") void release(entry);
       else holding.push(entry);
-      if (state === "unknown") unconfirmed = true;
+      if (state === "shown") shown = true;
+      else if (state !== "gone" && state !== "hidden") unconfirmed = true;
     }
     fences.set(tab.page, holding);
-    if (holding.length > 0) throw refused(unconfirmed ? UNCONFIRMED : FENCED);
+    // A text snapshot hides password inputs itself, so only a value shown as plain text stops it.
+    if (textSnapshot ? !shown : holding.length === 0) return;
+    throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
   };
 
   /** Masks the thread's filled values in everything the tab answers. */

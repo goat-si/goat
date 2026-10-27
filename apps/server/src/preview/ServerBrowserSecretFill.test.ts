@@ -20,7 +20,7 @@ const PASSWORD = "pw_unit_secret_value";
 
 /** One password field behind a scripted CDP session; faults are injected per method. */
 const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: boolean } = {}) => {
-  const field = { value: "" };
+  const field = { value: "", type: "password" };
   const page = { frames: () => [], mainFrame: () => page } as unknown as Page;
   const send = async (method: string, params?: Record<string, unknown>) => {
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
@@ -39,7 +39,9 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
     }
     if (fn.includes("this.value === value")) {
       if (faults.stillFilled) throw new Error("Session closed");
-      return { result: { value: field.value === args[0]?.value } };
+      // Runs the page-side check against the scripted field.
+      const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
+      return { result: { value: check.call({ isConnected: true, ...field }, args[0]?.value) } };
     }
     throw new Error(`unexpected ${method}`);
   };
@@ -74,6 +76,7 @@ const withFill = <A>(
     state: { consumed: number },
   ) => Promise<A>,
   beforeConsume: () => void = () => {},
+  password = PASSWORD,
 ) => {
   const state = { consumed: 0 };
   const secrets = Layer.succeed(
@@ -89,7 +92,7 @@ const withFill = <A>(
             input.origin === "https://login.test" && state.consumed === 0
               ? Effect.sync(() => {
                   state.consumed += 1;
-                  return PASSWORD;
+                  return password;
                 })
               : Effect.fail(new SecretRequestError({ reason: "ref_unavailable" })),
           ),
@@ -196,5 +199,48 @@ it.live("masks filled values in every answer, keys included only for page-made J
         error: { _tag: "X", message: `said ${PASSWORD}` },
       }),
     ).toEqual({ ok: false, error: { _tag: "X", message: "said [secret]" } });
+  });
+});
+
+it.live("masks a filled value in the escaped and URL-encoded forms a page echoes it in", () => {
+  const { tab } = makeTab();
+  const password = 'p@ss "w0rd"\\ ä&+=';
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const echoed = [
+        JSON.stringify({ password }),
+        `password=${encodeURIComponent(password)}`,
+        new URLSearchParams({ password }).toString(),
+      ].join("\n");
+      const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text: echoed } });
+      expect(outcome).toEqual({
+        ok: true,
+        result: {
+          text: ['{"password":"[secret]"}', "password=[secret]", "password=[secret]"].join("\n"),
+        },
+      });
+    },
+    undefined,
+    password,
+  );
+});
+
+it.live("keeps the fence while an edited filled field still holds part of the value", () => {
+  const { tab, field } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    field.value = PASSWORD.slice(0, -1);
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+    // A password input still shows dots, so a text snapshot cannot read the edited value.
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.type = "text";
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
+    );
+    field.value = "";
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
   });
 });
