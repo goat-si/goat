@@ -39,7 +39,7 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 export const driver = ProviderDriverKind.make("codex");
 export const instanceId = ProviderInstanceId.make("codex");
-export const modelSelection: ModelSelection = { instanceId, model: "test-model" };
+const modelSelection: ModelSelection = { instanceId, model: "test-model" };
 export const projectId = ProjectId.make("project:agent-thread-steering");
 export const threadId = ThreadId.make("thread:agent-thread-steering:target");
 export const senderThreadId = ThreadId.make("thread:agent-thread-steering:sender");

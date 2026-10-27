@@ -211,10 +211,8 @@ describe("computerUseOrigin", () => {
           b: { launchedBy: { kind: "launch", threadId: ThreadId.make("a"), environmentId: null } },
         },
       };
-      assert.deepEqual(yield* classify(loop, "a"), {
-        _tag: "unattended",
-        reason: "launched_by_unattended",
-      });
+      // Each launcher in the loop is unreadable in the end, and that stays unknown.
+      assert.deepEqual(yield* classify(loop, "a"), unknown);
       assert.deepEqual(yield* classify({ threads: {} }, "gone"), unknown);
       assert.deepEqual(yield* classify({ threads: { x: {} }, failing: ["x"] }, "x"), unknown);
       assert.deepEqual(

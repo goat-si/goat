@@ -70,6 +70,8 @@ export interface OriginRun {
   readonly userMessageId: MessageId;
   readonly requestedAt: DateTime.Utc;
   readonly completedAt: DateTime.Utc | null;
+  /** Read only to find the run a thread sends from (senderOrigin). */
+  readonly status?: string | undefined;
 }
 
 export interface OriginMessage {
@@ -113,11 +115,14 @@ const unattended = (reason: UnattendedReason): ComputerUseOrigin => ({
   _tag: "unattended",
   reason,
 });
-/** A remote launch stays one through every send and launch it makes on this host. */
+/**
+ * An ancestor's origin through a send or a launch on this host: a remote launch stays one, and an
+ * ancestor that could not be read stays unknown, so nothing counts it as known unattended work.
+ */
 const unattendedVia = (from: ComputerUseOrigin, reason: UnattendedReason) =>
   unattended(
-    from._tag === "unattended" && from.reason === "launched_remotely"
-      ? "launched_remotely"
+    from._tag === "unattended" && (from.reason === "launched_remotely" || from.reason === "unknown")
+      ? from.reason
       : reason,
   );
 
@@ -309,6 +314,26 @@ interface OriginRuntimeRequest {
     | undefined;
 }
 
+/**
+ * The origin of the run a thread sends from now: the one in progress, not a run queued behind it.
+ */
+export const senderOrigin = (
+  reads: OriginReads,
+  threadId: ThreadId,
+): Effect.Effect<ComputerUseOrigin> =>
+  classify(
+    reads,
+    threadId,
+    (runs) =>
+      runs.find((run) => run.status === "running") ??
+      runs.findLast((run) => run.status !== "queued") ??
+      runs.at(-1),
+    0,
+  ).pipe(
+    Effect.catchCause(() => Effect.succeed(unattended("unknown"))),
+    Effect.withSpan("ComputerUse.senderOrigin"),
+  );
+
 /** The projection reads every caller has, as classification reads. */
 export const projectionOriginReads = <E1, E2>(deps: {
   readonly getThreadRecords: (
@@ -430,7 +455,7 @@ export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteer
   const sender =
     input.senderThreadId === undefined || input.scheduledTaskId !== undefined
       ? unattended("scheduled_task")
-      : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
+      : yield* senderOrigin(reads, input.senderThreadId);
   // The origin the message's own turn would have in this thread.
   const message =
     sender._tag === "interactive" || input.scheduledTaskId !== undefined

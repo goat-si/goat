@@ -4,6 +4,7 @@ import {
   MessageId,
   type OrchestrationV2ServerCommand,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -41,7 +42,8 @@ const steering = (
 ) => {
   const getThreadRecords = (id: ThreadId) => {
     const thread = threads[id];
-    if (thread === undefined) return Effect.die("no such thread");
+    // A thread this host does not have reads as no record, the way the projection answers.
+    if (thread === undefined) return Effect.succeed({ thread: undefined, runs: [], messages: [] });
     const runs = thread.runs.map((run) => ({
       id: RunId.make(run.id),
       userMessageId: MessageId.make(run.message),
@@ -144,6 +146,67 @@ it.effect("a promotion into a turn whose origin cannot be read stays queued", ()
       { "m-cron": { createdAt: 3, scheduledTaskId: "task-1" } },
     )
       .admit(promote("queued", "lost"))
+      .pipe(Effect.result);
+    assert.equal(admitted._tag, "Failure");
+  }),
+);
+
+it.effect(
+  "an agent's answer is weighed by the run sending it, not a follow-up queued behind it",
+  () =>
+    Effect.gen(function* () {
+      const admitted = yield* steering(
+        {
+          mine: { runs: [{ id: "typed", message: "m-typed", from: 1 }] },
+          // A schedule runs the peer now; a person's follow-up waits behind it.
+          peer: {
+            runs: [
+              { id: "cron", message: "p-cron", from: 1 },
+              { id: "follow-up", message: "p-typed", from: 2, status: "queued" },
+            ],
+          },
+        },
+        {
+          "m-typed": { createdAt: 1 },
+          "p-cron": { createdAt: 1, scheduledTaskId: "task-1" },
+          "p-typed": { createdAt: 2 },
+        },
+      ).admit({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("answer"),
+        threadId: ThreadId.make("mine"),
+        requestId: RuntimeRequestId.make("question"),
+        answers: { next: "go" },
+        respondedBy: {
+          type: "agent",
+          threadId: ThreadId.make("peer"),
+          environmentId: null,
+          title: null,
+          reason: "Answering for the peer",
+        },
+      });
+      assert.isFalse("answerSteersRunId" in admitted);
+    }),
+);
+
+it.effect("a promotion into a turn whose sender cannot be read stays queued", () =>
+  Effect.gen(function* () {
+    const admitted = yield* steering(
+      {
+        // The running turn came from a thread this host no longer has.
+        mine: {
+          runs: [
+            { id: "sent", message: "m-sent", from: 1 },
+            { id: "queued", message: "m-cron", from: 3, status: "queued" },
+          ],
+        },
+      },
+      {
+        "m-sent": { createdAt: 1, senderThreadId: "gone" },
+        "m-cron": { createdAt: 3, scheduledTaskId: "task-1" },
+      },
+    )
+      .admit(promote("queued", "sent"))
       .pipe(Effect.result);
     assert.equal(admitted._tag, "Failure");
   }),

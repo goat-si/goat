@@ -22,6 +22,7 @@ import {
   computerUseOrigin,
   gateUnattendedSteering,
   projectionOriginReads,
+  senderOrigin,
   steeringAllowed,
 } from "./ComputerUseOrigin.ts";
 import type * as CuaDriver from "./CuaDriver.ts";
@@ -125,10 +126,10 @@ export const makeComputerUseSteering = (deps: {
     if (running === undefined) return command;
     const approved = { ...command, answerSteersRunId: running.id };
     if (!(yield* enabled)) return approved;
-    // Another computer's agent counts as remote work; a local one as its thread does.
+    // Another computer's agent counts as remote work; a local one as the run it sends from.
     const sender =
       responder.environmentId === null
-        ? yield* computerUseOrigin(reads, { threadId: responder.threadId })
+        ? yield* senderOrigin(reads, responder.threadId)
         : unattendedRemote;
     const message =
       sender._tag === "interactive" ||
