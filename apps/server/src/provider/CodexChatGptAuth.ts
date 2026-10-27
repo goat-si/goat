@@ -30,7 +30,6 @@ import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-
 const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
 const REQUIRED_SCOPE = "chatgpt.tokens.use.direct";
@@ -101,7 +100,6 @@ const encodeSessions = Schema.encodeEffect(Schema.fromJsonString(Sessions));
 const decodeTokens = Schema.decodeUnknownSync(TokenResponse);
 const decodeDiscoveryEffect = Schema.decodeUnknownEffect(Discovery);
 const decodeOAuthError = Schema.decodeUnknownSync(OAuthError);
-
 export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* (options: {
   readonly instanceId: ProviderInstanceId;
   readonly discoveryUrl?: string;
@@ -736,77 +734,76 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         ),
       )
       .pipe(Effect.map(Hex.encode), Effect.orDie);
-  const access = lock.withPermit(
-    withSessionLock(
-      Effect.uninterruptible(
-        Effect.gen(function* () {
-          const saved = yield* read;
-          if (Option.isNone(saved))
-            return yield* failure("access", "Sign in with ChatGPT to use managed Codex.");
-          let record = saved.value;
-          if (
-            options.expectedProfileKey !== undefined &&
-            (yield* profileKey(record)) !== options.expectedProfileKey
-          )
-            return yield* failure("access", "The ChatGPT connection changed. Start a new session.");
-          if (!record.scopes.includes(REQUIRED_SCOPE))
-            return yield* failure(
-              "sharing",
-              "Token sharing is disabled. Sign in with ChatGPT and enable token sharing.",
-            );
-          const now = yield* Clock.currentTimeMillis;
-          if (record.expiresAt - now > 60_000) return record;
-          if (record.earliestRefreshAt !== null && record.earliestRefreshAt > now) {
-            if (record.expiresAt > now) return record;
-            return yield* failure(
-              "refresh",
-              "ChatGPT cannot renew this connection yet. Try again shortly.",
-            );
-          }
-          if (!record.refreshToken) {
-            yield* remove;
-            return yield* failure("refresh", "Your ChatGPT connection expired. Sign in again.");
-          }
-          const tokens = yield* exchange(
-            new URLSearchParams({
-              grant_type: "refresh_token",
-              client_id: record.clientId,
-              refresh_token: record.refreshToken,
-              resource,
-            }),
-          ).pipe(
-            Effect.interruptible,
-            Effect.timeout("20 seconds"),
-            Effect.mapError((error) =>
-              error._tag === "ProviderSetupError" && error.operation === "client"
-                ? error
-                : failure(
-                    "refresh",
-                    "Could not renew the ChatGPT connection. Retry, or sign in again.",
-                  ),
-            ),
-          );
-          if (!tokens.refresh_token || tokens.token_type.toLowerCase() !== "bearer") {
-            return yield* failure("refresh", "ChatGPT returned an invalid renewal. Sign in again.");
-          }
-          record = {
-            ...record,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-            expiresAt: (yield* Clock.currentTimeMillis) + tokens.expires_in * 1000,
-            earliestRefreshAt: earliest(tokens.earliest_refresh_at),
-            scopes: tokens.scope.split(/\s+/).filter(Boolean),
-          };
-          yield* save(record);
-          if (!record.scopes.includes(REQUIRED_SCOPE))
-            return yield* failure(
-              "sharing",
-              "ChatGPT token sharing is no longer enabled. Sign in again.",
-            );
-          return record;
+  const getAccess = Effect.fn("CodexChatGptAuth.getAccess")(
+    function* (force: boolean, rejected?: CodexChatGptCredentials) {
+      const saved = yield* read;
+      if (Option.isNone(saved))
+        return yield* failure("access", "Sign in with ChatGPT to use managed Codex.");
+      let record = saved.value;
+      if (
+        (rejected && (yield* profileKey(record)) !== (yield* profileKey(rejected))) ||
+        (options.expectedProfileKey !== undefined &&
+          (yield* profileKey(record)) !== options.expectedProfileKey)
+      )
+        return yield* failure("access", "The ChatGPT account changed. Start again.");
+      if (!record.scopes.includes(REQUIRED_SCOPE))
+        return yield* failure(
+          "sharing",
+          "Token sharing is disabled. Sign in with ChatGPT and enable token sharing.",
+        );
+      const now = yield* Clock.currentTimeMillis;
+      // A concurrent caller may already have renewed this rejected token.
+      if (rejected && record.accessToken !== rejected.accessToken) return record;
+      if (!force && record.expiresAt - now > 60_000) return record;
+      if (record.earliestRefreshAt !== null && record.earliestRefreshAt > now) {
+        if (!force && record.expiresAt > now) return record;
+        return yield* failure(
+          "refresh",
+          "ChatGPT cannot renew this connection yet. Try again shortly.",
+        );
+      }
+      if (!record.refreshToken) {
+        yield* remove;
+        return yield* failure("refresh", "Your ChatGPT connection expired. Sign in again.");
+      }
+      const tokens = yield* exchange(
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: record.clientId,
+          refresh_token: record.refreshToken,
+          resource,
         }),
-      ),
-    ),
+      ).pipe(
+        Effect.interruptible,
+        Effect.timeout("20 seconds"),
+        Effect.mapError((error) =>
+          error._tag === "ProviderSetupError" && error.operation === "client"
+            ? error
+            : failure(
+                "refresh",
+                "Could not renew the ChatGPT connection. Retry, or sign in again.",
+              ),
+        ),
+      );
+      if (!tokens.refresh_token || tokens.token_type.toLowerCase() !== "bearer")
+        return yield* failure("refresh", "ChatGPT returned an invalid renewal. Sign in again.");
+      record = {
+        ...record,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt: (yield* Clock.currentTimeMillis) + tokens.expires_in * 1000,
+        earliestRefreshAt: earliest(tokens.earliest_refresh_at),
+        scopes: tokens.scope.split(/\s+/).filter(Boolean),
+      };
+      yield* save(record);
+      if (!record.scopes.includes(REQUIRED_SCOPE))
+        return yield* failure(
+          "sharing",
+          "ChatGPT token sharing is no longer enabled. Sign in again.",
+        );
+      return record;
+    },
+    (effect) => effect.pipe(Effect.uninterruptible, withSessionLock, lock.withPermit),
   );
   const logout = Effect.gen(function* () {
     const credentials = Option.getOrUndefined(yield* read);
@@ -1005,7 +1002,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   return {
     controller: { ...controller, reconnectProfile, importProfile },
     read,
-    access,
+    access: getAccess(false),
+    refreshAccess: (rejected?: CodexChatGptCredentials) => getAccess(true, rejected),
     profileKey,
     exportProfile,
     revoke: lock.withPermit(withSessionLock(remove)),

@@ -4,20 +4,22 @@ import { voiceInputBlocksSubmission, type VoiceInputState } from "@goat/client-r
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useGlobalVoiceInput } from "./VoiceInputProvider";
-import { createVoiceInputTarget } from "./voiceInputSession";
+import { createVoiceInputTarget, type VoiceInputTarget } from "./voiceInputSession";
 
 const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
 
-export function useVoiceInputController(input: {
-  readonly ownerKey: string | null;
-  readonly label: string;
-  readonly readDraftMessage: () => string | null;
-  readonly subscribeToDraftChanges: (onChange: () => void) => () => void;
-  readonly selection: ComposerEditorSelection;
-  readonly disabled?: boolean;
-  readonly onChangeDraftMessage: (value: string) => void;
-  readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
-}) {
+export function useVoiceInputController(
+  input: Pick<VoiceInputTarget, "environmentId" | "providerInstanceId" | "cwd" | "threadId"> & {
+    readonly ownerKey: string | null;
+    readonly label: string;
+    readonly readDraftMessage: () => string | null;
+    readonly subscribeToDraftChanges: (onChange: () => void) => () => void;
+    readonly selection: ComposerEditorSelection;
+    readonly disabled?: boolean;
+    readonly onChangeDraftMessage: (value: string) => void;
+    readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
+  },
+) {
   const global = useGlobalVoiceInput();
   const { setOwnerFocused, session } = global;
   const latestInput = useRef(input);
@@ -55,6 +57,12 @@ export function useVoiceInputController(input: {
         },
         captured.selection,
         captured.subscribeToDraftChanges,
+        {
+          environmentId: captured.environmentId,
+          providerInstanceId: captured.providerInstanceId,
+          cwd: captured.cwd,
+          threadId: captured.threadId,
+        },
       ),
       label: captured.label,
     });
@@ -62,7 +70,9 @@ export function useVoiceInputController(input: {
   const state = global.ownerKey === input.ownerKey ? global.state : IDLE_STATE;
   const isBusy = voiceInputBlocksSubmission(state);
   return {
-    isAvailable: global.isAvailable && (!global.isBusy || global.ownerKey === input.ownerKey),
+    isAvailable:
+      global.isAvailableForEnvironment(input.environmentId ?? null) &&
+      (!global.isBusy || global.ownerKey === input.ownerKey),
     state,
     audioLevels: global.audioLevels,
     elapsedSeconds: global.elapsedSeconds,
