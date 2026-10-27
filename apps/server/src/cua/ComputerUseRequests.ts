@@ -1,4 +1,4 @@
-import { describeHolder } from "./computerUseGrants.ts";
+import { coversApps, describeHolder } from "./computerUseGrants.ts";
 /**
  * A thread asking a person for computer use on this host, of the whole screen or of the apps it
  * names. The request is an approval handoff on the computer_use.grant path whose expiry is the
@@ -18,7 +18,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
+import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -128,8 +128,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       } satisfies ComputerUseRequestResult;
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {
-      const known = new Set(listed.value.map((app) => app.toLowerCase()));
-      const unknownApps = wanted.filter((app) => !known.has(app.toLowerCase()));
+      const known = new Set(listed.value.map(cuaAppKey));
+      const unknownApps = wanted.filter((app) => !known.has(cuaAppKey(app)));
       if (unknownApps.length > 0)
         return {
           kind: "refused",
@@ -190,17 +190,28 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   const granted = Option.isSome(own) ? own.value.apps : [];
   const covered =
     Option.isSome(own) &&
-    (granted === undefined ||
-      (wanted !== undefined &&
-        wanted.every((app) => granted.some((name) => name.toLowerCase() === app.toLowerCase()))));
+    (granted === undefined || (wanted !== undefined && coversApps(granted, wanted)));
   const foregroundCovered =
     foreground && (yield* leases.foregroundAvailable(input.threadId, input.request.purpose));
+  // A whole-screen approval covers an app opened after the driver started, once the manifest
+  // names it too.
+  const named =
+    !foreground &&
+    covered &&
+    granted === undefined &&
+    wanted !== undefined &&
+    Option.isSome(current);
+  if (named) yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
   if (Option.isSome(own) && (foreground ? foregroundCovered : covered))
     return {
       kind: "available",
       message: foreground
         ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop, control replacement or turn end requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
-        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
+        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. ${
+            named
+              ? "An app opened after computer use started is added in a moment; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again."
+              : "The cua-driver tools are attached from your next turn if they are not already."
+          }`,
     } satisfies ComputerUseRequestResult;
 
   if (!run || run.rootNodeId === null)
@@ -275,10 +286,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         if (state._tag !== "active") return false;
         const held = state.apps;
         if (held === undefined) return true;
-        return (
-          wanted !== undefined &&
-          wanted.every((app) => held.some((name) => name.toLowerCase() === app.toLowerCase()))
-        );
+        return wanted !== undefined && coversApps(held, wanted);
       },
       Effect.orElseSucceed(() => false),
     );
