@@ -6,7 +6,13 @@ import * as Sessions from "../auth/SessionStore.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import { session } from "./CodexRouteService.testkit.ts";
 import { assert, it } from "@effect/vitest";
-import { CodexSettings, ProviderDriverKind, ProviderInstanceId, TurnItemId } from "@goat/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderInstanceMutation,
+  TurnItemId,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -385,5 +391,106 @@ it.effect("rejects a conflicting create instead of replacing a canonical committ
     if (conflict._tag === "Failure")
       assert.equal(conflict.failure.operation, "create-provider-instance");
     assert.deepStrictEqual(yield* routes.capture(instanceId), before);
+  }).pipe(Effect.provide(layer)),
+);
+
+const mutationJson = Schema.toCodecJson(ProviderInstanceMutation);
+/** The mutation as a client sends it, decoded the way the RPC boundary decodes it. */
+const overWire = (mutation: ProviderInstanceMutation) =>
+  Schema.decodeUnknownSync(mutationJson)(
+    JSON.parse(JSON.stringify(Schema.encodeSync(mutationJson)(mutation))),
+  );
+it.effect.each([
+  { case: "rejects a stale confirmation without writing", stale: true },
+  { case: "applies a confirmation made against the current instance", stale: false },
+])("$case", ({ stale }) =>
+  Effect.gen(function* () {
+    const routes = yield* seed;
+    const settings = yield* Settings.ServerSettingsService;
+    const home = {
+      ...base,
+      config: {
+        ...base.config,
+        modelRoute: "opencodex" as const,
+        opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+      },
+    };
+    yield* commitAndApply(
+      routes.mutateProviderInstance(
+        { mutation: { operation: "upsert", instanceId, instance: home } },
+        caller,
+      ),
+    );
+    const confirmed = Settings.redactServerSettingsForClient(yield* settings.getSettings)
+      .providerInstances[instanceId];
+    if (confirmed === undefined) return yield* Effect.die("Expected the seeded instance");
+    if (stale)
+      yield* commitAndApply(
+        routes.mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: {
+                ...home,
+                config: {
+                  ...home.config,
+                  modelRoute: "default",
+                  opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+                },
+              },
+            },
+          },
+          caller,
+        ),
+      );
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* Config.ServerConfig;
+    const before = yield* fs.readFileString(config.settingsPath);
+    const request = routes.mutateProviderInstance(
+      {
+        mutation: overWire({
+          operation: "upsert",
+          instanceId,
+          instance: { ...confirmed, config: { ...home.config, opencodexAuth: "none" } },
+          expectedInstance: confirmed,
+        }),
+      },
+      caller,
+    );
+    if (stale) {
+      const state = yield* Routes.CodexRouteState;
+      const changes = yield* settings.subscribeProviderChanges!;
+      const baseline = state.revision();
+      const fiber = yield* request.pipe(Effect.result, Effect.forkScoped);
+      const result = yield* Effect.raceFirst(
+        Fiber.join(fiber),
+        Stream.runHead(
+          changes.pipe(Stream.filter((event) => event.revision.sequence > baseline.sequence)),
+        ).pipe(Effect.andThen(Effect.die("A stale confirmation was committed"))),
+      );
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "provider_instance_stale");
+        assert.equal(
+          result.failure.message,
+          "Settings changed on another device. Review them and try again.",
+        );
+      }
+      assert.equal(yield* fs.readFileString(config.settingsPath), before);
+      const kept = decode(
+        (yield* settings.getSettings).providerInstances[instanceId]?.config ?? {},
+      );
+      assert.deepInclude(kept, {
+        modelRoute: "default",
+        opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+      });
+      return;
+    }
+    const saved = yield* commitAndApply(request);
+    assert.deepInclude(decode(saved.providerInstances[instanceId]?.config ?? {}), {
+      modelRoute: "opencodex",
+      opencodexAuth: "none",
+    });
   }).pipe(Effect.provide(layer)),
 );

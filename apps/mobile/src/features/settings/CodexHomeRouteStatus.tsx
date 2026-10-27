@@ -59,6 +59,8 @@ export function buildDefaultCodexRouteMutation(
         operation: "upsert" as const,
         instanceId,
         instance: { ...instance, config: { ...config, ...change } },
+        // The server refuses the write if its instance no longer matches the one changed here.
+        expectedInstance: instance,
       },
     },
   };

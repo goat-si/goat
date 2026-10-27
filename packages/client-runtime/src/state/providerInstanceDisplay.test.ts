@@ -155,6 +155,9 @@ describe("OpenCodex Home routing", () => {
     expect(codexRouteErrorMessage({ code: "provider_instance_busy" })).toBe(
       "Wait for this instance's active turns to finish before changing its model route.",
     );
+    expect(codexRouteErrorMessage({ code: "provider_instance_stale" })).toBe(
+      "Settings changed on another device. Review them and try again.",
+    );
   });
 });
 

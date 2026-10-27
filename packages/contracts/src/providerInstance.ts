@@ -67,6 +67,8 @@ export const ProviderInstanceMutation = Schema.Union([
     operation: Schema.Literal("upsert"),
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,
+    /** The instance as the client saw it; the write fails if the stored one has changed since. */
+    expectedInstance: Schema.optionalKey(ProviderInstanceConfig),
   }),
   Schema.Struct({
     operation: Schema.Literal("remove"),

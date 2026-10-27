@@ -141,15 +141,12 @@ export function openCodexHomeHandoff(input: {
 
 export const CODEX_ROUTE_BUSY_MESSAGE =
   "Wait for this instance's active turns to finish before changing its model route.";
+const CODEX_ROUTE_STALE_MESSAGE = "Settings changed on another device. Review them and try again.";
 
 export function codexRouteErrorMessage(error: unknown): string {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "provider_instance_busy"
-  )
-    return CODEX_ROUTE_BUSY_MESSAGE;
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+  if (code === "provider_instance_busy") return CODEX_ROUTE_BUSY_MESSAGE;
+  if (code === "provider_instance_stale") return CODEX_ROUTE_STALE_MESSAGE;
   return error instanceof Error
     ? error.message
     : "Could not update the model route. Check status and try again.";

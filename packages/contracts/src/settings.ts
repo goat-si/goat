@@ -1789,6 +1789,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     code: Schema.optionalKey(
       Schema.Literals([
         "provider_instance_busy",
+        "provider_instance_stale",
         "computer_use_unavailable",
         "computer_use_install_failed",
       ]),
@@ -1804,6 +1805,8 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     if (this.code === "provider_instance_busy") {
       return "End this instance's active sessions before changing its model route.";
     }
+    if (this.code === "provider_instance_stale")
+      return "Settings changed on another device. Review them and try again.";
     if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
       return this.reason ?? "Computer use cannot run on this host.";
     }

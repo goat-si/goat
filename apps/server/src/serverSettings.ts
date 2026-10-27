@@ -226,7 +226,7 @@ function ensureProviderInstanceMutationAllowed(
       }),
     );
   }
-  return Effect.void;
+  return CodexRoute.ensureExpectedProviderInstance(settings, mutation, settingsPath);
 }
 
 /** Used before any generic settings side effect, including device-host normalization. */

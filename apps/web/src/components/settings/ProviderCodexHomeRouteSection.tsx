@@ -5,8 +5,13 @@ import { readCodexSetupMode } from "./CodexSetupSection.logic";
 
 type Props = Omit<CodexHomeRouteSectionProps, "settings" | "onChange" | "onOpenDashboard"> & {
   readonly instance: ProviderInstanceConfig;
+  /** The stored instance, when there is one; the server refuses a write made against an older one. */
+  readonly expectedInstance: ProviderInstanceConfig | undefined;
   readonly canOpenDashboard: boolean;
-  readonly onConfigure: (instance: ProviderInstanceConfig) => Promise<void>;
+  readonly onConfigure: (
+    instance: ProviderInstanceConfig,
+    expectedInstance: ProviderInstanceConfig | undefined,
+  ) => Promise<void>;
 };
 const LOCAL_ADDRESS = "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.";
 function configString(config: unknown, key: string): string | null {
@@ -18,6 +23,7 @@ function configString(config: unknown, key: string): string | null {
 /** Decodes one Codex instance's Home route and writes changes back as one instance mutation. */
 export function ProviderCodexHomeRouteSection({
   instance,
+  expectedInstance,
   canOpenDashboard,
   onConfigure,
   ...props
@@ -42,15 +48,18 @@ export function ProviderCodexHomeRouteSection({
       key={`${props.instanceId}:${settings.modelRoute}:${settings.opencodexAuth}:${settings.opencodexBaseUrl}`}
       settings={settings}
       onChange={async (route) => {
-        await onConfigure({
-          ...instance,
-          config: {
-            ...(instance.config !== null && typeof instance.config === "object"
-              ? instance.config
-              : {}),
-            ...route,
+        await onConfigure(
+          {
+            ...instance,
+            config: {
+              ...(instance.config !== null && typeof instance.config === "object"
+                ? instance.config
+                : {}),
+              ...route,
+            },
           },
-        });
+          expectedInstance,
+        );
       }}
       onOpenDashboard={
         canOpenDashboard

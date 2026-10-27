@@ -72,6 +72,7 @@ describe("OpenCodex Home routing", () => {
             ...instance,
             config: { ...(instance.config as Record<string, unknown>), modelRoute: "default" },
           },
+          expectedInstance: instance,
         },
       },
     });
@@ -105,7 +106,9 @@ describe("OpenCodex Home routing", () => {
       driver: codex,
       config: { modelRoute: "default", opencodexBaseUrl: "http://localhost:10101/v1" },
     };
-    const mutate = vi.fn(async () => undefined);
+    const mutate = vi.fn<
+      (mutation: ReturnType<typeof buildDefaultCodexRouteMutation>) => Promise<void>
+    >(async () => undefined);
     for (const change of [{ opencodexAuth: "none" }, { modelRoute: "default" }] as const)
       await expect(
         confirmCodexRouteChange({
@@ -126,7 +129,9 @@ describe("OpenCodex Home routing", () => {
       config: { modelRoute: "opencodex", opencodexAuth: "openai" },
     };
     const latest = { ...opened, displayName: "Renamed elsewhere" };
-    const mutate = vi.fn(async () => undefined);
+    const mutate = vi.fn<
+      (mutation: ReturnType<typeof buildDefaultCodexRouteMutation>) => Promise<void>
+    >(async () => undefined);
     await confirmCodexRouteChange({
       environmentId: EnvironmentId.make("child"),
       instanceId: ProviderInstanceId.make("child_codex"),
@@ -143,5 +148,7 @@ describe("OpenCodex Home routing", () => {
         { opencodexAuth: "none" },
       ),
     );
+    // The server refuses the write if the instance changes between this check and its commit.
+    expect(mutate.mock.calls[0]?.[0].input.providerInstanceMutation.expectedInstance).toBe(latest);
   });
 });

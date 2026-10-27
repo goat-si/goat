@@ -45,6 +45,29 @@ export const instanceFingerprint = (instance: unknown) =>
       ) ?? "null",
     )
     .digest("hex");
+/**
+ * Rejects an upsert whose client-confirmed instance no longer matches the stored one. Clients only
+ * see redacted settings, so both sides are compared in that form. Called under the settings lock.
+ */
+export const ensureExpectedProviderInstance = (
+  settings: ServerSettings,
+  mutation: ProviderInstanceMutation,
+  settingsPath: string,
+) =>
+  mutation.operation !== "upsert" ||
+  mutation.expectedInstance === undefined ||
+  instanceFingerprint(
+    Settings.redactServerSettingsForClient(settings).providerInstances[mutation.instanceId],
+  ) === instanceFingerprint(mutation.expectedInstance)
+    ? Effect.void
+    : Effect.fail(
+        new ServerSettingsError({
+          settingsPath,
+          operation: "normalize",
+          providerInstanceId: mutation.instanceId,
+          code: "provider_instance_stale",
+        }),
+      );
 class ProviderInstanceBusyError extends ServerSettingsError {
   override get message() {
     return "Wait for this instance's active turns to finish before changing its model route.";

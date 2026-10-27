@@ -836,6 +836,7 @@ export function EnvironmentProviderSettings({
     next: ProviderInstanceConfig,
     options?: {
       readonly throwOnFailure?: boolean;
+      readonly expectedInstance?: ProviderInstanceConfig | undefined;
       readonly textGenerationModelSelection?: Parameters<
         typeof buildProviderInstanceUpdatePatch
       >[0]["textGenerationModelSelection"];
@@ -848,7 +849,12 @@ export function EnvironmentProviderSettings({
       textGenerationModelSelection: options?.textGenerationModelSelection,
     });
     const result = await persistProviderInstance(
-      { operation: "upsert", instanceId, instance: next },
+      {
+        operation: "upsert",
+        instanceId,
+        instance: next,
+        ...(options?.expectedInstance ? { expectedInstance: options.expectedInstance } : {}),
+      },
       patch,
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -956,12 +962,16 @@ export function EnvironmentProviderSettings({
   const stableUpdateModelPreferences = useStableCallback(updateModelPreferences);
   const stableToggleModelFavorite = useStableCallback(toggleModelFavorite);
   const configureInstance = useStableCallback(
-    async (instanceId: ProviderInstanceId, next: ProviderInstanceConfig) => {
+    async (
+      instanceId: ProviderInstanceId,
+      next: ProviderInstanceConfig,
+      expectedInstance?: ProviderInstanceConfig,
+    ) => {
       if (!readEnvironmentScope(environmentId, AuthProvidersManageScope))
         throw new Error(
           "This device can't change providers on this environment. Ask its owner for full access.",
         );
-      await persistInstance(instanceId, next, { throwOnFailure: true });
+      await persistInstance(instanceId, next, { throwOnFailure: true, expectedInstance });
     },
   );
   const refreshInstance = useStableCallback(async (instanceId: ProviderInstanceId) => {
@@ -1276,6 +1286,7 @@ interface ProviderInstanceRowActions {
   readonly configureInstance: (
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,
+    expectedInstance?: ProviderInstanceConfig,
   ) => Promise<void>;
   readonly refreshInstance: (instanceId: ProviderInstanceId) => Promise<void>;
   readonly addOpenCodexInstance: () => void;
@@ -1448,13 +1459,14 @@ function ProviderInstanceRow({
             environmentLabel={environmentLabel}
             instanceId={instanceId}
             instance={instance}
+            expectedInstance={explicitInstance}
             status={liveProvider?.codexRoute}
             readOnly={readOnly}
             active={active}
             canRefresh={canRefreshProviders}
             canOpenDashboard={canOpenHomeDashboard}
-            onConfigure={async (next) => {
-              await actions.configureInstance(instanceId, next);
+            onConfigure={async (next, expected) => {
+              await actions.configureInstance(instanceId, next, expected);
             }}
             onRefresh={async () => {
               await actions.refreshInstance(instanceId);

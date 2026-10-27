@@ -478,6 +478,7 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
             opencodexBaseUrl: "http://127.0.0.1:10100/v1",
           },
         }),
+        expectedInstance: state.settings.providerInstances[customId],
       },
       expect.anything(),
     );
@@ -537,6 +538,8 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
                 opencodexBaseUrl: "http://127.0.0.1:10100/v1",
               },
             }),
+            // The server refuses the write if another device changed the instance since.
+            expectedInstance: state.settings.providerInstances[customId],
           },
           expect.anything(),
         ),
