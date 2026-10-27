@@ -22,7 +22,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2ThreadDetailSnapshot,
 } from "@goat/contracts";
-import { describe, expect, it, vi } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -30,6 +30,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AtomRegistry } from "effect/reactivity";
+import { vi } from "vitest";
 
 import { v2Projection } from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
 import type { WsRpcProtocolClient } from "../../../../packages/client-runtime/src/rpc/protocol";
@@ -216,46 +217,44 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
 });
 
 describe("startOpeningEnvironmentThread", () => {
-  for (const outcome of ["queued", "failed"] as const) {
-    it.effect(
-      `opens the delivered thread after ${outcome} creation without retaining an early miss (#1952)`,
-      () =>
-        Effect.gen(function* () {
-          const h = yield* setup();
-          vi.useFakeTimers();
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              vi.clearAllTimers();
-              vi.useRealTimers();
-            }),
-          );
-          if (outcome === "queued") {
-            h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {
-              [threadKey]: [creation],
-            });
-          } else {
-            h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
-              [threadKey]: { kind: "failed", message: creation, reason: "Checkout failed" },
-            });
-          }
-          h.threads.startOpeningEnvironmentThread(environmentId, threadId);
-          // Drain scheduled atom work while the server still answers missing.
-          yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
-          h.availableThreads.add(threadId);
-          h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
-          h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
-            [threadKey]: { kind: "delivered", message: creation },
+  it.effect.each(["queued", "failed"] as const)(
+    "opens the delivered thread after %s creation without retaining an early miss (#1952)",
+    (outcome) =>
+      Effect.gen(function* () {
+        const h = yield* setup();
+        vi.useFakeTimers();
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+          }),
+        );
+        if (outcome === "queued") {
+          h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {
+            [threadKey]: [creation],
           });
-          h.threads.startOpeningEnvironmentThread(environmentId, threadId);
-          const state = yield* h.observe(
-            (value) => value.status === "live" || value.status === "deleted",
-          );
-          expect(state.status).toBe("live");
-          expect(Option.getOrThrow(state.data).thread).toEqual(v2Projection.thread);
-          yield* Effect.promise(() => vi.runAllTimersAsync());
-        }),
-    );
-  }
+        } else {
+          h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
+            [threadKey]: { kind: "failed", message: creation, reason: "Checkout failed" },
+          });
+        }
+        h.threads.startOpeningEnvironmentThread(environmentId, threadId);
+        // Drain scheduled atom work while the server still answers missing.
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        h.availableThreads.add(threadId);
+        h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+        h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
+          [threadKey]: { kind: "delivered", message: creation },
+        });
+        h.threads.startOpeningEnvironmentThread(environmentId, threadId);
+        const state = yield* h.observe(
+          (value) => value.status === "live" || value.status === "deleted",
+        );
+        expect(state.status).toBe("live");
+        expect(Option.getOrThrow(state.data).thread).toEqual(v2Projection.thread);
+        yield* Effect.promise(() => vi.runAllTimersAsync());
+      }),
+  );
 
   it.effect("opens an existing thread with a queued follow-up message", () =>
     Effect.gen(function* () {
