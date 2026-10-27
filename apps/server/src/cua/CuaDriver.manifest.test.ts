@@ -50,6 +50,7 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
       let reads = 0;
       let stops = 0;
       let starts = 0;
+      const listedOn: Array<ReadonlyArray<{ readonly name: string; readonly value: string }>> = [];
       const exited = yield* Deferred.make<void>();
       const service = yield* CuaDriver.make(
         () =>
@@ -63,9 +64,13 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
             }),
             waitForExit: Deferred.await(exited),
           }),
-        Effect.succeed({ capability: "available", reason: "test display", environment: [] }),
+        Effect.succeed({
+          capability: "available",
+          reason: "test display",
+          environment: [{ name: "DISPLAY", value: ":1" }],
+        }),
         {
-          refreshManifest: (apps) =>
+          refreshManifest: (apps, display) =>
             refreshManifest({
               apps,
               path: "/manifest",
@@ -76,6 +81,7 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
                 }),
               prepare: Effect.sync(() => {
                 prepares++;
+                listedOn.push(display);
                 text = cuaDriverCapabilityManifest({ applications: scenario.after });
                 return "/manifest";
               }),
@@ -91,6 +97,8 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
       if (scenario.prepares === 0 || scenario.stops > 0)
         yield* service.refreshManifest!(["editor"]);
       expect(prepares).toBe(scenario.prepares);
+      // A server started without DISPLAY lists windows only on the screen its driver runs on.
+      for (const display of listedOn) expect(display).toEqual([{ name: "DISPLAY", value: ":1" }]);
       expect(stops).toBe(scenario.stops);
       expect(starts).toBe(scenario.running ? 1 : 0);
       if (!scenario.running) expect(reads).toBe(0);

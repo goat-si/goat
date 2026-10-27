@@ -722,11 +722,10 @@ const make = Effect.gen(function* () {
         const appsChanged =
           apps.length !== deliveredApps.length ||
           apps.some((app, index) => app !== deliveredApps[index]);
-        if (receiver === undefined && appsChanged && Option.isSome(driver)) {
-          const refresh = driver.value.refreshManifest;
-          if (refresh)
-            yield* refresh(apps).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
-        }
+        // Only a driver this server runs itself offers a refresh; a desktop host refreshes its own.
+        const refresh = Option.isSome(driver) ? driver.value.refreshManifest : undefined;
+        if (appsChanged && refresh)
+          yield* refresh(apps).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
         const active = current.length > 0;
         let retry = false;
         // The server's own helper takes the wanted state as is, so it cannot fall behind.

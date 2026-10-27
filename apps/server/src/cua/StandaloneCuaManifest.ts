@@ -5,7 +5,6 @@ import {
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
-import { cuaDriverListingEnvironment } from "@goat/shared/cuaDriverRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -45,26 +44,30 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifestPath = path.join(stateDir, "cua-driver", "capability-manifest.yaml");
-  const prepare = Effect.fn("StandaloneCuaManifest.prepare")((binaryPath: string) =>
-    Effect.tryPromise(() =>
-      prepareCuaDriverCapabilityManifest({
-        binaryPath,
-        platform,
-        environment: cuaDriverListingEnvironment(environment),
-        hostBundleIds: [hostBundleId],
-        path: manifestPath,
-      }),
-    ),
+  // Listed on the driver's own screen: a server started over SSH has no DISPLAY of its own, and
+  // without one the listing sees no windows, so apps without a desktop entry never get admitted.
+  const prepare = Effect.fn("StandaloneCuaManifest.prepare")(
+    (binaryPath: string, display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
+      Effect.tryPromise(() =>
+        prepareCuaDriverCapabilityManifest({
+          binaryPath,
+          platform,
+          environment: cuaDriverSessionListingEnvironment(environment, display, platform),
+          hostBundleIds: [hostBundleId],
+          path: manifestPath,
+        }),
+      ),
   );
   const refresh = Effect.fn("StandaloneCuaManifest.refresh")(function* (
     binaryPath: string,
     apps: ReadonlyArray<string>,
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
   ) {
     return yield* refreshManifest({
       apps,
       path: manifestPath,
       read: (path) => fs.readFileString(path),
-      prepare: prepare(binaryPath),
+      prepare: prepare(binaryPath, display),
     });
   });
   const requestListing = <E>(startBinary: Effect.Effect<string, E>) =>

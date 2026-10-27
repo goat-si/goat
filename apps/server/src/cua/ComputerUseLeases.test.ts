@@ -665,6 +665,12 @@ it.effect(
                 database,
                 NodeServices.layer,
                 driver,
+                // A standalone server still assembles the desktop receiver, with no desktop on it.
+                Layer.mock(DesktopTelemetryReceiver.DesktopTelemetryReceiver)({
+                  cuaReadiness: Effect.succeedNone,
+                  cuaSafety: Stream.empty,
+                  setCuaWatch: () => Effect.void,
+                }),
                 Layer.succeed(
                   LinuxHelperHost.LinuxHelperHost,
                   LinuxHelperHost.LinuxHelperHost.of({

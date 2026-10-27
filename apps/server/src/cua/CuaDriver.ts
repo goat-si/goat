@@ -236,8 +236,10 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  /** Re-lists on the running driver's display; true when that admitted a missing approved app. */
   readonly refreshManifest?: (
     apps: ReadonlyArray<string>,
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
   ) => Effect.Effect<boolean, CuaDriverHostError>;
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   /** A desktop host's named listing; servers without one name each app by its id. */
@@ -481,7 +483,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   ) {
     const entry = active;
     if (!entry?.running || !refresh) return;
-    if (yield* refresh(apps)) {
+    if (yield* refresh(apps, entry.displayEnvironment ?? [])) {
       if (active !== entry || !entry.running) return;
       failure = Option.none();
       yield* revoke(entry);
@@ -651,7 +653,10 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
   function* <E, M, P>(
     executable: Effect.Effect<string, E>,
     /** Writes the capability manifest for this binary and returns its path. */
-    prepareManifest: (binaryPath: string) => Effect.Effect<string, P>,
+    prepareManifest: (
+      binaryPath: string,
+      display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+    ) => Effect.Effect<string, P>,
     module?: Effect.Effect<NativeModule, M>,
   ) {
     const environment = yield* HostProcess.Environment;
@@ -693,7 +698,7 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
           : module.pipe(Effect.mapError((cause) => new CuaDriverStartError({ binaryPath, cause })));
         // Acquisition can suspend during installation/loading, so check ownership again.
         if (owned) return yield* new CuaDriverHostError({ operation: "busy" });
-        const manifestPath = yield* prepareManifest(binaryPath).pipe(
+        const manifestPath = yield* prepareManifest(binaryPath, display).pipe(
           Effect.mapError((cause) => new CuaDriverStartError({ binaryPath, cause })),
         );
         if (owned) return yield* new CuaDriverHostError({ operation: "busy" });
@@ -945,9 +950,12 @@ export const layer = Layer.effect(
             const binary = Option.isSome(linuxHelper) ? startBinary : undefined;
             const requestListing = manifest.requestListing(startBinary);
             const refreshManifest = Effect.fn("CuaDriver.refreshStandaloneManifest")(
-              (apps: ReadonlyArray<string>) =>
+              (
+                apps: ReadonlyArray<string>,
+                display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+              ) =>
                 startBinary.pipe(
-                  Effect.flatMap((binaryPath) => manifest.refresh(binaryPath, apps)),
+                  Effect.flatMap((binaryPath) => manifest.refresh(binaryPath, apps, display)),
                   Effect.mapError(
                     (cause) => new CuaDriverHostError({ operation: "restart", cause }),
                   ),
