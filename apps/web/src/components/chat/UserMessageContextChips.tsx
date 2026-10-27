@@ -48,11 +48,8 @@ import { formatComposerContextReference } from "@goat/shared/composerContextRefe
 import { ContextChip, ContextChipLabel, type ContextChipKind } from "../ContextChip";
 import { createContextPresentationRegistry } from "../contextPresentationRegistry";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
-import {
-  SkillChipPopover,
-  skillInstructionsOpener,
-  skillPopoverDescription,
-} from "./SkillInlineText";
+import { SkillChipIcon } from "./SkillInlineText";
+import { Button } from "../ui/button";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -109,13 +106,30 @@ function UserMessageSkillChip(props: {
 }) {
   const { skills, threadRef } = use(TimelineRowCtx);
   const skill = skills.find((candidate) => candidate.name === props.record.name);
+  const label = props.record.label || props.record.name;
+  const description = skill?.description?.trim() || skill?.shortDescription?.trim();
   return (
-    <SkillChipPopover
-      label={props.record.label || props.record.name}
-      description={skill ? skillPopoverDescription(skill) : null}
+    <UserMessageContextPopover
+      kind="skill"
+      icon={<SkillChipIcon />}
+      label={label}
+      accessibleLabel={`Skill ${label}`}
       copyMarkdown={props.copyMarkdown}
-      onViewInstructions={skillInstructionsOpener(threadRef, skill)}
-    />
+    >
+      <div className="space-y-3 p-2 text-sm">
+        <p className="font-medium">{label}</p>
+        <p>{description || "No description is available for this skill."}</p>
+        {threadRef && skill?.path ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => useRightPanelStore.getState().openFile(threadRef, skill.path)}
+          >
+            View instructions
+          </Button>
+        ) : null}
+      </div>
+    </UserMessageContextPopover>
   );
 }
 

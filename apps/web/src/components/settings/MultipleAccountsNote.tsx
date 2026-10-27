@@ -41,7 +41,6 @@ export function MultipleAccountsNote({
             href={`https://github.com/goat-si/goat/blob/dev/docs/user/${guidance.guide}`}
             target="_blank"
             rel="noreferrer"
-            className="underline underline-offset-2 hover:text-foreground"
           >
             Multi-account guidance
           </a>

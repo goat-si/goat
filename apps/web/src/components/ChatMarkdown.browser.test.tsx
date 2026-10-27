@@ -8,7 +8,11 @@ import { act, render } from "../../test/render";
 import "../index.css";
 
 import { filesystemEnvironment } from "../state/filesystem";
-import { useRightPanelStore } from "../rightPanelStore";
+import {
+  selectActiveRightPanelSurface,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "../rightPanelStore";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
@@ -347,15 +351,29 @@ describe("ChatMarkdown skill chips", () => {
         },
       ],
     });
-    using openFile = vi
-      .spyOn(useRightPanelStore.getState(), "openFile")
-      .mockImplementation(() => {});
+    const otherThread = { ...threadRef, threadId: ThreadId.make("other-thread") };
+    const otherEnvironment = { ...threadRef, environmentId: EnvironmentId.make("other-workspace") };
+    const previous = useRightPanelStore.getState();
+    using _restorePanels = { [Symbol.dispose]: () => useRightPanelStore.setState(previous) };
+    useRightPanelStore.getState().openFile(otherThread, "/notes/thread.md");
+    useRightPanelStore.getState().openFile(otherEnvironment, "/notes/environment.md");
+    const before = useRightPanelStore.getState().byThreadKey;
 
     await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
     await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
     await userEvent.click(page.getByRole("button", { name: "View instructions" }));
 
-    expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, "/skills/review/SKILL.md");
+    const after = useRightPanelStore.getState().byThreadKey;
+    expect(selectActiveRightPanelSurface(after, threadRef)).toMatchObject({
+      kind: "file",
+      relativePath: "/skills/review/SKILL.md",
+    });
+    expect(selectThreadRightPanelState(after, otherThread)).toEqual(
+      selectThreadRightPanelState(before, otherThread),
+    );
+    expect(selectThreadRightPanelState(after, otherEnvironment)).toEqual(
+      selectThreadRightPanelState(before, otherEnvironment),
+    );
   });
 });
 

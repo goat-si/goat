@@ -21,12 +21,11 @@ function SkillInlineText(props: {
       nodes.push(props.text.slice(cursor, start));
     }
     nodes.push(
-      <SkillChipPopover
+      <SkillChip
         key={`${start}:${skill.name}`}
-        label={formatProviderSkillDisplayName(skill)}
-        description={skillPopoverDescription(skill)}
-        copyMarkdown={rawText}
-        onViewInstructions={skillInstructionsOpener(props.threadRef, skill)}
+        skill={skill}
+        rawText={rawText}
+        threadRef={props.threadRef}
       />,
     );
     cursor = end;
@@ -69,39 +68,33 @@ export function renderSkillInlineMarkdownChildren(
   });
 }
 
-export function skillPopoverDescription(
-  skill: Pick<ServerProviderSkill, "description" | "shortDescription">,
-) {
-  return skill.description?.trim() || skill.shortDescription?.trim() || null;
-}
-
-export function skillInstructionsOpener(
-  threadRef: ScopedThreadRef | null | undefined,
-  skill: Pick<ServerProviderSkill, "path"> | undefined,
-) {
-  if (!threadRef || !skill?.path) return undefined;
-  return () => useRightPanelStore.getState().openFile(threadRef, skill.path);
-}
-
-export function SkillChipPopover(props: {
-  label: string;
-  description: string | null | undefined;
-  copyMarkdown?: string | undefined;
-  onViewInstructions: (() => void) | undefined;
+function SkillChip(props: {
+  skill: ServerProviderSkill;
+  rawText: string;
+  threadRef: ScopedThreadRef | undefined;
 }) {
+  const label = formatProviderSkillDisplayName(props.skill);
+  const description = props.skill.description?.trim() || props.skill.shortDescription?.trim();
   return (
     <ContextChipPopover
       kind="skill"
       icon={<SkillChipIcon />}
-      label={props.label}
-      accessibleLabel={`Skill ${props.label}`}
-      copyMarkdown={props.copyMarkdown}
+      label={label}
+      accessibleLabel={`Skill ${label}`}
+      copyMarkdown={props.rawText}
     >
       <div className="space-y-3 p-2 text-sm">
-        <p className="font-medium">{props.label}</p>
-        <p>{props.description || "No description is available for this skill."}</p>
-        {props.onViewInstructions ? (
-          <Button variant="outline" size="sm" onClick={props.onViewInstructions}>
+        <p className="font-medium">{label}</p>
+        <p>{description || "No description is available for this skill."}</p>
+        {props.threadRef && props.skill.path ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (props.threadRef)
+                useRightPanelStore.getState().openFile(props.threadRef, props.skill.path);
+            }}
+          >
             View instructions
           </Button>
         ) : null}
@@ -110,7 +103,7 @@ export function SkillChipPopover(props: {
   );
 }
 
-function SkillChipIcon() {
+export function SkillChipIcon() {
   return (
     <span
       aria-hidden="true"

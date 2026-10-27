@@ -103,7 +103,6 @@ export function AddCodexAccountDialog({
           ) : (
             <form
               id="add-codex-account"
-              className="grid gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 void createAccount();
