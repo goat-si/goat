@@ -37,6 +37,17 @@ describe("macOS input tool errors after dispatch reach the agent as may-have-act
     assert.equal(markUnverified("click", line), line);
   });
 
+  it("a refusal that says nothing went out is not marked may-have-acted", () => {
+    for (const structured of [
+      { code: "px_capture_unavailable", window_id: 9 },
+      { code: "bring_to_front_window_not_found", activated: false, request_accepted: false },
+      { code: "paste_target_is_browser_chrome", delivered: false },
+    ]) {
+      const line = reply(structured);
+      assert.equal(markUnverified("click", line), line, structured.code);
+    }
+  });
+
   it("an explicit effect from the driver is kept as it said", () => {
     const line = reply({ code: "tool_invocation_failed", effect: "refused" });
     assert.equal(markUnverified("type_text", line), line);

@@ -25,6 +25,15 @@ const UNVERIFIED_INPUT_NOTE =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/**
+ * The driver's own word that nothing went out, on refusals that carry no effect: bring_to_front's
+ * pre-checks (activated and request_accepted false) and a paste kept out of browser chrome.
+ */
+const saysNotSent = (structured: Record<string, unknown>) =>
+  structured.dispatched === false ||
+  structured.delivered === false ||
+  (structured.activated === false && structured.request_accepted === false);
+
 /** The driver's reply to an input tool, with effect "unverifiable" added when it may have acted. */
 export function markUnverified(tool: string | undefined, line: string): string {
   if (tool === undefined || READ_ONLY_TOOLS.has(tool)) return line;
@@ -40,7 +49,8 @@ export function markUnverified(tool: string | undefined, line: string): string {
   const structured = isRecord(result.structuredContent) ? result.structuredContent : {};
   const code = structured.code;
   if (structured.effect !== undefined || structured.status === "refused") return line;
-  if (typeof code === "string" && PRE_DISPATCH_CODES.has(code)) return line;
+  if ((typeof code === "string" && PRE_DISPATCH_CODES.has(code)) || saysNotSent(structured))
+    return line;
   const content = Array.isArray(result.content) ? result.content : [];
   return JSON.stringify({
     ...message,

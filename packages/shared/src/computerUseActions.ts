@@ -256,6 +256,8 @@ export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "screenshot_context_missing",
   "px_frame_mismatch",
   "px_window_not_found",
+  // A pixel action whose window could not be captured to prove its frame: "Refusing to dispatch".
+  "px_capture_unavailable",
   "window_id_not_found",
   "window_owner_pid_mismatch",
   "window_target_not_found",
