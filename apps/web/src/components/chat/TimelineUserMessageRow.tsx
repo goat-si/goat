@@ -234,8 +234,51 @@ function FoldedMessageHeader(props: {
   summary: string;
   expanded: boolean;
   onToggle: () => void;
+  /** Makes the label a button of its own; left out, the label stays plain text. */
+  onOpenLabel?: (() => void) | undefined;
 }) {
   const Icon = props.icon;
+  const chevron = (
+    <ChevronDownIcon
+      className={cn(
+        "size-3.5 shrink-0 text-muted-foreground transition-transform",
+        props.expanded && "rotate-180",
+      )}
+    />
+  );
+  if (props.onOpenLabel) {
+    // A button cannot hold another, so the label sits beside the toggle; clicks on the
+    // icon and padding land on this row and still toggle.
+    return (
+      <div
+        data-scroll-anchor-ignore
+        onClick={(event) => {
+          if (event.target === event.currentTarget) props.onToggle();
+        }}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-2xl px-3 py-2 text-sm"
+      >
+        <Icon className="pointer-events-none size-4 shrink-0 stroke-2 text-muted-foreground" />
+        <InlineButton
+          tone="muted"
+          aria-label={`Open ${props.label}`}
+          onClick={props.onOpenLabel}
+          className="min-w-0 max-w-1/2"
+        >
+          <span className="truncate">{props.label}</span>
+        </InlineButton>
+        <button
+          type="button"
+          aria-expanded={props.expanded}
+          aria-label={props.summary ? undefined : `Message from ${props.label}`}
+          onClick={props.onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className="min-w-0 flex-1 truncate">{props.summary}</span>
+          {chevron}
+        </button>
+      </div>
+    );
+  }
   return (
     <button
       type="button"
@@ -247,12 +290,7 @@ function FoldedMessageHeader(props: {
       <Icon className="size-4 shrink-0 stroke-2 text-muted-foreground" />
       <span className="max-w-1/2 shrink-0 truncate text-muted-foreground">{props.label}</span>
       <span className="min-w-0 flex-1 truncate">{props.summary}</span>
-      <ChevronDownIcon
-        className={cn(
-          "size-3.5 shrink-0 text-muted-foreground transition-transform",
-          props.expanded && "rotate-180",
-        )}
-      />
+      {chevron}
     </button>
   );
 }
@@ -313,6 +351,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ? { environmentId: ctx.activeThreadEnvironmentId, threadId: senderThreadId }
       : null,
   );
+  const senderTitle = senderShell?.title.trim();
+  // Only a sender this environment still knows gets a link; anything else would open nowhere.
+  const openSender =
+    senderThreadId && senderTitle && senderShell?.deletedAt === null
+      ? () => ctx.onOpenThread(senderThreadId)
+      : undefined;
   const resolvedContext = resolveUserMessageContext(
     userMessage.standingInstructions !== null || userMessage.attribution === "guest"
       ? { ...row.message, text: userMessage.text }
@@ -464,10 +508,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         {folded ? (
           <FoldedMessageHeader
             icon={MessagesSquareIcon}
-            label={senderShell?.title.trim() || "Agent"}
+            label={senderTitle || "Agent"}
             summary={foldSummary}
             expanded={expanded}
             onToggle={() => setExpanded((value) => !value)}
+            onOpenLabel={openSender}
           />
         ) : null}
         {/* Find reads the DOM, so a folded message stays mounted but hidden while find is open. */}
