@@ -46,6 +46,14 @@ vi.mock(import("~/state/query"), async (original) => ({
 }));
 
 const audioAsset = vi.hoisted(() => ({ url: "" }));
+const threadShells = vi.hoisted(
+  () => new Map<string, { readonly title: string; readonly deletedAt: string | null }>(),
+);
+vi.mock(import("~/state/entities"), async (original) => ({
+  ...(await original()),
+  useQuietThreadShell: ((ref: { readonly threadId: string } | null) =>
+    (ref && threadShells.get(ref.threadId)) ?? null) as never,
+}));
 vi.mock(import("~/assets/assetUrls"), async (original) => {
   const actual = await original();
   return {
@@ -149,8 +157,15 @@ async function click(element: HTMLElement) {
   await act(async () => element.click());
 }
 
-function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
+function setup({
+  scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }>,
+  shells = [] as ReadonlyArray<{ id: string; title: string; deletedAt?: string }>,
+} = {}) {
   environmentQuery.data = { tasks: scheduledTasks };
+  threadShells.clear();
+  for (const shell of shells) {
+    threadShells.set(shell.id, { title: shell.title, deletedAt: shell.deletedAt ?? null });
+  }
 }
 
 const TASK_ID = ScheduledTaskId.make("task-1");
@@ -456,6 +471,8 @@ describe("MessagesTimeline agent messages", () => {
     expect(row.getAttribute("aria-expanded")).toBe("false");
     expect(screen.text()).not.toContain("drops the index");
     expect(screen.buttons("Open thread")).toHaveLength(0);
+    // An unknown sender has no title to open, so its label stays inside the toggle.
+    expect(screen.buttons(/^Open /)).toHaveLength(0);
 
     await click(row);
     expect(screen.text()).toContain("The migration drops the index before backfilling it.");
@@ -464,6 +481,38 @@ describe("MessagesTimeline agent messages", () => {
 
     await click(screen.button(/^Agent/));
     expect(screen.text()).not.toContain("drops the index");
+  });
+
+  it("opens a known sender thread from its name without unfolding the message", async () => {
+    setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
+    const onOpenThread = vi.fn();
+    await using screen = await renderTimeline(
+      [message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID })],
+      { onOpenThread },
+    );
+    const toggle = screen.button("Review finished");
+
+    await click(screen.button("Open CU100 merge manager"));
+    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    await click(toggle.parentElement!);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows a deleted sender's name as plain text", async () => {
+    setup({
+      shells: [
+        { id: SENDER_THREAD_ID, title: "CU100 merge manager", deletedAt: "2026-03-18T00:00:00Z" },
+      ],
+    });
+    await using screen = await renderTimeline([
+      message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
+    ]);
+    expect(screen.buttons(/^Open /)).toHaveLength(0);
+    expect(screen.button(/^CU100 merge manager/).textContent).toContain("Review finished");
   });
 
   it("leaves messages sent by GOAT as full bubbles", async () => {
