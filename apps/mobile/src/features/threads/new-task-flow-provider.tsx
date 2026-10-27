@@ -1,14 +1,10 @@
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import * as Dialog from "../../components/ui/Dialog";
-import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
-import { useEnvironmentPresentation } from "../../state/presentation";
-import { environmentSession } from "../../state/session";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
   ModelSelection,
-  ProjectReadFileResult,
   ProviderInteractionMode,
   ProviderOptionSelection,
   RuntimeMode,
@@ -18,25 +14,15 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
-  DEFAULT_SERVER_SETTINGS,
   MessageId,
   repositoryGroupingKeyOf,
-  GOAT_PROJECT_FILE_NAME,
   ThreadId,
 } from "@goat/contracts";
 import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
-import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
-import { goatProjectFileReadPath } from "@goat/client-runtime/goat-project-file";
-import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
-import {
-  useEnvironmentServerConfig,
-  useProjects,
-  useServerConfigs,
-  useThreadShells,
-} from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -102,7 +88,6 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { isScratchProject } from "@goat/client-runtime/state/projects";
 import { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { type VcsRef } from "@goat/client-runtime/state/vcs";
 import {
@@ -118,12 +103,11 @@ import {
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
   resolveNewTaskBranchWorktreePath,
-  resolveNewTaskLocalWorkspaceSelection,
-  resolveNewTaskWorkspaceSelection,
+  resolveNewTaskDraftWorkspace,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
-import { useOlderSettledCount } from "../../state/olderSettledShelf";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -279,7 +263,6 @@ export function NewTaskFlowProvider(
   const [submitting, setSubmitting] = useState(false);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [editingPendingTask, setEditingPendingTask] = useState<QueuedThreadMessage | null>(null);
-  const pendingLocalBranchSyncDraftKeysRef = useRef(new Set<string>());
   // Mirror edit state synchronously so unmount flush cannot save a session ended this render.
   const editingPendingTaskRef = useRef<QueuedThreadMessage | null>(null);
   const editingRevisionRef = useRef(Promise.resolve(0));
@@ -290,7 +273,6 @@ export function NewTaskFlowProvider(
     setActiveDraftKey(null);
     setSubmitting(false);
     setExpandedProvider(null);
-    pendingLocalBranchSyncDraftKeysRef.current.clear();
     const editing = editingPendingTaskRef.current;
     editingPendingTaskRef.current = null;
     setEditingPendingTask(null);
@@ -336,12 +318,9 @@ export function NewTaskFlowProvider(
       ? editingPendingProject
       : (projectsForEnvironment[0] ?? null));
 
-  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
-    selectedProject?.environmentId ?? null,
-  );
-  const isScratchDraft =
-    selectedProject !== null &&
-    isScratchProject(selectedProject, selectedEnvironmentServerConfig?.scratchWorkspaceRoot);
+  const projectDefaults = useNewTaskProjectDefaults(selectedProject);
+  const selectedEnvironmentServerConfig = projectDefaults.serverConfig;
+  const isScratchDraft = projectDefaults.isScratch;
   const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const scratchEnvironments = connectedEnvironments.filter(
@@ -462,94 +441,27 @@ export function NewTaskFlowProvider(
   });
   const knownIsGitRepo = projectGitStatus.data?.isRepo ?? projectBranches.data?.isRepo ?? null;
   const isGitRepo = knownIsGitRepo ?? true;
-  const fileAccessSession = useEnvironmentQuery(
-    selectedProject !== null && selectedProject.workspaceRoot !== ""
-      ? environmentSession.sessionStateAtom(selectedProject.environmentId)
-      : null,
-  );
-  const fileEnvironment = useEnvironmentPresentation(selectedProject?.environmentId ?? null);
-  const fileAccess = resolveFilesystemReadAccess({
-    isCatalogReady: fileEnvironment.isReady,
-    connection: fileEnvironment.presentation?.connection ?? null,
-    session: fileAccessSession.data,
-    sessionError: fileAccessSession.error,
-  });
-  const { canReadFiles } = fileAccess;
-  const fileAccessPending =
-    selectedProject !== null && selectedProject.workspaceRoot !== "" && fileAccess.isPending;
-  const goatProjectFileQuery = useEnvironmentQuery(
-    canReadFiles && selectedProject !== null && selectedProject.workspaceRoot !== ""
-      ? projectEnvironment.readFile({
-          environmentId: selectedProject.environmentId,
-          input: {
-            cwd: selectedProject.workspaceRoot,
-            relativePath: GOAT_PROJECT_FILE_NAME,
-            allowMissing: true,
-          },
-        })
-      : null,
-  );
-  const projectFilePath = goatProjectFileReadPath(
-    goatProjectFileQuery.data,
-    goatProjectFileQuery.cause,
-    goatProjectFileQuery.isPending,
-  );
-  const legacyProjectFileQuery = useEnvironmentQuery(
-    canReadFiles &&
-      selectedProject !== null &&
-      selectedProject.workspaceRoot !== "" &&
-      projectFilePath !== GOAT_PROJECT_FILE_NAME
-      ? projectEnvironment.readFile({
-          environmentId: selectedProject.environmentId,
-          input: { cwd: selectedProject.workspaceRoot, relativePath: projectFilePath },
-        })
-      : null,
-  );
-  const goatProjectFileData = (
-    projectFilePath === GOAT_PROJECT_FILE_NAME
-      ? goatProjectFileQuery.data
-      : legacyProjectFileQuery.data
-  ) as ProjectReadFileResult | null;
-  const goatProjectFile =
-    goatProjectFileData === null ||
-    goatProjectFileData.exists === false ||
-    goatProjectFileData.truncated
-      ? null
-      : parseGoatProjectFile(goatProjectFileData.contents);
-  const projectSettings = resolveProjectSettings(
-    selectedEnvironmentServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
-    selectedProject?.id ?? null,
-    selectedProject,
-    goatProjectFile,
-  );
+  const { projectSettings, defaultWorkspaceMode, defaultWorkspaceModeSettled } = projectDefaults;
   const canChooseWorkspace = !isScratchDraft;
-  const selectedProjectOlderSettledCount = useOlderSettledCount(selectedProject);
-  const selectedProjectHasThreads =
-    selectedProject !== null &&
-    (selectedProjectOlderSettledCount > 0 ||
-      threads.some(
-        (thread) =>
-          thread.environmentId === selectedProject.environmentId &&
-          thread.projectId === selectedProject.id,
-      ));
-  const defaultWorkspaceMode: WorkspaceMode = canChooseWorkspace
-    ? resolveNewThreadEnvMode({
-        projectSettings,
-        workspaceRoot: selectedProject?.workspaceRoot ?? null,
-        newProjectsRoot: selectedEnvironmentServerConfig?.newProjectsRoot,
-        projectHasThreads: selectedProjectHasThreads,
-      })
-    : "local";
-  // Do not persist the provisional workspace default while t3.json is loading; it would override
-  // the file's eventual default.
-  const defaultWorkspaceModeSettled =
-    selectedProjectDraft.workspaceSelection?.mode !== undefined ||
-    projectSettings.sources.defaultThreadEnvMode !== "environment" ||
-    (!goatProjectFileQuery.isPending && !legacyProjectFileQuery.isPending && !fileAccessPending);
-  const workspaceSelection = resolveNewTaskWorkspaceSelection({
-    selection: canChooseWorkspace ? selectedProjectDraft.workspaceSelection : undefined,
-    fallback: { mode: defaultWorkspaceMode, branch: null, worktreePath: null },
+  const branchState = usePaginatedBranches({
+    environmentId: selectedProject?.environmentId ?? null,
+    cwd: selectedProject?.workspaceRoot || null,
+  });
+  const branchesLoading = branchState.isPending && branchState.data === null;
+  const allBranchRefs = branchState.refs;
+  const availableBranches = pipe(
+    allBranchRefs,
+    Arr.filter((branch) => !branch.isRemote),
+  );
+
+  const workspaceSelection = resolveNewTaskDraftWorkspace({
+    selection: selectedProjectDraft.workspaceSelection,
+    canChooseWorkspace,
+    defaultMode: defaultWorkspaceMode,
+    defaultModeSettled: defaultWorkspaceModeSettled,
     isGitRepo,
+    branches: allBranchRefs,
+    projectCwd: selectedProject?.workspaceRoot ?? null,
   });
   const workspaceMode = workspaceSelection.mode;
   const selectedBranchName = workspaceSelection.branch;
@@ -695,17 +607,6 @@ export function NewTaskFlowProvider(
     }
     replaceComposerDraftAttachments(selectedProjectDraftKey, []);
   };
-  const branchState = usePaginatedBranches({
-    environmentId: selectedProject?.environmentId ?? null,
-    cwd: selectedProject?.workspaceRoot || null,
-  });
-  const branchesLoading = branchState.isPending && branchState.data === null;
-  const allBranchRefs = branchState.refs;
-  const availableBranches = pipe(
-    allBranchRefs,
-    Arr.filter((branch) => !branch.isRemote),
-  );
-
   const carryDraftContentTo = (project: EnvironmentProject) => {
     const target = { environmentId: project.environmentId, projectId: project.id };
     if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
@@ -797,64 +698,21 @@ export function NewTaskFlowProvider(
     if (!selectedProject) {
       return;
     }
-    const localSelection = resolveNewTaskLocalWorkspaceSelection({
-      branches: availableBranches,
-      projectCwd: selectedProject.workspaceRoot,
-    });
-    if (mode === "local" && localSelection.awaitsCurrentBranch) {
-      pendingLocalBranchSyncDraftKeysRef.current.add(selectedProjectDraftKey);
-    } else {
-      pendingLocalBranchSyncDraftKeysRef.current.delete(selectedProjectDraftKey);
-    }
     updateComposerDraftSettings(selectedProjectDraftKey, {
       workspaceSelection: {
         mode,
-        branch: mode === "local" ? localSelection.branch : selectedBranchName,
-        worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
+        branch: mode === "local" ? null : selectedBranchName,
+        worktreePath: mode === "local" ? null : selectedWorktreePath,
+        ...(mode === "local" ? { followsCurrentCheckout: true } : {}),
         ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
       },
     });
   };
 
-  useEffect(() => {
-    if (
-      workspaceMode !== "local" ||
-      !selectedProject ||
-      !selectedProjectDraftKey ||
-      !pendingLocalBranchSyncDraftKeysRef.current.has(selectedProjectDraftKey)
-    ) {
-      return;
-    }
-    const localSelection = resolveNewTaskLocalWorkspaceSelection({
-      branches: availableBranches,
-      projectCwd: selectedProject.workspaceRoot,
-    });
-    if (localSelection.awaitsCurrentBranch) {
-      return;
-    }
-
-    pendingLocalBranchSyncDraftKeysRef.current.delete(selectedProjectDraftKey);
-    updateComposerDraftSettings(selectedProjectDraftKey, {
-      workspaceSelection: {
-        mode: "local",
-        branch: localSelection.branch,
-        worktreePath: localSelection.worktreePath,
-        ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
-      },
-    });
-  }, [
-    availableBranches,
-    draftStartFromOrigin,
-    selectedProject,
-    selectedProjectDraftKey,
-    workspaceMode,
-  ]);
-
   const selectBranch = (branch: VcsRef) => {
     if (!selectedProject || !selectedProjectDraftKey) {
       return;
     }
-    pendingLocalBranchSyncDraftKeysRef.current.delete(selectedProjectDraftKey);
     updateComposerDraftSettings(selectedProjectDraftKey, {
       workspaceSelection: {
         mode: workspaceMode,
@@ -876,8 +734,9 @@ export function NewTaskFlowProvider(
     updateComposerDraftSettings(selectedProjectDraftKey, {
       workspaceSelection: {
         mode: workspaceMode,
-        branch: selectedBranchName,
-        worktreePath: selectedWorktreePath,
+        branch: selectedProjectDraft.workspaceSelection?.branch ?? null,
+        worktreePath: selectedProjectDraft.workspaceSelection?.worktreePath ?? null,
+        followsCurrentCheckout: selectedProjectDraft.workspaceSelection?.followsCurrentCheckout,
         startFromOrigin: value,
       },
     });
@@ -891,38 +750,6 @@ export function NewTaskFlowProvider(
     setPendingConnectionError(null);
     refreshBranches();
   };
-
-  useEffect(() => {
-    if (
-      !selectedProjectDraftKey ||
-      !defaultWorkspaceModeSettled ||
-      workspaceMode !== "worktree" ||
-      selectedBranchName !== null
-    ) {
-      return;
-    }
-    // Re-read before replacing: the draft screen can update workspace selection in this same commit.
-    const live = getComposerDraftSnapshot(selectedProjectDraftKey).workspaceSelection;
-    if (live && (live.mode !== "worktree" || live.branch !== null)) {
-      return;
-    }
-    // Search unfiltered refs: the default may exist only as origin/<default>, excluded by availableBranches.
-    const preferredBranch =
-      allBranchRefs.find((branch) => branch.isDefault) ??
-      availableBranches.find((branch) => branch.current) ??
-      null;
-    if (preferredBranch) {
-      selectBranch(preferredBranch);
-    }
-  }, [
-    allBranchRefs,
-    availableBranches,
-    defaultWorkspaceModeSettled,
-    selectBranch,
-    selectedBranchName,
-    selectedProjectDraftKey,
-    workspaceMode,
-  ]);
 
   const setRuntimeMode = (value: RuntimeMode) => {
     if (selectedProjectDraftKey) {
@@ -997,10 +824,14 @@ export function NewTaskFlowProvider(
     ) {
       return null;
     }
-    const workspaceSelection = resolveNewTaskWorkspaceSelection({
-      selection: canChooseWorkspace ? draft.workspaceSelection : undefined,
-      fallback: { mode: workspaceMode, branch: null, worktreePath: null },
+    const workspaceSelection = resolveNewTaskDraftWorkspace({
+      selection: draft.workspaceSelection,
+      canChooseWorkspace,
+      defaultMode: defaultWorkspaceMode,
+      defaultModeSettled: defaultWorkspaceModeSettled,
       isGitRepo,
+      branches: allBranchRefs,
+      projectCwd: selectedProject.workspaceRoot,
     });
     const mode = workspaceSelection.mode;
     // When the selection is the stand-in built from the queued snapshot,

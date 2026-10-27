@@ -360,6 +360,7 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly followsCurrentCheckout?: boolean;
   readonly pullRequestReference?: string;
 }
 
@@ -373,6 +374,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  followsCurrentCheckout: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
 });
 
