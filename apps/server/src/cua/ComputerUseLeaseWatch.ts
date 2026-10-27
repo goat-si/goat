@@ -36,7 +36,7 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
     { readonly _tag: string; readonly reason?: ComputerUseControlEnd },
     ComputerUseLeaseError
   >;
-  readonly end: (threadId: ThreadId, reason: ComputerUseControlEnd) => boolean;
+  readonly end: (threadId: ThreadId, reason: ComputerUseControlEnd, now: number) => boolean;
   readonly signals: PubSub.PubSub<void>;
   readonly watchKick: PubSub.PubSub<void>;
   readonly live: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
@@ -69,7 +69,12 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
           grant.value.reason !== undefined &&
           controls.get(record.threadId)?.controlId === record.controlId
         )
-          endedAny = input.end(record.threadId, grant.value.reason) || endedAny;
+          endedAny =
+            input.end(
+              record.threadId,
+              grant.value.reason,
+              DateTime.toEpochMillis(yield* DateTime.now),
+            ) || endedAny;
       }
       // Proxies waiting on a pause hear their control ended.
       if (endedAny) yield* PubSub.publish(input.signals, undefined);
@@ -79,22 +84,24 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
       const listed = yield* input.live.pipe(Effect.option);
       const grants = Option.getOrElse(listed, (): ReadonlyArray<ComputerUseLease> => []);
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const current = [...controls.values()].filter(
-        (record) => input.acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
+      // The manifest also covers a control idle between turns: an approval given then is in it
+      // before the next turn takes the driver, which a refresh during that turn would restart.
+      const scoped = [...controls.values()].filter(
+        (record) => record.ended === undefined && DateTime.toEpochMillis(record.expiresAt) > now,
       );
+      const current = scoped.filter(input.acting);
       const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
       const approved = new Set<string>();
-      for (const record of current) {
-        if (record.everyApp !== undefined) {
-          for (const app of record.named ?? []) approved.add(app);
-          continue;
-        }
+      for (const record of scoped) {
+        for (const app of record.named ?? []) approved.add(app);
+        if (record.everyApp !== undefined) continue;
         const held = grants.filter(
           (grant) =>
             grant.threadId === record.threadId &&
             (record.handoffId === undefined || grant.handoffId === record.handoffId),
         );
-        for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
+        if (input.acting(record))
+          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
         for (const app of rememberScope(controls, record, appsOf(held)) ?? []) approved.add(app);
       }
       const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;

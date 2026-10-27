@@ -645,6 +645,13 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /**
+   * The proxy's connection to its GOAT server dropped and is reconnecting. Nothing was sent;
+   * the same call can be tried again in a few seconds.
+   */
+  "reconnecting",
+  /** The proxy could not reach its GOAT server for the reconnect window, so the control ended. */
+  "transport_lost",
   /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
   "helper_restarted",
   /**

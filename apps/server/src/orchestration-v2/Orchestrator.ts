@@ -1,3 +1,7 @@
+import {
+  completionDeliveryRun,
+  completionDeliveryMessage,
+} from "./goat/DelegatedCompletionMerge.ts";
 import { markThreadUnread } from "./ProjectionRunNotification.ts";
 import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
@@ -49,7 +53,6 @@ import {
   type OrchestrationV2ContextTransferResolution,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DelegatedCompletionCohort,
-  type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
@@ -1306,23 +1309,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* eventSink.writeWithEffects({ events: withIds, effects, ...options });
     });
 
-  const completionDeliveryRun = (
-    projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs">,
-    delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
-  ) => {
-    if (delivery == null) return undefined;
-    const message = projection.messages.find((candidate) => candidate.id === delivery.messageId);
-    return projection.runs.find((candidate) => candidate.id === message?.runId);
-  };
-
-  const completionDeliveryMessage = (
-    projection: Pick<OrchestrationV2ThreadProjection, "messages">,
-    delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
-  ) =>
-    delivery === null || delivery === undefined
-      ? undefined
-      : projection.messages.find((candidate) => candidate.id === delivery.messageId);
-
   const offerDelegatedCompletionDelivery =
     /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
     Effect.fnUntraced(function* (threadId: ThreadId, parentRunId: RunId) {
@@ -2507,7 +2493,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now,
           cause: "delegated_wake_disposed",
         });
-        return;
+        return parentRun.id;
       }
       const message = completionDeliveryMessage(projection, delivery);
       if (message !== undefined) {
@@ -2531,6 +2517,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
+    return parentRun.id;
   });
 
   const disposeDelegatedCompletionCohort = Effect.fn(
@@ -12472,6 +12459,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       },
     });
+    return parentRun.id;
   });
 
   const dispatchUnsupported = (command: OrchestrationV2ServerCommand) =>
@@ -12492,6 +12480,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
         readonly reason: string;
       };
+      readonly updateDelegatedCompletionOnlyRunId?: RunId;
     },
     OrchestratorV2Error
   > {
@@ -12509,6 +12498,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           readonly reason: string;
         }
       | undefined;
+    let updateDelegatedCompletionOnlyRunId: RunId | undefined;
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
@@ -12652,7 +12642,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       }
       case "notification.delivery.accept":
-        yield* dispatchNotificationAccepted(command, events);
+        updateDelegatedCompletionOnlyRunId = yield* dispatchNotificationAccepted(command, events);
         break;
       case "prepared-run.release":
         yield* dispatchPreparedRunRelease(command, events, effects);
@@ -12834,7 +12824,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "delegated_task.completion-delivery.acknowledge":
       case "delegated_task.completion-delivery.dispose":
-        yield* dispatchDelegatedTaskCompletionDeliveryResolution(command, events);
+        updateDelegatedCompletionOnlyRunId =
+          yield* dispatchDelegatedTaskCompletionDeliveryResolution(command, events);
         break;
       case "thread.created.record":
         yield* dispatchCreatedThreadRecord(command, events);
@@ -12859,6 +12850,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
+      ...(updateDelegatedCompletionOnlyRunId === undefined
+        ? {}
+        : { updateDelegatedCompletionOnlyRunId }),
     };
   });
 
@@ -13041,6 +13035,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
+        ...(plan.updateDelegatedCompletionOnlyRunId === undefined
+          ? {}
+          : { updateDelegatedCompletionOnlyRunId: plan.updateDelegatedCompletionOnlyRunId }),
       })
       .pipe(
         Effect.mapError(

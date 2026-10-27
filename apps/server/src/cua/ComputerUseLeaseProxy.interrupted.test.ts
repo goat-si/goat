@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 
 import {
   active,
+  unknownWriteSafety,
   call,
   CONTROL,
   harness,
@@ -26,6 +27,7 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
         assert.isTrue(answer.result.isError);
         assert.deepEqual(answer.result.structuredContent, {
           effect: "unverifiable",
+          safety: unknownWriteSafety,
           code: "interrupted",
           detail: "waiting_for_human",
         });
@@ -48,6 +50,7 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
         const answer = (yield* h.nextToProvider) as unknown as ToolAnswer;
         assert.deepEqual(answer.result.structuredContent, {
           effect: "unverifiable",
+          safety: unknownWriteSafety,
           code: "interrupted",
           detail: "stopped",
         });
@@ -69,6 +72,12 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
       assert.deepEqual(answer.result.structuredContent, {
         code: "interrupted",
         detail: "waiting_for_human",
+        safety: {
+          possibleCommit: false,
+          retryClass: "same_key",
+          writeStatus: "not_applicable",
+          code: "read_indeterminate",
+        },
       });
       const text = answer.result.content[0]?.text ?? "";
       assert.include(text, "read again");
@@ -136,6 +145,7 @@ describe("ComputerUseLeaseProxy answers for sent calls whose reply it cannot sho
       assert.equal(answer.id, 1);
       assert.deepEqual(answer.result.structuredContent, {
         effect: "unverifiable",
+        safety: unknownWriteSafety,
         code: "interrupted",
         detail: "wrong_display",
       });

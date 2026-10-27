@@ -559,19 +559,16 @@ const MAX_ROW_SPANS = 64;
 const MAX_COVERAGE_WORK = 4_000_000;
 
 /**
- * Asks the app to redraw the window and watches it until the pixels are read (#1381).
+ * Asks the app to redraw the window and watches the window tree until the pixels are read.
  *
- * A window with no background keeps, where it has not drawn, the pixels Composite copied in
- * from behind it, and those can be another app's. The protocol does not say which windows have
- * no background. So every capture sends the app a synthetic Expose for the whole window, which
- * paints nothing by itself, and waits, without holding the server, until the app's drawing
- * (Damage, which includes the window's children) covers all of it.
+ * Every capture sends a synthetic Expose for the whole window and waits, without holding the
+ * server, until the app's drawing (Damage, children included) covers it or the limit passes. GTK
+ * 3 and 4, Firefox and Xt apps under GNOME's compositor answer with no drawing or their frame
+ * only, so a whole redraw is not required: the pixmap read is what the compositor shows. A window
+ * without a background still keeps, where it never painted, what Composite copied from behind it.
  *
- * Damage rectangles bound what was drawn rather than prove each pixel. An app that answers by
- * drawing only part of a window without a background shows the same leftovers on screen; that
- * limit is documented in #1381. Damage also cannot tell whose window drew, so from before the
- * Expose until the read, another app's window that is created, mapped or reparented anywhere in
- * the target's subtree spoils the capture.
+ * Damage cannot tell whose window drew, so from before the Expose until the read, another app's
+ * window that is created, mapped or reparented anywhere in the target's subtree spoils the capture.
  *
  * Resolves with whether the window was redrawn whole, and a check of whether nothing else
  * arrived since; undefined when the display cannot track drawing.
@@ -771,7 +768,7 @@ async function exchange(
   );
   const redraw = await watchRedraw(x, setup, chain, u16(first, 16), u16(first, 18));
   if (redraw === undefined) return undefined;
-  if (!redraw.redrawn || !redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true };
+  if (!redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true };
   // Held: nothing else may map, move or draw a window between the check and the read. The hold
   // covers only that, and is cut off at GRAB_LIMIT_MS by ending the connection.
   const held = async () => {

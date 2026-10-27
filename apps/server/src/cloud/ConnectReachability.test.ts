@@ -70,7 +70,7 @@ describe("classifyReachability", () => {
 describe("GOAT Connect troubleshooting links", () => {
   it("each section resolves to a heading or a legacy anchor in the user guide", () => {
     const guide = NodeFS.readFileSync(
-      new URL("../../../../docs/user/t3-connect-troubleshooting.md", import.meta.url),
+      new URL("../../../../docs/user/goat-connect-troubleshooting.md", import.meta.url),
       "utf8",
     );
     // GitHub's heading anchors: lowercase, drop punctuation, spaces become hyphens.
