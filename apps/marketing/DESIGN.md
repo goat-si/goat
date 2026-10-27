@@ -78,23 +78,26 @@ Every page exists in English at `/` and Korean at `/ko/`, under the deploy's bas
 on GitHub Pages). Every internal link, image `src`/`srcset`, canonical, `hreflang`, Open Graph URL
 and manifest field is built from the base path.
 
-| Page     | Purpose                                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------- |
-| Home     | Hero with capture, environments diagram, work across machines, agents, features, open source, download        |
-| Download | Desktop builds per platform from the newest release, the `goat` command, server-only install, mobile status   |
-| Legal    | Which GOAT policies are not published yet, what the site itself does with visits, product usage data, license |
-| 404      | One page in both languages, since a static host serves a single `404.html` for every missing path             |
+| Page     | Purpose                                                                                                     |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| Home     | Hero with capture, environments diagram, work across machines, agents, features, open source, download      |
+| Download | Desktop builds per platform from the newest release, the `goat` command, server-only install, mobile status |
+| Legal    | Index of Connect beta policies, operator contact and license                                                |
+| Privacy  | Connect processing and retention limits, account deletion requests, website visits and product usage data   |
+| Terms    | Invite-only Connect beta access, acceptable use, availability and suspension                                |
+| Security | Private vulnerability reporting and incident contact                                                        |
+| 404      | One page in both languages, since a static host serves a single `404.html` for every missing path           |
 
-`/privacy-policy`, `/terms-of-service` and `/security-policy` stay as routes so links to those
-paths on this site keep working; each renders the matching part of the legal page. The app's legal
+`/privacy-policy`, `/terms-of-service` and `/security-policy` each render their own localized policy.
+The app's legal
 links (`apps/web/src/legalLinks.ts`) and the `goat.json` schema URL
 (`packages/contracts/src/goatProjectFile.ts`, served at `/schema/goat.json`) point at this site.
 `/95` (an upstream easter egg) is removed and falls through to the 404 page.
 
-Legal content is honest about gaps. GOAT has not published its own privacy policy, terms or security
-contact, so the legal page says so. It never republishes upstream T3 Tools Inc. text, and it never
-adopts the upstream contact in `.github/SECURITY.md` as GOAT's. Publishing real policies is a launch
-blocker.
+Legal content describes the invite-only Connect beta and remains explicit about implementation
+gaps, including account-wide deletion and retention. It never republishes upstream T3 Tools Inc.
+text or adopts the upstream contact in `.github/SECURITY.md` as GOAT's. Policy publication does not
+mean the beta's planned security controls are deployed.
 
 ## Content rules
 
