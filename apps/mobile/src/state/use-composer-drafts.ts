@@ -55,6 +55,10 @@ import type { DraftComposerAttachment, FileBackedComposerAttachment } from "../l
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 import {
+  readComposerDraftSelection,
+  rememberComposerDraftSelection,
+} from "./composerDraftSelection";
+import {
   abortComposerDraftOperations,
   abortComposerDraftOperationsWhere,
 } from "./composerDraftOperations";
@@ -72,6 +76,12 @@ import {
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
+export {
+  readComposerDraftSelection,
+  rememberComposerDraftSelection,
+  useComposerDraftSelection,
+} from "./composerDraftSelection";
+
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
 const COMPOSER_DRAFTS_FILE = "drafts.json";
@@ -86,28 +96,6 @@ export function setComposerContextImporting(draftKey: string, importing: boolean
   if (importing) next[draftKey] = true;
   else delete next[draftKey];
   appAtomRegistry.set(composerContextImportsAtom, next);
-}
-
-let lastComposerSelection: { draftKey: string; text: string; start: number; end: number } | null =
-  null;
-
-export function rememberComposerDraftSelection(
-  draftKey: string,
-  text: string,
-  selection: { start: number; end: number },
-): void {
-  lastComposerSelection = { draftKey, text, ...selection };
-}
-
-/** Read the post-chip-insertion selection or the editor restores the pre-insert caret before the chip. */
-export function readComposerDraftSelection(
-  draftKey: string,
-  text: string,
-): { start: number; end: number } | null {
-  if (lastComposerSelection?.draftKey !== draftKey || lastComposerSelection.text !== text) {
-    return null;
-  }
-  return { start: lastComposerSelection.start, end: lastComposerSelection.end };
 }
 
 export interface ComposerDraftInsertion {
@@ -133,10 +121,12 @@ function contextInsertionRange(
   draft: ComposerDraft,
   target?: ComposerDraftInsertion,
 ) {
-  const captured =
-    target ?? (lastComposerSelection?.draftKey === draftKey ? lastComposerSelection : null);
   // Append after text edits during writes; caret-only moves preserve the captured insertion range.
-  const selection = captured?.text === draft.text ? captured : null;
+  const selection = target
+    ? target.text === draft.text
+      ? target
+      : null
+    : readComposerDraftSelection(draftKey, draft.text);
   const start = Math.max(0, Math.min(selection?.start ?? draft.text.length, draft.text.length));
   return { start, end: Math.max(start, Math.min(selection?.end ?? start, draft.text.length)) };
 }
@@ -307,12 +297,10 @@ function draftWithInsertedContext(
   for (const record of content.context.records) records.set(record.contextId, record);
   const context = referencedComposerContext(text, { version: 1, records: [...records.values()] });
   if ((context?.records.length ?? 0) > COMPOSER_CONTEXT_MAX_RECORDS) return null;
-  lastComposerSelection = {
-    draftKey,
-    text,
+  rememberComposerDraftSelection(draftKey, text, {
     start: start + insertion.length,
     end: start + insertion.length,
-  };
+  });
   return withReferencedContextFiles(draft, text, context);
 }
 
