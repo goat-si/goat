@@ -587,3 +587,28 @@ it.live("interrupting the run fiber cuts its exact child and discards the cell",
     expect((yield* bridge.takeCellImages("r", "t", "interrupt")).journal).toHaveLength(0);
   }),
 );
+
+it.live(
+  "the first cell of a fresh child that runs to its wall limit reports the child's deadline",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const asset = yield* resolveScreenRuntimeAsset("dev");
+        const limits = screenRunLimits({ cellWallMs: 1000 });
+        const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+        yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+        const outcome = yield* supervisor
+          .runCell(
+            { runId: "r", turnId: "t", context: context("one", limits) },
+            "console.log('started'); while (true) {}",
+            false,
+          )
+          .pipe(Effect.result);
+        expect(outcome._tag).toBe("Success");
+        if (outcome._tag === "Success") {
+          expect(outcome.success.status).toBe("deadline");
+          expect(outcome.success.console).toEqual(["started"]);
+        }
+      }),
+    ),
+);

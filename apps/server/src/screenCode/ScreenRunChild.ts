@@ -91,7 +91,10 @@ export async function runScreenChild(
   const Wasm = Reflect.get(globalThis, "WebAssembly") as {
     Memory: new (input: { initial: number; maximum: number }) => { readonly buffer: ArrayBuffer };
   };
-  const wasmMemory = new Wasm.Memory({ initial: 256, maximum: 1024 });
+  const wasmMemory = new Wasm.Memory({
+    initial: 256,
+    maximum: Math.floor(limits.turnWasmBytes / (64 * 1024)),
+  });
   const module = await newQuickJSWASMModuleFromVariant(
     newVariant(BellardSync as unknown as Parameters<typeof newVariant>[0], {
       wasmMemory: wasmMemory as Parameters<typeof newVariant>[1]["wasmMemory"],
@@ -308,20 +311,23 @@ export async function runScreenChild(
       consoleBytes = 0;
       linesOut = [];
       truncated = [];
-      deadline = Date.now() + currentLimits.cellWallMs;
+      deadline = cell.deadlineMillis;
       admitted = true;
       runtime.setInterruptHandler(() => Date.now() >= deadline);
-      deadlineTimer = setTimeout(() => {
-        if (cellId === cell.cellId)
-          finish({
-            t: "result",
-            cellId,
-            status: "deadline",
-            console: linesOut,
-            truncated,
-            unawaitedCallIds: [...pending.keys()],
-          });
-      }, currentLimits.cellWallMs);
+      deadlineTimer = setTimeout(
+        () => {
+          if (cellId === cell.cellId)
+            finish({
+              t: "result",
+              cellId,
+              status: "deadline",
+              console: linesOut,
+              truncated,
+              unawaitedCallIds: [...pending.keys()],
+            });
+        },
+        Math.max(0, deadline - Date.now()),
+      );
       try {
         const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
         const handle = vm.unwrapResult(evaluation);
