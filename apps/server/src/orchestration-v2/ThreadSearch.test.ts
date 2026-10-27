@@ -1065,7 +1065,7 @@ it.effect("starts snippets a few words before the match so one line shows it", (
   }),
 );
 
-it.effect("searches on the reader worker while the writer is busy", () =>
+it.effect("searches and matches threads on the reader worker while the writer is busy", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1103,11 +1103,23 @@ it.effect("searches on the reader worker while the writer is busy", () =>
       );
       yield* Deferred.await(writerHeld);
       const result = yield* search.search({ query: "needle" });
+      const matched = yield* search.matchThreads({
+        query: "needle",
+        projectId: undefined,
+        includeArchived: false,
+        updatedAfter: undefined,
+        updatedBefore: undefined,
+        limit: 10,
+      });
       yield* Deferred.succeed(releaseWriter, undefined);
       yield* Fiber.join(writer);
 
       assert.deepEqual(
         result.matches.map((match) => match.threadId),
+        [threadId],
+      );
+      assert.deepEqual(
+        matched.map((match) => match.threadId),
         [threadId],
       );
     }).pipe(Effect.provide(layerFile));
