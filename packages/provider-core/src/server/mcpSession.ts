@@ -260,3 +260,26 @@ export function withThreadAgentEnvironment(
 ): NodeJS.ProcessEnv {
   return withThreadUrlOpener(withThreadMcpEnvironment(base, config), config);
 }
+
+// An overlay carries the opener under its own name until it meets the provider's environment.
+const THREAD_URL_OPENER_ENV = "GOAT_URL_OPENER";
+
+/** A thread overlay for agents that merge it over their own environment later (ACP). */
+export function withThreadOverlayEnvironment(
+  base: NodeJS.ProcessEnv,
+  config: Parameters<typeof withThreadAgentEnvironment>[1],
+): NodeJS.ProcessEnv {
+  const environment = withThreadMcpEnvironment(base, config);
+  return config?.urlOpener === undefined
+    ? environment
+    : { ...environment, [THREAD_URL_OPENER_ENV]: config.urlOpener };
+}
+
+/** Where a thread overlay meets the provider's own environment; a BROWSER there is kept. */
+export function mergeThreadEnvironment(
+  base: NodeJS.ProcessEnv | undefined,
+  overlay: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  const { [THREAD_URL_OPENER_ENV]: urlOpener, ...merged } = { ...base, ...overlay };
+  return withThreadUrlOpener(merged, urlOpener === undefined ? undefined : { urlOpener });
+}

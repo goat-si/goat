@@ -61,7 +61,7 @@ export function acpMcpContext(
       ? {}
       : { screenCodeSkillPath: session.screenCodeSkillPath }),
     // Agent instructions and terminal fallbacks written for older builds read the legacy names.
-    processEnvironment: McpProviderSession.withThreadAgentEnvironment(
+    processEnvironment: McpProviderSession.withThreadOverlayEnvironment(
       {
         GOAT_ACP_MCP_NODE: self.command,
         ...(self.entrypoint === undefined ? {} : { GOAT_ACP_MCP_ENTRYPOINT: self.entrypoint }),
