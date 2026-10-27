@@ -14,7 +14,6 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 
 import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
-import { formatWorkingDurationLabel } from "@goat/client-runtime/state/models";
 import { type EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import {
@@ -50,6 +49,7 @@ import {
   memo,
   useRef,
   useState,
+  type AnimationEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -85,7 +85,6 @@ import {
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
-  resolveWorkingStartedAt,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
   isSidebarThreadWoke,
@@ -125,7 +124,6 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
-import { useNowSecond } from "../../hooks/useNowSecond";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -156,17 +154,15 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
-function WorkingDuration(props: { startedAt: string | null }) {
-  const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
-  if (Number.isNaN(startedMs)) return null;
-  return <WorkingDurationLabel startedMs={startedMs} />;
-}
+function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
+  if (event.animationName !== "spin") return;
 
-function WorkingDurationLabel(props: { startedMs: number }) {
-  const nowMs = useNowSecond();
-  return (
-    <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - props.startedMs)}</span>
-  );
+  // Every running row shares the document timeline phase.
+  for (const animation of event.currentTarget.getAnimations()) {
+    if ("animationName" in animation && animation.animationName === "spin") {
+      animation.startTime = 0;
+    }
+  }
 }
 
 function terminalProcessLabel(count: number): string {
@@ -688,7 +684,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ? {
           label: thread.goal?.status === "active" ? "Goal" : "Working",
           icon: "working" as const,
-          className: "text-info-foreground",
+          className: "text-muted-foreground",
         }
       : status === "waiting"
         ? {
@@ -1363,11 +1359,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           )}
                         >
                           {topStatus.icon === "working" ? (
-                            // oxlint-disable shadcn/no-arbitrary-values -- The approved sidebar spinner uses an eight-step 0.9s rotation.
+                            // oxlint-disable shadcn/no-arbitrary-values -- The sidebar spinner uses a twelve-step 1.6s rotation.
                             <svg
                               aria-hidden
                               viewBox="0 0 16 16"
-                              className="size-3.5 shrink-0 animate-[spin_0.9s_steps(8)_infinite] motion-reduce:animate-none"
+                              className="size-3.5 shrink-0 animate-[spin_1.6s_steps(12)_infinite] motion-reduce:animate-none"
+                              onAnimationStart={synchronizeSidebarSpinner}
                               fill="none"
                             >
                               <circle
@@ -1418,15 +1415,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           >
                             {topStatus.label}
                           </span>
-                          {status === "working" ? (
-                            <span aria-hidden>
-                              <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
-                            </span>
-                          ) : status === "waiting" ? (
-                            <span aria-hidden>
-                              <WorkingDuration startedAt={thread.latestRun?.completedAt ?? null} />
-                            </span>
-                          ) : null}
                         </span>
                       )
                     ) : null}

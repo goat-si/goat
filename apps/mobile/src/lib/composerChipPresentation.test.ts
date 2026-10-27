@@ -114,6 +114,6 @@ describe("contextChipAccent", () => {
 
   it("keeps an accent that already reads everywhere", () => {
     const theme = getMobileThemeVariables("goat-code", "dark");
-    expect(contextChipAccent("#00aa76", theme, theme["--color-md-body"])).toBe("#00aa76");
+    expect(contextChipAccent("#00b07a", theme, theme["--color-md-body"])).toBe("#00b07a");
   });
 });

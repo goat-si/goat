@@ -1,7 +1,6 @@
 import { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
 export { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@goat/shared/threadPullRequests";
 import * as React from "react";
@@ -1581,12 +1580,6 @@ export function reduceSidebarProjectScopeMenuState(
     case "project-settings-opened":
       return { open: false, query: "" };
   }
-}
-
-export function resolveWorkingStartedAt(
-  thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
-): string | null {
-  return resolveThreadWorkingStartedAt(thread);
 }
 
 export function resolveThreadStatusPill(input: {

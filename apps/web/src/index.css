@@ -1286,10 +1286,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --goat-bubble-out: #1466d0;
   --goat-bubble-in: #e9e9eb;
   --goat-bubble-in-foreground: #000;
-  --goat-composer-fill: #f2f2f7;
+  --goat-composer-fill: #f3f3f3;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
-  --background: var(--color-zinc-25);
+  /* Neutral grays without a cool cast, an ink primary, and blue kept for focus
+     and updates, after the ChatGPT desktop palette. */
+  --background: #ffffff;
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
@@ -1298,36 +1300,35 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --toolbar-control-foreground: var(--foreground);
   --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
-  --foreground: var(--color-zinc-900);
+  --foreground: #0d0d0d;
   --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
+  --card-foreground: var(--foreground);
   --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-900);
-  --primary: oklch(0.488 0.217 264);
+  --popover-foreground: var(--foreground);
+  --primary: var(--foreground);
   --primary-foreground: var(--color-white);
-  --secondary: var(--color-zinc-50);
-  --secondary-foreground: var(--color-zinc-800);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
+  --secondary: #f9f9f9;
+  --secondary-foreground: var(--foreground);
+  --muted: #f9f9f9;
+  --muted-foreground: #5d5d5d;
   --placeholder: var(--muted-foreground);
   --secondary-label: var(--muted-foreground);
   --icon-muted: var(--muted-foreground);
-  /* One step past the accent, so a user turn stands off the near-white canvas. */
-  --message-surface: color-mix(in srgb, var(--color-zinc-200) 55%, var(--color-zinc-100));
+  --message-surface: #f3f3f3;
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
   --message-action-foreground: var(--primary-foreground);
   --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
+  --accent: #f3f3f3;
+  --accent-foreground: var(--foreground);
   --error: var(--color-red-500);
   --error-foreground: var(--color-red-700);
   --tool-error-icon: var(--error);
   --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
   --destructive: var(--error);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
-  --ring: var(--primary);
+  --border: #ececec;
+  --input: #dfdfdf;
+  --ring: #0285ff;
   --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
@@ -1347,23 +1348,23 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --heat-hot: var(--color-orange-500);
   --heat-burning: var(--color-red-500);
   --heat-ember: var(--color-amber-400);
-  --update: var(--primary);
-  --update-foreground: var(--primary);
+  --update: #0169cc;
+  --update-foreground: var(--update);
   --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar.
      The gray panel against the white canvas carries the layout, so the default
      light look draws no chrome hairlines (--chrome-divider). */
-  --sidebar: oklch(96.2% 0 0);
+  --sidebar: #f7f7f7;
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
   --sidebar-control-surface: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
   --sidebar-row-hover: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
-  --sidebar-row-active: color-mix(in srgb, var(--color-black) 7%, var(--sidebar));
-  --sidebar-row-selected: color-mix(in srgb, var(--color-black) 7%, var(--sidebar));
+  --sidebar-row-active: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
+  --sidebar-row-selected: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
   --sidebar-border: var(--border);
   --chrome-divider: transparent;
-  --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
+  --code-background: #f9f9f9;
   --code-foreground: var(--foreground);
   --terminal-background: var(--background);
   --terminal-foreground: var(--foreground);
@@ -1376,33 +1377,35 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --goat-bubble-out: #2b66c6;
     --goat-bubble-in: #3a3a3c;
     --goat-bubble-in-foreground: #fff;
-    --goat-composer-fill: #262628;
+    --goat-composer-fill: #262626;
     --goat-hairline: rgb(255 255 255 / 10%);
     /* A near-black (not black) canvas with surfaces a visible step lighter.
        Muted text is sized for its common 60-80% alpha uses
        (text-muted-foreground/70) to stay readable; the floors are asserted in
        darkModeContrast.browser.test.ts. */
-    --background: var(--color-neutral-900);
-    --surface-raised: color-mix(in srgb, var(--background) 95%, var(--color-white));
-    --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--background) 95%, var(--color-white));
-    --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 95%, var(--color-white));
-    --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.57 0.2 259);
+    --background: #181818;
+    --surface-raised: #212121;
+    --foreground: #ececec;
+    --card: #212121;
+    --card-foreground: var(--foreground);
+    --popover: #282828;
+    --popover-foreground: var(--foreground);
+    --primary: var(--foreground);
+    --primary-foreground: #0d0d0d;
     --secondary: --alpha(var(--color-white) / 5%);
-    --secondary-foreground: var(--color-neutral-100);
+    --secondary-foreground: var(--foreground);
     --muted: --alpha(var(--color-white) / 5%);
-    --muted-foreground: var(--color-neutral-400);
+    --muted-foreground: #afafaf;
     --accent: --alpha(var(--color-white) / 6%);
-    --accent-foreground: var(--color-neutral-100);
-    --message-surface: var(--accent);
+    --accent-foreground: var(--foreground);
+    --message-surface: --alpha(var(--color-white) / 8%);
     --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --error-foreground: var(--color-red-400);
     --tool-error-icon: #fca5a5;
     --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
     --border: --alpha(var(--color-white) / 10%);
     --input: --alpha(var(--color-white) / 14%);
+    --ring: #339cff;
     --info-foreground: var(--color-blue-400);
     --guest-foreground: var(--color-fuchsia-300);
     --success-foreground: var(--color-emerald-400);
@@ -1413,7 +1416,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --heat-hot: var(--color-orange-400);
     --heat-burning: var(--color-red-500);
     --heat-ember: var(--color-amber-200);
-    --update-foreground: var(--color-blue-400);
+    --update: #339cff;
+    --update-foreground: #66b5ff;
     --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);
@@ -1433,39 +1437,40 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
    hierarchy as :root: a gray panel on the white canvas, rows darkening on hover
    and selection, and no chrome hairline in light mode. */
 [data-app-sidebar] {
-  --background: var(--color-zinc-25);
-  --foreground: var(--color-zinc-900);
+  --background: #ffffff;
+  --foreground: #0d0d0d;
   --card: var(--color-white);
-  --card-foreground: var(--color-zinc-900);
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
-  --sidebar: var(--color-zinc-50);
-  --sidebar-foreground: var(--color-zinc-900);
-  --sidebar-muted-foreground: var(--color-zinc-500);
+  --card-foreground: var(--foreground);
+  --accent: #f3f3f3;
+  --accent-foreground: var(--foreground);
+  --muted: #f9f9f9;
+  --muted-foreground: #5d5d5d;
+  --border: #ececec;
+  --input: #dfdfdf;
+  --sidebar: #f7f7f7;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-muted-foreground: var(--muted-foreground);
   --sidebar-control-surface: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
   --sidebar-row-hover: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
-  --sidebar-row-active: color-mix(in srgb, var(--color-black) 7%, var(--sidebar));
-  --sidebar-row-selected: color-mix(in srgb, var(--color-black) 7%, var(--sidebar));
-  --sidebar-border: var(--color-zinc-200);
+  --sidebar-row-active: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
+  --sidebar-row-selected: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
+  --sidebar-border: var(--border);
   --chrome-divider: transparent;
   /* The panel's outer edge against the main canvas. */
   border-color: var(--color-chrome-divider);
 
   @variant dark {
-    --background: #0f0f0f;
-    --foreground: #f1f3f7;
-    --card: #0f0f0f;
+    /* One step below the #181818 canvas. */
+    --background: #141414;
+    --foreground: #ececec;
+    --card: #141414;
     --card-foreground: var(--foreground);
-    --accent: #232427;
-    --accent-foreground: #f7f9ff;
-    --muted: #1a1a1a;
-    --muted-foreground: #a3a3a3;
-    --border: rgb(255 255 255 / 12%);
-    --input: rgb(255 255 255 / 18%);
+    --accent: #242424;
+    --accent-foreground: var(--foreground);
+    --muted: #1c1c1c;
+    --muted-foreground: #afafaf;
+    --border: rgb(255 255 255 / 10%);
+    --input: rgb(255 255 255 / 14%);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);
@@ -1513,17 +1518,6 @@ html.dark[data-redesign][data-diff-color-scheme="blue-orange"] {
   [data-redesign] diffs-container:not(:hover) [data-diff-copy-path]:not(:focus-within) {
     opacity: 0;
   }
-}
-
-/* New design: the default dark canvas is true black, matching the sidebar. Raised surfaces
-   keep the tone they had over neutral-950 so cards, popovers, and the composer still lift. */
-html.dark[data-redesign]:not([data-theme-id]) {
-  --background: #000;
-  --surface-raised: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-  --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-  --popover: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-  /* A user turn sits above the composer tone, level with the selected sidebar row. */
-  --message-surface: color-mix(in srgb, var(--color-neutral-950) 92%, var(--color-white));
 }
 
 /* Theme files are expressed in app color roles and mapped to the existing
