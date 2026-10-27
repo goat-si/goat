@@ -83,14 +83,18 @@ describe("turn thread cards", () => {
     setup([
       ["lane-1", shell("Lane 1", { runtime: "idle", run: "completed", backgroundWork: true })],
       ["lane-2", shell("Lane 2", { runtime: "idle", run: "completed", subagentRequest: true })],
+      ["lane-3", shell("Lane 3", { runtime: "idle", run: "failed", backgroundWork: true })],
     ]);
     await using screen = await renderTimeline([
       launch("lane-1", "Lane 1"),
       launch("lane-2", "Lane 2"),
+      launch("lane-3", "Lane 3"),
       answer,
     ]);
     expect(screen.buttons("Open Lane 1, Working")).toHaveLength(1);
     expect(screen.buttons("Open Lane 2, Waiting")).toHaveLength(1);
+    // A failed run stays Failed even while its background work is still held.
+    expect(screen.buttons("Open Lane 3, Failed")).toHaveLength(1);
   });
 
   it("shows three cards and the rest behind +N more", async () => {

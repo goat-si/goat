@@ -37,13 +37,13 @@ function cardStatus(shell: EnvironmentThreadShell): CardStatus {
     runtime === "starting" ||
     runtime === "running" ||
     runtime === "waiting" ||
-    runtime === "queued" ||
-    // An idle thread still waiting on its background work or children has not finished.
-    backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
+    runtime === "queued"
   )
     return "working";
   const run = shell.latestRun?.status;
   if (run === "failed" || run === "interrupted" || run === "cancelled") return "failed";
+  // An idle thread still waiting on its background work or children has not finished.
+  if (backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)) return "working";
   return run === undefined ? "idle" : "done";
 }
 
