@@ -1,5 +1,8 @@
-import { assert, describe } from "@effect/vitest";
-import * as NodeFS from "node:fs";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import { createOxlintRuleHarness } from "../test/utils.ts";
 
@@ -23,13 +26,20 @@ const parenthesizedAnyCast = [
 ].join(" ");
 
 describe("goat/code-budget", () => {
-  harness("apps/server/scripts/record-fx-acp-replay-fixture.ts").valid(
-    "the fx replay recorder satisfies the production assertion budget (#1938)",
-    NodeFS.readFileSync(
-      new URL("../../apps/server/scripts/record-fx-acp-replay-fixture.ts", import.meta.url),
-      "utf8",
-    ),
-  );
+  it.layer(NodeServices.layer)("fx replay recorder", (it) => {
+    it.effect("satisfies the production assertion budget (#1938)", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const source = yield* fs.readFileString(
+          yield* path.fromFileUrl(
+            new URL("../../apps/server/scripts/record-fx-acp-replay-fixture.ts", import.meta.url),
+          ),
+        );
+        yield* harness("apps/server/scripts/record-fx-acp-replay-fixture.ts").run(source);
+      }),
+    );
+  });
 
   harness("apps/demo/src/Big.ts").valid(
     "allows a recorded file at its recorded length",

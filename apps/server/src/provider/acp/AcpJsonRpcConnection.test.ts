@@ -2,9 +2,7 @@ import { assert } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
-import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
-import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";

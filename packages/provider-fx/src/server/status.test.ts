@@ -11,7 +11,8 @@ import { FxSettings } from "../settings.ts";
 import { checkFxProviderStatus } from "./status.ts";
 
 const encoder = new TextEncoder();
-const settings = Schema.decodeSync(FxSettings)({ enabled: true });
+const decodeFxSettings = Schema.decodeSync(FxSettings);
+const settings = decodeFxSettings({ enabled: true });
 
 function processHandle(stdout: string, code: number) {
   return ChildProcessSpawner.makeHandle({
@@ -62,7 +63,7 @@ describe("checkFxProviderStatus", () => {
   it.effect("keeps fx disabled by default without invoking its CLI", () =>
     Effect.gen(function* () {
       let invocations = 0;
-      const defaults = Schema.decodeSync(FxSettings)({});
+      const defaults = decodeFxSettings({});
       const draft = yield* checkFxProviderStatus(defaults, {}).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
