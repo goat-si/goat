@@ -47,7 +47,6 @@ function setup() {
     revealRequestId?: number;
   }) {
     const reveal = useCodeViewFileReveal("working-tree");
-    // oxlint-disable-next-line goat/react-effect-budget -- Attach the mock viewer for the committed panel lifecycle.
     useEffect(() => {
       const viewer = {
         getInstance: () => viewer,

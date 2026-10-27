@@ -65,7 +65,7 @@ import {
 } from "./thread-outbox-model";
 import { environmentThreadShells, threadEnvironment, threadFamilies } from "./threads";
 import { composerDraftsAtom } from "./use-composer-drafts";
-import { dispatchingQueuedMessageIdAtom, editingQueuedMessageIdsAtom } from "./use-thread-outbox";
+import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 
 interface ThreadOutboxRetry {
   readonly attempt: number;

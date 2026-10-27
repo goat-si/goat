@@ -94,7 +94,7 @@ import {
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
-import { newTaskFlowKey } from "./features/threads/new-task-flow-state";
+import { draftRouteFlowProps } from "./draft-route-flow";
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavigationRouteScreen";
@@ -537,21 +537,7 @@ function RootStackLayout(props: {
       .slice(0, props.state.index + 1)
       .filter((route) => !isWorkspaceOverlayRoute(route.name)),
   );
-  const draftRoute = props.state.routes.findLast(isDraftThreadRoute);
-  const draftRouteOnTop =
-    draftRoute !== undefined &&
-    props.state.routes.findLast((route) => route.name === "Thread") === draftRoute;
-  const draftParams = (
-    draftRoute?.params as
-      | { draft?: { draftId?: string | string[]; pendingTaskId?: string | string[] } }
-      | undefined
-  )?.draft;
-  const routeDraftId = Array.isArray(draftParams?.draftId)
-    ? draftParams.draftId[0]
-    : draftParams?.draftId;
-  const routePendingTaskId = Array.isArray(draftParams?.pendingTaskId)
-    ? draftParams.pendingTaskId[0]
-    : draftParams?.pendingTaskId;
+  const draftFlowProps = draftRouteFlowProps(props.state);
   useAgentNotificationNavigation(workspaceLocation.pathname);
   useConnectOnboardingNavigation();
   useAppShortcuts(props.state);
@@ -573,12 +559,7 @@ function RootStackLayout(props: {
   }, [navigation, pendingShare, props.state]);
 
   return (
-    <NewTaskFlowProvider
-      active={draftRouteOnTop}
-      flowKey={draftRoute === undefined ? undefined : newTaskFlowKey(draftRoute)}
-      routeDraftId={routeDraftId}
-      routePendingTaskId={routePendingTaskId}
-    >
+    <NewTaskFlowProvider {...draftFlowProps}>
       <HardwareKeyboardCommandProvider pathname={pathname}>
         <NotesOutboxWorker />
         <MobileGoatBotHomeWorker />

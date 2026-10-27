@@ -9,7 +9,7 @@ import {
   type ResolvedSharePayload,
   type SharePayload,
 } from "expo-sharing";
-import React, { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
 import {
@@ -205,63 +205,54 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
   const [error, setError] = useState<Error | null>(null);
 
   const mountedRef = useRef(false);
+  const refreshRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
+    let disposed = false;
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const refresh = useMemo(
-    () =>
-      coalescedRun(async () => {
-        try {
-          const snapshot = await incomingShareInbox.refresh({ ingestNative: enabled });
-          if (mountedRef.current) {
-            setDrafts(snapshot);
-            setError(null);
-          }
-        } catch (cause) {
-          const persisted = await incomingShareInbox
-            .refresh({ ingestNative: false })
-            .catch(() => null);
-          if (mountedRef.current) {
-            if (persisted) {
-              setDrafts(persisted);
-            }
-            setError(
-              cause instanceof Error ? cause : new Error("Could not import shared content."),
-            );
-          }
+    const run = coalescedRun(async () => {
+      try {
+        const snapshot = await incomingShareInbox.refresh({ ingestNative: enabled });
+        if (!disposed) {
+          setDrafts(snapshot);
+          setError(null);
         }
-      }),
-    [enabled],
-  );
-
-  useEffect(() => {
-    void refresh().finally(() => {
-      if (mountedRef.current) {
+      } catch (cause) {
+        const persisted = await incomingShareInbox
+          .refresh({ ingestNative: false })
+          .catch(() => null);
+        if (!disposed) {
+          if (persisted) {
+            setDrafts(persisted);
+          }
+          setError(cause instanceof Error ? cause : new Error("Could not import shared content."));
+        }
+      }
+    });
+    refreshRef.current = run;
+    void run().finally(() => {
+      if (!disposed) {
         setIsLoading(false);
       }
     });
-  }, [refresh]);
-
-  const refreshOnAppActive = useEffectEvent(() => {
-    void refresh();
-  });
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        refreshOnAppActive();
-      }
-    });
-    return () => subscription.remove();
+    const subscription = enabled
+      ? AppState.addEventListener("change", (state) => {
+          if (state === "active") {
+            void run();
+          }
+        })
+      : undefined;
+    return () => {
+      disposed = true;
+      mountedRef.current = false;
+      refreshRef.current = null;
+      subscription?.remove();
+    };
   }, [enabled]);
+
+  async function refresh() {
+    await refreshRef.current?.();
+  }
 
   useEffect(() => {
     if (!error) {
