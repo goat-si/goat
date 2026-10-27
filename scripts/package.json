@@ -13,8 +13,9 @@
     "@goat/contracts": "workspace:*",
     "@goat/shared": "workspace:*",
     "@goat/tailscale": "workspace:*",
-    "agent-device": "0.21.31",
+    "agent-device": "0.21.32",
     "effect": "catalog:",
+    "playwright-core": "1.60.0",
     "plist": "catalog:",
     "pngjs": "7.0.0",
     "sharp": "0.35.4"

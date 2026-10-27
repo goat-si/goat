@@ -7,7 +7,8 @@ import type { HomeProjectScope } from "../home/homeThreadList";
 type DraftProjectSelectionResolution =
   | { readonly kind: "preserve" }
   | { readonly kind: "select"; readonly project: EnvironmentProject }
-  | { readonly kind: "pick" };
+  | { readonly kind: "pick" }
+  | { readonly kind: "dismiss" };
 
 /**
  * The copy of a project a new thread starts in: the preferred environment's, then the
@@ -43,13 +44,6 @@ export function filterProjectScopes(
           project.workspaceRoot.toLowerCase().includes(query),
       ),
   );
-}
-
-function getOnlySelectableProject(
-  projectScopes: ReadonlyArray<HomeProjectScope>,
-): EnvironmentProject | null {
-  const onlyScope = projectScopes.length === 1 ? projectScopes[0] : null;
-  return onlyScope?.representative ?? null;
 }
 
 export function resolveEnvironmentProjectMatch(
@@ -98,6 +92,11 @@ export function resolveDraftProjectSelection(
   selectedProjectKey: string | null,
   projects: ReadonlyArray<EnvironmentProject>,
   projectScopes: ReadonlyArray<HomeProjectScope>,
+  draft: {
+    readonly incomingShareId?: string;
+    readonly pickerClosed: boolean;
+    readonly connectedEnvironmentIds: ReadonlySet<EnvironmentId>;
+  },
 ): DraftProjectSelectionResolution {
   const hasExplicitProjectSelection =
     selectedProjectKey !== null &&
@@ -108,29 +107,85 @@ export function resolveDraftProjectSelection(
     return { kind: "preserve" };
   }
 
-  const onlyProject = getOnlySelectableProject(projectScopes);
-  return onlyProject ? { kind: "select", project: onlyProject } : { kind: "pick" };
+  if (draft.pickerClosed && selectedProjectKey === null && draft.incomingShareId === undefined) {
+    return { kind: "dismiss" };
+  }
+  const onlyScope =
+    draft.incomingShareId !== undefined && projectScopes.length === 1 ? projectScopes[0] : null;
+  return onlyScope
+    ? {
+        kind: "select",
+        project: getProjectScopeSelectionTarget(onlyScope, null, draft.connectedEnvironmentIds),
+      }
+    : { kind: "pick" };
 }
 
-export function newTaskDestination(
-  _usesSplitView: boolean,
-  projects: ReadonlyArray<EnvironmentProject>,
-  currentProject: Pick<EnvironmentProject, "environmentId" | "id"> | undefined,
-  requestId: string,
-) {
+type ProjectRef = { readonly environmentId: string; readonly projectId: string };
+
+export function resolveDraftShareTransfer(options: {
+  readonly selectedProjectKey: string | null;
+  readonly selectedProject: EnvironmentProject | null;
+  readonly initialProjectRef?: {
+    readonly environmentId?: string;
+    readonly projectId?: string;
+  };
+  readonly hasPendingShare: boolean;
+  readonly awaitingServerConfig: boolean;
+  readonly isImportingShare: boolean;
+}) {
+  const selected = options.selectedProject;
+  const initial = options.initialProjectRef;
   const project =
-    projects.find(
-      (candidate) =>
-        candidate.environmentId === currentProject?.environmentId &&
-        candidate.id === currentProject.id,
-    ) ?? projects[0];
+    selected &&
+    options.selectedProjectKey === scopedProjectKey(selected.environmentId, selected.id) &&
+    (!initial?.environmentId ||
+      !initial.projectId ||
+      (selected.environmentId === initial.environmentId && selected.id === initial.projectId))
+      ? selected
+      : null;
+  return {
+    project,
+    // An unreserved share waiting for a destination must leave Back and project selection usable.
+    isPending:
+      options.isImportingShare ||
+      Boolean(project && options.hasPendingShare && !options.awaitingServerConfig),
+  };
+}
+
+export function newTaskDestination(options: {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projectScopes?: ReadonlyArray<HomeProjectScope>;
+  readonly connectedEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly requestId: string;
+  readonly useLastProject: boolean | undefined;
+  readonly currentProject: ProjectRef | undefined;
+  readonly lastProject: ProjectRef | undefined;
+}) {
+  const find = (ref: ProjectRef | undefined) =>
+    ref &&
+    options.projects.find(
+      (project) => project.environmentId === ref.environmentId && project.id === ref.projectId,
+    );
+  const matched =
+    options.useLastProject === false
+      ? undefined
+      : (find(options.currentProject) ?? find(options.lastProject));
+  const scope = matched && options.projectScopes?.find((scope) => scope.projects.includes(matched));
+  const project =
+    scope && options.connectedEnvironmentIds
+      ? getProjectScopeSelectionTarget(
+          scope,
+          matched?.environmentId ?? null,
+          options.connectedEnvironmentIds,
+        )
+      : matched;
   return project
     ? {
         draft: {
-          requestId,
+          requestId: options.requestId,
           environmentId: String(project.environmentId),
           projectId: String(project.id),
         },
       }
-    : { draft: { requestId } };
+    : { draft: { requestId: options.requestId } };
 }

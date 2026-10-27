@@ -94,6 +94,7 @@ import {
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
+import { draftRouteFlowProps } from "./draft-route-flow";
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavigationRouteScreen";
@@ -161,8 +162,6 @@ import { deriveLayout } from "./lib/layout";
 import { useNativeLayoutMetrics } from "./native/native-layout-metrics";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { HORIZONTAL_FORM_SHEET_OPTIONS, formSheetDetents } from "./native/sheet-surface";
-import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
-import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
 import {
   selectWorkspaceDetail,
   workspaceDetailRouter,
@@ -518,10 +517,8 @@ function workspaceLocationFromState(state: NavigationState) {
 }
 
 // Isolate subscriptions so streaming updates cannot re-render RootStackLayout and every screen.
-function ThreadOutboxDrainWorker() {
-  useThreadOutboxDrain();
+function NotesOutboxWorker() {
   useNotesOutboxWorker();
-  useComposerAttachmentUploadWorker();
   return null;
 }
 
@@ -540,18 +537,7 @@ function RootStackLayout(props: {
       .slice(0, props.state.index + 1)
       .filter((route) => !isWorkspaceOverlayRoute(route.name)),
   );
-  const draftRoute = props.state.routes.findLast((route) => route.name === "Thread");
-  const draftParams = (
-    draftRoute?.params as
-      | { draft?: { draftId?: string | string[]; pendingTaskId?: string | string[] } }
-      | undefined
-  )?.draft;
-  const routeDraftId = Array.isArray(draftParams?.draftId)
-    ? draftParams.draftId[0]
-    : draftParams?.draftId;
-  const routePendingTaskId = Array.isArray(draftParams?.pendingTaskId)
-    ? draftParams.pendingTaskId[0]
-    : draftParams?.pendingTaskId;
+  const draftFlowProps = draftRouteFlowProps(props.state);
   useAgentNotificationNavigation(workspaceLocation.pathname);
   useConnectOnboardingNavigation();
   useAppShortcuts(props.state);
@@ -573,13 +559,9 @@ function RootStackLayout(props: {
   }, [navigation, pendingShare, props.state]);
 
   return (
-    <NewTaskFlowProvider
-      active={isDraftThreadRoute(draftRoute)}
-      routeDraftId={routeDraftId}
-      routePendingTaskId={routePendingTaskId}
-    >
+    <NewTaskFlowProvider {...draftFlowProps}>
       <HardwareKeyboardCommandProvider pathname={pathname}>
-        <ThreadOutboxDrainWorker />
+        <NotesOutboxWorker />
         <MobileGoatBotHomeWorker />
         <ShowcaseCaptureCoordinator pathname={pathname} />
         <SettingsEnvironmentFilterProvider open={settingsOpen}>

@@ -138,6 +138,30 @@ describe("thread workflows", () => {
     expect(state.canSendNow).toBe(false);
   });
 
+  it.each(["preparing", "starting", "running", "waiting"])(
+    "allows queued promotion past a %s compaction without a steerable provider turn",
+    (status) => {
+      const state = deriveThreadQueueWorkflowState({
+        thread: { id: "thread", activeProviderThreadId: null },
+        runs: [
+          { id: "compact", status, userMessageId: "message-compact", ordinal: 1 },
+          { id: "queued", status: "queued", userMessageId: "message-queued", ordinal: 2 },
+        ],
+        messages: [
+          { id: "message-compact", role: "user", text: "/compact", attachments: [] },
+          { id: "message-queued", role: "user", text: "Next", attachments: [] },
+        ],
+        providerThreads: [],
+        providerTurns: [],
+        providerSessions: [],
+      } as never);
+
+      expect(state.canPromoteToSteer).toBe(true);
+      expect(state.canReorder).toBe(false);
+      expect(state.canSendNow).toBe(false);
+    },
+  );
+
   it.each(["completed", "interrupted", "cancelled", "failed"])(
     "allows sending a held message after a %s turn without a live session",
     (status) => {

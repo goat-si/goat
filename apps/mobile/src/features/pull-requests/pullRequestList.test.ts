@@ -8,10 +8,12 @@ import {
 import {
   appendPullRequestListPage,
   DEFAULT_PR_LIST_CONTROLS,
+  EMPTY_PULL_REQUEST_STATS_CACHE,
   filterPullRequestList,
   mergePullRequestListEntries,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
+  patchPullRequestListEntry,
   PR_LIST_PAGE_SIZE,
   pullRequestFilterChoices,
   pullRequestLabelColors,
@@ -19,6 +21,11 @@ import {
   pullRequestListInput,
   scopedPullRequestListKey,
   pullRequestListRowsAreEqual,
+  pullRequestProjectOrderIsEqual,
+  retainPullRequestStatsAnswers,
+  withShownPullRequestStats,
+  withAnsweredPullRequestStats,
+  withListedPullRequests,
   withoutScratchProjectScope,
 } from "./pullRequestList";
 
@@ -80,6 +87,29 @@ describe("recycled PR list rows", () => {
 });
 
 describe("mobile PR list pagination", () => {
+  it("patches a head-only row before its pages have been recorded", () => {
+    const head = page([entry(1)]);
+    const patched = patchPullRequestListEntry(null, head, entry(1), { isDraft: true }, 20);
+    expect(patched?.entries[0]).toMatchObject({ isDraft: true, observedAt: 20 });
+    expect(patched && pullRequestListHead(patched, head)).toBe(patched);
+  });
+
+  it("patches the current head while preserving loaded continuations", () => {
+    const recorded = appendPullRequestListPage(
+      pullRequestListHead(null, page([entry(2)])),
+      page([entry(1)], { repo: "next" }),
+      { state: "open" },
+    );
+    const head = page([entry(3)]);
+    const patched = patchPullRequestListEntry(recorded, head, entry(3), { state: "merged" }, 20);
+    expect(patched?.entries.map(({ number, state }) => [number, state])).toEqual([
+      [3, "merged"],
+      [2, "open"],
+      [1, "open"],
+    ]);
+    expect(patched?.nextCursors).toEqual({ repo: "next" });
+  });
+
   it("continues only the repositories that have more, preserving the query and filters", () => {
     const first = pullRequestListHead(
       null,
@@ -135,6 +165,171 @@ describe("mobile PR list pagination", () => {
     expect(nextPullRequestListInput(first, { state: "all" })?.limit).toBe(60);
     expect(nextPullRequestListInput({ ...first, limit: 490 }, { state: "all" })?.limit).toBe(500);
     expect(nextPullRequestListInput({ ...first, limit: 500 }, { state: "all" })).toBeNull();
+  });
+});
+
+describe("shown PR diff stats", () => {
+  it("does not restore an old shown answer after a live row changes", () => {
+    const environmentId = EnvironmentId.make("env-one");
+    const stat = {
+      projectId: entry(1).projectId,
+      repository: "org/repo",
+      number: 1,
+      additions: 5,
+      deletions: 2,
+    };
+    const row = { ...entry(1, { updatedAt: "2026-10-20T00:00:00Z" }), environmentId };
+    const { cache } = withListedPullRequests(EMPTY_PULL_REQUEST_STATS_CACHE, [row]);
+    const rows = [row];
+    const answers = [{ environmentId, stats: [stat] }];
+    expect(withShownPullRequestStats(rows, answers, new Map([[environmentId, cache]]))).toBe(rows);
+    expect(withShownPullRequestStats(rows, answers, new Map()).at(0)?.additions).toBe(5);
+  });
+
+  it("keeps each offline answer while a newly visible stats batch has no answer", () => {
+    const first = EnvironmentId.make("env-one");
+    const second = EnvironmentId.make("env-two");
+    const stat = {
+      projectId: entry(1).projectId,
+      repository: "org/repo",
+      number: 1,
+      additions: 5,
+      deletions: 2,
+    };
+    const previous = [
+      { environmentId: first, stats: [stat] },
+      { environmentId: second, stats: [stat] },
+    ];
+    expect(
+      retainPullRequestStatsAnswers(
+        [
+          { environmentId: first, stats: null },
+          { environmentId: second, stats: null },
+        ],
+        previous,
+      ),
+    ).toBe(previous);
+    const next = retainPullRequestStatsAnswers(
+      [
+        { environmentId: first, stats: [{ ...stat, additions: 8 }] },
+        { environmentId: second, stats: null },
+      ],
+      previous,
+    );
+    const rows = [first, second].map((environmentId) => ({ ...entry(1), environmentId }));
+    expect(withShownPullRequestStats(rows, next).map(({ additions }) => additions)).toEqual([8, 5]);
+    expect(retainPullRequestStatsAnswers([{ environmentId: first, stats: [] }], previous)).toEqual([
+      { environmentId: first, stats: [] },
+    ]);
+  });
+
+  it("fills offline counts per environment without replacing newer row counts", () => {
+    const first = EnvironmentId.make("env-one");
+    const second = EnvironmentId.make("env-two");
+    const rows = [
+      { ...entry(1), environmentId: first },
+      { ...entry(1), environmentId: second },
+      { ...entry(2, { additions: 9 }), environmentId: first },
+    ];
+    const stat = (number: number, additions: number) => ({
+      projectId: entry(number).projectId,
+      repository: "org/repo",
+      number,
+      additions,
+      deletions: 2,
+    });
+    const filled = withShownPullRequestStats(rows, [
+      { environmentId: first, stats: [stat(1, 5), stat(2, 3)] },
+      { environmentId: second, stats: [stat(1, 7)] },
+    ]);
+    expect(filled.map(({ additions }) => additions)).toEqual([5, 7, 9]);
+    expect(filled[2]).toBe(rows[2]);
+    expect(withShownPullRequestStats(rows, [])).toBe(rows);
+  });
+});
+
+describe("cached PR diff stats", () => {
+  const stat = (number: number, additions: number) => ({
+    projectId: entry(number).projectId,
+    repository: "org/repo",
+    number,
+    additions,
+    deletions: 0,
+  });
+
+  it("evicts pushed rows and refreshes each answering query once, preserving other rows", () => {
+    const query = {
+      refs: [1, 2, 3].map((number) => ({
+        projectId: entry(number).projectId,
+        repository: "org/repo",
+        number,
+      })),
+    };
+    const listed = withListedPullRequests(EMPTY_PULL_REQUEST_STATS_CACHE, [
+      entry(1),
+      entry(2),
+      entry(3),
+    ]);
+    expect(listed.refresh).toEqual([]);
+    const answered = withAnsweredPullRequestStats(listed.cache, query, [
+      stat(1, 5),
+      stat(2, 7),
+      stat(3, 9),
+    ]);
+    expect(withListedPullRequests(answered, [entry(1), entry(2), entry(3)])).toEqual({
+      cache: answered,
+      refresh: [],
+    });
+    const pushed = withListedPullRequests(answered, [
+      entry(1, { updatedAt: "2026-10-20T00:00:00Z" }),
+      entry(2, { updatedAt: "2026-10-20T00:00:00Z" }),
+      entry(3),
+    ]);
+    expect([...pushed.cache.stats.values()]).toEqual([stat(3, 9)]);
+    expect(pushed.refresh).toEqual([query]);
+    expect(
+      withListedPullRequests(pushed.cache, [entry(1, { updatedAt: "2026-10-20T00:00:00Z" })]).cache,
+    ).toBe(pushed.cache);
+    expect([...answered.stats.values()]).toEqual([stat(1, 5), stat(2, 7), stat(3, 9)]);
+    const refreshed = withAnsweredPullRequestStats(pushed.cache, query, [stat(1, 0), stat(2, 11)]);
+    expect([...refreshed.stats.values()]).toEqual([stat(3, 9), stat(1, 0), stat(2, 11)]);
+  });
+
+  it("keeps identical PR references independent across environment caches and projects", () => {
+    const query = { refs: [{ projectId: entry(1).projectId, repository: "org/repo", number: 1 }] };
+    const original = withListedPullRequests(EMPTY_PULL_REQUEST_STATS_CACHE, [entry(1)]).cache;
+    const local = withAnsweredPullRequestStats(original, query, [stat(1, 5)]);
+    const remote = withAnsweredPullRequestStats(original, query, [stat(1, 7)]);
+    const otherProject = entry(1, { projectId: "other" as PullRequestListEntry["projectId"] });
+    expect(withListedPullRequests(local, [otherProject]).cache.stats.size).toBe(1);
+    const pushed = withListedPullRequests(local, [entry(1, { updatedAt: "2026-10-20T00:00:00Z" })]);
+    expect(pushed.cache.stats.size).toBe(0);
+    expect([...remote.stats.values()]).toEqual([stat(1, 7)]);
+  });
+});
+
+describe("PR filter project order", () => {
+  it("ignores rebuilt groups while noticing group, member and environment changes", () => {
+    const first = { environmentId: EnvironmentId.make("env-one"), projectId: entry(1).projectId };
+    const second = { ...first, projectId: "other" as PullRequestListEntry["projectId"] };
+    const order = [{ memberProjectRefs: [first, second] }];
+    expect(
+      pullRequestProjectOrderIsEqual(order, [{ memberProjectRefs: [{ ...first }, { ...second }] }]),
+    ).toBe(true);
+    expect(pullRequestProjectOrderIsEqual(order, [{ memberProjectRefs: [second, first] }])).toBe(
+      false,
+    );
+    expect(
+      pullRequestProjectOrderIsEqual(order, [
+        { memberProjectRefs: [first] },
+        { memberProjectRefs: [second] },
+      ]),
+    ).toBe(false);
+    expect(
+      pullRequestProjectOrderIsEqual(order, [
+        { memberProjectRefs: [first, { ...second, environmentId: EnvironmentId.make("env-two") }] },
+      ]),
+    ).toBe(false);
   });
 });
 

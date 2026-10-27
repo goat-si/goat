@@ -65,6 +65,7 @@ function DocumentWebPreview(props: { readonly uri: string }) {
         ) : null}
         <WebView
           source={{ uri: props.uri }}
+          contentInsetAdjustmentBehavior="automatic"
           originWhitelist={["*"]}
           allowsBackForwardNavigationGestures
           allowsFullscreenVideo

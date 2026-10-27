@@ -20,3 +20,5 @@ export function createDeferredNavigation() {
     },
   };
 }
+
+export const threadSelectionDeferral = createDeferredNavigation();

@@ -475,8 +475,6 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   const composerOverlayRef = useRef<ViewInstance>(null);
   const listRef = useRef<LegendListRef>(null);
   const feedTouchStartRef = useRef<{ pageX: number; pageY: number } | null>(null);
-  // Aborted when this thread's body unmounts, so async work started for it
-  // stops touching a list or composer that now shows another thread.
   // Aborted when the screen hides or unmounts; a hidden Activity pane keeps its state but re-runs
   // effects when shown, so each show arms a fresh scope.
   const threadScope = useRef(new AbortController());
@@ -1181,8 +1179,8 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
     }
     return messageId;
   };
-
   const handleEditPendingMessage = async (message: QueuedThreadMessage) => {
+    if (activeUserInputRequestId !== null) return;
     const scope = threadScope.current.signal;
     const edited = await settlePromise(() => editPendingThreadMessage(message));
     if (AsyncResult.isFailure(edited)) {
@@ -1310,9 +1308,11 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
               setupWorkingStartedAt={props.setupWorkingStartedAt}
               queuedMessages={props.queuedMessages}
               dispatchingMessageId={props.dispatchingMessageId}
-              // A native subagent has no composer to edit a pending message in;
-              // Cancel on the edit banner would discard it.
-              onEditPendingMessage={isProviderSubagent ? null : handleEditPendingMessage}
+              onEditPendingMessage={
+                isProviderSubagent || activeUserInputRequestId !== null
+                  ? null
+                  : handleEditPendingMessage
+              }
               contentPresentation={props.contentPresentation}
               agentLabel={agentLabel}
               threadTitle={props.selectedThread.title}

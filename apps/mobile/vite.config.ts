@@ -4,6 +4,7 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/files/useFileTreeEntries.test.tsx",
   "src/lib/clock.test.ts",
   "src/lib/useNotificationPermissionStatus.test.tsx",
   "src/components/VideoPreviewModal.ios.test.tsx",
@@ -12,6 +13,7 @@ const reactTests = [
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
   "src/features/goat-bot/GoatBotBubble.test.tsx",
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
@@ -29,6 +31,7 @@ const reactTests = [
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",
   "src/features/threads/ThreadHeader.memory.test.tsx",
+  "src/features/threads/thread-settings-sheet-state.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/lib/visible-animations.test.tsx",
 

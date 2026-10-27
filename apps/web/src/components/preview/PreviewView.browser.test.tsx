@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   showEmptyState: false,
   loading: false,
   nativeServerTab: false,
+  serverTab: false,
+  url: "http://example.com/",
   serverEpoch: null as string | null,
   servers: [] as PreviewableServer[],
   recordingTabIds: new Set<string>(),
@@ -126,8 +128,8 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
           "tab-1": {
             threadId: "thread-1",
             tabId: "tab-1",
-            runtime: mocks.nativeServerTab ? "server" : "desktop",
-            navStatus: { _tag: "Success", url: "http://example.com/", title: "Example" },
+            runtime: mocks.serverTab || mocks.nativeServerTab ? "server" : "desktop",
+            navStatus: { _tag: "Success", url: mocks.url, title: "Example" },
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -243,6 +245,8 @@ function setup() {
   mocks.showEmptyState = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
+  mocks.serverTab = false;
+  mocks.url = "http://example.com/";
   mocks.serverEpoch = null;
   mocks.servers = [];
   mocks.recordingTabIds = new Set();
@@ -256,6 +260,33 @@ function setup() {
 }
 
 describe("PreviewView", () => {
+  it.each([
+    { url: "https://example.com/", pdfUrl: null },
+    {
+      url: "http://localhost:3773/api/assets/report.pdf?signature=test",
+      pdfUrl: "http://172.25.85.75:3773/api/assets/report.pdf?signature=test",
+    },
+  ])("renders a settled server tab at $url through its environment", async ({ url, pdfUrl }) => {
+    setup();
+    mocks.serverTab = true;
+    mocks.url = url;
+    const container = document.createElement("div");
+    container.style.display = "flex";
+    container.style.flexDirection = "column";
+    container.style.width = "800px";
+    container.style.height = "600px";
+    await using screen = await render(view(), { container });
+
+    await expect
+      .element(page.elementLocator(screen.container.querySelector("canvas")!))
+      .toBeVisible();
+    if (pdfUrl) {
+      await expect.element(screen.getByTitle("PDF document")).toHaveAttribute("src", pdfUrl);
+    } else {
+      await expect.element(screen.getByTitle("PDF document")).not.toBeInTheDocument();
+    }
+  });
+
   it("activates the existing scoped browser surface and refuses closed or replaced results", async () => {
     setup();
     await using _screen = await render(view());

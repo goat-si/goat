@@ -17,6 +17,8 @@ export interface TextRule {
   /** Must be global (`g`). */
   readonly find: RegExp;
   readonly replace: string;
+  /** Match across adjacent lines unless a legacy marker separates them. */
+  readonly multiline?: boolean;
   /** Limits the rule to some repo-relative paths. Defaults to every scanned file. */
   readonly scope?: (path: string) => boolean;
 }
@@ -98,20 +100,28 @@ export const applyTextRules = (
   const holds = keeps.filter((rule) => rule.holdsOnApply === true && (rule.scope?.(path) ?? true));
   const lines = text.split("\n");
   const keep = protectedLines(lines);
-  const next = lines.map((line, index) => {
-    if (keep.has(index)) return line;
+  const multiline = active.some((rule) => rule.multiline);
+  const rewrite = (text: string) => {
     const held: string[] = [];
-    let current = line;
+    let current = text;
     for (const rule of holds)
-      current = current.replace(rule.pattern, (match) => {
-        held.push(match);
-        return `${HELD_OPEN}${held.length - 1}${HELD_CLOSE}`;
-      });
+      current = current
+        .split("\n")
+        .map((line) =>
+          line.replace(rule.pattern, (match) => {
+            held.push(match);
+            return `${HELD_OPEN}${held.length - 1}${HELD_CLOSE}`;
+          }),
+        )
+        .join("\n");
     for (const rule of active) {
-      const count = current.match(rule.find)?.length ?? 0;
-      if (count === 0) continue;
-      current = current.replace(rule.find, rule.replace);
-      hits.set(rule.id, (hits.get(rule.id) ?? 0) + count);
+      const replace = (part: string) => {
+        const count = part.match(rule.find)?.length ?? 0;
+        if (count === 0) return part;
+        hits.set(rule.id, (hits.get(rule.id) ?? 0) + count);
+        return part.replace(rule.find, rule.replace);
+      };
+      current = rule.multiline ? replace(current) : current.split("\n").map(replace).join("\n");
     }
     return held.length === 0
       ? current
@@ -119,7 +129,21 @@ export const applyTextRules = (
           HELD,
           (placeholder: string, slot: string) => held[Number(slot)] ?? placeholder,
         );
-  });
+  };
+  const next: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (keep.has(index)) {
+      next.push(lines[index] ?? "");
+      index++;
+      continue;
+    }
+    const start = index;
+    do {
+      index++;
+    } while (multiline && index < lines.length && !keep.has(index));
+    next.push(rewrite(lines.slice(start, index).join("\n")));
+  }
   return { text: next.join("\n"), hits };
 };
 

@@ -45,7 +45,7 @@ export function SegmentedControl<Value extends string | number>(
         selectedIndex={props.options.findIndex((option) => option.value === props.selected)}
         trackColor={trackColor}
         selectedColor={selectedColor}
-        textColor={selectedTextColor}
+        textColor={themeColorWithContrast(selectedTextColor, selectedColor)}
         mutedColor={themeColorWithContrast(
           colors["--color-foreground-muted"],
           trackColor,

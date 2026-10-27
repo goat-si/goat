@@ -3,8 +3,7 @@ import * as Dialog from "../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentId } from "@goat/contracts";
-import * as Cause from "effect/Cause";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 import { useCallback } from "react";
 
 import { hasCloudPublicConfig } from "../features/cloud/publicConfig";
@@ -112,7 +111,6 @@ export function useRemoteConnections() {
   const controller = useConnectionController();
   const navigation = useNavigation();
   const connectionPairingUrl = useAtomValue(connectionPairingUrlAtom);
-  const pendingConnectionError = useAtomValue(pendingConnectionErrorAtom);
   const { connectedEnvironments, connectionError, connectionState } = useRemoteConnectionStatus();
 
   const onChangeConnectionPairingUrl = useCallback((pairingUrl: string) => {
@@ -120,29 +118,8 @@ export function useRemoteConnections() {
   }, []);
 
   const onConnectPress = useCallback(
-    async (pairingUrl?: string, expectedEnvironmentId?: EnvironmentId) => {
-      const nextPairingUrl = pairingUrl ?? connectionPairingUrl;
-      setPendingConnectionError(null);
-      const result = await controller.connectPairingUrl(nextPairingUrl, expectedEnvironmentId);
-      if (AsyncResult.isFailure(result)) {
-        const error = Cause.squash(result.cause);
-        const message =
-          error instanceof Error ? error.message : "Failed to pair with the environment.";
-        if (
-          error !== null &&
-          typeof error === "object" &&
-          "reason" in error &&
-          error.reason === "unsupported"
-        ) {
-          Dialog.alert("Client not supported", message);
-        } else {
-          setPendingConnectionError(message);
-        }
-      } else {
-        appAtomRegistry.set(connectionPairingUrlAtom, "");
-      }
-      return result;
-    },
+    (pairingUrl?: string, expectedEnvironmentId?: EnvironmentId) =>
+      controller.connectPairingUrl(pairingUrl ?? connectionPairingUrl, expectedEnvironmentId),
     [connectionPairingUrl, controller],
   );
 
@@ -211,7 +188,6 @@ export function useRemoteConnections() {
     connectionPairingUrl,
     connectionState,
     connectionError,
-    pairingConnectionError: pendingConnectionError,
     connectedEnvironments,
     connectedEnvironmentCount: connectedEnvironments.length,
     onChangeConnectionPairingUrl,
