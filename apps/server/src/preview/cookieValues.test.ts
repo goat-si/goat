@@ -41,4 +41,19 @@ describe("redactCookieValues", () => {
       `{"echo":"sid=${REDACTED}"}`,
     );
   });
+  it("masks a long value whole even when a shorter one inside it falls in another batch", () => {
+    const cookies = [
+      // Sorted first by length, so its prefix ABCDEF lands in the first batch.
+      { name: "first", value: `ABCDEF${"x".repeat(100)}` },
+      ...Array.from({ length: 5_000 }, (_, index) => ({
+        name: `c${index}`,
+        value: `${index.toString(36).padStart(6, "0")}${"z".repeat(70)}`,
+      })),
+      { name: "short", value: "ABCDEF" },
+      { name: "long", value: "TargetCredential-ABCDEF-Secret123456" },
+    ];
+    expect(redactCookieValues("log TargetCredential-ABCDEF-Secret123456 end", cookies)).toBe(
+      `log ${REDACTED} end`,
+    );
+  });
 });

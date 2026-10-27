@@ -94,24 +94,34 @@ function replaceLong(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<s
     }
     if (next !== undefined) size += next.length + 1;
   }
-  let result = text;
-  for (const scanner of scanners) {
-    let out = "";
-    let copied = 0;
-    for (let match = scanner.exec(result); match !== null; match = scanner.exec(result)) {
+  // Every batch reads the original text, so one batch's match never hides a longer value from
+  // another; overlapping matches merge before anything is replaced.
+  const spans: Array<readonly [number, number]> = [];
+  for (const scanner of scanners)
+    for (let match = scanner.exec(text); match !== null; match = scanner.exec(text)) {
       const at = match.index;
-      const found = byPrefix.get(match[0])?.find((form) => result.startsWith(form, at));
-      if (found === undefined) {
-        scanner.lastIndex = at + 1;
-        continue;
-      }
-      out += result.slice(copied, at) + REDACTED;
-      copied = at + found.length;
-      scanner.lastIndex = copied;
+      const found = byPrefix.get(match[0])?.find((form) => text.startsWith(form, at));
+      if (found !== undefined) spans.push([at, at + found.length]);
+      scanner.lastIndex = at + 1;
     }
-    result = out + result.slice(copied);
+  if (spans.length === 0) return text;
+  spans.sort((left, right) => left[0] - right[0]);
+  let result = "";
+  let copied = 0;
+  let end = -1;
+  for (const [from, to] of spans) {
+    if (from < end) {
+      end = Math.max(end, to);
+      continue;
+    }
+    if (end >= 0) {
+      result += REDACTED;
+      copied = end;
+    }
+    result += text.slice(copied, from);
+    end = to;
   }
-  return result;
+  return result + REDACTED + text.slice(end);
 }
 
 /**
