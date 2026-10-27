@@ -109,6 +109,34 @@ it("leaves the thread on screen's large card and hidden cards alone when another
   expect(after.get("env-1|thread-1")).toMatchObject({ tabId: "tab_mine" });
 });
 
+it("ends an agent's reveal of its thread's cards when the person hides them or the pane narrows", () => {
+  setup();
+  usePreviewSessionStack.setState({ hidden: false, narrow: false });
+  const shown = () => selectAgentCardsShown("env-1|thread-1")(usePreviewSessionStack.getState());
+  const reveal = () =>
+    openPreviewSessionStack({
+      environmentId: ref.environmentId,
+      focus: { kind: "browser", threadId: "thread-1", tabId: "tab_mine" },
+      scope: "thread",
+    });
+  usePreviewSessionStack
+    .getState()
+    .setShown(false, scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2")));
+  expect(shown()).toBe(false);
+  reveal();
+  expect(shown()).toBe(true);
+  // Hiding from another thread is the window's choice and hides this thread's cards too.
+  usePreviewSessionStack
+    .getState()
+    .setShown(false, scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2")));
+  expect(shown()).toBe(false);
+
+  reveal();
+  expect(shown()).toBe(true);
+  usePreviewSessionStack.getState().setNarrow(true);
+  expect(shown()).toBe(false);
+});
+
 it("opens a device an agent started as a background panel tab, and floats one a person asks for", () => {
   setup();
   floatPreview(ref, phone, { by: "agent" });
