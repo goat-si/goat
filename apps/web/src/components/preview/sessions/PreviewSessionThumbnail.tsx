@@ -152,12 +152,19 @@ type DesktopFrame = Extract<PreviewSessionFrameEvent, { type: "frame" }>;
  * The cursor to draw over a frame. A server that stamps capturedAt sends the cursor those pixels
  * go with, so a cursor that moved on since is not drawn over a picture that does not show it yet;
  * an older server's frames carry none, and the session's cursor is all there is.
+ * Either way the list has the last word on whether one shows: a cursor it has since hidden, or a
+ * person's turn, takes the frame's away at once.
  */
 function frameCursor(target: DesktopTarget, frame: DesktopFrame) {
   const paired = frame.capturedAt !== undefined;
   const source = paired ? frame : target;
   const cursorState = source.cursorState;
+  const listShows =
+    target.cursor !== undefined &&
+    target.cursorState?.phase !== "hidden" &&
+    target.cursorState?.phase !== "yielded";
   const cursor =
+    listShows &&
     (paired || source.cursor?.windowId === target.windowId) &&
     cursorState?.phase !== "hidden" &&
     cursorState?.phase !== "yielded"

@@ -837,7 +837,8 @@ const make = Effect.gen(function* () {
       if ("report" in target && staleCursorReport(record, target.report)) return false;
       const next = targeted(record, target);
       if (next === undefined) return true;
-      controls.set(threadId, next);
+      const moved = next.cursor !== record.cursor || next.cursorReport !== record.cursorReport;
+      controls.set(threadId, moved ? { ...next, cursorAt: yield* Clock.currentTimeMillis } : next);
       yield* changed;
       return true;
     }),

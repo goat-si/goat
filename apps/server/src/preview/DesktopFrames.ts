@@ -79,6 +79,8 @@ export type FrameGate =
       /** The agent's cursor on the window now; a frame admitted now carries it. */
       readonly cursor?: ComputerUseLeases.ComputerUseControl["cursor"];
       readonly cursorState?: AgentCursorSnapshot;
+      /** When that cursor last changed; a frame captured before it carries none. */
+      readonly cursorAt?: number;
     }
   | { readonly _tag: "closed"; readonly reason: PreviewSessionNoPicture };
 
@@ -96,7 +98,7 @@ export function frameGate(
   if (!detection.frames) return closed("unsupported");
   const target = entry.control.target;
   if (target === undefined) return closed("windowUnknown");
-  const { cursor, cursorReport } = entry.control;
+  const { cursor, cursorReport, cursorAt } = entry.control;
   return {
     _tag: "open",
     ...target,
@@ -106,6 +108,7 @@ export function frameGate(
     ...(cursorReport === undefined
       ? {}
       : { cursorState: { identity: cursorReport.identity, phase: cursorReport.phase } }),
+    ...(cursorAt === undefined ? {} : { cursorAt }),
   };
 }
 
@@ -151,8 +154,9 @@ const sameApps = (a: ReadonlyArray<string> | undefined, b: ReadonlyArray<string>
 
 /**
  * What a viewer receives for a frame the desktop sent, or undefined when it is dropped. A frame
- * carries the cursor as the gate read it when the frame arrived, so a viewer never draws a cursor
- * that moved on after these pixels over them.
+ * carries the cursor the gate holds only when that cursor is no newer than the capture, so a
+ * viewer never draws over pixels a cursor they do not show yet. A frame from a source that does
+ * not stamp its capture counts as captured when it arrived.
  */
 export function admitFrame(
   message: DesktopCuaFrame,
@@ -178,6 +182,8 @@ export function admitFrame(
   const bytes = Math.floor((message.data.length * 3) / 4);
   if (bytes > PREVIEW_SESSION_FRAME_LIMITS.maxBytes || message.width > target.maxWidth)
     return { type: "unavailable", reason: "captureFailed" };
+  const capturedAt = Math.min(message.capturedAt ?? now, now);
+  const paired = gate.cursorAt === undefined || gate.cursorAt <= capturedAt;
   return {
     type: "frame",
     seq: 0,
@@ -185,9 +191,9 @@ export function admitFrame(
     height: message.height,
     mime: message.mime,
     data: message.data,
-    capturedAt: now,
-    ...(gate.cursor === undefined ? {} : { cursor: gate.cursor }),
-    ...(gate.cursorState === undefined ? {} : { cursorState: gate.cursorState }),
+    capturedAt,
+    ...(!paired || gate.cursor === undefined ? {} : { cursor: gate.cursor }),
+    ...(!paired || gate.cursorState === undefined ? {} : { cursorState: gate.cursorState }),
   };
 }
 
@@ -218,6 +224,8 @@ const make = Effect.gen(function* () {
   const linux = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
   const viewers = new Map<string, Set<Viewer>>();
   const frameSeq = new Map<string, number>();
+  /** When the newest frame shown for a session was captured, so a late older one is dropped. */
+  const capturedAt = new Map<string, number>();
   const nextFrameAt = new Map<string, number>();
   /**
    * The last request handed to the desktop. One that failed to send has an unknown fate: the
@@ -357,10 +365,15 @@ const make = Effect.gen(function* () {
         const event = admitFrame(message, current, gate, now);
         if (event === undefined) return;
         if (event.type === "frame") {
+          // A capture older than one already shown arrived late; showing it would step back.
+          const shown = capturedAt.get(message.key);
+          if (shown !== undefined && event.capturedAt !== undefined && event.capturedAt < shown)
+            return;
           const target = current.targets.find((candidate) => candidate.key === message.key);
           const nextAt = pace(now, nextFrameAt.get(message.key), target?.intervalMs ?? 0);
           if (nextAt === undefined) return;
           nextFrameAt.set(message.key, nextAt);
+          if (event.capturedAt !== undefined) capturedAt.set(message.key, event.capturedAt);
         }
         const seq = (frameSeq.get(message.key) ?? 0) + 1;
         frameSeq.set(message.key, seq);
@@ -420,6 +433,7 @@ const make = Effect.gen(function* () {
                   if (set?.size === 0) {
                     viewers.delete(input.sessionId);
                     frameSeq.delete(input.sessionId);
+                    capturedAt.delete(input.sessionId);
                     nextFrameAt.delete(input.sessionId);
                   }
                   return reconcile;

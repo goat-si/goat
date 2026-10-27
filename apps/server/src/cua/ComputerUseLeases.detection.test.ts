@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -178,6 +179,23 @@ it.effect.skip(
             entries.find((entry) => entry.control.controlId === control.controlId)?.control.cursor,
         );
         assert.deepEqual(yield* cursorOf, cursor);
+        // When it changed rides along, so a frame captured before it carries no cursor; a repeat
+        // of the same cursor is no change.
+        const cursorAtOf = Effect.map(
+          leases.sessions,
+          (entries) =>
+            entries.find((entry) => entry.control.controlId === control.controlId)?.control
+              .cursorAt,
+        );
+        const placedAt = yield* cursorAtOf;
+        assert.isNumber(placedAt);
+        yield* TestClock.adjust("1 second");
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor }));
+        assert.equal(yield* cursorAtOf, placedAt);
+        const moved = { ...cursor, point: { fx: 0.5, fy: 0.5 } };
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor: moved }));
+        assert.equal(yield* cursorAtOf, placedAt! + 1_000);
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor }));
         // Another window becomes the target: a point on the old one says nothing about it.
         assert.isTrue(yield* leases.setTarget(thread, control.controlId, { pid: 7, windowId: 4 }));
         assert.isUndefined(yield* cursorOf);

@@ -770,6 +770,16 @@ it("draws the cursor a frame was captured with, and says when the picture stops 
       Math.round(picture().height / 2),
     ]);
   });
+  // The list hides the cursor after this frame: the frame's own cursor goes with it.
+  await screen.rerender(
+    cardView({
+      ...desk,
+      target: { ...desk.target, cursor: undefined },
+    } as PreviewSession).element,
+  );
+  await vi.waitFor(() => expect(marker()).toBeNull());
+  await screen.rerender(cardView(desk).element);
+  await vi.waitFor(() => expect(marker()).not.toBeNull());
   using _timers = fakeTimers();
   // Captured with no cursor on the window: none is drawn, whatever the list says.
   await sendFrame(captured(2));

@@ -431,56 +431,70 @@ describe("DesktopFrames", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("pairs each frame with when it arrived and the agent's cursor as it was then", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const next = yield* watch(f.service);
-      yield* f.requested;
-      const report = (sequence: number, fx: number) =>
-        ({
-          identity: {
-            environmentId: EnvironmentId.make("env"),
-            runId: "run",
-            turnId: "turn",
-            targetId: "target",
-            generation: 1,
-            sequence,
-          },
-          cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "moving" },
-          phase: "moving",
-        }) as const;
-      const pointAt = (sequence: number, fx: number) => ({
-        ...control,
-        cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "acting" } as const,
-        cursorReport: report(sequence, fx),
-      });
-      yield* TestClock.adjust("1 second");
-      yield* f.record(pointAt(1, 0.25));
-      yield* f.send(frame(yield* f.seq));
-      assert.deepInclude(yield* next, {
-        type: "frame",
-        capturedAt: 1_000,
-        cursor: { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" },
-        cursorState: { identity: report(1, 0.25).identity, phase: "moving" },
-      });
-      // The cursor moves on after this frame: only the next frame carries it.
-      yield* TestClock.adjust("500 millis");
-      yield* f.record(pointAt(2, 0.75));
-      yield* f.send(frame(yield* f.seq, "TkVX"));
-      const later = yield* next;
-      assert.deepInclude(later, { type: "frame", capturedAt: 1_500, data: "TkVX" });
-      assert.deepInclude(later.type === "frame" ? later.cursor : undefined, {
-        point: { fx: 0.75, fy: 0.5 },
-      });
-      // No cursor on the window: the frame says so by carrying none.
-      yield* TestClock.adjust("500 millis");
-      yield* f.record(control);
-      yield* f.send(frame(yield* f.seq, "R09ORQ=="));
-      const bare = yield* next;
-      assert.deepInclude(bare, { type: "frame", capturedAt: 2_000 });
-      assert.notProperty(bare, "cursor");
-      assert.notProperty(bare, "cursorState");
-    }).pipe(Effect.scoped),
+  it.effect(
+    "pairs a frame only with a cursor no newer than its capture, and drops a late older capture",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const next = yield* watch(f.service);
+        yield* f.requested;
+        const report = (sequence: number, fx: number) =>
+          ({
+            identity: {
+              environmentId: EnvironmentId.make("env"),
+              runId: "run",
+              turnId: "turn",
+              targetId: "target",
+              generation: 1,
+              sequence,
+            },
+            cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "moving" },
+            phase: "moving",
+          }) as const;
+        const pointAt = (sequence: number, fx: number, cursorAt: number) => ({
+          ...control,
+          cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "acting" } as const,
+          cursorReport: report(sequence, fx),
+          cursorAt,
+        });
+        const captured = (data: string, capturedAt?: number) =>
+          Effect.flatMap(f.seq, (seq) =>
+            f.send({ ...frame(seq, data), ...(capturedAt === undefined ? {} : { capturedAt }) }),
+          );
+        yield* TestClock.adjust("1 second");
+        yield* f.record(pointAt(1, 0.25, 900));
+        yield* captured("QUJD", 950);
+        assert.deepInclude(yield* next, {
+          type: "frame",
+          capturedAt: 950,
+          cursor: { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" },
+          cursorState: { identity: report(1, 0.25).identity, phase: "moving" },
+        });
+        // Captured at 1300, before the cursor moved at 1400, and arriving after: no cursor at all.
+        yield* TestClock.adjust("500 millis");
+        yield* f.record(pointAt(2, 0.75, 1_400));
+        yield* captured("TkVX", 1_300);
+        const before = yield* next;
+        assert.deepInclude(before, { type: "frame", capturedAt: 1_300, data: "TkVX" });
+        assert.notProperty(before, "cursor");
+        assert.notProperty(before, "cursorState");
+        // A capture older than the one shown arrives late and is dropped; the next one shows.
+        yield* TestClock.adjust("500 millis");
+        yield* captured("T0xE", 1_200);
+        yield* captured("TkVX", 1_900);
+        const after = yield* next;
+        assert.deepInclude(after, { type: "frame", capturedAt: 1_900 });
+        assert.deepInclude(after.type === "frame" ? after.cursor : undefined, {
+          point: { fx: 0.75, fy: 0.5 },
+        });
+        // A helper that stamps nothing: the frame counts as captured when it arrived.
+        yield* TestClock.adjust("500 millis");
+        yield* f.record(control);
+        yield* captured("R09ORQ==");
+        const bare = yield* next;
+        assert.deepInclude(bare, { type: "frame", capturedAt: 2_500 });
+        assert.notProperty(bare, "cursor");
+      }).pipe(Effect.scoped),
   );
 
   it.effect("shows at most one frame per interval however fast the desktop sends them", () =>
