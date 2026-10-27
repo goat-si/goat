@@ -1,4 +1,4 @@
-import { assert, it } from "@effect/vitest";
+import { assert, it } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -15,7 +15,6 @@ it("keeps failed, slow, waiting, eventful and root SQL spans and suppresses only
       links: [],
       startTime: 0n,
       kind: "client",
-      root,
       sampled: true,
     });
     span.attribute("db.lock_wait_ms", 0);
@@ -24,11 +23,11 @@ it("keeps failed, slow, waiting, eventful and root SQL spans and suppresses only
   const fast = make();
   fast.attribute("db.lock_wait_ms", 0);
   fast.end(1_000_000n, Exit.void);
-  assert.isFalse(keepLocalSqlSpan(fast));
+  assert.isFalse(keepLocalSqlSpan(fast, fast.events.length));
   const tx = make("sql.transaction");
   tx.attribute("db.lock_wait_ms", 0);
   tx.end(1_000_000n, Exit.void);
-  assert.isFalse(keepLocalSqlSpan(tx));
+  assert.isFalse(keepLocalSqlSpan(tx, tx.events.length));
   const slow = make();
   slow.attribute("db.lock_wait_ms", 0);
   slow.end(10_000_000n, Exit.void);
@@ -58,7 +57,7 @@ it("keeps failed, slow, waiting, eventful and root SQL spans and suppresses only
     const invalid = make();
     invalid.attribute("db.lock_wait_ms", wait);
     invalid.end(1n, Exit.void);
-    assert.isTrue(keepLocalSqlSpan(invalid));
+    assert.isTrue(keepLocalSqlSpan(invalid, invalid.events.length));
   }
   for (const span of [
     slow,
@@ -72,6 +71,29 @@ it("keeps failed, slow, waiting, eventful and root SQL spans and suppresses only
     unfinished,
     negative,
   ]) {
-    assert.isTrue(keepLocalSqlSpan(span));
+    assert.isTrue(keepLocalSqlSpan(span, span.events.length));
   }
+});
+
+it("retains event evidence without reading an unsupported Span event collection", () => {
+  const native = new Tracer.NativeSpan({
+    name: "sqlite",
+    parent: Option.some(Tracer.externalSpan({ traceId: "trace", spanId: "parent" })),
+    annotations: Context.empty(),
+    links: [],
+    startTime: 0n,
+    kind: "client",
+    sampled: true,
+  });
+  native.attribute("db.lock_wait_ms", 0);
+  native.end(1_000_000n, Exit.void);
+  const span: Tracer.Span = new Proxy(native, {
+    get(target, key, receiver) {
+      if (key === "events") throw new Error("Span does not expose an event collection");
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const policy: (span: Tracer.Span, eventCount: number) => boolean = keepLocalSqlSpan;
+  assert.isFalse(policy(span, 0));
+  assert.isTrue(policy(span, 1));
 });

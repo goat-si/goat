@@ -192,7 +192,7 @@ export interface TraceSink {
 }
 
 export interface LocalFileTracerOptions extends TraceSinkOptions {
-  readonly shouldRecord?: (span: Tracer.Span) => boolean;
+  readonly shouldRecord?: (span: Tracer.Span, eventCount: number) => boolean;
   readonly onSpanEnd?: (snapshot: {
     readonly considered: number;
     readonly suppressed: number;
@@ -481,7 +481,7 @@ class LocalFileSpan implements Tracer.Span {
     this.delegate.end(endTime, traceExit);
 
     if (this.sampled) {
-      const included = this.shouldRecord?.(this) ?? true;
+      const included = this.shouldRecord?.(this, this.events.length) ?? true;
       this.recordDecision?.(included);
       if (included) this.push(spanToTraceRecord(this));
     }

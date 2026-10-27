@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, expect, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert, describe, expect } from "vite-plus/test";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Tracer from "effect/Tracer";
@@ -9,6 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
@@ -28,20 +30,70 @@ class UpstreamError extends Error {
   override readonly name = "UpstreamError";
 }
 
-interface OtlpAttribute {
-  readonly key: string;
-  readonly value: { readonly stringValue?: string; readonly boolValue?: boolean };
-}
-
-interface OtlpSpan {
-  readonly name: string;
-  readonly attributes: ReadonlyArray<OtlpAttribute>;
-  readonly events: ReadonlyArray<{
-    readonly name: string;
-    readonly attributes: ReadonlyArray<OtlpAttribute>;
-  }>;
-  readonly status: { readonly code: number; readonly message?: string };
-}
+const OtlpAttribute = Schema.Struct({
+  key: Schema.String,
+  value: Schema.Struct({
+    stringValue: Schema.optional(Schema.String),
+    boolValue: Schema.optional(Schema.Boolean),
+  }),
+});
+type OtlpAttribute = typeof OtlpAttribute.Type;
+const OtlpSpan = Schema.Struct({
+  name: Schema.String,
+  attributes: Schema.Array(OtlpAttribute),
+  events: Schema.Array(
+    Schema.Struct({ name: Schema.String, attributes: Schema.Array(OtlpAttribute) }),
+  ),
+  status: Schema.Struct({ code: Schema.Number, message: Schema.optional(Schema.String) }),
+});
+type OtlpSpan = typeof OtlpSpan.Type;
+const decodeOtlp = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      resourceSpans: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            scopeSpans: Schema.Array(Schema.Struct({ spans: Schema.Array(OtlpSpan) })),
+          }),
+        ),
+      ),
+    }),
+  ),
+);
+const TraceAttributes = Schema.Record(Schema.String, Schema.Unknown);
+const TraceRecordJson = Schema.fromJsonString(
+  Schema.Struct({
+    type: Schema.Literal("effect-span"),
+    name: Schema.String,
+    traceId: Schema.String,
+    spanId: Schema.String,
+    parentSpanId: Schema.optional(Schema.String),
+    sampled: Schema.Boolean,
+    kind: Schema.String,
+    startTimeUnixNano: Schema.String,
+    endTimeUnixNano: Schema.String,
+    durationMs: Schema.Number,
+    attributes: TraceAttributes,
+    resourceAttributes: Schema.optional(TraceAttributes),
+    events: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        timeUnixNano: Schema.String,
+        attributes: TraceAttributes,
+      }),
+    ),
+    links: Schema.Array(
+      Schema.Struct({ traceId: Schema.String, spanId: Schema.String, attributes: TraceAttributes }),
+    ),
+    exit: Schema.Union([
+      Schema.Struct({ _tag: Schema.Literal("Success") }),
+      Schema.Struct({ _tag: Schema.Literal("Failure"), cause: Schema.String }),
+      Schema.Struct({ _tag: Schema.Literal("Interrupted"), cause: Schema.String }),
+    ]),
+  }),
+);
+const decodeTraceRecord = Schema.decodeUnknownSync(TraceRecordJson);
+const encodeTraceRecord = Schema.encodeSync(TraceRecordJson);
 
 const layerTraceCollector = (bodies: Array<string>) =>
   Layer.succeed(
@@ -57,11 +109,7 @@ const layerTraceCollector = (bodies: Array<string>) =>
 
 const exportedSpans = (bodies: ReadonlyArray<string>): ReadonlyArray<OtlpSpan> =>
   bodies.flatMap((body) => {
-    const payload = JSON.parse(body) as {
-      readonly resourceSpans?: ReadonlyArray<{
-        readonly scopeSpans: ReadonlyArray<{ readonly spans: ReadonlyArray<OtlpSpan> }>;
-      }>;
-    };
+    const payload = decodeOtlp(body);
     return (payload.resourceSpans ?? []).flatMap((resource) =>
       resource.scopeSpans.flatMap((scope) => scope.spans),
     );
@@ -126,7 +174,7 @@ const traceThroughServer = (otlpTracesUrl: string | undefined) =>
     const records = traceText
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as EffectTraceRecord)
+      .map(decodeTraceRecord)
       .filter((record) => record.name.startsWith("observability-"));
     const record = (name: string) => {
       const found = records.find((entry) => entry.name === name);
@@ -259,6 +307,20 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
           span.attribute("fixture.id", index);
           span.end(1_000_000n, Exit.void);
         }
+        const eventful = tracer.span({
+          name: "sqlite",
+          parent: Option.some(parent),
+          annotations: Context.empty(),
+          links: [],
+          startTime: 0n,
+          kind: "client",
+          root: false,
+          sampled: true,
+        });
+        eventful.attribute("db.lock_wait_ms", 0);
+        eventful.attribute("fixture.id", "eventful");
+        eventful.event("warning", 0n);
+        eventful.end(1_000_000n, Exit.void);
         yield* Effect.void.pipe(Effect.withSpan("policy-fixture"));
         return (yield* ServerConfig.ServerConfig).serverTracePath;
       }).pipe(
@@ -270,12 +332,18 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
           ),
         ),
       );
-      const records = (yield* fs.readFileString(tracePath))
+      const sqlRecords = (yield* fs.readFileString(tracePath))
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as EffectTraceRecord)
+        .map(decodeTraceRecord)
         .filter((record) => record.name === "sqlite");
+      const diagnostic = sqlRecords.filter(
+        (record) => record.attributes["fixture.id"] === "eventful",
+      );
+      assert.equal(diagnostic.length, 1);
+      assert.equal(diagnostic[0]?.events[0]?.name, "warning");
+      const records = sqlRecords.filter((record) => record.attributes["fixture.id"] !== "eventful");
       const expectedIds =
         traceMinLevel === "Info" ? [] : Array.from({ length: 1_000 }, (_, i) => i);
       assert.deepEqual(
@@ -283,12 +351,12 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
         expectedIds,
       );
       const bytes = records.reduce(
-        (total, record) => total + Buffer.byteLength(`${JSON.stringify(record)}\n`),
+        (total, record) => total + Buffer.byteLength(`${encodeTraceRecord(record)}\n`),
         0,
       );
       if (traceMinLevel === "Info") assert.equal(bytes, 0);
       else assert.isAbove(bytes, 0);
-      assert.equal(exportedSpans(bodies).filter((span) => span.name === "sqlite").length, 1_000);
+      assert.equal(exportedSpans(bodies).filter((span) => span.name === "sqlite").length, 1_001);
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -330,16 +398,14 @@ it.effect("keeps browser SQL records and counts server sink loss with a fixed re
         Observability.layer.pipe(
           Layer.provideMerge(layerConfig),
           Layer.provide(ResourceAttribution.layer),
+          Layer.provide(layerTraceCollector([])),
         ),
       ),
     );
     const after = yield* Metric.value(metric);
     assert.equal(after.count - before.count, 1);
     assert.isTrue(after.incremental);
-    const records = (yield* fs.readFileString(tracePath))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as EffectTraceRecord);
+    const records = (yield* fs.readFileString(tracePath)).trim().split("\n").map(decodeTraceRecord);
     assert.deepEqual(
       records.filter((entry) => entry.name === "sqlite"),
       [record],

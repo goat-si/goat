@@ -1,4 +1,5 @@
-import { assert, describe, expect, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert, describe, expect } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
