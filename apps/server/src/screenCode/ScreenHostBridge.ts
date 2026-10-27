@@ -525,13 +525,12 @@ export class ScreenHostBridge {
     else closed.add(cellId);
   }
 
-  markUnawaited = Effect.fn("ScreenHostBridge.markUnawaited")(function* (
-    this: ScreenHostBridge,
+  markUnawaitedNow(
     runId: string,
     turnId: string,
     cellId: string,
     callIds: readonly number[],
-  ) {
+  ): void {
     const state = this.cells.get(key(runId, turnId, cellId));
     if (!state) return;
     const unawaited = new Set(callIds);
@@ -543,7 +542,7 @@ export class ScreenHostBridge {
         receipt: { ...entry.receipt, category: "unknown_outcome", journalState: "unknown" },
       };
     }
-  });
+  }
 
   invalidateTarget = Effect.fn("ScreenHostBridge.invalidateTarget")(function* (
     this: ScreenHostBridge,

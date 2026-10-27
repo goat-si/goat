@@ -193,6 +193,38 @@ it.live("hung post-cell availability returns within its bound", () =>
   }),
 );
 
+it.live("a failed availability read after the result keeps the live child and its values", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.die(new Error("availability read failed")),
+      dispatch: () => Effect.succeed({ value: true, category: "confirmed" }),
+    });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    const first = yield* supervisor.runCell(
+      { runId: "r", turnId: "t", context: context("one", limits) },
+      "screen.values.kept = 7; return 1;",
+      false,
+    );
+    expect(first.status).toBe("completed");
+    expect(first.value).toBe(1);
+    expect(first.availability).toEqual([
+      { kind: "app", available: false, reason: "no_lease" },
+      { kind: "tab", available: false, reason: "no_host" },
+    ]);
+    expect(supervisor.activeCount()).toBe(1);
+    const second = yield* supervisor.runCell(
+      { runId: "r", turnId: "t", context: context("two", limits) },
+      "return screen.values.kept;",
+      false,
+    );
+    expect(second.value).toBe(7);
+    yield* supervisor.finishTurn("r", "t", "test");
+  }),
+);
+
 it.live(
   "a Stop while availability is read after the result keeps the result and its receipts",
   () =>
