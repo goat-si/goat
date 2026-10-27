@@ -10,6 +10,7 @@ import {
   type CursorCloudDriverEnv,
 } from "@goat/provider-cursor/server";
 import { DevinCloudDriver, type DevinCloudDriverEnv } from "@goat/provider-devin-cloud/server";
+import { FxDriver, type FxDriverEnv } from "@goat/provider-fx/server";
 import { GrokDriver, type GrokDriverEnv } from "@goat/provider-grok/server";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "@goat/provider-opencode/server";
 import { MuseDriver, type MuseDriverEnv } from "@goat/provider-muse/server";
@@ -25,6 +26,7 @@ export type BuiltInDriversEnv =
   | CursorDriverEnv
   | CursorCloudDriverEnv
   | DevinCloudDriverEnv
+  | FxDriverEnv
   | GrokDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
@@ -37,6 +39,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   CursorDriver,
   CursorCloudDriver,
   GrokDriver,
+  FxDriver,
   OpenCodeDriver,
   AntigravityDriver,
   PiDriver,

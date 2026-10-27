@@ -477,6 +477,21 @@ describe("implicitDefaultInstance", () => {
   const cursorCloud = ProviderInstanceId.make("cursorCloud");
   const cloudDriver = ProviderDriverKind.make("cursorCloud");
 
+  it("requires explicit enablement for fx in existing settings", () => {
+    const fx = ProviderInstanceId.make("fx");
+    const driver = ProviderDriverKind.make("fx");
+    const settings = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
+    expect(implicitDefaultInstance(settings, driver).enabled).toBe(false);
+    expect(resolveProjectProviderInstanceEnabled(settings, null, fx)).toBe(false);
+    expect(
+      resolveProjectProviderInstanceEnabled(
+        { ...settings, providerInstances: { [fx]: { driver, enabled: true } } },
+        null,
+        fx,
+      ),
+    ).toBe(true);
+  });
+
   it("follows the effective sibling state and project resolution", () => {
     const off = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
     expect(implicitDefaultInstance(off, cloudDriver)).toEqual({ present: true, enabled: false });

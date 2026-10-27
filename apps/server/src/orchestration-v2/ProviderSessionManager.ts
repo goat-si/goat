@@ -1,3 +1,4 @@
+import { repairSchedule } from "../retryJitter.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
@@ -38,7 +39,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -1282,13 +1282,7 @@ export const layerWithOptions = (
           return yield* Effect.fail(exit.cause);
         });
         return attempt.pipe(
-          Effect.retry({
-            schedule: Schedule.exponential("1 second").pipe(
-              Schedule.modifyDelay(({ duration }) =>
-                Effect.succeed(Duration.min(duration, Duration.seconds(30))),
-              ),
-            ),
-          }),
+          Effect.retry({ schedule: repairSchedule }),
           Effect.delay("1 second"),
           FiberSet.run(releaseRecordRetries),
         );

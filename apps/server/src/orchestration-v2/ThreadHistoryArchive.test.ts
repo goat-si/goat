@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -106,6 +108,105 @@ const crashAt = (pattern: RegExp, nth = 1): Statement.Transformer => {
       ? Effect.die("simulated crash")
       : Effect.succeed(statement);
 };
+
+it.effect("closes archive observation exactly once when interrupted during acquisition", () =>
+  Effect.gen(function* () {
+    const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+    let active = 0;
+    let started = 0;
+    let pages = 0;
+    const ended: boolean[] = [];
+    const fiber = yield* Effect.withFiber((current) =>
+      archive.runPass(policy).pipe(
+        Effect.provideService(ThreadHistoryArchive.ThreadHistoryArchiveObserver, {
+          onStart: () => {
+            active++;
+            started++;
+            current.interruptUnsafe();
+            return {
+              onPage: () => pages++,
+              onEnd: (succeeded) => {
+                active--;
+                ended.push(succeeded);
+              },
+            };
+          },
+        }),
+      ),
+    ).pipe(Effect.forkChild);
+    const exit = yield* Fiber.await(fiber);
+    assert.isTrue(Exit.isFailure(exit));
+    assert.equal(started, 1);
+    assert.equal(active, 0);
+    assert.equal(pages, 0);
+    assert.deepEqual(ended, [false]);
+  }).pipe(Effect.provide(layer())),
+);
+
+it.effect("reports archive pass pages and closes observation on interruption", () =>
+  Effect.gen(function* () {
+    const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+    yield* seed;
+    const before = yield* rows("old");
+    let active = 0;
+    const pages: Array<readonly [string, number]> = [];
+    const ended: boolean[] = [];
+    const observed = archive.runPass(policy).pipe(
+      Effect.provideService(ThreadHistoryArchive.ThreadHistoryArchiveObserver, {
+        onStart: () => {
+          active++;
+          return {
+            onPage: (kind, processedRows) => pages.push([kind, processedRows]),
+            onEnd: (succeeded) => {
+              active--;
+              ended.push(succeeded);
+            },
+          };
+        },
+      }),
+    );
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const hold: Statement.Transformer = (statement) =>
+      /SELECT thread_id, updated_at FROM orchestration_v2_projection_threads/u.test(
+        statement.compile()[0],
+      )
+        ? Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(statement),
+          )
+        : Effect.succeed(statement);
+    const fiber = yield* observed.pipe(
+      Effect.provideService(Statement.CurrentTransformer, hold),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(entered);
+    assert.equal(active, 1);
+    assert.deepEqual(pages, []);
+    yield* Fiber.interrupt(fiber);
+    assert.equal(active, 0);
+    assert.deepEqual(ended, [false]);
+    assert.deepEqual(yield* rows("old"), before);
+
+    assert.equal((yield* observed).archivedThreads, 1);
+    assert.equal(active, 0);
+    assert.deepEqual(ended, [false, true]);
+    for (const [kind, expected] of [
+      ["threads", 2],
+      ["items", 80],
+      ["events", 41],
+    ] as const)
+      assert.equal(
+        pages.filter(([pageKind]) => pageKind === kind).reduce((sum, [, count]) => sum + count, 0),
+        expected,
+      );
+    assert.equal((yield* rows("old")).items.length, 0);
+    const captured = pages.slice();
+    assert.equal((yield* archive.runPass(policy)).archivedThreads, 0);
+    assert.deepEqual(pages, captured);
+    assert.deepEqual(ended, [false, true]);
+  }).pipe(Effect.provide(layer())),
+);
 
 it.effect("archives idle threads and restores them on read, row for row", () =>
   Effect.gen(function* () {

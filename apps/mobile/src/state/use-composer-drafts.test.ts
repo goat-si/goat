@@ -944,8 +944,7 @@ describe("mobile composer drafts", () => {
     expect(getComposerDraftSnapshot(key).attachments).toEqual([file]);
     expect(getComposerDraftSnapshot(key).text).toBe(`replaced ${link}`);
   });
-
-  it("inserts context at the saved caret and retains its payload through persistence and restore", () => {
+  it("inserts context at its own saved caret after another draft moves and retains the payload", () => {
     const draftKey = "context-environment:context-thread";
     const record = {
       version: 1 as const,
@@ -961,6 +960,7 @@ describe("mobile composer drafts", () => {
     const reference = "[Build output](t3-context://v1/terminal/context-terminal)";
     setComposerDraftText(draftKey, "Fix this next");
     rememberComposerDraftSelection(draftKey, "Fix this next", { start: 4, end: 8 });
+    rememberComposerDraftSelection("other-draft", "Other", { start: 1, end: 1 });
     insertComposerDraftContext(draftKey, {
       text: reference,
       context: { version: 1, records: [record] },

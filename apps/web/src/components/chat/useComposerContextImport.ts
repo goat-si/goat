@@ -1,3 +1,7 @@
+import { ConnectionBlockedError, ConnectionTransientError } from "@goat/client-runtime/connection";
+import { EnvironmentRpcUnavailableError } from "@goat/client-runtime/rpc";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import type { RefObject } from "react";
 import type { ChatComposerProps } from "./ChatComposer";
 import {
@@ -53,6 +57,10 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { routeThreadContextRecords } from "~/lib/threadContextRoute";
 import { countPreparingComposerImages } from "./preparingComposerImages";
+
+const isUnreachable = Schema.is(
+  Schema.Union([ConnectionTransientError, ConnectionBlockedError, EnvironmentRpcUnavailableError]),
+);
 
 async function downloadAttachmentBlob(url: string): Promise<Blob | null> {
   try {
@@ -168,7 +176,12 @@ export function useComposerContextImport(input: {
           ? resolveAssetUrl(sourceConnection.httpBaseUrl, result.value.relativeUrl)
           : null;
       if (!url) {
-        fail("The original attachment is no longer available.");
+        const cause = result._tag === "Failure" ? Cause.squash(result.cause) : null;
+        fail(
+          isUnreachable(cause)
+            ? "The environment it came from is not reachable right now."
+            : "The original attachment is no longer available.",
+        );
         return;
       }
       const blob = await downloadAttachmentBlob(url);

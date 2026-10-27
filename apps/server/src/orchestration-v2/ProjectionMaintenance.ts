@@ -7,6 +7,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -78,6 +79,17 @@ export class ProjectionMaintenanceV2 extends Context.Service<
   ProjectionMaintenanceV2,
   ProjectionMaintenanceV2Shape
 >()("goat/orchestration-v2/ProjectionMaintenance/ProjectionMaintenanceV2") {}
+
+/** Optional synchronous, nonthrowing callbacks; each pass owns its observation. */
+export class ProjectionMaintenanceObserver extends Context.Reference<
+  | {
+      readonly onStart: () => {
+        readonly onPage: (kind: "events" | "receipts", processedRows: number) => void;
+        readonly onEnd: (succeeded: boolean) => void;
+      };
+    }
+  | undefined
+>("goat/orchestration-v2/ProjectionMaintenanceObserver", { defaultValue: () => undefined }) {}
 
 type ProjectionMetadataRow = {
   readonly schema_version: number;
@@ -268,36 +280,53 @@ export const layer: Layer.Layer<
     const COMPACTION_PAGE_SIZE = 50;
 
     // Keep first/latest keyed events for replay order; page every event to bound sparse scans.
-    const compactEventStore = Effect.fn("ProjectionMaintenance.compactEventStore")(function* (
-      betweenPages: Effect.Effect<void> = Effect.void,
-    ) {
-      const bounds = yield* sql<{
-        readonly event_sequence: number;
-        readonly receipt_row_id: number;
-      }>`
+    const compactEventStore = Effect.fn("ProjectionMaintenance.compactEventStore")(
+      function* (betweenPages: Effect.Effect<void> = Effect.void) {
+        const observer = yield* ProjectionMaintenanceObserver;
+        const observation =
+          observer === undefined
+            ? undefined
+            : yield* Effect.acquireRelease(
+                Effect.sync(() => observer.onStart()),
+                (observation, exit) => Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
+              );
+        const bounds = yield* sql<{
+          readonly event_sequence: number;
+          readonly receipt_row_id: number;
+        }>`
         SELECT
           COALESCE((SELECT MAX(sequence) FROM orchestration_events), 0) AS event_sequence,
-          COALESCE((SELECT MAX(rowid) FROM orchestration_command_receipts), 0) AS receipt_row_id
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM orchestration_v2_legacy_imports AS legacy_import
+            CROSS JOIN orchestration_command_receipts AS receipt
+              INDEXED BY idx_orch_command_receipts_aggregate
+            WHERE legacy_import.transcript_imported_at IS NOT NULL
+              AND receipt.aggregate_kind = 'thread'
+              AND receipt.aggregate_id = legacy_import.thread_id
+              AND receipt.command_type = 'legacy'
+          ) THEN COALESCE((SELECT MAX(rowid) FROM orchestration_command_receipts), 0)
+          ELSE 0 END AS receipt_row_id
       `.pipe(NodeSqliteClient.readOnly);
-      let throughSequence = bounds[0]?.event_sequence ?? 0;
-      let throughReceiptRowId = bounds[0]?.receipt_row_id ?? 0;
-      const retainedThreadIds = new Set<string>();
-      const retainedReadStateThreadIds = new Set<string>();
-      // Retain each key's oldest candidate, deleting it only when an older event appears.
-      const oldestCandidateByEntityKey = new Map<string, number | null>();
-      let deletedEventCount = 0;
-      let deletedReceiptCount = 0;
+        let throughSequence = bounds[0]?.event_sequence ?? 0;
+        let throughReceiptRowId = bounds[0]?.receipt_row_id ?? 0;
+        const retainedThreadIds = new Set<string>();
+        const retainedReadStateThreadIds = new Set<string>();
+        // Retain each key's oldest candidate, deleting it only when an older event appears.
+        const oldestCandidateByEntityKey = new Map<string, number | null>();
+        let deletedEventCount = 0;
+        let deletedReceiptCount = 0;
 
-      while (throughSequence > 0) {
-        const rows = yield* sql<{
-          readonly sequence: number;
-          readonly application_event_version: number;
-          readonly aggregate_kind: string;
-          readonly stream_id: string;
-          readonly event_type: string;
-          readonly entity_id: string | null;
-          readonly imported_legacy_thread: number;
-        }>`
+        while (throughSequence > 0) {
+          const rows = yield* sql<{
+            readonly sequence: number;
+            readonly application_event_version: number;
+            readonly aggregate_kind: string;
+            readonly stream_id: string;
+            readonly event_type: string;
+            readonly entity_id: string | null;
+            readonly imported_legacy_thread: number;
+          }>`
           SELECT
             event.sequence,
             event.application_event_version,
@@ -334,68 +363,69 @@ export const layer: Layer.Layer<
           ORDER BY event.sequence DESC
           LIMIT ${COMPACTION_PAGE_SIZE + 1}
         `.pipe(NodeSqliteClient.readOnly);
-        const page = rows.slice(0, COMPACTION_PAGE_SIZE);
-        const obsolete: number[] = [];
-        for (const row of page) {
-          if (row.imported_legacy_thread === 1) {
-            obsolete.push(row.sequence);
-          } else if (row.application_event_version === 2) {
-            if (
-              row.aggregate_kind === "thread" &&
-              supersedableThreadEventTypes.has(row.event_type)
-            ) {
-              if (retainedThreadIds.has(row.stream_id)) obsolete.push(row.sequence);
-              else retainedThreadIds.add(row.stream_id);
-            } else if (
-              row.aggregate_kind === "thread" &&
-              readStateThreadEventTypes.has(row.event_type)
-            ) {
-              if (
-                retainedThreadIds.has(row.stream_id) ||
-                retainedReadStateThreadIds.has(row.stream_id)
-              ) {
-                obsolete.push(row.sequence);
-              } else retainedReadStateThreadIds.add(row.stream_id);
-            } else if (
-              row.event_type === "thread.pull-request-link-updated" &&
-              retainedThreadIds.has(row.stream_id)
-            ) {
-              // A newer whole-thread payload already carries this link's state.
+          const page = rows.slice(0, COMPACTION_PAGE_SIZE);
+          observation?.onPage("events", page.length);
+          const obsolete: number[] = [];
+          for (const row of page) {
+            if (row.imported_legacy_thread === 1) {
               obsolete.push(row.sequence);
-            } else if (
-              row.event_type === "thread.pull-request-link-updated" ||
-              row.event_type === "message.updated" ||
-              row.event_type === "node.updated" ||
-              (row.event_type === "turn-item.updated" && row.entity_id !== null)
-            ) {
-              const key = encodeEntityKey([row.event_type, row.stream_id, row.entity_id]);
-              const candidate = oldestCandidateByEntityKey.get(key);
-              if (candidate === undefined) oldestCandidateByEntityKey.set(key, null);
-              else {
-                if (candidate !== null) obsolete.push(candidate);
-                oldestCandidateByEntityKey.set(key, row.sequence);
+            } else if (row.application_event_version === 2) {
+              if (
+                row.aggregate_kind === "thread" &&
+                supersedableThreadEventTypes.has(row.event_type)
+              ) {
+                if (retainedThreadIds.has(row.stream_id)) obsolete.push(row.sequence);
+                else retainedThreadIds.add(row.stream_id);
+              } else if (
+                row.aggregate_kind === "thread" &&
+                readStateThreadEventTypes.has(row.event_type)
+              ) {
+                if (
+                  retainedThreadIds.has(row.stream_id) ||
+                  retainedReadStateThreadIds.has(row.stream_id)
+                ) {
+                  obsolete.push(row.sequence);
+                } else retainedReadStateThreadIds.add(row.stream_id);
+              } else if (
+                row.event_type === "thread.pull-request-link-updated" &&
+                retainedThreadIds.has(row.stream_id)
+              ) {
+                // A newer whole-thread payload already carries this link's state.
+                obsolete.push(row.sequence);
+              } else if (
+                row.event_type === "thread.pull-request-link-updated" ||
+                row.event_type === "message.updated" ||
+                row.event_type === "node.updated" ||
+                (row.event_type === "turn-item.updated" && row.entity_id !== null)
+              ) {
+                const key = encodeEntityKey([row.event_type, row.stream_id, row.entity_id]);
+                const candidate = oldestCandidateByEntityKey.get(key);
+                if (candidate === undefined) oldestCandidateByEntityKey.set(key, null);
+                else {
+                  if (candidate !== null) obsolete.push(candidate);
+                  oldestCandidateByEntityKey.set(key, row.sequence);
+                }
               }
             }
           }
-        }
-        // Never hold a transaction or the reader lock across a yield or a rest.
-        yield* Effect.yieldNow;
-        if (obsolete.length > 0) {
-          yield* sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(obsolete)}`;
-          deletedEventCount += obsolete.length;
+          // Never hold a transaction or the reader lock across a yield or a rest.
           yield* Effect.yieldNow;
+          if (obsolete.length > 0) {
+            yield* sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(obsolete)}`;
+            deletedEventCount += obsolete.length;
+            yield* Effect.yieldNow;
+          }
+          throughSequence =
+            rows.length <= COMPACTION_PAGE_SIZE ? 0 : (page.at(-1)?.sequence ?? 1) - 1;
+          if (throughSequence > 0 || throughReceiptRowId > 0) yield* betweenPages;
         }
-        throughSequence =
-          rows.length <= COMPACTION_PAGE_SIZE ? 0 : (page.at(-1)?.sequence ?? 1) - 1;
-        if (throughSequence > 0 || throughReceiptRowId > 0) yield* betweenPages;
-      }
 
-      while (throughReceiptRowId > 0) {
-        const rows = yield* sql<{
-          readonly row_id: number;
-          readonly command_id: string;
-          readonly imported_legacy_thread: number;
-        }>`
+        while (throughReceiptRowId > 0) {
+          const rows = yield* sql<{
+            readonly row_id: number;
+            readonly command_id: string;
+            readonly imported_legacy_thread: number;
+          }>`
           SELECT
             receipt.rowid AS row_id,
             receipt.command_id,
@@ -413,28 +443,32 @@ export const layer: Layer.Layer<
           ORDER BY receipt.rowid DESC
           LIMIT ${COMPACTION_PAGE_SIZE + 1}
         `.pipe(NodeSqliteClient.readOnly);
-        const page = rows.slice(0, COMPACTION_PAGE_SIZE);
-        const obsolete = page
-          .filter((row) => row.imported_legacy_thread === 1)
-          .map((row) => row.command_id);
-        yield* Effect.yieldNow;
-        if (obsolete.length > 0) {
-          yield* sql`DELETE FROM orchestration_command_receipts WHERE command_id IN ${sql.in(obsolete)}`;
-          deletedReceiptCount += obsolete.length;
+          const page = rows.slice(0, COMPACTION_PAGE_SIZE);
+          observation?.onPage("receipts", page.length);
+          const obsolete = page
+            .filter((row) => row.imported_legacy_thread === 1)
+            .map((row) => row.command_id);
           yield* Effect.yieldNow;
+          if (obsolete.length > 0) {
+            yield* sql`DELETE FROM orchestration_command_receipts WHERE command_id IN ${sql.in(obsolete)}`;
+            deletedReceiptCount += obsolete.length;
+            yield* Effect.yieldNow;
+          }
+          throughReceiptRowId = (page.at(-1)?.row_id ?? 1) - 1;
+          if (rows.length <= COMPACTION_PAGE_SIZE) break;
+          yield* betweenPages;
         }
-        throughReceiptRowId = (page.at(-1)?.row_id ?? 1) - 1;
-        if (rows.length <= COMPACTION_PAGE_SIZE) break;
-        yield* betweenPages;
-      }
 
-      const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
-      const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
-      const reclaimableBytes =
-        (freelistRows[0]?.freelist_count ?? 0) * (pageSizeRows[0]?.page_size ?? 0);
+        const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
+        const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
+        const reclaimableBytes =
+          (freelistRows[0]?.freelist_count ?? 0) * (pageSizeRows[0]?.page_size ?? 0);
 
-      return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
-    }, mapError("compact event store"));
+        return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
+      },
+      Effect.scoped,
+      mapError("compact event store"),
+    );
 
     // Memory's own storage sample, refreshed hourly. Measuring here would cost a dbstat walk
     // of the memory tables, and memory is small next to a history budget.

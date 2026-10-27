@@ -50,6 +50,7 @@ export const BUILTIN_SKILL_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
   "cursor",
+  "fx",
   "grok",
   "antigravity",
   "acpRegistry",

@@ -14,7 +14,7 @@ export function pageText(content: Pick<TextContent, "items">) {
   for (const item of content.items) {
     if (!("str" in item)) continue;
     starts.push(text.length);
-    text += item.str + (item.hasEOL ? " " : "");
+    text += item.str + (item.hasEOL ? "\n" : "");
   }
   return { text, starts };
 }
@@ -40,13 +40,36 @@ export function findPdfMatches(pages: readonly string[], query: string): PdfMatc
     query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"),
     "giu",
   );
-  return pages.flatMap((text, page) =>
-    [...text.matchAll(pattern)].map((match) => ({
+  return pages.flatMap((text, page) => {
+    const breaks: { start: number; length: number }[] = [];
+    let removed = 0;
+    const searchable = text.replace(
+      /(?<=\p{L})-\r?\n(?=\p{L})/gu,
+      (lineEnd: string, offset: number) => {
+        breaks.push({ start: offset - removed, length: lineEnd.length });
+        removed += lineEnd.length;
+        return "";
+      },
+    );
+    // Map only removed line ends, avoiding a per-character offset array for every page.
+    let nextBreak = 0;
+    let shift = 0;
+    const originalOffset = (offset: number, includeBoundary: boolean) => {
+      for (
+        let gap = breaks[nextBreak];
+        gap && (includeBoundary ? gap.start <= offset : gap.start < offset);
+        gap = breaks[++nextBreak]
+      ) {
+        shift += gap.length;
+      }
+      return offset + shift;
+    };
+    return [...searchable.matchAll(pattern)].map((match) => ({
       page,
-      start: match.index,
-      end: match.index + match[0].length,
-    })),
-  );
+      start: originalOffset(match.index, true),
+      end: originalOffset(match.index + match[0].length, false),
+    }));
+  });
 }
 
 /** Rebuild only text nodes/marks, so PDF content is never interpreted as HTML. */

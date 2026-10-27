@@ -110,6 +110,95 @@ function setup() {
 }
 
 describe("file-save React lifecycle", () => {
+  it.each([false, true])(
+    "writes a recovered draft once across editor switches (already saving: %s)",
+    async (alreadySaving) => {
+      await using fixture = setup();
+      getUnsavedFile.mockReturnValue({ contents: "shared draft" });
+      let finishWrite!: () => void;
+      writeFile.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishWrite = () => {
+              getUnsavedFile.mockReturnValue(null);
+              resolve(AsyncResult.success(undefined));
+            };
+          }),
+      );
+      await fixture.mount();
+      const retiredChange = fixture.changeHandler();
+      if (alreadySaving) await act(async () => vi.advanceTimersByTimeAsync(500));
+      await act(() =>
+        fixture.root.render(
+          <StrictMode>
+            <fixture.FileSurface key="markdown" {...defaultProps} />
+          </StrictMode>,
+        ),
+      );
+      retiredChange("stale source contents");
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      await act(async () => finishWrite());
+      await act(async () => vi.runAllTimersAsync());
+      expect(writeFile).toHaveBeenCalledExactlyOnceWith({
+        environmentId,
+        input: { cwd: "/workspace", relativePath: "file.txt", contents: "shared draft" },
+      });
+      expect(fixture.coordinator.status).toBe("saved");
+    },
+  );
+
+  it("recovers when an editor rejoins a release flush that fails", async () => {
+    await using fixture = setup();
+    getUnsavedFile.mockReturnValue({ contents: "recoverable draft" });
+    let failWrite!: () => void;
+    writeFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          failWrite = () => resolve(AsyncResult.failure(Cause.fail(new Error("write failed"))));
+        }),
+    );
+    confirmFile.mockImplementation(() => {
+      getUnsavedFile.mockReturnValue(null);
+      return true;
+    });
+    await fixture.mount();
+    await act(() =>
+      fixture.root.render(
+        <StrictMode>
+          <fixture.FileSurface key="markdown" {...defaultProps} />
+        </StrictMode>,
+      ),
+    );
+    await act(async () => failWrite());
+    await act(async () => vi.runAllTimersAsync());
+    expect(writeFile).toHaveBeenCalledTimes(2);
+    expect(fixture.coordinator.status).toBe("saved");
+  });
+
+  it("keeps a repeated write failure visible for explicit retry", async () => {
+    await using fixture = setup();
+    getUnsavedFile.mockReturnValue({ contents: "recoverable draft" });
+    writeFile.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("write failed"))));
+    await fixture.mount();
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    await act(() =>
+      fixture.root.render(
+        <StrictMode>
+          <fixture.FileSurface key="markdown" {...defaultProps} />
+        </StrictMode>,
+      ),
+    );
+    await act(async () => vi.runAllTimersAsync());
+    expect(fixture.coordinator.status).toBe("failed");
+    const attempts = writeFile.mock.calls.length;
+    writeFile.mockResolvedValue(AsyncResult.success(undefined));
+    await act(async () => fixture.coordinator.retry());
+    expect(writeFile).toHaveBeenCalledTimes(attempts + 1);
+    expect(writeFile.mock.lastCall![0].input.contents).toBe("recoverable draft");
+    expect(fixture.coordinator.status).toBe("saved");
+  });
+
   it.each(["changed_on_disk", "deleted_on_disk"] as const)(
     "keeps the draft and pauses %s until explicit overwrite",
     async (failure) => {

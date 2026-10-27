@@ -1,3 +1,5 @@
+import { environmentConnectionAtoms } from "./environmentConnections.ts";
+export { environmentSessionGenerationAtom } from "./environmentConnections.ts";
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { followStreamInEnvironment } from "./environmentStreams.ts";
@@ -575,23 +577,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
-  const connectionAtom = Atom.family((environmentId: EnvironmentIdType) =>
-    runtime.atom(
-      followStreamInEnvironment(
-        environmentId,
-        Stream.unwrap(
-          EnvironmentSupervisor.EnvironmentSupervisor.pipe(
-            Effect.map((supervisor) =>
-              SubscriptionRef.changes(supervisor.state).pipe(
-                Stream.zipLatest(SubscriptionRef.changes(supervisor.session)),
-              ),
-            ),
-          ),
-        ),
-      ),
-      { initialValue: null },
-    ),
-  );
+  const connectionAtom = environmentConnectionAtoms(runtime);
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
@@ -647,7 +633,18 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
                 : Effect.never;
             case "connecting":
             case "backoff":
-              return Effect.never;
+              // A retry can take minutes. A query with an answer keeps showing it while it
+              // waits; one with nothing to show reports the failure the retry is recovering
+              // from, so its reader stops loading, and re-runs when the connection settles.
+              return connectionState.lastFailure !== null &&
+                Option.isNone(
+                  Option.flatMap(
+                    get.self<AsyncResult.AsyncResult<A, unknown>>(),
+                    AsyncResult.value,
+                  ),
+                )
+                ? Effect.fail(connectionState.lastFailure)
+                : Effect.never;
             case "available":
             case "offline":
             case "blocked":
