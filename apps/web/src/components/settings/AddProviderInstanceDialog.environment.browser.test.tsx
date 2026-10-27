@@ -218,7 +218,9 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
     await expect
       .element(page.getByRole("note"))
-      .toHaveTextContent("GOAT supports separate Claude accounts");
+      .toHaveTextContent(
+        "GOAT supports separate Claude accounts. Before adding another, check which account is already signed in and keep each account's sign-in separate. Adding an account does not increase another account's usage limits. Multi-account guidance",
+      );
     await userEvent.click(radio("Grok"));
     expect(document.querySelector('[role="note"]')).toBeNull();
   });

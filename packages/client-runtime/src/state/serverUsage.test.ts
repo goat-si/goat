@@ -330,7 +330,7 @@ it.effect(
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(60_000));
 
         unmount = registry.mount(search);
-        registry.schedulerAsync.flush();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
         expect(yield* read).toEqual({ agents: [] });
         expect(registrySearches).toEqual([{ query: "review" }]);
 
@@ -341,7 +341,7 @@ it.effect(
         unmount();
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(301_001));
         unmount = registry.mount(search);
-        registry.schedulerAsync.flush();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
         expect(yield* read).toEqual({ agents: [] });
         expect(registrySearches).toHaveLength(3);
 
