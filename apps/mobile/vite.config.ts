@@ -23,6 +23,7 @@ const reactTests = [
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",
   "src/features/threads/ThreadHeader.memory.test.tsx",
+  "src/features/threads/thread-settings-sheet-state.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/lib/visible-animations.test.tsx",
 

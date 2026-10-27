@@ -787,7 +787,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
 
     settingsRoutePresentedRef.current = false;
     settingsSheetPresentation.onDismissed();
-    settingsRoutePresentation.clear(settingsOwnerId);
+    settingsRoutePresentation.clear(composerOwnerKey);
   });
 
   useEffect(
