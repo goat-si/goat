@@ -5,7 +5,6 @@ import {
   type ChildReadyFailure,
   type ChildReadyNextAction,
   type ChildReadyResult,
-  DEFAULT_SERVER_SETTINGS,
   OpenCodexChildBootstrapStatus,
   OpenCodexChildSetup,
 } from "@goat/contracts";
@@ -21,7 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { presentSetupAction } from "./childBootstrapStatus.ts";
 import { READY_CHECK_TTL_MS } from "./childReadyVerification.ts";
 import * as ReadyDispatch from "./ChildReadyDispatch.ts";
-import { build, setup } from "./OpenCodexChildBootstrap.testkit.ts";
+import { build, commitHub, setup } from "./OpenCodexChildBootstrap.testkit.ts";
 
 const decodeSetup = Schema.decodeUnknownSync(OpenCodexChildSetup);
 const decodeRecords = Schema.decodeUnknownSync(
@@ -263,33 +262,58 @@ it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
 
   it.effect("turning the cloud switch off then on revokes and fails an in-flight Child setup", () =>
     Effect.gen(function* () {
-      const action = "configure";
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const revoked = yield* Deferred.make<void>();
-      const ready = transportDouble(action, entered, release);
       const home = yield* setup({
-        readyDispatch: ready,
+        readyDispatch: transportDouble("configure", entered, release),
         onRevoke: () => Deferred.succeed(revoked, undefined).pipe(Effect.asVoid),
       });
       const pending = yield* Effect.forkChild(home.bootstrap.ensure("boat-builder"));
       yield* Deferred.await(entered);
-      const hub = (autoJoinCloudMachines: boolean) => ({
-        ...DEFAULT_SERVER_SETTINGS,
-        hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled: true, autoJoinCloudMachines },
-      });
-      home.machine.autoJoin = false;
-      yield* PubSub.publish(home.machine.settingsChanges, hub(false));
+      const off = yield* commitHub(home.machine, { autoJoin: false });
+      yield* PubSub.publish(home.machine.settingsChanges, off);
       // Withdrawal revokes the delegated Child sessions at once.
       yield* Deferred.await(revoked);
-      home.machine.autoJoin = true;
-      yield* PubSub.publish(home.machine.settingsChanges, hub(true));
+      yield* PubSub.publish(
+        home.machine.settingsChanges,
+        yield* commitHub(home.machine, { autoJoin: true }),
+      );
       yield* Deferred.succeed(release, undefined);
       const status = yield* Fiber.join(pending);
       expect(status?.setup?.readiness).not.toBe("ready");
       expect(["setup_approval_revoked", "setup_approval_stale"]).toContain(status?.failure?.code);
     }),
   );
+
+  it.effect(
+    "an off-then-on commit fails an in-flight reply while the settings subscriber is held",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const home = yield* setup({
+          readyDispatch: transportDouble("configure", entered, release),
+          // The subscriber never runs during this test, as when it waits on secrets or SSH.
+          deliverChanges: yield* Deferred.make<void>(),
+        });
+        const pending = yield* Effect.forkChild(home.bootstrap.ensure("boat-builder"));
+        yield* Deferred.await(entered);
+        yield* PubSub.publish(
+          home.machine.settingsChanges,
+          yield* commitHub(home.machine, { autoJoin: false }),
+        );
+        yield* PubSub.publish(
+          home.machine.settingsChanges,
+          yield* commitHub(home.machine, { autoJoin: true }),
+        );
+        yield* Deferred.succeed(release, undefined);
+        const status = yield* Fiber.join(pending);
+        expect(status?.failure?.code).toBe("setup_approval_stale");
+        expect(status?.setup?.readiness).not.toBe("ready");
+      }),
+  );
+
   it.effect("shows Ready only while a fresh Child status confirms the recorded proof", () =>
     Effect.gen(function* () {
       const statusRevoked = yield* Deferred.make<string>();

@@ -71,6 +71,11 @@ import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import type * as MemoryStore from "./memory/MemoryStore.ts";
 import * as CodexRoute from "./provider/CodexRouteService.ts";
+import {
+  type HubConsentGenerations,
+  makeHubConsentGenerations,
+} from "./hub/hubConsentGenerations.ts";
+import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -787,6 +792,8 @@ export class ServerSettingsService extends Context.Service<
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
     /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
     readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
+    /** Hub and cloud consent generations, advanced inside each commit; doubles may leave it out. */
+    readonly hubConsentGenerations?: Effect.Effect<HubConsentGenerations>;
 
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -850,104 +857,6 @@ export class ServerSettingsService extends Context.Service<
   static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
 }
 
-// Publication holds only its host gate. A settings writer never waits for that gate
-// while holding the global write semaphore, so staged payload I/O cannot stall settings.
-const makeCheckpointReplicationAdmission = () => {
-  const gates = new Map<string, { gate: Semaphore.Semaphore; revision: number }>();
-  const forHost = (host: string) => {
-    let entry = gates.get(host);
-    if (entry === undefined) {
-      entry = { gate: Semaphore.makeUnsafe(1), revision: 0 };
-      gates.set(host, entry);
-    }
-    return entry;
-  };
-  const permit = Effect.fn("ServerSettings.checkpointReplicationPermit")(function* (
-    host: string,
-    read: Effect.Effect<ServerSettings, ServerSettingsError>,
-  ) {
-    const entry = forHost(host);
-    return yield* entry.gate.withPermits(1)(
-      Effect.gen(function* () {
-        const settings = yield* read;
-        const revision = entry.revision;
-        return {
-          choice: settings.fleet.hosts?.[host]?.checkpointReplication,
-          publish: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-            entry.gate.withPermits(1)(
-              Effect.suspend(() =>
-                entry.revision === revision
-                  ? effect.pipe(Effect.map(Option.some))
-                  : Effect.succeed(Option.none<A>()),
-              ),
-            ),
-        };
-      }),
-    );
-  });
-  const tryCommit = <A, E, R>(
-    current: ServerSettings,
-    next: ServerSettings,
-    commit: Effect.Effect<A, E, R>,
-  ) => {
-    const changed = [
-      ...new Set([
-        ...Object.keys(current.fleet.hosts ?? {}),
-        ...Object.keys(next.fleet.hosts ?? {}),
-      ]),
-    ]
-      .filter(
-        (host) =>
-          current.fleet.hosts?.[host]?.checkpointReplication !==
-          next.fleet.hosts?.[host]?.checkpointReplication,
-      )
-      .sort()
-      .map(forHost);
-    let guarded = commit.pipe(
-      Effect.tap(() =>
-        Effect.sync(() => {
-          for (const entry of changed) entry.revision++;
-        }),
-      ),
-      Effect.map(Option.some),
-      Effect.uninterruptible,
-    );
-    for (const entry of changed.toReversed())
-      guarded = entry.gate.withPermitsIfAvailable(1)(guarded).pipe(Effect.map(Option.flatten));
-    return guarded.pipe(
-      Effect.map((result) =>
-        Option.isSome(result)
-          ? { done: true as const, value: result.value }
-          : {
-              done: false as const,
-              wait: Effect.forEach(changed, ({ gate }) => gate.withPermits(1)(Effect.void), {
-                discard: true,
-              }),
-            },
-      ),
-    );
-  };
-  const retry = Effect.fn("ServerSettings.retryCheckpointPublication")(function* <A, E, R>(
-    attempt: Effect.Effect<
-      { done: true; value: A } | { done: false; wait: Effect.Effect<void> },
-      E,
-      R
-    >,
-  ) {
-    for (let attemptNumber = 0; attemptNumber < 16; attemptNumber++) {
-      const result = yield* attempt;
-      if (result.done) return result.value;
-      yield* result.wait;
-    }
-    return yield* new ServerSettingsError({
-      settingsPath: "checkpointReplication",
-      operation: "normalize",
-      cause: "Checkpoint publication remained busy; retry this settings change.",
-    });
-  });
-  return { permit, tryCommit, retry };
-};
-
 const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   overrides: DeepPartial<ServerSettings> = {},
 ) {
@@ -972,6 +881,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   const writeSemaphore = yield* Semaphore.make(1);
   const checkpointAdmission = makeCheckpointReplicationAdmission();
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
+  const hubConsent = yield* makeHubConsentGenerations;
   const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
 
   const updateTestSettingsLocked = <E, R>(
@@ -983,6 +893,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       Effect.tap((nextSettings) =>
         Effect.uninterruptible(
           Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(hubConsent.committed(nextSettings.hub)),
             Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
           ),
@@ -1053,6 +964,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     ready: Effect.void,
     getSettings,
     committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
+    hubConsentGenerations: hubConsent.current,
     updateSettings: (patch, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         (authorizeAtCommit ?? Effect.void).pipe(
@@ -1394,6 +1306,7 @@ const make = Effect.gen(function* () {
       },
     }));
   const cacheKey = "settings" as const;
+  const hubConsent = yield* makeHubConsentGenerations;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const providerChangesPubSub = yield* PubSub.unbounded<{
     readonly settings: ServerSettings;
@@ -1406,6 +1319,7 @@ const make = Effect.gen(function* () {
 
   const emitChange = (settings: ServerSettings) =>
     Effect.gen(function* () {
+      yield* hubConsent.committed(settings.hub);
       yield* PubSub.publish(changesPubSub, settings);
       if (Option.isSome(routeState))
         yield* PubSub.publish(providerChangesPubSub, {
@@ -2185,6 +2099,7 @@ const make = Effect.gen(function* () {
       Effect.map(resolveTextGenerationProvider),
     ),
     committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
+    hubConsentGenerations: hubConsent.current,
     updateSettings: (patch, authorizeAtCommit) =>
       updateAndPersistSettings(
         (current) =>

@@ -439,7 +439,7 @@
   "apps/server/src/scheduledTasks/webhookTemplate.ts": { "nonNull": 1 },
   "apps/server/src/server.ts": { "lines": 1339 },
   "apps/server/src/serverSettings.test.ts": { "lines": 3110 },
-  "apps/server/src/serverSettings.ts": { "lines": 2314 },
+  "apps/server/src/serverSettings.ts": { "lines": 2229 },
   "apps/server/src/serviceLauncher.test.ts": { "lines": 1590 },
   "apps/server/src/serviceLauncher.ts": { "lines": 1160 },
   "apps/server/src/sshRemote/SshDeviceAdd.ts": { "nonNull": 1 },

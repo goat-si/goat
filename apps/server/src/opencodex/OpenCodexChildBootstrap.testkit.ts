@@ -15,6 +15,7 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,7 @@ import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import { makeHubConsentGenerations } from "../hub/hubConsentGenerations.ts";
 import { type DevicePlatform, HubOcx } from "../hub/HubOcx.ts";
 import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Settings from "../serverSettings.ts";
@@ -94,6 +96,10 @@ export interface Machine {
   completeFailure: ChildReadyFailure | undefined;
   /** Committed settings changes, as ServerSettingsService publishes them. */
   settingsChanges: PubSub.PubSub<ServerSettings>;
+  /** The settings subscriber receives published changes only once this completes. */
+  deliverChanges: Deferred.Deferred<void>;
+  /** serverSettings' own consent generations; `commitHub` advances them like a commit. */
+  consent: Effect.Success<typeof makeHubConsentGenerations>;
   /** Runs when the Home revokes a setup binding's Child sessions. */
   onRevoke: (binding: ChildSetupBinding) => Effect.Effect<void>;
   /** Each Child completion the Home asked for, as "alias linkId". */
@@ -387,7 +393,13 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(Settings.ServerSettingsService)({
-          subscribeChanges: Effect.succeed(Stream.fromPubSub(machine.settingsChanges)),
+          // Subscribed at once, delivered only when the test lets the subscriber run.
+          subscribeChanges: Effect.map(PubSub.subscribe(machine.settingsChanges), (subscription) =>
+            Stream.fromEffect(Deferred.await(machine.deliverChanges)).pipe(
+              Stream.flatMap(() => Stream.fromSubscription(subscription)),
+            ),
+          ),
+          hubConsentGenerations: Effect.suspend(() => machine.consent.current),
           // As in serverSettings: a full read can answer from state captured before it waited.
           getSettings: Effect.sync(() => ({
             ...DEFAULT_SERVER_SETTINGS,
@@ -462,6 +474,8 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     duringEnsure: Effect.void,
     completeFailure: undefined,
     settingsChanges: yield* PubSub.unbounded<ServerSettings>(),
+    deliverChanges: yield* Deferred.make<void>(),
+    consent: yield* makeHubConsentGenerations,
     onRevoke: () => Effect.void,
     completed: [],
     extraLinks: [],
@@ -472,6 +486,33 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     readyDispatch: undefined,
     ...overrides,
   };
+  if (overrides.deliverChanges === undefined)
+    yield* Deferred.succeed(machine.deliverChanges, undefined);
+  yield* machine.consent.committed({
+    enabled: machine.hub,
+    autoJoinCloudMachines: machine.autoJoin,
+  });
   const calls: string[] = [];
   return { machine, calls, baseDir, ...(yield* build(baseDir, machine, calls)) };
+});
+
+/** A settings commit of the hub switches: consent generations advance before anyone is told. */
+export const commitHub = Effect.fn("OpenCodexChildBootstrapTest.commitHub")(function* (
+  machine: Machine,
+  next: { readonly hub?: boolean; readonly autoJoin?: boolean },
+) {
+  machine.hub = next.hub ?? machine.hub;
+  machine.autoJoin = next.autoJoin ?? machine.autoJoin;
+  yield* machine.consent.committed({
+    enabled: machine.hub,
+    autoJoinCloudMachines: machine.autoJoin,
+  });
+  return {
+    ...DEFAULT_SERVER_SETTINGS,
+    hub: {
+      ...DEFAULT_SERVER_SETTINGS.hub,
+      enabled: machine.hub,
+      autoJoinCloudMachines: machine.autoJoin,
+    },
+  };
 });

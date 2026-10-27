@@ -562,11 +562,12 @@ const make = Effect.gen(function* () {
     return !(previous?.state === "blocked" && now - previous.checkedAt < RETRY_AFTER_MS);
   });
 
-  // Every cloud setup binds this generation. Each committed change of the cloud switch bumps it,
-  // so an off-then-on during a request still fails that request's post-reply check, and turning
-  // it off revokes the sessions already delegated. The epoch keeps ids unique per process.
+  // Setup binds the consent generations the settings commit itself advances, so an off-then-on
+  // during a request fails its post-reply check before this subscriber runs; the subscriber only
+  // revokes sessions already delegated. The epoch keeps cloud grant ids unique per process.
   const cloudEpoch = NodeCrypto.randomUUID();
-  let cloudGeneration = 0;
+  const consentGenerations =
+    settings.hubConsentGenerations ?? Effect.die("Settings publish no consent generations.");
   const changes = yield* settings.subscribeChanges.pipe(Scope.provide(serviceScope));
   let cloudOn = yield* cloudAllowed;
   let hubOn = yield* hubEnabled;
@@ -577,7 +578,6 @@ const make = Effect.gen(function* () {
         const cloudNow = hub && next.hub.autoJoinCloudMachines;
         const withdrawnHub = hubOn && !hub;
         const withdrawnCloud = cloudOn && !cloudNow;
-        if (cloudNow !== cloudOn) cloudGeneration++;
         hubOn = hub;
         cloudOn = cloudNow;
         if (!withdrawnHub && !withdrawnCloud) return;
@@ -598,11 +598,11 @@ const make = Effect.gen(function* () {
     ),
     join: (scope) => membership.joinProvisioned(scope, alias, cloudAllowed),
     // Cloud setup needs the switch on and this Home still owning the machine, read each time.
-    grant: Effect.all([cloudAllowed, cloud.owns(alias)]).pipe(
-      Effect.map(([allowed, owned]) => ({
+    grant: Effect.all([cloudAllowed, cloud.owns(alias), consentGenerations]).pipe(
+      Effect.map(([allowed, owned, generations]) => ({
         enabled: allowed && owned,
         grantId: `cloud:${alias}:${cloudEpoch}`,
-        grantRevision: cloudGeneration,
+        grantRevision: generations.cloud,
       })),
     ),
   });
@@ -658,11 +658,12 @@ const make = Effect.gen(function* () {
             Effect.map((read) => (read.state === "allowed" ? read.person : undefined)),
           ),
         ),
-      // The purpose binds this grant and alias generation; a new grant or a Forget ends it.
-      grant: admission.pipe(
-        Effect.map((read) => ({
+      // The purpose binds this grant, the alias generation and the hub switch's generation; a
+      // new grant, a Forget or the hub turned off and on again ends it.
+      grant: Effect.all([admission, consentGenerations]).pipe(
+        Effect.map(([read, generations]) => ({
           enabled: read.state === "allowed",
-          grantId,
+          grantId: `${grantId}:hub${generations.hub}`,
           grantRevision: generation,
         })),
       ),
