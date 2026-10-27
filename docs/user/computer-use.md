@@ -227,8 +227,8 @@ keyboard but cannot read app controls.
 Window screenshots on Linux need a desktop that composites its windows (a bare
 Xvfb needs a compositor such as xcompmgr). In a Wayland session without
 XWayland, other than Hyprland, agents read app controls but get no window
-screenshots. Before each screenshot the app is asked to redraw its window, and
-an app that does not redraw all of it promptly gets no screenshot that time.
+screenshots. A screenshot shows the window as the desktop draws it; a part an
+app never painted can still show what was behind the window when it opened.
 
 ## Other computers
 

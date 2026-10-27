@@ -133,7 +133,7 @@
     .dialog-glass {
       background: color-mix(
         in srgb,
-        var(--background) var(--glass-opacity),
+        var(--background) var(--glass-surface-opacity),
         transparent
       ) !important;
     }
@@ -141,11 +141,19 @@
       background: color-mix(in srgb, var(--background) 60%, transparent) !important;
     }
     .dropdown-glass {
-      background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent) !important;
+      background: color-mix(
+        in srgb,
+        var(--popover) var(--glass-surface-opacity),
+        transparent
+      ) !important;
     }
-    :is(.dialog-glass, .dialog-backdrop, .dropdown-glass) {
+    .dialog-backdrop {
       -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
       backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    }
+    :is(.dialog-glass, .dropdown-glass) {
+      -webkit-backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
+      backdrop-filter: blur(var(--glass-surface-blur)) saturate(var(--glass-saturation));
     }
   }
 }

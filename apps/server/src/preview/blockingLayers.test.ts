@@ -151,6 +151,150 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     );
   });
 
+  it("reports a native modal dialog and a full-screen popover, and not a small popover menu", async () => {
+    await page.setContent(
+      article + '<dialog id="confirm"><h2>Delete this draft?</h2><button>Delete</button></dialog>',
+    );
+    await page.evaluate("document.getElementById('confirm').showModal()");
+    const modal = await describeLayers(page, control);
+    expect(modal.blocking).toMatchObject({
+      role: "dialog",
+      name: "Delete this draft?",
+      selectorHint: "#confirm",
+    });
+
+    await page.setContent(
+      article +
+        '<div popover id="promo" style="inset:0;width:100vw;height:100vh;margin:0;border:0;background:#fff"><h2>Subscribe for more</h2></div>',
+    );
+    await page.evaluate("document.getElementById('promo').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toMatchObject({
+      name: "Subscribe for more",
+      selectorHint: "#promo",
+    });
+
+    await page.setContent(
+      article +
+        '<div popover id="gate" style="position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;border:0"><section style="width:100%;height:100%;background:#fff">Members only</section></div>',
+    );
+    await page.evaluate("document.getElementById('gate').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toMatchObject({ selectorHint: "#gate" });
+
+    await page.setContent(
+      article +
+        '<div popover id="menu" style="width:160px;height:120px"><button>Copy</button></div>',
+    );
+    await page.evaluate("document.getElementById('menu').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toBeNull();
+  });
+
+  it("scales a nested frame's modal by what its ancestors leave visible, and skips one off screen", async () => {
+    const wall =
+      '<div role="dialog" aria-modal="true" aria-label="Framed wall" style="position:fixed;inset:0;background:#fff">Sign in</div>';
+    await page.route("https://layers.test/inner", (route) =>
+      route.fulfill({ contentType: "text/html", body: wall }),
+    );
+    await page.route("https://layers.test/outer", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://layers.test/inner" style="border:0;width:800px;height:800px"></iframe></body>',
+      }),
+    );
+    const framed = async (style: string, wrapper = "") => {
+      await page.route("https://layers.test/", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body:
+            article +
+            `<div style="${wrapper}"><iframe id="outer" src="https://layers.test/outer" style="position:absolute;border:0;${style}"></iframe></div>`,
+        }),
+      );
+      await page.goto("https://layers.test/");
+      await page
+        .frameLocator("#outer")
+        .frameLocator("iframe")
+        .getByText("Sign in")
+        .waitFor({ state: "attached" });
+      await page.unroute("https://layers.test/");
+      return describeLayers(page, control);
+    };
+    const clipped = await framed("left:0;top:0;width:100px;height:100px");
+    expect(clipped.blocking?.name).toBe("Framed wall");
+    // 100 x 100 of a 1000 x 800 viewport, though the inner frame itself is 800 x 800.
+    expect(clipped.blocking?.coverage).toBeLessThan(0.02);
+    expect((await framed("left:-2000px;top:0;width:100px;height:100px")).blocking).toBeNull();
+    // A full-size frame inside a zero-size box that clips its overflow shows nothing.
+    const hidden = "position:absolute;top:0;left:0;width:0;height:0;overflow:hidden";
+    expect((await framed("left:0;top:0;width:900px;height:700px", hidden)).blocking).toBeNull();
+  });
+
+  it("counts a frame's modal by what the browser really draws: escaping, scaled, clipped or covered", async () => {
+    const wall =
+      '<div role="dialog" aria-modal="true" aria-label="Framed wall" style="position:fixed;inset:0;background:#fff">Sign in</div>';
+    await page.route("https://draw.test/inner", (route) =>
+      route.fulfill({ contentType: "text/html", body: wall }),
+    );
+    await page.route("https://draw.test/outer", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://draw.test/inner" style="position:absolute;left:-500px;top:0;border:0;width:1000px;height:800px"></iframe></body>',
+      }),
+    );
+    const show = async (body: string, nested = false) => {
+      await page.route("https://draw.test/", (route) =>
+        route.fulfill({ contentType: "text/html", body: article + body }),
+      );
+      await page.goto("https://draw.test/");
+      const frame = nested
+        ? page.frameLocator("#f").frameLocator("iframe")
+        : page.frameLocator("#f");
+      await frame.getByText("Sign in").waitFor({ state: "attached" });
+      await page.unroute("https://draw.test/");
+      return (await describeLayers(page, control)).blocking;
+    };
+    // A fixed frame escapes the zero-size box that clips its overflow and covers the page.
+    const escaped = await show(
+      '<div style="position:absolute;top:0;left:0;width:0;height:0;overflow:hidden"><iframe id="f" src="https://draw.test/inner" style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe></div>',
+    );
+    expect(escaped?.name).toBe("Framed wall");
+    expect(escaped?.coverage).toBeGreaterThan(0.9);
+    // A frame scaled to half shows a quarter of its inner frame: 250 x 400 of 1000 x 800.
+    const scaled = await show(
+      '<iframe id="f" src="https://draw.test/outer" style="position:absolute;left:0;top:0;border:0;width:1000px;height:800px;transform:scale(.5);transform-origin:0 0"></iframe>',
+      true,
+    );
+    expect(scaled?.coverage).toBeGreaterThan(0.1);
+    expect(scaled?.coverage).toBeLessThan(0.16);
+    // The outer frame shows only its left part, and the inner frame sits on its right: nothing.
+    await page.route("https://draw.test/right", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://draw.test/inner" style="position:absolute;left:600px;top:0;border:0;width:400px;height:800px"></iframe></body>',
+      }),
+    );
+    expect(
+      await show(
+        '<div style="position:absolute;left:0;top:0;width:400px;height:800px;overflow:hidden"><iframe id="f" src="https://draw.test/right" style="border:0;width:1000px;height:800px"></iframe></div>',
+        true,
+      ),
+    ).toBeNull();
+
+    // A frame under an opaque cover draws nothing.
+    expect(
+      await show(
+        '<iframe id="f" src="https://draw.test/inner" style="position:absolute;left:0;top:0;border:0;width:400px;height:300px"></iframe><div style="position:absolute;left:0;top:0;width:400px;height:300px;background:#000;z-index:5"></div>',
+      ),
+    ).toBeNull();
+  });
+
+  it("names a consent wall whose message lives in a cross-origin frame by that frame's title", async () => {
+    const report = await layers(
+      article +
+        '<div role="dialog" id="sp_message_container" style="position:fixed;inset:0;z-index:9"><iframe title="Site consent message" src="about:blank" style="width:100%;height:100%;border:0"></iframe></div>',
+    );
+    expect(report.blocking).toMatchObject({ role: "dialog", name: "Site consent message" });
+  });
+
   it("finds an overlay that lives inside an open shadow root", async () => {
     await page.setContent(article + '<x-wall id="host"></x-wall>');
     await page.evaluate(`

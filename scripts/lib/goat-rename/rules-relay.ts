@@ -186,12 +186,11 @@ export const RELAY_KEEP_RULES: readonly KeepRule[] = [
     id: "relay:help-mirror",
     pattern: /[a-z-]*t3-connect[a-z-]*|\[T3 Connect troubleshooting\]/g,
     scope: (path) =>
-      path === "docs/user/t3-connect-troubleshooting.md" ||
+      path === "docs/user/goat-connect-troubleshooting.md" ||
       path === "docs/README.md" ||
       path === "packages/client-runtime/src/connection/diagnosis.ts" ||
       path === "packages/contracts/src/environmentHttp.ts",
-    reason:
-      "Help URLs open upstream's troubleshooting page by heading anchor; GOAT hosts no user docs yet (W11).",
+    reason: "Legacy help anchors stay valid after the GOAT troubleshooting guide is renamed.",
   },
   {
     id: "relay:migration-default-label",

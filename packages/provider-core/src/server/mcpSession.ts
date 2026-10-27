@@ -69,6 +69,11 @@ export interface McpProviderSessionConfig {
    * activation sockets live there, so `goat app` from a thread shell still finds a running desktop.
    */
   readonly systemTemporaryDirectory?: string;
+  /**
+   * The executable GOAT sets as BROWSER, so a URL the agent's tools open lands in this thread's
+   * browser preview. Absent where the server's own environment already names a BROWSER.
+   */
+  readonly urlOpener?: string;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */
@@ -228,4 +233,53 @@ export function withThreadMcpEnvironment(
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });
+}
+
+/** A BROWSER the user or provider settings already chose wins over GOAT's opener. */
+function withThreadUrlOpener(
+  base: NodeJS.ProcessEnv,
+  config: Pick<McpProviderSessionConfig, "urlOpener"> | undefined,
+): NodeJS.ProcessEnv {
+  if (config?.urlOpener === undefined || base.BROWSER !== undefined) return base;
+  return { ...base, BROWSER: config.urlOpener };
+}
+
+/** A provider's own processes: the thread MCP environment plus GOAT's URL opener. */
+export function withThreadAgentEnvironment(
+  base: NodeJS.ProcessEnv,
+  config:
+    | Pick<
+        McpProviderSessionConfig,
+        | "endpoint"
+        | "authorizationHeader"
+        | "temporaryDirectory"
+        | "systemTemporaryDirectory"
+        | "urlOpener"
+      >
+    | undefined,
+): NodeJS.ProcessEnv {
+  return withThreadUrlOpener(withThreadMcpEnvironment(base, config), config);
+}
+
+// An overlay carries the opener under its own name until it meets the provider's environment.
+const THREAD_URL_OPENER_ENV = "GOAT_URL_OPENER";
+
+/** A thread overlay for agents that merge it over their own environment later (ACP). */
+export function withThreadOverlayEnvironment(
+  base: NodeJS.ProcessEnv,
+  config: Parameters<typeof withThreadAgentEnvironment>[1],
+): NodeJS.ProcessEnv {
+  const environment = withThreadMcpEnvironment(base, config);
+  return config?.urlOpener === undefined
+    ? environment
+    : { ...environment, [THREAD_URL_OPENER_ENV]: config.urlOpener };
+}
+
+/** Where a thread overlay meets the provider's own environment; a BROWSER there is kept. */
+export function mergeThreadEnvironment(
+  base: NodeJS.ProcessEnv | undefined,
+  overlay: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  const { [THREAD_URL_OPENER_ENV]: urlOpener, ...merged } = { ...base, ...overlay };
+  return withThreadUrlOpener(merged, urlOpener === undefined ? undefined : { urlOpener });
 }

@@ -3226,9 +3226,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           commandId: CommandId.make(`gitcafe-pr-link-${index}`),
           threadId,
           host: "git.cafe",
-          repository: "pingdotgg/t3code",
+          repository: "goat-si/goat",
           number: 21353 + index,
-          url: `https://git.cafe/pingdotgg/t3code/${route}/${21353 + index}`,
+          url: `https://git.cafe/goat-si/goat/${route}/${21353 + index}`,
           source: "manual",
         });
       }
@@ -3237,7 +3237,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests
           ?.filter((link) => link.host === "git.cafe")
           .map((link) => link.url),
-        [21353, 21354].map((number) => `https://git.cafe/pingdotgg/t3code/pulls/${number}`),
+        [21353, 21354].map((number) => `https://git.cafe/goat-si/goat/pulls/${number}`),
       );
     }),
   );

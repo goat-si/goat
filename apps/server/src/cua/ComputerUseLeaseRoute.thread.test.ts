@@ -1,8 +1,30 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import { threadRouteFixture } from "./ComputerUseLeaseRoute.thread.testkit.ts";
 
 describe("recoverable thread lease subscriptions", () => {
+  it.effect(
+    "a quiet stream sends a blank heartbeat line every 15 seconds and advertises the interval",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* threadRouteFixture();
+        const s = yield* f.open();
+        assert.equal(s.headers["x-goat-lease-heartbeat-ms"], "15000");
+        assert.deepEqual(yield* s.next, { state: "waiting" });
+        assert.equal(yield* s.heartbeats, 0);
+        yield* TestClock.adjust("15 seconds");
+        yield* s.heartbeat;
+        yield* TestClock.adjust("15 seconds");
+        yield* s.heartbeat;
+        const a = yield* f.attach();
+        assert.deepInclude(yield* s.next, {
+          state: "active",
+          controlId: a.attachment.control.controlId,
+        });
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "disable ends the active control, waits on the open stream, and follows a new control after re-enable",
     () =>
