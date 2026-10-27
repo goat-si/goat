@@ -5,6 +5,7 @@ import {
   NodeId,
   RunId,
   ThreadId,
+  TurnItemId,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
@@ -252,4 +253,98 @@ it.effect("a fork created with its source's excerpt starts without one", () =>
       }),
     { runStatus: "queued" },
   ),
+);
+
+// The fixture run becomes an idle compaction once its prompt is GOAT's own /compact.
+const idleCompaction = (input: Parameters<Scenario>[0]) => {
+  const { initial, run, answer, runUpdate, at } = input;
+  const earlier = {
+    ...run,
+    id: RunId.make("run-earlier"),
+    ordinal: run.ordinal + 1,
+    userMessageId: MessageId.make("earlier-prompt"),
+  };
+  const prompt: OrchestrationV2DomainEvent = {
+    id: EventId.make("idle-prompt"),
+    type: "message.updated",
+    threadId: run.threadId,
+    occurredAt: at(1),
+    payload: {
+      ...initial.messages[0]!,
+      text: "/compact",
+      createdBy: "agent",
+      creationSource: "server",
+    },
+  };
+  const failed: OrchestrationV2DomainEvent = {
+    id: EventId.make("idle-compaction-failed"),
+    type: "turn-item.updated",
+    threadId: run.threadId,
+    occurredAt: at(4),
+    payload: {
+      id: TurnItemId.make("idle-compaction"),
+      threadId: run.threadId,
+      runId: run.id,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "failed",
+      title: null,
+      startedAt: at(4),
+      completedAt: at(4),
+      updatedAt: at(4),
+      type: "compaction",
+      driver: null,
+    },
+  };
+  return {
+    prompt,
+    failed,
+    before: [
+      runUpdate({ ...earlier, status: "completed", completedAt: at(1) }, 1),
+      answer("earlier-answer", "Earlier answer", { run: earlier }),
+      answer("compacted", "Compacted the context", { at: 2 }),
+      runUpdate({ ...run, status: "completed", completedAt: at(3) }, 3),
+    ],
+  };
+};
+
+it.effect(
+  "a compaction failure after an idle compaction completed makes its answer the latest",
+  () =>
+    expectExcerpt((input) => {
+      const idle = idleCompaction(input);
+      return [idle.prompt, ...idle.before, idle.failed];
+    }, "Compacted the context"),
+);
+
+it.effect("a /compact prompt recorded after its run completed hands the excerpt back", () =>
+  expectExcerpt((input) => {
+    const idle = idleCompaction(input);
+    return [...idle.before, idle.prompt];
+  }, "Earlier answer"),
+);
+
+it.effect("an answer on a node that has not arrived waits for it, in SQL as in memory", () =>
+  Effect.gen(function* () {
+    const scenario =
+      (withNode: boolean): Scenario =>
+      ({ run, answer, node, runUpdate, at }) => {
+        const rootless = { ...run, rootNodeId: null };
+        return [
+          runUpdate(rootless, 1),
+          answer("late-answer", "Answer on a late node", {
+            run: rootless,
+            node: NodeId.make("late-node"),
+          }),
+          runUpdate({ ...rootless, status: "completed", completedAt: at(3) }, 3),
+          ...(withNode ? [node("late-node", "assistant_message", null, rootless)] : []),
+        ];
+      };
+    yield* expectExcerpt(scenario(false), undefined);
+    yield* expectExcerpt(scenario(true), "Answer on a late node");
+  }),
 );

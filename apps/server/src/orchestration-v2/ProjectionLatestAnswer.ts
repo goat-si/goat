@@ -1,10 +1,11 @@
-import type {
-  OrchestrationV2AppThread,
-  OrchestrationV2DomainEvent,
-  OrchestrationV2Run,
-  OrchestrationV2ThreadProjection,
-  RunId,
-  ThreadId,
+import {
+  idleCompactionOf,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
+  type RunId,
+  type ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,7 +41,10 @@ export const changesLatestAnswer = (event: OrchestrationV2DomainEvent) =>
   (event.type === "node.updated" && event.payload.kind === "assistant_message") ||
   (event.type === "message.updated" &&
     event.payload.role === "assistant" &&
-    !event.payload.streaming);
+    !event.payload.streaming) ||
+  // An idle compaction's prompt and its compaction item decide whether its run counts.
+  (event.type === "message.updated" && idleCompactionOf(event.payload) !== undefined) ||
+  (event.type === "turn-item.updated" && event.payload.type === "compaction");
 
 const byId = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 const at = (time: DateTime.Utc) => DateTime.toEpochMillis(time);
@@ -74,8 +78,7 @@ export function latestAnswerExcerpt(
         message.runId === run.id &&
         message.role === "assistant" &&
         !message.streaming &&
-        (message.nodeId === root ||
-          projection.nodes.find((node) => node.id === message.nodeId)?.parentNodeId === root),
+        (message.nodeId === root || parentOf(projection.nodes, message.nodeId) === root),
     )
     .toSorted((left, right) => at(left.createdAt) - at(right.createdAt) || byId(left.id, right.id));
   for (const answer of answers.toReversed()) {
@@ -83,6 +86,16 @@ export function latestAnswerExcerpt(
     if (excerpt !== undefined) return excerpt;
   }
   return undefined;
+}
+
+// A node that has not arrived yet has no parent to match, in SQL as in memory.
+const MISSING_NODE = Symbol("missing-node");
+function parentOf(
+  nodes: OrchestrationV2ThreadProjection["nodes"],
+  nodeId: OrchestrationV2ThreadProjection["messages"][number]["nodeId"],
+) {
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  return node === undefined ? MISSING_NODE : node.parentNodeId;
 }
 
 export const withExcerpt = (
@@ -126,11 +139,14 @@ export const recordLatestAnswer = Effect.fn("ProjectionLatestAnswer.record")(fun
           FROM orchestration_v2_projection_messages m
           LEFT JOIN orchestration_v2_projection_nodes n ON n.node_id = m.node_id
           WHERE m.run_id = ${run.run_id} AND m.role = 'assistant' AND m.streaming = 0
-            AND (m.node_id IS ${run.root_node_id} OR n.parent_node_id IS ${run.root_node_id})
+            AND (m.node_id IS ${run.root_node_id}
+              OR (n.node_id IS NOT NULL AND n.parent_node_id IS ${run.root_node_id}))
           ORDER BY m.created_at DESC, m.message_id DESC`;
-  const excerpt = answers
-    .map((answer) => answerExcerpt(answer.text ?? ""))
-    .find((candidate) => candidate !== undefined);
+  let excerpt: string | undefined;
+  for (const answer of answers) {
+    excerpt = answerExcerpt(answer.text ?? "");
+    if (excerpt !== undefined) break;
+  }
   yield* writeExcerpt(sql, event.threadId, excerpt);
 });
 
