@@ -1,10 +1,7 @@
 /**
- * Ways a message joins a running turn, weighed against how much of the screen that turn may use
- * (gateUnattendedSteering). A message whose origin reaches less waits as the thread's next turn,
- * which is admitted on its own, so it cannot use what the running turn was given: a send that
- * asked to steer queues, a promotion is refused and stays queued, and an agent's answer to a
- * question is delivered as the next turn.
- *
+ * A message whose origin reaches less of the screen than the running turn waits as the next turn
+ * instead of using what that turn was given: a steer queues, a promotion is refused, an answer
+ * is delivered as the next turn (steeringAllowed in ComputerUseOrigin).
  * @module ComputerUseSteering
  */
 import type {

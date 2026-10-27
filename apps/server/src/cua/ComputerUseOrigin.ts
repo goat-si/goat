@@ -1,13 +1,7 @@
 /**
- * Whether a person is directing the turn that is about to get computer use.
- *
- * Unattended turns come from GOAT Bot, channel tasks, scheduled and webhook tasks, messages
- * another unattended thread sent, and threads such a turn launched or delegated to. They get the
- * driver only through an approved lease or full access (ComputerUseLeases). Threads launched from
- * another environment, and turns they launch or send here, are `launched_remotely`: in full
- * access they use the screen like a person's (usesScreenLikePerson). Every read that fails or
- * runs out of lineage counts as unattended.
- *
+ * Whether a person directs the turn about to get computer use. GOAT Bot, channel, scheduled and
+ * webhook work, and what it sends or launches, is unattended; another environment's launches are
+ * `launched_remotely`, which full access admits like a person's. A failed read is unattended.
  * @module ComputerUseOrigin
  */
 import {
@@ -251,11 +245,9 @@ const ASYNC_ANSWER = /^async-answer:(.+)$/;
 
 /**
  * Whether a person, or an agent a person directs, caused this run, so full access gives it the
- * foreground without asking: a person's client sent its message; an agent sent it from a run that
- * was itself directed; a launch or an answer from another environment started it; or it is the
- * wake for a computer use approval such a run asked for. Server wakes and other server messages
- * are not, so a schedule's continuation never gains the foreground. Any failed read, or a chain
- * longer than lineage allows, is false.
+ * foreground: a person's client, a directed run's agent message, another environment's launch or
+ * answer, or an approval's wake. Server wakes are not, so a schedule never gains the foreground.
+ * Any failed read, or a chain longer than lineage allows, is false.
  */
 export const directedRun = Effect.fn("ComputerUse.directedRun")(
   function* (reads: DirectedReads, input: { readonly threadId: ThreadId; readonly runId: RunId }) {
