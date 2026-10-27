@@ -26,7 +26,7 @@ export const locateXcodeGitWithXcrun = Effect.fn("shell.locateXcodeGit")((env: N
         },
       );
     } catch {
-      resume(Effect.void);
+      resume(Effect.undefined);
       return;
     }
     return Effect.sync(() => {
