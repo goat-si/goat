@@ -307,11 +307,26 @@ describe("runTrayComputerUseAction", () => {
     );
     expect(control).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith({
-      title: "The agent stopped, but its apps are still reserved",
-      description: "Its computer use approval could not be ended. Stop all releases them.",
-    });
+    expect(notify).toHaveBeenCalledWith(
+      {
+        title: "The agent stopped, but its apps are still reserved",
+        description: "Its computer use approval could not be ended. Stop all releases them.",
+      },
+      expect.any(Function),
+    );
     expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Stop all on the notice, since the ended session leaves the tray and card without it", async () => {
+    const control = vi.fn<TrayControl>().mockImplementationOnce(denied).mockImplementation(stopped);
+    const { notify } = await run(
+      { kind: "stop-computer-use", appId: "com.apple.calculator" },
+      { control },
+    );
+    const stopAll = notify.mock.calls[0]?.[1] as (() => Promise<void>) | undefined;
+    expect(stopAll).toBeTypeOf("function");
+    await stopAll?.();
+    expect(control).toHaveBeenLastCalledWith(env, { control: "stopAll" });
   });
 
   it("reports stop all only when the server did not apply it", async () => {
@@ -325,10 +340,13 @@ describe("runTrayComputerUseAction", () => {
     expect(failed.control).toHaveBeenCalledTimes(1);
     expect(failed.control).toHaveBeenCalledWith(env, { control: "stopAll" });
     expect(failed.notify).toHaveBeenCalledTimes(1);
-    expect(failed.notify).toHaveBeenCalledWith({
-      title: "Some agents could not be stopped",
-      description: "An approval for computer use is still active. Try Stop all again.",
-    });
+    expect(failed.notify).toHaveBeenCalledWith(
+      {
+        title: "Some agents could not be stopped",
+        description: "An approval for computer use is still active. Try Stop all again.",
+      },
+      expect.any(Function),
+    );
     expect(failed.reveal).toHaveBeenCalledTimes(1);
   });
 
