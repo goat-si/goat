@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
+import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
 import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
@@ -285,7 +286,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (request.method === "tools/call") {
               tool = request.tool;
               const marked = tokenFirst.reply(request, message, line);
-              line = typeAutomationRefusal(marked, options.automationHolder, request.args, listed);
+              line = typeManifestRefusal(
+                typeAutomationRefusal(marked, options.automationHolder, request.args, listed),
+              );
               delivered = line;
             }
             yield* agentInput.ended(key);

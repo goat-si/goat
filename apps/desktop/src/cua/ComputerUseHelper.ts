@@ -78,7 +78,8 @@ export const HelperGrants = Schema.Struct({
 const decodeGrants = Schema.decodeUnknownSync(HelperGrants);
 /**
  * list_apps entries as the driver reports them, with the executable the Windows helper adds for
- * running apps (#1368); other fields are dropped.
+ * running apps (#1368) and the bundle path the macOS manifest reads kill_app's binary from;
+ * other fields are dropped.
  */
 const decodeListedApps = Schema.decodeUnknownSync(
   Schema.Struct({
@@ -87,6 +88,7 @@ const decodeListedApps = Schema.decodeUnknownSync(
         bundle_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
         name: Schema.optionalKey(Schema.NullOr(Schema.String)),
         executable: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        launch_path: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     ),
   }),

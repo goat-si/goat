@@ -68,6 +68,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
 - A row whose actions list only \`AXOpen\` (Finder list rows) ignores a plain click; click it with \`action: "open"\`. An "AX action failed" answer, such as CannotComplete, may still have acted: observe before trying again.
 - Minimized windows and windows on another Space may not be observable, and a Chromium window on another Space shows an old tree and picture until it is shown. Ask before moving them.
 - Secure text fields are private fields (see above).
+- \`kill_app\` force-quits (SIGKILL) only an app this connection opened with \`launch_app\`, and loses its unsaved work. Quit it first through its menu (\`invoke_menu\`) or \`hotkey\` \`command\`+\`q\` and observe; use \`kill_app\` only when it stays open. Any refusal of it, such as \`foreign_process_termination_denied\`, means GOAT may not end that process: ask the person to quit the app.
 - \`command\` is Command and \`option\` is Option.
 </computer_use_host>`,
   win32: `<computer_use_host os="Windows">
