@@ -111,7 +111,7 @@ git reset -q --soft "$MERGED"
 
 ## 수동 선별 사이클
 
-사용자가 일괄 머지 대신 커밋별 선별을 정한 사이클(첫 사례 [10.017](./10.017_t3_chase_cycle_261028.md))은 위 3-7번 대신 이렇게 돈다.
+사용자가 일괄 머지 대신 커밋별 선별을 정한 사이클(첫 사례 [10.017](./_fin/10/10.017_t3_chase_cycle_261028.md))은 위 3-7번 대신 이렇게 돈다.
 
 - 범위: 시작점은 `scan.sh`의 merge-base가 아니라 MOC의 reviewed-through(내용 기준)다. 끝점은 스캔한 upstream SHA로 고정한다.
 - 분류: 커밋마다 take(`cherry-pick -x`), adapt(의미만 GOAT 코드에 재구현), skip을 이유와 함께 카드 표에 적는다. UI 레이아웃·스타일·디자인 토큰은 따라가지 않고 그 의미만 adapt한다. 010 영역과 부딪히면 GOAT 동작을 지킨다.
