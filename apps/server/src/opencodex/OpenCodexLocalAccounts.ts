@@ -11,10 +11,19 @@ const LocalCredentials = Schema.Struct({
   count: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
   generation: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
 });
-/** Only the additive attestation OpenCodex publishes; other status fields are ignored. */
+/**
+ * Only the additive attestations OpenCodex publishes; other status fields are ignored.
+ * `link.connectionGeneration` changes on every tunnel connect, including a recovery that
+ * keeps the same link and listener ids.
+ */
 const LocalCredentialStatus = Schema.Struct({
   runtimeRole: Schema.Literals(["standalone", "hub", "client"]),
   localCredentials: Schema.optional(LocalCredentials),
+  link: Schema.optional(
+    Schema.Struct({
+      connectionGeneration: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+    }),
+  ),
 });
 export type LocalCredentialStatus = typeof LocalCredentialStatus.Type;
 const decodeStatus = Schema.decodeUnknownOption(Schema.fromJsonString(LocalCredentialStatus));

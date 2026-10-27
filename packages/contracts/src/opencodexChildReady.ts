@@ -155,6 +155,8 @@ export const ChildReadyProof = Schema.Struct({
   executableVersion: TrimmedNonEmptyString,
   linkId: TrimmedNonEmptyString,
   listenerInstanceId: TrimmedNonEmptyString,
+  /** OpenCodex's link connection generation, unchanged across the request: no reconnect. */
+  linkConnectionGeneration: TrimmedNonEmptyString,
   settingsDigest: TrimmedNonEmptyString,
   catalogDigest: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,

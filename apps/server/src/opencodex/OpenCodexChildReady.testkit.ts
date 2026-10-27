@@ -65,6 +65,8 @@ export interface ChildState {
   listener: string;
   binary: { path: string; version: string } | undefined;
   localCredentials: { count: number; generation: string } | undefined;
+  /** OpenCodex's link connection generation; undefined for a release that does not report it. */
+  connectionGeneration: string | undefined;
   revision: { epoch: string; sequence: number };
   managedCodex: boolean;
   installResult: "succeeded" | "failed";
@@ -116,6 +118,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     listener: "listener-1",
     binary: { path: "/fixture/ocx", version: "2.92.0" },
     localCredentials: { count: 0, generation: "gen-1" },
+    connectionGeneration: "connection-1",
     revision: { epoch: "epoch-1", sequence: 1 },
     managedCodex: true,
     installResult: "succeeded",
@@ -221,6 +224,9 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
                 ...(state.localCredentials === undefined
                   ? {}
                   : { localCredentials: state.localCredentials }),
+                ...(state.connectionGeneration === undefined
+                  ? {}
+                  : { link: { connectionGeneration: state.connectionGeneration } }),
               }),
             );
           if (input.args[0] === "sync") {

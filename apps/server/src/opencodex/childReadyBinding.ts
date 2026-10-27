@@ -19,12 +19,13 @@ export interface ChildReadyFacts {
   readonly executable: { readonly path: string; readonly version: string } | undefined;
   /** Digest of the zero-count attestation now, or undefined when it cannot be read. */
   readonly localAccountsDigest: string | undefined;
+  /** OpenCodex's link connection generation now, or undefined when it does not report one. */
+  readonly connectionGeneration: string | undefined;
 }
 
 /**
- * The first recorded fact that no longer holds, or undefined while the proof stands. OpenCodex
- * exposes no link-connection generation, so a disconnect and recovery with the same link and
- * listener ids is not observable here; any read that does not see a client role invalidates.
+ * The first recorded fact that no longer holds, or undefined while the proof stands. A link that
+ * reconnected, even with the same link and listener ids, has a new connection generation.
  */
 export const bindingFailure = (
   proof: ChildReadyProof,
@@ -33,6 +34,9 @@ export const bindingFailure = (
   if (!childReadyProofIsCurrent(proof, facts.now)) return "proof_expired";
   if (facts.device.connection.role !== "client" || facts.device.connection.linkId !== proof.linkId)
     return "link_changed";
+  // An OpenCodex that reports no connection generation cannot show the link stayed up.
+  if (facts.connectionGeneration === undefined) return "attribution_unproven";
+  if (facts.connectionGeneration !== proof.linkConnectionGeneration) return "link_changed";
   if (
     facts.listenerInstanceId !== proof.listenerInstanceId ||
     facts.settingsDigest !== proof.settingsDigest ||

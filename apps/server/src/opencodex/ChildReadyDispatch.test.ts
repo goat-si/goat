@@ -78,6 +78,7 @@ const fixture = Effect.fn("ChildReadyDispatch.test.fixture")(function* (
               executableVersion: "1.0.0",
               linkId: options.proofLinkId ?? "r2-link",
               listenerInstanceId: "r2-listener",
+              linkConnectionGeneration: "r2-connection",
               settingsDigest: "settings",
               catalogDigest: "catalog",
               model: "fixture-model",

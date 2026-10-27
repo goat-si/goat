@@ -152,6 +152,7 @@ const readySetup = (
             executableVersion: "0.156.0",
             linkId: "r2-link",
             listenerInstanceId: "listener",
+            linkConnectionGeneration: "connection",
             settingsDigest: "settings",
             catalogDigest: "catalog",
             model: "fixture-model",

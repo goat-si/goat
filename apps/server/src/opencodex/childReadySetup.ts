@@ -31,7 +31,7 @@ const MESSAGES: Partial<Record<ChildReadyFailure["code"], string>> = {
   probe_failed: "The check request through Home did not complete.",
   probe_timeout: "The check request through Home timed out. Retry setup.",
   attribution_unproven:
-    "Update OpenCodex on this Child to a release with local-credential attestation, then retry verification.",
+    "Update OpenCodex on this Child to a release that attests local credentials and link continuity, then retry verification.",
   proof_expired: "The last verification expired. Retry setup to verify again.",
   storage_failed: "Setup records on this Child could not be saved.",
   interrupted:

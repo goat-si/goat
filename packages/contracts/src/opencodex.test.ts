@@ -81,6 +81,7 @@ const proof = {
   executableVersion: "0.156.1",
   linkId: "link-1",
   listenerInstanceId: "listener-1",
+  linkConnectionGeneration: "connection-1",
   settingsDigest: "settings",
   catalogDigest: "catalog",
   model: "fixture-model",

@@ -433,7 +433,10 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       return { kind: "ok" as const, setup } satisfies ChildReadyResult;
     });
 
-    /** Fresh zero-local-credential attestation from the selected ocx, or an unproven refusal. */
+    /**
+     * Fresh zero-local-credential attestation and link connection generation from the selected
+     * ocx, or an unproven refusal: an OpenCodex without either cannot attribute a request.
+     */
     const attestation = Effect.fn("OpenCodexChildReady.attestation")(function* (
       ocxPath: string,
       step: ChildReadyStep,
@@ -443,10 +446,14 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         Option.isNone(status) ||
         status.value.runtimeRole !== "client" ||
         status.value.localCredentials === undefined ||
-        status.value.localCredentials.count !== 0
+        status.value.localCredentials.count !== 0 ||
+        status.value.link?.connectionGeneration === undefined
       )
         return yield* childError("attribution_unproven", step);
-      return status.value.localCredentials.generation;
+      return {
+        generation: status.value.localCredentials.generation,
+        connectionGeneration: status.value.link.connectionGeneration,
+      };
     });
 
     /** Every fact a proof binds, read now; nothing here starts a request. */
@@ -463,7 +470,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         Effect.orElseSucceed(() => undefined),
       );
       const { device } = observed.device;
-      const generation =
+      const attested =
         device.ocx.path === null
           ? undefined
           : yield* attestation(device.ocx.path, step).pipe(Effect.orElseSucceed(() => undefined));
@@ -476,11 +483,12 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         instance,
         executable,
         localAccountsDigest:
-          generation === undefined
+          attested === undefined
             ? undefined
-            : yield* localAccountsDigest(crypto, generation).pipe(
+            : yield* localAccountsDigest(crypto, attested.generation).pipe(
                 Effect.orElseSucceed(() => undefined),
               ),
+        connectionGeneration: attested?.connectionGeneration,
       } satisfies ChildReadyFacts;
     });
     // A completed request this process could not record: never repeated for that operation.
@@ -527,7 +535,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       )
         return yield* childError("route_unverified", step);
       // Local credentials refuse before any paid request; nothing is deleted.
-      const generation = yield* attestation(before.ocxPath, step);
+      const attested = yield* attestation(before.ocxPath, step);
       yield* journal
         .put(input.homeEnvironmentId, {
           ...operation,
@@ -556,7 +564,11 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         after.catalogDigest !== before.catalogDigest
       )
         return yield* childError("route_unverified", step);
-      if ((yield* attestation(after.ocxPath, step)) !== generation)
+      // The link stayed connected throughout: a reconnect has a new connection generation.
+      const reattested = yield* attestation(after.ocxPath, step);
+      if (reattested.connectionGeneration !== attested.connectionGeneration)
+        return yield* childError("link_changed", step);
+      if (reattested.generation !== attested.generation)
         return yield* childError("attribution_unproven", step);
       yield* deps.authorize(input, scope);
       const completedAt = yield* Clock.currentTimeMillis;
@@ -578,13 +590,14 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
           executableVersion: result.executableVersion,
           linkId: before.linkId,
           listenerInstanceId: before.listenerInstanceId,
+          linkConnectionGeneration: attested.connectionGeneration,
           settingsDigest: before.settingsDigest,
           catalogDigest: before.catalogDigest,
           model: result.model,
           completedAt,
           expiresAt: completedAt + CHILD_READY_PROOF_TTL_MS,
           attribution: "home_zero_local_accounts",
-          localAccountsDigest: yield* localAccountsDigest(crypto, generation).pipe(
+          localAccountsDigest: yield* localAccountsDigest(crypto, attested.generation).pipe(
             Effect.mapError(() => childError("attribution_unproven", step)),
           ),
         },

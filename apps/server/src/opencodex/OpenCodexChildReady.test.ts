@@ -246,6 +246,45 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
     }),
   );
 
+  it.effect("withholds proof when the link reconnects during the request with the same ids", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({}, (state) => {
+        state.connectionGeneration = "connection-2";
+      });
+      yield* f.routed;
+      expect(failureCode(yield* f.call("probe"))).toBe("link_changed");
+      expect(yield* f.status).not.toMatchObject({ setup: { readiness: "ready" } });
+    }),
+  );
+
+  it.effect("invalidates stored proof after the link reconnects with the same ids", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      expect(yield* f.call("probe")).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+      f.state.connectionGeneration = "connection-2";
+      expect(yield* f.status).toMatchObject({
+        device: { connection: { role: "client", linkId: "link-1" } },
+        setup: { readiness: "invalid", failure: { code: "link_changed" } },
+      });
+    }),
+  );
+
+  it.effect("offers an OpenCodex update hint when no link connection generation is reported", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ connectionGeneration: undefined });
+      yield* f.routed;
+      expect(yield* f.call("probe")).toMatchObject({
+        kind: "error",
+        failure: {
+          code: "attribution_unproven",
+          message: expect.stringContaining("Update OpenCodex"),
+        },
+      });
+      expect(yield* f.probes).toBe(0);
+    }),
+  );
+
   it.effect("expires Ready at 24h without another inference", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
