@@ -81,6 +81,7 @@ export async function statusNotifierHostAvailable(
   deadlineMs = PROBE_DEADLINE_MS,
 ): Promise<boolean> {
   let bus: WatcherBus | null = null;
+  let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<boolean>((resolve) => {
@@ -88,6 +89,11 @@ export async function statusNotifierHostAvailable(
       timer = setTimeout(() => resolve(false), deadlineMs);
       openBus().then(
         (opened) => {
+          // A bus that connects after the deadline is closed unused.
+          if (settled) {
+            disconnectQuietly(opened);
+            return;
+          }
           bus = opened;
           opened.onError(() => resolve(false));
           opened.hostRegistered().then(
@@ -99,12 +105,18 @@ export async function statusNotifierHostAvailable(
       );
     });
   } finally {
+    settled = true;
     clearTimeout(timer);
-    try {
-      (bus as WatcherBus | null)?.disconnect();
-    } catch {
-      // The connection already failed.
-    }
+    const opened = bus as WatcherBus | null;
+    if (opened !== null) disconnectQuietly(opened);
+  }
+}
+
+function disconnectQuietly(bus: WatcherBus): void {
+  try {
+    bus.disconnect();
+  } catch {
+    // The connection already failed.
   }
 }
 

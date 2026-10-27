@@ -152,4 +152,29 @@ describe("statusNotifierHostAvailable", () => {
       vi.useRealTimers();
     }
   });
+
+  it("closes a bus that connects only after the deadline without asking it anything", async () => {
+    vi.useFakeTimers();
+    try {
+      let asked = 0;
+      const late = fakeBus({
+        hostRegistered: async () => {
+          asked += 1;
+          return true;
+        },
+      });
+      let connect: (bus: WatcherBus) => void = () => {};
+      const answer = statusNotifierHostAvailable(
+        () => new Promise<WatcherBus>((resolve) => (connect = resolve)),
+        750,
+      );
+      await vi.advanceTimersByTimeAsync(750);
+      expect(await answer).toBe(false);
+      connect(late);
+      await vi.waitFor(() => expect(late.disconnected).toBe(1));
+      expect(asked).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

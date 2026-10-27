@@ -242,7 +242,7 @@ function RootRouteBranch() {
         {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <HubNodesImportCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
-        {isElectron && primaryEnvironmentAuthenticated ? <DesktopTrayNewThread /> : null}
+        {isElectron ? <DesktopTrayNewThread /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         {hasCloudPublicConfig() ? <RelayClientInstallDialog /> : null}
         <ConnectOnboardingDialog />

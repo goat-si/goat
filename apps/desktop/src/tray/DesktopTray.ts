@@ -217,8 +217,16 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       result: Schema.Void,
       handler: Effect.fn("desktop.tray.setIconEnabled")(function* (enabled) {
         yield* appSettings.setTrayIconEnabled(enabled);
-        if (enabled) showIcon();
-        else hideIcon();
+        if (enabled) {
+          showIcon();
+          return;
+        }
+        hideIcon();
+        // A window closed to the tray while this saved would have no way back.
+        const hidden = [...closingWindows].some(
+          (id) => Electron.BrowserWindow.fromId(id)?.isVisible() === false,
+        );
+        if (hidden) yield* desktopWindow.activate;
       }),
     }),
   );
