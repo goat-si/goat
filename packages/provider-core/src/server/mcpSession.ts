@@ -69,6 +69,11 @@ export interface McpProviderSessionConfig {
    * activation sockets live there, so `goat app` from a thread shell still finds a running desktop.
    */
   readonly systemTemporaryDirectory?: string;
+  /**
+   * The executable GOAT sets as BROWSER, so a URL the agent's tools open lands in this thread's
+   * browser preview. Absent where the server's own environment already names a BROWSER.
+   */
+  readonly urlOpener?: string;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */
@@ -228,4 +233,13 @@ export function withThreadMcpEnvironment(
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });
+}
+
+/** A BROWSER the user or provider settings already chose wins over GOAT's opener. */
+export function withThreadUrlOpener(
+  base: NodeJS.ProcessEnv,
+  config: Pick<McpProviderSessionConfig, "urlOpener"> | undefined,
+): NodeJS.ProcessEnv {
+  if (config?.urlOpener === undefined || base.BROWSER !== undefined) return base;
+  return { ...base, BROWSER: config.urlOpener };
 }

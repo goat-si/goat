@@ -47,6 +47,10 @@ if (
     // Spawned by providers for an unattended thread's approved computer use; see ComputerUseLeaseProxy.
     const { runLeaseProxyCli } = await import("./cua/ComputerUseLeaseProxyCli.ts");
     await runLeaseProxyCli(process.argv.slice(3));
+  } else if (command === "__open-url") {
+    // A thread's BROWSER; see urlOpener/UrlOpenerShim.ts.
+    const { runUrlOpenerCli } = await import("./urlOpener/urlOpenerCli.ts");
+    process.exitCode = await runUrlOpenerCli(process.argv.slice(3));
   } else {
     const { agentSurfaceInvocation, nodeInputReader } =
       await import("./cli/agentSurfaceCommand.ts");

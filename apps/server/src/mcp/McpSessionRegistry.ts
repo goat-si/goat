@@ -21,6 +21,7 @@ import * as NetAddress from "effect/net/NetAddress";
 
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { ensureUrlOpenerShim } from "../urlOpener/UrlOpenerShim.ts";
 import { registerCredentialRunTag } from "./goatCredentialRedaction.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -239,6 +240,8 @@ export interface McpSessionRegistryOptions {
   readonly makeThreadTemporaryDirectory?: (threadKey: string) => Effect.Effect<string | undefined>;
   /** The system temporary directory those thread directories stand in for. */
   readonly systemTemporaryDirectory?: string;
+  /** What a thread's processes get as BROWSER (UrlOpenerShim.ts); none when absent. */
+  readonly urlOpener?: string;
 }
 
 /**
@@ -487,6 +490,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           ...(temporaryDirectory === undefined || options.systemTemporaryDirectory === undefined
             ? {}
             : { systemTemporaryDirectory: options.systemTemporaryDirectory }),
+          ...(options.urlOpener === undefined ? {} : { urlOpener: options.urlOpener }),
         },
       };
     },
@@ -751,7 +755,12 @@ const makeThreadTemporaryDirectories = Effect.gen(function* () {
       ),
     );
   };
-  return { makeThreadTemporaryDirectory, systemTemporaryDirectory: path.dirname(root) };
+  const urlOpener = yield* ensureUrlOpenerShim(root);
+  return {
+    makeThreadTemporaryDirectory,
+    systemTemporaryDirectory: path.dirname(root),
+    ...(urlOpener === undefined ? {} : { urlOpener }),
+  };
 });
 
 const make = Effect.acquireRelease(

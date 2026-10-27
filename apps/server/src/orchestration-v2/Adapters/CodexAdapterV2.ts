@@ -1359,9 +1359,12 @@ const codexThreadMcpEnvironment = (
   session: McpProviderSession.McpProviderSessionConfig | undefined,
 ) =>
   Object.fromEntries(
-    Object.entries(McpProviderSession.withThreadMcpEnvironment({}, session)).map(
-      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
-    ),
+    Object.entries(
+      McpProviderSession.withThreadUrlOpener(
+        McpProviderSession.withThreadMcpEnvironment({}, session),
+        session,
+      ),
+    ).map(([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""]),
   );
 
 /**

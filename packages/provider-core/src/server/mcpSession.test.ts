@@ -8,6 +8,7 @@ import {
   memoryToolAvailability,
   withAgentDeviceEnvironment,
   withThreadMcpEnvironment,
+  withThreadUrlOpener,
 } from "./mcpSession.ts";
 
 it("only an attached screen-code skill sets the provider guide flag", () => {
@@ -116,5 +117,20 @@ describe("thread CLI environment", () => {
 
     expect(child.stdout).toBe(thread);
     expect(env.GOAT_SYSTEM_TMPDIR).toBe(system);
+  });
+});
+
+describe("thread URL opener", () => {
+  it("routes BROWSER to GOAT's opener only when no opener was chosen", () => {
+    const opener = { urlOpener: "/tmp/goat-threads-fixture/goat-browser" };
+    expect(withThreadUrlOpener({ PATH: "/usr/bin" }, opener)).toEqual({
+      PATH: "/usr/bin",
+      BROWSER: opener.urlOpener,
+    });
+    // A BROWSER the user set, even an empty one, is their choice to keep.
+    for (const chosen of ["firefox", ""]) {
+      expect(withThreadUrlOpener({ BROWSER: chosen }, opener).BROWSER).toBe(chosen);
+    }
+    expect(withThreadUrlOpener({ PATH: "/usr/bin" }, undefined)).toEqual({ PATH: "/usr/bin" });
   });
 });

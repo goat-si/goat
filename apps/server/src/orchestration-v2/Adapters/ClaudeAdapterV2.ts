@@ -10027,8 +10027,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              McpProviderSession.withThreadMcpEnvironment(
-                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+              McpProviderSession.withThreadUrlOpener(
+                McpProviderSession.withThreadMcpEnvironment(
+                  { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                  mcpSession,
+                ),
                 mcpSession,
               ),
               turnInput.appThread,
