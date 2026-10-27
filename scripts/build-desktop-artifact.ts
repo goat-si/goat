@@ -1080,6 +1080,8 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/cua-driver/**/*",
   "!apps/desktop/resources/cua-driver",
   "!apps/desktop/resources/cua-driver/**/*",
+  "!apps/desktop/resources/tray",
+  "!apps/desktop/resources/tray/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
 const WINDOWS_PTY_FILE_EXCLUSIONS = [
