@@ -15,6 +15,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import { computerUseAttachment } from "./ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import {
   foregroundDatabase,
@@ -60,6 +61,10 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
   agentInputGate?: Deferred.Deferred<void>,
   /** A run a person started, attached in place of GOAT Bot's unattended turn. */
   person?: RunId,
+  /** Who started that run, when not a person typing in a GOAT client. */
+  origin?: ComputerUseOrigin,
+  /** A person or the agents they direct caused that run (ComputerUseOrigin.directedRun). */
+  directed = true,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
@@ -89,8 +94,10 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     interactionMode: "default",
     readOnly: false,
     origin:
-      person === undefined ? { _tag: "unattended", reason: "goat_bot" } : { _tag: "interactive" },
-    ...(person === undefined ? {} : { runId: person, personStarted: true }),
+      person === undefined
+        ? { _tag: "unattended", reason: "goat_bot" }
+        : (origin ?? { _tag: "interactive" }),
+    ...(person === undefined ? {} : { runId: person, directed }),
     leases: Option.some({
       ...leases,
       proxy: { command: "/fixture/node", entrypoint: "/fixture/proxy" },
@@ -532,6 +539,43 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.nextReservation;
         yield* h.send(call(2, "run_script", { script: "press 7 x 6 =" }));
         assert.equal((yield* h.nextToDriver).id, 2);
+      }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect.each([
+    {
+      label: "launched from another environment",
+      origin: { _tag: "unattended", reason: "launched_remotely" },
+    },
+    { label: "an agent started", origin: { _tag: "interactive" } },
+  ] as const)("a full access run $label takes the foreground without approval", ({ origin }) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const { leases } = yield* attach(
+        true,
+        true,
+        undefined,
+        RunId.make("run:attached-foreground"),
+        origin,
+      );
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a full access run no one directed, such as a server wake, still asks for the foreground",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const { leases } = yield* attach(
+          true,
+          true,
+          undefined,
+          RunId.make("run:attached-foreground"),
+          { _tag: "interactive" },
+          false,
+        );
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build"));
       }).pipe(Effect.provide(layer)),
   );
 

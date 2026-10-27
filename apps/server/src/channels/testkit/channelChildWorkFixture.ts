@@ -115,6 +115,7 @@ const threadsLayer = (
       getShellSnapshot: unused,
       readShellSnapshot: unused,
       ensureLegacyTranscript: unused,
+      promoteQueuedToSteer: unused,
       dispatch: ((command: {
         readonly type: string;
         readonly commandId: string;

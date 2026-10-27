@@ -711,9 +711,9 @@ export const layerWithOptions = (
                     ? { runtimeMode: thread.value.runtimeMode, projectId: thread.value.projectId }
                     : {}),
                   runId: preparedInput.runId,
-                  personStarted:
+                  directed:
                     preparedInput.runId !== undefined &&
-                    (yield* ComputerUseOrigin.personStarted(originReads, {
+                    (yield* ComputerUseOrigin.directedRun(originReads, {
                       threadId,
                       runId: preparedInput.runId,
                     })),
