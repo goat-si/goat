@@ -78,6 +78,8 @@ export interface ChildState {
   purposeHome: EnvironmentId;
   codexVersion: string;
   settingsDigest: string;
+  /** Runs inside each `ocx sync` before it writes the catalog; a test may hold one there. */
+  duringSync: () => Effect.Effect<void>;
   /** Runs inside each native probe request before it answers; a test may hold one there. */
   duringProbe: () => Effect.Effect<void>;
   /** The bootstrap instance has a hydration or session pending, so its route cannot be held. */
@@ -139,6 +141,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     commit: (write) => write,
     duringStatus: () => Effect.void,
     duringProbe: () => Effect.void,
+    duringSync: () => Effect.void,
     routeBusy: false,
     ...overrides,
   };
@@ -247,6 +250,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
             );
           }
           if (input.args[0] === "sync") {
+            yield* state.duringSync();
             const fs = yield* FileSystem.FileSystem;
             const path = yield* Path.Path;
             yield* fs

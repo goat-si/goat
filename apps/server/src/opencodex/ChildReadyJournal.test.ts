@@ -47,7 +47,7 @@ it.layer(layer)("ChildReadyJournal", (it) => {
       const first = yield* journalAt(dir);
       yield* first.put(home, operation);
       const reopened = yield* journalAt(dir);
-      expect(yield* reopened.read(home)).toEqual(operation);
+      expect(yield* reopened.read(home)).toEqual({ ...operation, revision: 1 });
     }),
   );
 

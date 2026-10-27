@@ -45,6 +45,7 @@ import {
 } from "./childReadySetup.ts";
 import { localAccountsDigest, readLocalCredentials } from "./OpenCodexLocalAccounts.ts";
 import { bindingFailure, type ChildReadyFacts } from "./childReadyBinding.ts";
+import { mergeStageWrite } from "./childReadyWrites.ts";
 
 const decodeCodex = Schema.decodeUnknownEffect(CodexSettings);
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled"]);
@@ -195,24 +196,40 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         Effect.provide(runtimeContext),
       );
     });
-    /** Writes an operation's next record only while it is still the Home's current one. */
+    /**
+     * Writes `next`, computed from the record a stage read, only onto that same operation. When
+     * the record's revision moved since the read, the stage's own changes merge onto what is
+     * stored now. `start` lets a new operation replace another one. Answers the stored record.
+     */
     const putOwn = Effect.fn("OpenCodexChildReady.putOwn")(function* (
       home: EnvironmentId,
+      read: Journal.ChildReadyOperation | undefined,
       next: Journal.ChildReadyOperation,
       step: ChildReadyStep,
+      options: { readonly probe?: boolean; readonly start?: boolean } = {},
     ) {
-      const { written } = yield* journal
-        .updateIf(home, (current) => (current?.operationId === next.operationId ? next : undefined))
+      const stored = yield* journal
+        .updateIf(home, (current) => {
+          if (current?.operationId !== next.operationId)
+            return options.start === true ? next : undefined;
+          return read?.operationId === current.operationId && read.revision === current.revision
+            ? next
+            : mergeStageWrite(read, next, current, options.probe === true);
+        })
         .pipe(storage(step));
-      if (!written) return yield* childError("stale_configuration", step);
+      if (!stored.written || stored.operation === undefined)
+        return yield* childError("stale_configuration", step);
+      return stored.operation;
     });
     const finishStage = Effect.fn("OpenCodexChildReady.finishStage")(function* (
       home: EnvironmentId,
-      operation: Journal.ChildReadyOperation,
+      read: Journal.ChildReadyOperation,
+      next: Journal.ChildReadyOperation,
       step: ChildReadyStep,
+      probe = false,
     ) {
-      const { running: _running, ...rest } = operation;
-      yield* putOwn(home, rest, step);
+      const { running: _running, ...rest } = next;
+      return yield* putOwn(home, read, rest, step, { probe });
     });
 
     /**
@@ -230,15 +247,19 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       if (operation?.deleted === true) return yield* childError("instance_changed", step);
       if (current === undefined) {
         if (operation?.ownedFingerprint === undefined) return { operation, expected: null };
-        yield* putOwn(home, { ...operation, deleted: true }, step);
+        yield* putOwn(home, operation, { ...operation, deleted: true }, step);
         return yield* childError("instance_changed", step);
       }
       const fingerprint = CodexRoute.instanceFingerprint(current);
       if (operation !== undefined && fingerprint === operation.ownedFingerprint)
         return { operation, expected: operation.ownedInstance ?? current };
       if (operation !== undefined && fingerprint === operation.desiredFingerprint) {
-        const adopted = { ...operation, ownedFingerprint: fingerprint, ownedInstance: current };
-        yield* putOwn(home, adopted, step);
+        const adopted = yield* putOwn(
+          home,
+          operation,
+          { ...operation, ownedFingerprint: fingerprint, ownedInstance: current },
+          step,
+        );
         return { operation: adopted, expected: current };
       }
       return yield* childError("instance_changed", step);
@@ -274,7 +295,13 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         destinationEnvironmentId: input.destinationEnvironmentId,
         instanceId: id,
       };
-      yield* journal.put(input.homeEnvironmentId, { ...base, running: step }).pipe(storage(step));
+      const started = yield* putOwn(
+        input.homeEnvironmentId,
+        previous,
+        { ...base, running: step },
+        step,
+        { start: true },
+      );
       // GOAT's own pinned release, even when another Codex is on PATH; no sign-in.
       yield* codex.resolve({ managedOnly: true }).pipe(
         Effect.catch(() =>
@@ -321,7 +348,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         attribution: "unproven",
         nextAction: "none",
       };
-      yield* finishStage(input.homeEnvironmentId, { ...base, setup }, step);
+      yield* finishStage(input.homeEnvironmentId, started, { ...started, setup }, step);
       return { kind: "ok" as const, setup } satisfies ChildReadyResult;
     });
 
@@ -366,6 +393,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       };
       yield* putOwn(
         input.homeEnvironmentId,
+        operation,
         {
           ...operation,
           desiredFingerprint: CodexRoute.instanceFingerprint(desired),
@@ -444,6 +472,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       };
       yield* putOwn(
         input.homeEnvironmentId,
+        owned.operation ?? operation,
         {
           ...(owned.operation ?? operation),
           ownedFingerprint: CodexRoute.instanceFingerprint(stored),
@@ -560,8 +589,9 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         return yield* childError("route_unverified", step);
       // Local credentials refuse before any paid request; nothing is deleted.
       const attested = yield* attestation(before.ocxPath, step);
-      yield* putOwn(
+      const requested = yield* putOwn(
         input.homeEnvironmentId,
+        operation,
         {
           ...operation,
           running: step,
@@ -569,6 +599,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
           setup: { ...operation.setup, readiness: "verifying", steps: stepStates(step, "running") },
         },
         step,
+        { probe: true },
       );
       yield* deps.authorize(input, scope);
       const result = yield* readyProbe
@@ -635,8 +666,10 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       if (broken !== undefined) return yield* childError(broken, step);
       yield* finishStage(
         input.homeEnvironmentId,
-        { ...operation, probeRequestedFor: input.operationId, setup: clean },
+        requested,
+        { ...requested, probeRequestedFor: input.operationId, setup: clean },
         step,
+        true,
       ).pipe(Effect.tapError(() => Effect.sync(() => uncertain.add(uncertainKey(input)))));
       return { kind: "ok" as const, setup: clean } satisfies ChildReadyResult;
     });

@@ -192,4 +192,36 @@ it.layer(NodeServices.layer)("OpenCodexChildReady operations", (it) => {
       expect((yield* f.call("probe")).kind).toBe("ok");
     }),
   );
+
+  it.effect(
+    "a catalog sync held across a completed probe keeps its proof and request history",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let hold = false;
+        const f = yield* fixture({
+          duringSync: () => {
+            if (!hold) return Effect.void;
+            hold = false;
+            return Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
+          },
+        });
+        yield* f.routed;
+        // The same operation's catalog phase may sync again; this one has read its record.
+        hold = true;
+        const syncing = yield* Effect.forkChild(f.call("syncCatalog"));
+        yield* Deferred.await(entered);
+        expect(yield* f.call("probe")).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+        yield* Deferred.succeed(release, undefined);
+        expect((yield* Fiber.join(syncing)).kind).toBe("ok");
+        const stored = yield* f.journal.read(home);
+        expect(stored?.probeRequestedFor).toBe("op-1");
+        expect(stored?.setup?.proof?.operationId).toBe("op-1");
+        expect(yield* f.call("probe")).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+        expect(yield* f.probes).toBe(1);
+      }),
+  );
 });

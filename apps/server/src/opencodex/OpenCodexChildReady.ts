@@ -155,9 +155,13 @@ const make = Effect.gen(function* () {
     yield* journal.updateIf(input.homeEnvironmentId, (operation) => {
       if (operation === undefined || operation.operationId !== input.operationId) return undefined;
       const { running: _running, ...rest } = operation;
+      // Only the probe's own failure clears a proof; another stage's leaves it to status.
+      const keepsProof = input.action !== "probe" && rest.setup?.proof !== undefined;
       return {
         ...rest,
-        ...(rest.setup === undefined ? {} : { setup: withFailure(rest.setup, failure) }),
+        ...(rest.setup === undefined || keepsProof
+          ? {}
+          : { setup: withFailure(rest.setup, failure) }),
       };
     });
   });

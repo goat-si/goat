@@ -29,6 +29,8 @@ const FILE = "opencodex-child-ready.json";
  */
 export const ChildReadyOperation = Schema.Struct({
   operationId: TrimmedNonEmptyString,
+  /** Advanced by the journal on every write to this Home's record; a writer compares it. */
+  revision: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   homeEnvironmentId: EnvironmentId,
   destinationEnvironmentId: EnvironmentId,
   running: Schema.optional(ChildReadyStep),
@@ -165,19 +167,28 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((value) => persist({ version: 1, operations: change(value.operations) })),
       ),
     );
+  /** The record as written: one revision past whatever this Home's record held before. */
+  const stamped = (
+    previous: ChildReadyOperation | undefined,
+    next: ChildReadyOperation,
+  ): ChildReadyOperation => ({ ...next, revision: (previous?.revision ?? 0) + 1 });
   return ChildReadyJournal.of({
     read: Effect.fn("ChildReadyJournal.read")(function* (home) {
       return (yield* current).operations[home];
     }),
     put: Effect.fn("ChildReadyJournal.put")(function* (home, operation) {
-      yield* update((operations) => ({ ...operations, [home]: operation }));
+      yield* update((operations) => ({
+        ...operations,
+        [home]: stamped(operations[home], operation),
+      }));
     }),
     updateIf: Effect.fn("ChildReadyJournal.updateIf")(function* (home, change) {
       return yield* writing.withPermits(1)(
         Effect.gen(function* () {
           const { operations } = yield* current;
-          const next = change(operations[home]);
-          if (next === undefined) return { written: false, operation: operations[home] };
+          const changed = change(operations[home]);
+          if (changed === undefined) return { written: false, operation: operations[home] };
+          const next = stamped(operations[home], changed);
           yield* persist({ version: 1, operations: { ...operations, [home]: next } });
           return { written: true, operation: next };
         }),
@@ -190,7 +201,7 @@ export const make = Effect.gen(function* () {
         const { proof: _proof, ...setup } = operation.setup;
         return {
           ...operations,
-          [home]: { ...operation, setup: { ...setup, readiness: "invalid" } },
+          [home]: stamped(operation, { ...operation, setup: { ...setup, readiness: "invalid" } }),
         };
       });
     }),
