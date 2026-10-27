@@ -178,7 +178,7 @@ try {
   $si.WorkingDirectory=$baseDir; $si.UseShellExecute=$false; $si.CreateNoWindow=$true
   $si.RedirectStandardOutput=$true; $si.RedirectStandardError=$true; $si.RedirectStandardInput=$true
   foreach ($key in @($si.EnvironmentVariables.Keys)) {
-    if ($key -match '^(GOAT|T3|T3CODE)_') { $si.EnvironmentVariables.Remove($key) }
+    if ($key -match '^(GOAT|T3|T3CODE)_') { $si.EnvironmentVariables.Remove($key) } # goat-rename: legacy
   }
   $si.EnvironmentVariables['T3CODE_NO_BROWSER']='1'
   $child=New-Object Diagnostics.Process; $child.StartInfo=$si; [void]$child.Start(); $child.StandardInput.Close()
