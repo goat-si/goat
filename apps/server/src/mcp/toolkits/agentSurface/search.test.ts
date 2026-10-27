@@ -74,7 +74,7 @@ const searchAs = (caller: "thread" | "client", args: object) =>
 describe("goat_describe search", () => {
   it("finds GOAT page reading among the first three results", () => {
     const top = searchEntries(entries, "read web page").matches.slice(0, 3);
-    expect(top.some(({ entry }) => entry.resource === "preview")).toBe(true);
+    expect(top.map(({ entry }) => entry.path)).toContain("preview.read");
   });
 
   it("ranks GOAT browser operations above browsing remote hosts", () => {

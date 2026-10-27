@@ -2,7 +2,10 @@ import {
   boundSnapshotMetadata,
   cutText,
   MAX_SNAPSHOT_IDENTIFIER_CHARS,
+  recordSnapshotDelivery,
+  snapshotDeliveryKey,
   type SnapshotMetadata,
+  withDeliveredBaseline,
 } from "./toolkits/preview/snapshotTransport.ts";
 import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
@@ -437,10 +440,12 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               const png = new Uint8Array(Buffer.from(data, "base64"));
               const saving = payload?.save === true && screenshot !== undefined;
               const screenshotPath = saving ? yield* saveScreenshot(snapshot.url, png) : undefined;
+              const deliveryKey = snapshotDeliveryKey(invocation, payload?.tabId);
               // Images stay out of tool history unless asked for: providers replay them on every
               // later request, and some reject inline images outright.
               const includeImage = payload?.includeImage === true;
               if (screenshotPath !== undefined && !includeImage) {
+                recordSnapshotDelivery(deliveryKey, true);
                 const saved = {
                   url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
                   screenshotPath,
@@ -452,12 +457,13 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   content: [{ type: "text", text: encodeJsonText(saved) }],
                 });
               }
-              const metadata = {
+              const metadata = withDeliveredBaseline(deliveryKey, {
                 ...page,
                 ...(screenshot ? { screenshot: screenshotMetadata } : {}),
                 ...(screenshotPath === undefined ? {} : { screenshotPath }),
-              };
+              });
               const bounded = boundSnapshotMetadata(metadata);
+              recordSnapshotDelivery(deliveryKey, bounded.treeCut);
               return new McpSchema.CallToolResult({
                 isError: false,
                 // Codex would send the model this JSON in place of the image (see imageToolSuccess).

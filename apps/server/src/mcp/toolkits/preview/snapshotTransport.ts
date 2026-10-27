@@ -183,5 +183,33 @@ export const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   }
   if (keptAdded.length < diffAdded.length || keptRemoved.length < diffRemoved.length)
     omitted.push("diff lines beyond the transport budget");
-  return { value: value(), text, omitted };
+  const treeCut =
+    (accessibilityTree !== undefined && ariaTree === undefined) ||
+    (ariaTree !== undefined && ariaTreeChars < ariaTree.length);
+  return { value: value(), text, omitted, treeCut };
+};
+
+/**
+ * The browser keeps the full tree as the next diff baseline, but the caller only saw what this
+ * transport delivered. After a cut or tree-less reply, the next diff from that caller and tab
+ * would hide changes in parts it never saw, so it is replaced by a fresh baseline.
+ */
+const cutDeliveries = new Map<string, boolean>();
+export const snapshotDeliveryKey = (invocation: unknown, tabId: unknown) => {
+  const thread =
+    typeof invocation === "object" && invocation !== null && "thread" in invocation
+      ? (invocation.thread as { threadId?: unknown; providerSessionId?: unknown } | undefined)
+      : undefined;
+  return JSON.stringify([thread?.threadId, thread?.providerSessionId, tabId ?? null]);
+};
+export const withDeliveredBaseline = <M extends SnapshotMetadata>(key: string, metadata: M): M => {
+  const diff = metadata.diff as { base?: unknown } | undefined;
+  return cutDeliveries.get(key) === true && diff?.base === "previous"
+    ? { ...metadata, diff: { base: "none", added: [], removed: [] } }
+    : metadata;
+};
+export const recordSnapshotDelivery = (key: string, treeCut: boolean) => {
+  cutDeliveries.delete(key);
+  cutDeliveries.set(key, treeCut);
+  if (cutDeliveries.size > 512) cutDeliveries.delete(cutDeliveries.keys().next().value ?? "");
 };

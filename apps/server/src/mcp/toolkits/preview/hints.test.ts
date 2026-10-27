@@ -39,3 +39,40 @@ it("bounds semantic diffs together with snapshot text and reports transport omis
   expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(MAX_SNAPSHOT_TEXT_BYTES);
   expect(result.value).toMatchObject({ treeComplete: false, omitted: ["transport_budget"] });
 });
+
+it("restarts the diff after the caller received a cut tree", async () => {
+  const transport = await import("./snapshotTransport.ts");
+  const page = (tree: string) => ({
+    url: "https://snapshot.test",
+    title: "Diff",
+    visibleText: "",
+    accessibilityTree: tree,
+    interactiveElements: [],
+    consoleEntries: [],
+    networkEntries: [],
+    actionTimeline: [],
+    treeComplete: true,
+    diff: { base: "previous", added: ["- button Added"], removed: [] },
+  });
+  const key = transport.snapshotDeliveryKey(
+    { thread: { threadId: "t", providerSessionId: "s" } },
+    "tab",
+  );
+  const large = transport.boundSnapshotMetadata(page('- text "Long line"\n'.repeat(4000)));
+  expect(large.treeCut).toBe(true);
+  transport.recordSnapshotDelivery(key, large.treeCut);
+  const next = transport.withDeliveredBaseline(key, page("- button Added"));
+  expect(next.diff).toEqual({ base: "none", added: [], removed: [] });
+  const small = transport.boundSnapshotMetadata(next);
+  transport.recordSnapshotDelivery(key, small.treeCut);
+  expect(transport.withDeliveredBaseline(key, page("- button Added")).diff).toMatchObject({
+    base: "previous",
+  });
+  const otherTab = transport.snapshotDeliveryKey(
+    { thread: { threadId: "t", providerSessionId: "s" } },
+    "other",
+  );
+  expect(transport.withDeliveredBaseline(otherTab, page("x")).diff).toMatchObject({
+    base: "previous",
+  });
+});

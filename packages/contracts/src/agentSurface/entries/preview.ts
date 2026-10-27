@@ -6,7 +6,7 @@ export const previewEntries = {
     verb: "read",
     name: "goat_preview_read",
     toolkit: "preview",
-    summary: "Read rendered browser text",
+    summary: "Read a web page's rendered text",
     description:
       "Read rendered page text as Markdown after the page settles, for articles, docs and script-rendered pages. Page with offset, revision and nextOffset. With network unknown, settled means DOM quiet only. To act, use preview.snapshot refs. Older hosts: use goat_preview_snapshot.",
     guide:
