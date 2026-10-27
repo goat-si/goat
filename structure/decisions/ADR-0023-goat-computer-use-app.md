@@ -141,8 +141,10 @@
     not approved, a blocked URL, an incompatible client, or a named policy.
   - **Readiness and approvals.** Readiness is four answers shown separately: OS grant, an
     authenticated helper, a real capture and tree, and tools available to the model. Apps are
-    approved for a conversation or always from a card, the approved target is frozen before the
-    action runs, and always-allowed apps can be removed in Settings.
+    approved from a card for a span the agent asks for, 5 to 120 minutes, and every call is
+    checked against the approved apps before it runs. No approval is standing: a person ends one
+    early from its card, and after it expires the thread asks again (owner decision, Jun,
+    2026-10-27; an "Always allow" choice with a Settings list was considered and not built).
     A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
     a schedule, a webhook, Slack or another channel started it, because choosing full access for a
     thread already gives that trust (D16). The "Full access without approval" switch is gone from

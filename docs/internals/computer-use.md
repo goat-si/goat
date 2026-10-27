@@ -375,19 +375,26 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Safety
 
-- **Approvals.** Outside full access, a person approves apps per thread, or always, through a
-  handoff that needs `settings:write` in an authenticated client session. A run in full-access
+- **Approvals.** Outside full access, an agent asks with `computer_use.request` for the apps it
+  names, or for the whole screen, and for a span of 5 to 120 minutes, 30 by default
+  (`ComputerUseRequestInput` in `packages/contracts/src/cua.ts`). The request is an approval
+  handoff on the `computer_use.grant` path, answered by a person with `settings:write` in an
+  authenticated client session. A run in full-access
   runtime mode skips these approvals whoever or whatever started it
   ([ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), D16); everything else
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
-  The approval card names the app and machine, warns when the app is high risk, explains on first
-  use that screenshots of its windows reach the model, and offers "Allow this conversation",
-  "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
-  executable path) at approval time, and the action runs on that frozen target, so a request
-  cannot be approved for one app and executed against another. "Always" approvals are listed in
-  Settings, where a person removes them; outside full access, a removed app asks again.
+  The approval card names the apps and machine, the thread and turn, the span and purpose, and
+  whether input stays in the background or may take the foreground, and offers Approve and
+  Decline (`apps/server/src/cua/ComputerUseRequests.ts`). Approving admits that thread's turns
+  to those apps, by the ids `list_apps` reports, until the request's expiry, which counts from
+  when the agent asked; it never approves each action. The proxy ties every call to an app by the
+  pid it targets and refuses calls outside the approved apps
+  (`apps/server/src/cua/ComputerUseScope.ts`). Every approval is time-bounded: there is no
+  standing "always" approval and no list of approved apps in Settings. A person ends one early
+  with "End computer use" on its card, Stop, or turning computer use off, and after its expiry
+  the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.
