@@ -176,6 +176,7 @@ export type ServerBrowserViewerOutput =
       readonly generation: number;
       /** A secret field has focus: only its controller still gets frames. */
       readonly private: boolean;
+      readonly waitingForPerson: boolean;
       /** A person's hand back here was not recorded; the agent still waits for them. */
       readonly handBackFailed?: true;
       readonly dialog: {

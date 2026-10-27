@@ -33,6 +33,8 @@ export interface PreviewStreamControl {
   readonly generation: number;
   /** A secret field has focus; viewers other than its controller get no frames. */
   readonly private?: boolean;
+  /** The agent asked a person for a step on this tab and waits for it to be handed back. */
+  readonly waitingForPerson?: boolean;
   /** Your hand back of a tab an agent asked you about was not saved; it still waits for you. */
   readonly handBackFailed?: boolean;
   readonly dialog: null | {
@@ -51,11 +53,13 @@ export const previewStreamControlLabel = (control: PreviewStreamControl | null):
         ? "You have control"
         : control.handBackFailed === true
           ? "Hand back not saved. Take control and release it again."
-          : control.controller === "agent"
-            ? "Agent has control"
-            : control.controller === "another-viewer"
-              ? "Another viewer has control"
-              : "Watching";
+          : control.controller === "another-viewer"
+            ? "Another viewer has control"
+            : control.waitingForPerson === true
+              ? "Waiting for you"
+              : control.controller === "agent"
+                ? "Agent has control"
+                : "Watching";
 
 const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["dialog"] =>
   value === null ||
@@ -320,6 +324,7 @@ export function createPreviewStreamClient(
         dialog,
         private: privateMode,
         handBackFailed,
+        waitingForPerson,
         text,
         id,
         fileName,
@@ -411,6 +416,7 @@ export function createPreviewStreamClient(
           dialog,
           ...(typeof privateMode === "boolean" ? { private: privateMode } : {}),
           ...(handBackFailed === true ? { handBackFailed } : {}),
+          ...(waitingForPerson === true ? { waitingForPerson: true } : {}),
         };
         if (
           control?.generation !== nextControl.generation ||

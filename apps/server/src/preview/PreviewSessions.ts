@@ -367,8 +367,10 @@ const make = Effect.gen(function* () {
         : undefined;
     if (cutoff) yield* fenceScreen(cutoff);
     // The pause is the host's: a person on the desktop holds every agent there.
-    if (input.control === "takeover") yield* leases.value.pause("takeover");
-    else if (input.control === "handBack") {
+    if (input.control === "takeover") {
+      yield* leases.value.pause("takeover");
+      if (Option.isSome(requests)) yield* requests.value.taken(id);
+    } else if (input.control === "handBack") {
       // Ends this control's request only; another thread's stays held for the person.
       if (Option.isSome(requests)) yield* requests.value.handBack(id);
       yield* leases.value.resume;
