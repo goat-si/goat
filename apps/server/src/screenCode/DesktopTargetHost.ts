@@ -68,6 +68,8 @@ interface BoundWindow {
   readonly epoch: number;
   readonly connectionGeneration: string;
   observationId?: string;
+  /** The driver snapshot behind observationId; a diff read names it as `since`. */
+  snapshotId?: string;
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -237,6 +239,13 @@ export const createDesktopTargetHost = (deps: {
       )
         return yield* Effect.fail(fail("unsupported"));
       const capture = call.method === "screenshot";
+      const args = callArgs(call.args);
+      const baseObservationId = capture ? undefined : string(args.baseObservationId);
+      // The driver diffs against a snapshot it still holds; only this target's latest read has one.
+      const since =
+        !capture && args.mode === "diff" && baseObservationId === bound.observationId
+          ? bound.snapshotId
+          : undefined;
       const reply = yield* request(
         "get_window_state",
         {
@@ -245,6 +254,8 @@ export const createDesktopTargetHost = (deps: {
           include_accessibility_tree: !capture,
           include_screenshot: capture,
           max_elements: 4096,
+          ...(capture ? {} : { tree_format: "both" }),
+          ...(since === undefined ? {} : { since }),
         },
         call,
         context,
@@ -271,20 +282,40 @@ export const createDesktopTargetHost = (deps: {
             },
           ];
         });
-      const observation = yield* Effect.try({
+      const sinceStatus = string(state.since_status);
+      const diff =
+        since !== undefined &&
+        (sinceStatus === "diff" || sinceStatus === "no_change") &&
+        typeof state.tree_diff === "string"
+          ? state.tree_diff
+          : undefined;
+      const resetReason =
+        capture || diff !== undefined
+          ? undefined
+          : args.mode === "diff"
+            ? since === undefined
+              ? "unknown_base_observation"
+              : (sinceStatus ?? "driver_read_full")
+            : args.mode === "query"
+              ? "desktop_query_unsupported"
+              : undefined;
+      const render = Effect.try({
         try: () =>
           observations.renderObservation({
             draft: observations.normalizeAppTree({
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText: typeof state.tree_markdown === "string" ? state.tree_markdown : "",
+              indexedText:
+                diff ?? (typeof state.tree_markdown === "string" ? state.tree_markdown : ""),
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,
               elements,
             }),
-            mode: "full",
+            mode: diff === undefined ? "full" : "diff",
+            ...(diff === undefined ? {} : { baseObservationId, prediffed: true }),
+            ...(resetReason === undefined ? {} : { resetReason }),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
         catch: (cause) =>
@@ -295,8 +326,26 @@ export const createDesktopTargetHost = (deps: {
               : "downstream_failure",
           ),
       });
-      bound.observationId = observation.observationId;
-      if (!capture) return { value: observation, category: "unverifiable" };
+      if (!capture) {
+        const observation = yield* render;
+        bound.observationId = observation.observationId;
+        bound.snapshotId = string(state.snapshot_id);
+        return { value: observation, category: "unverifiable" };
+      }
+      // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
+      // tree's observation stays and only gains this region. Any other snapshot replaces it.
+      const invalidated = array(state.invalidated_snapshot_ids);
+      let observationId =
+        bound.snapshotId !== undefined &&
+        string(state.snapshot_id) === bound.snapshotId &&
+        !invalidated.includes(bound.snapshotId)
+          ? bound.observationId
+          : undefined;
+      if (observationId === undefined) {
+        observationId = (yield* render).observationId;
+        bound.observationId = observationId;
+        delete bound.snapshotId;
+      }
       const imagePart = reply.image;
       const width = integer(state.screenshot_width);
       const height = integer(state.screenshot_height);
@@ -315,7 +364,7 @@ export const createDesktopTargetHost = (deps: {
         imageRef: NodeCrypto.randomUUID(),
         callId: call.callId,
         targetId: bound.ref.id,
-        observationId: observation.observationId,
+        observationId,
         regionId: NodeCrypto.randomUUID(),
         region: {
           kind: "window",
@@ -332,12 +381,25 @@ export const createDesktopTargetHost = (deps: {
             : 1,
         mimeType,
       };
+      observations.index.putRegion(bound.ref.id, observationId, metadata.regionId, {
+        ...metadata.region,
+        pixelWidth: width,
+        pixelHeight: height,
+        scale: metadata.scale,
+      });
       const image: ScreenImage = { ...metadata, bytes: imagePart.bytes };
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
   );
   const invoke: DesktopTargetHost["invoke"] = Effect.fn("DesktopTargetHost.invoke")(
     function* (call, context) {
+      if (call.method === "select_text")
+        return yield* Effect.fail(
+          fail(
+            "unsupported",
+            "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
+          ),
+        );
       if (call.method === "launch_app" && !call.targetRef) {
         const args = callArgs(call.args);
         const bundleId = string(args.bundle_id) ?? string(args.bundleId);

@@ -200,12 +200,16 @@ export class ScreenObservations {
     mode: "full" | "diff" | "query";
     baseObservationId?: string;
     query?: { role?: string; name?: string; text?: string };
+    /** The draft is already a diff against baseObservationId, made by the driver. */
+    prediffed?: boolean;
+    /** Why a read the caller asked to diff came back full. */
+    resetReason?: string;
     limits: { readonly treeBytes: number };
   }): ScreenObservation {
     const { draft } = input;
     const old = this.previous.get(draft.targetRef.id);
     let mode: ScreenObservation["mode"] = input.mode;
-    let resetReason: string | undefined;
+    let resetReason = input.resetReason;
     const currentLines = draft.indexedText.split("\n");
     let selected = draft.elements;
     let renderedText = draft.indexedText;
@@ -250,7 +254,7 @@ export class ScreenObservations {
       selected = draft.elements.filter((element) => matchingRefs.has(element.driverToken));
       renderedText = lines.filter((_, index) => included.has(index)).join("\n");
     }
-    if (mode === "diff") {
+    if (mode === "diff" && !input.prediffed) {
       const valid =
         old &&
         old.observation.observationId === input.baseObservationId &&
