@@ -33,7 +33,7 @@ case "$dir" in /*) ;; *) dir="$PWD/$dir" ;; esac
 
 [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { say "this installs the Apple silicon macOS runner" >&2; exit 1; }
 # svc.sh installs a LaunchAgent; only the logged-in GUI session can use the login
-# keychain that holds the signing identity (measured, devlog/_plan/261012_release_nightly M1).
+# keychain that holds the signing identity (measured, devlog/_fin/261012_release_nightly M1).
 [ "$(launchctl managername)" = "Aqua" ] || { say "run this in Terminal at the Mac's console, not over SSH" >&2; exit 1; }
 command -v gh >/dev/null || { say "gh is required (brew install gh; gh auth login)" >&2; exit 1; }
 

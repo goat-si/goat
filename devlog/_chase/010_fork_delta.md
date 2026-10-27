@@ -178,7 +178,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: #661
 - 경로: `.agents/skills/test-goat-{app,mobile}`, `goat.json`, `.cursor/` (삭제), `pr-assets/` (삭제), `scripts/lib/goat-rename/rules.ts`
-- 정책: upstream의 `.agents/skills/test-t3-{app,mobile}`과 루트 `t3.json`은 `goat-rename --apply`의 경로 규칙이 `test-goat-*`, `goat.json`으로 옮기고, 본문의 스킬 이름도 바꾼다(테스트 픽스처의 샘플 이름은 upstream 그대로). upstream `.cursor/`는 drop 규칙이 지운다. upstream 체크아웃에 `--apply --root`를 먼저 돌리면 충돌이 없고, 원본을 바로 머지했다면 머지 뒤 `--apply`가 modify/delete 충돌을 같은 결과로 정리한다. `--check`는 되살아난 drop 경로를 잡는다. 결정과 이유: `devlog/_plan/261021_repo_hygiene.md`.
+- 정책: upstream의 `.agents/skills/test-t3-{app,mobile}`과 루트 `t3.json`은 `goat-rename --apply`의 경로 규칙이 `test-goat-*`, `goat.json`으로 옮기고, 본문의 스킬 이름도 바꾼다(테스트 픽스처의 샘플 이름은 upstream 그대로). upstream `.cursor/`는 drop 규칙이 지운다. upstream 체크아웃에 `--apply --root`를 먼저 돌리면 충돌이 없고, 원본을 바로 머지했다면 머지 뒤 `--apply`가 modify/delete 충돌을 같은 결과로 정리한다. `--check`는 되살아난 drop 경로를 잡는다. 결정과 이유: `devlog/_fin/261021_repo_hygiene.md`.
 
 ### `screen-code` 화면 코드 실행 `goat_screen_run`
 

@@ -3,8 +3,8 @@ import { isTest } from "./paths.ts";
 
 /**
  * GOAT Connect: the disabled Connect stack and its relay (infra/relay) use GOAT names. No GOAT relay was ever
- * deployed, so headers, token types, client ids, worker and dataset names change freely. Values that saved data
- * holds stay in packages/contracts/src/legacyT3Names.ts. Plan: devlog/_plan/261026_goat-identity-cleanup/030.
+ * deployed, so headers, token types, client ids, worker and dataset names change freely. Values retained in saved
+ * data stay in packages/contracts/src/legacyT3Names.ts.
  */
 const inRelay = (path: string) => path.startsWith("infra/relay/");
 

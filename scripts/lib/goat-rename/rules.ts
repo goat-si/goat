@@ -3,7 +3,7 @@
  * `node scripts/goat-rename.ts --list` prints them. Order matters: longer,
  * more specific spellings come before shorter ones.
  *
- * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
+ * Plan and reasons: devlog/_fin/261013_remove-t3-internals/000_plan.md.
  */
 import { RESIDUE_KEEP_RULES } from "./rules-residue.ts";
 import { EXTERNAL_KEEP_RULES } from "./rules-external.ts";
@@ -504,7 +504,7 @@ export const TEXT_RULES: readonly TextRule[] = [
     replace: "goat",
     scope: (path) => path === "apps/server/src/process/agentScope.ts",
   },
-  // Repository hygiene (devlog/_plan/261021_repo_hygiene.md).
+  // Repository hygiene (devlog/_fin/261021_repo_hygiene.md).
   {
     id: "repo-skill-names",
     category: "hygiene",
@@ -554,7 +554,7 @@ export const PATH_RULES: readonly PathRule[] = [
   },
 ];
 
-/** Upstream paths GOAT drops. Reasons: devlog/_plan/261021_repo_hygiene.md. */
+/** Upstream paths GOAT drops. Reasons: devlog/_fin/261021_repo_hygiene.md. */
 export const DROP_RULES: readonly DropRule[] = [
   {
     id: "disabled-upstream-workflows",

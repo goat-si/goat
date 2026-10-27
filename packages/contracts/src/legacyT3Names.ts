@@ -1,7 +1,7 @@
 /**
  * T3 spellings GOAT still reads for compatibility with existing data and older peers. `scripts/goat-rename.ts`
  * never rewrites this file, so compatibility code that imports from here survives every
- * rerun of the rename. Plan: devlog/_plan/261013_remove-t3-internals/000_plan.md.
+ * rerun of the rename. Plan: devlog/_fin/261013_remove-t3-internals/000_plan.md.
  *
  * Dependency-free on purpose: contracts and shared both import it.
  */
