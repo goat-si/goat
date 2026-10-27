@@ -158,7 +158,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       networkEntries: [
         {
           url: `${origin}/${session}`,
-          method: "GET",
+          method: session,
           status: 200,
           failed: false,
           timestamp: at,
@@ -176,6 +176,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       timestamp: at,
     });
     expect(snapshot.networkEntries[0]).toMatchObject({
+      method: "[redacted]",
       url: `${origin}/[redacted]`,
       phase: "finished",
     });

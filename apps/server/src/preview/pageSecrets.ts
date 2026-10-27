@@ -77,6 +77,8 @@ export const maskRecords = (mask: (text: string) => string) => {
     }),
     network: (entry: PreviewAutomationNetworkEntry): PreviewAutomationNetworkEntry => ({
       ...entry,
+      // A page names a request's method itself; any string goes.
+      method: mask(entry.method),
       url: mask(entry.url),
       errorText: optional(entry.errorText),
     }),
