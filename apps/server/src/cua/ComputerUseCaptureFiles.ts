@@ -1,10 +1,6 @@
-/**
- * Cua Driver calls that ask it to write a capture to a file (#1688). The agent could read that
- * file outside every check GOAT puts on screenshots: the window-only capture, the hidden overlay,
- * Private and Stop. So the lease proxy refuses them on every desktop before they reach the
- * driver, at any depth of their arguments (run_steps passes an observe step's arguments through)
- * and in a script's text, which can name them.
- */
+// An agent could read a capture file outside every screenshot check (window-only capture, overlay
+// hide, Private, Stop), so the proxy refuses these on every desktop: at any depth, since run_steps
+// passes an observe step's arguments through, and in a script's text, which can name them.
 
 /** Arguments that make the driver write pixels to a path (cua-driver-sdk remote_receiver.rs). */
 const FILE_ARGUMENTS: ReadonlyArray<string> = ["screenshot_out_file", "image_path", "file_path"];
