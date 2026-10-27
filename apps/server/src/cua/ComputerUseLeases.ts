@@ -648,7 +648,8 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
-  // Private mode reports are disabled until their host signal is trustworthy (#1695).
+  // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
+  // them only with ComputerUsePrivateMode.privateModeOn, which admits unattended work.
   const privateHost = false;
 
   // The helper watches for secret fields and a person's input only while an agent controls this

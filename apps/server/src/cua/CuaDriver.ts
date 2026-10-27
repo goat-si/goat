@@ -47,6 +47,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
+import { honoredSignals } from "./ComputerUsePrivateMode.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
 import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
 
@@ -531,7 +532,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         failure,
         Option.isSome(helper) ? helper.value.readiness : observed?.readiness,
       );
-      return {
+      const status = {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
             ? platform
@@ -549,6 +550,10 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         display,
         ...(Option.isSome(helper) ? helper.value : {}),
       } satisfies CuaHostStatus;
+      // Clients see the signals the server acts on, so Settings matches what admission decides.
+      return status.signals === undefined
+        ? status
+        : { ...status, signals: honoredSignals(status.signals) };
     }),
     computerUse: Effect.all([enabled, reported]).pipe(
       Effect.map(([isEnabled, display]) => ({

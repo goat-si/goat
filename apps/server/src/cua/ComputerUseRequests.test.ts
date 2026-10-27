@@ -143,15 +143,18 @@ it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<s
 );
 
 it.effect(
-  "work that runs on its own requires private-field detection but not human-input detection",
+  "work that runs on its own is refused while private mode is off, even where the helper says it detects secret fields (#1695)",
   () =>
     withHarness(({ orchestrator }) =>
       Effect.gen(function* () {
         for (const signals of [
           undefined,
           { humanInput: "unsupported", privateMode: "unsupported" },
-          { humanInput: "unsupported", privateMode: "unsupported" },
           { humanInput: "supported", privateMode: "unsupported" },
+          // The server ignores secret-field reports, so a helper's word that it watches for them
+          // protects nothing.
+          { humanInput: "unsupported", privateMode: "supported" },
+          supported,
         ] satisfies ReadonlyArray<Signals | undefined>) {
           const result = yield* withRequests(
             orchestrator,
@@ -167,20 +170,11 @@ it.effect(
           assert.equal(result.kind, "refused", JSON.stringify(signals));
           if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
         }
-        for (const humanInput of ["supported", "unsupported"] as const) {
-          const allowed = yield* withRequests(
-            orchestrator,
-            { humanInput, privateMode: "supported" },
-            ({ request }) => request(),
-            undefined,
-            undefined,
-            undefined,
-            Option.none(),
-            undefined,
-            true,
-          );
-          assert.equal(allowed.kind, "needs_human");
-        }
+        // A thread a person directs still asks for the screen on the same host.
+        const interactive = yield* withRequests(orchestrator, supported, ({ request }) =>
+          request(),
+        );
+        assert.equal(interactive.kind, "needs_human");
       }),
     ),
 );
