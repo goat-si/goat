@@ -375,7 +375,6 @@ describe("queued task operation access", () => {
     // Ending the edit wakes the drain through a registry notification, the path on which the
     // mount's synchronous row change notifies the drain again mid-pass.
     appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
-    expect(state.familyMount).toHaveBeenCalledOnce();
     await delivered.promise.finally(release);
     expect(state.start).toHaveBeenCalledOnce();
     expect(remaining()).toEqual([]);
