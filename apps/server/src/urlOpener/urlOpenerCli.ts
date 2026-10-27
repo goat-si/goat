@@ -37,7 +37,7 @@ export interface UrlOpenerIo {
 }
 
 /** Plain web URLs without credentials; files, other schemes and userinfo stay with the system. */
-export const previewableUrl = (raw: string): boolean => {
+const previewableUrl = (raw: string): boolean => {
   if (raw.length > MAX_PREVIEW_URL_LENGTH || raw.trim() !== raw) return false;
   try {
     const url = new URL(raw);
