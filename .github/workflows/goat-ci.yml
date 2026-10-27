@@ -224,13 +224,13 @@ jobs:
       # no sudo for jobs and keeps the browser in its persistent HOME, so the install downloads only
       # when this Playwright version's shell is missing, and a missing system library fails the step.
       - name: Install Chromium headless shell
-        if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed'
+        if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed' || matrix.task == 'build'
         env:
           TASK: ${{ matrix.task }}
         run: |
           # The changed tests may be web or server browser tests, so that task installs both.
           case "$TASK" in
-            test) clis=(apps/web/node_modules/playwright/cli.js) ;;
+            test|build) clis=(apps/web/node_modules/playwright/cli.js) ;;
             test-server) clis=(apps/server/node_modules/playwright-core/cli.js) ;;
             *) clis=(apps/web/node_modules/playwright/cli.js apps/server/node_modules/playwright-core/cli.js) ;;
           esac
@@ -360,6 +360,8 @@ jobs:
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
           lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
           pr-assets.test.ts
+          lib/desktop-launch-fixture.test.ts
+          smoke-desktop-app.test.ts
 
       - name: Test CI scripts
         if: matrix.task == 'test'
@@ -396,6 +398,10 @@ jobs:
           for p in apps/desktop/dist-electron apps/server/dist apps/web/dist native/browser-secret/build/x64/goat-browser-secret; do
             test -e "$p" || { echo "missing build output: $p" >&2; exit 1; }
           done
+
+      - name: Boot built web client
+        if: matrix.task == 'build'
+        run: node apps/web/scripts/verify-built-boot.ts
 
       # The release verifier's private-repository URL rule, so a bundled link fails here, not the nightly.
       - name: Check bundled links

@@ -16,6 +16,23 @@ describe("upstream chase identities", () => {
   });
 
   it.each([
+    ["scripts/smoke-desktop-app.ts", "seeded T3 home", "seeded GOAT home"],
+    ["scripts/smoke-desktop-app.ts", "t3Home", "goatHome"],
+    ["scripts/smoke-desktop-app.ts", 'NodePath.join(home, "t3")', 'NodePath.join(home, "goat")'],
+    ["scripts/smoke-desktop-app.ts", "t3-desktop-launch-", "goat-desktop-launch-"],
+    ["scripts/smoke-desktop-app.ts", "T3CODE_HOME", "GOAT_HOME"],
+    ["scripts/smoke-desktop-app.ts", "T3CODE_TELEMETRY_ENABLED", "GOAT_TELEMETRY_ENABLED"],
+    ["scripts/smoke-desktop-app.ts", "T3CODE_DISABLE_AUTO_UPDATE", "GOAT_DISABLE_AUTO_UPDATE"],
+    [
+      ".github/workflows/goat-nightly.yml",
+      "$RUNNER_TEMP/squashfs-root/t3code",
+      "$RUNNER_TEMP/squashfs-root/goat-desktop",
+    ],
+    [
+      "apps/web/scripts/verify-built-boot.ts",
+      'const origin = "http://t3-boot.test";',
+      'const origin = "http://goat-boot.test";',
+    ],
     [
       "apps/mobile/app.config.ts",
       '"Allow T3 Code to save images."',
