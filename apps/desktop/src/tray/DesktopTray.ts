@@ -8,7 +8,6 @@ import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { SET_TRAY_MENU_CHANNEL, TRAY_OPEN_THREAD_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -88,7 +87,6 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   const ipc = yield* DesktopIpc.DesktopIpc;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  const electronWindow = yield* ElectronWindow.ElectronWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
   const { platform, displayName } = environment;
   const tray = yield* createTray(platform, displayName);
@@ -100,32 +98,26 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
         Effect.catchCause((cause) => logWarning("tray action failed", { action, cause })),
       ),
     );
-  // The renderer navigates itself, so a thread on a live remote environment opens even while
-  // the local one is down. activate recreates a window macOS closed.
-  const openThread = Effect.fn("desktop.tray.openThread")(function* (thread: DesktopTrayThread) {
-    yield* desktopWindow.activate;
-    const window = yield* electronWindow.currentMainOrFirst;
-    if (Option.isNone(window) || window.value.isDestroyed()) return;
-    const contents = window.value.webContents;
-    const send = () => {
-      if (!contents.isDestroyed()) {
-        contents.send(TRAY_OPEN_THREAD_CHANNEL, {
-          environmentId: thread.environmentId,
-          threadId: thread.threadId,
-        });
-      }
-    };
-    if (contents.isLoadingMainFrame()) contents.once("did-finish-load", send);
-    else send();
-  });
+  // Picks wait for a renderer that has published a menu, which it does only after it listens.
+  // It navigates itself, so a thread on a live remote opens while the local server is down.
+  let listener: Electron.WebContents | null = null;
+  let picked: Pick<DesktopTrayThread, "environmentId" | "threadId"> | null = null;
+  const deliver = () => {
+    if (picked === null || listener === null || listener.isDestroyed()) return;
+    listener.send(TRAY_OPEN_THREAD_CHANNEL, picked);
+    picked = null;
+  };
   const actions = {
     openApp: () => run(desktopWindow.activate, "open-app"),
-    openThread: (thread: DesktopTrayThread) => run(openThread(thread), "open-thread"),
+    openThread: (thread: DesktopTrayThread) => {
+      picked = { environmentId: thread.environmentId, threadId: thread.threadId };
+      // activate recreates a window macOS closed; its renderer then publishes and receives this.
+      run(desktopWindow.activate.pipe(Effect.andThen(Effect.sync(deliver))), "open-thread");
+    },
     quit: () => run(electronApp.quit, "quit"),
   };
 
   let applied: string | null = null;
-  const watched = new Set<number>();
   const apply = (menu: DesktopTrayMenu) => {
     if (Option.isNone(tray) || tray.value.isDestroyed()) return;
     const key = JSON.stringify(menu);
@@ -144,6 +136,26 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
     value.on("click", () => value.popUpContextMenu());
   }
 
+  // Rows go stale once their renderer reloads or is gone (macOS keeps running windowless).
+  const listen = (contents: Electron.WebContents) => {
+    if (listener === contents) return;
+    listener = contents;
+    const onNavigation = (
+      event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+    ) => {
+      if (event.isMainFrame && !event.isSameDocument) forget();
+    };
+    const forget = () => {
+      contents.removeListener("did-start-navigation", onNavigation);
+      contents.removeListener("destroyed", forget);
+      if (listener !== contents) return;
+      listener = null;
+      apply(EMPTY_MENU);
+    };
+    contents.on("did-start-navigation", onNavigation);
+    contents.once("destroyed", forget);
+  };
+
   yield* ipc.handle(
     DesktopIpc.makeIpcMethod({
       channel: SET_TRAY_MENU_CHANNEL,
@@ -151,17 +163,11 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       result: Schema.Void,
       handler: (menu, event) =>
         Effect.sync(() => {
+          const sender =
+            event === undefined ? undefined : Electron.webContents.fromId(event.sender.id);
+          if (sender !== undefined && !sender.isDestroyed()) listen(sender);
           apply(menu);
-          // Rows go stale once their renderer is gone (macOS keeps running windowless).
-          const senderId = event?.sender.id;
-          const sender = senderId === undefined ? undefined : Electron.webContents.fromId(senderId);
-          if (senderId !== undefined && sender && !watched.has(senderId)) {
-            watched.add(senderId);
-            sender.once("destroyed", () => {
-              watched.delete(senderId);
-              apply(EMPTY_MENU);
-            });
-          }
+          deliver();
         }),
     }),
   );
