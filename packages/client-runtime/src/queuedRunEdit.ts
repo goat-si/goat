@@ -61,6 +61,13 @@ export function resolveQueuedEditExit(input: {
   return input.threadDraftEmpty ? "kept" : "discarded";
 }
 
+/** An open question owns the composer until its answer is submitted. */
+export function queuedRunEditBlockedReason(input: {
+  readonly openQuestionCount: number;
+}): string | null {
+  return input.openQuestionCount > 0 ? "Answer the question to edit queued messages" : null;
+}
+
 interface ExitWatch<E> {
   readonly runs: QueuedRunsAtom;
   readonly runId: RunId;

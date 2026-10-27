@@ -112,3 +112,19 @@ describe("queue drag insertion", () => {
     expect(resolveQueueDropBeforeRunId(rows, "missing" as never, 100)).toBeUndefined();
   });
 });
+
+it("keeps queued edit disabled while a question owns the composer", () => {
+  const controls = resolveThreadQueueRowControls({
+    busy: false,
+    canPromoteToSteer: true,
+    canSendNow: false,
+    canReorder: true,
+    editBlocked: true,
+    index: 1,
+    queuedCount: 3,
+    text: "Queued message",
+  });
+  expect(controls.canEdit).toBe(false);
+  expect(controls.canMoveUp).toBe(true);
+  expect(controls.canDismiss).toBe(true);
+});
