@@ -1,6 +1,79 @@
 import { entry } from "../entry.ts";
 
 export const hubEntries = {
+  "hub.child_prepare": entry({
+    resource: "hub",
+    verb: "child_prepare",
+    name: "goat_hub_child_prepare",
+    toolkit: "hostStatus",
+    summary: "Prepare this Child before linking or finish its bootstrap Codex setup.",
+    description:
+      "Run one Child setup action for its Home: installOpenCodex, startOpenCodex, opencodexHealth, installCodex, syncCatalog, configure or probe. Accepts only a Home-issued opencodex-child-setup session; probe makes one real model request.",
+    guide:
+      "The Home calls this tool over its pinned SSH channel with a read-scoped session that carries a signed setup purpose for one phase. The purpose names the Home, this Child, the operation and the consent generation, and expires five minutes after its phase deadline. Ordinary sessions are refused even with full access. Pre-link actions need no membership. Post-link actions need the Home's link and the revision returned by the previous action. The Child derives every path, model and instance itself; the Home supplies none.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The Child journal binds operationId, destination, Home, revision and stage; a repeat of a finished stage reuses its result, and a completed proof is reused only while its binding holds.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.child_connection": entry({
+    resource: "hub",
+    verb: "child_connection",
+    name: "goat_hub_child_connection",
+    toolkit: "hostStatus",
+    summary: "Connect, disconnect or restart this Child's OpenCodex connection.",
+    description:
+      "Connect this machine's OpenCodex to a Hub, disconnect it, or restart it. Needs an ordinary live hub.manage session and refuses every opencodex-child-setup session. A pairing code reaches OpenCodex only on stdin.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "A pairing code is single-use; after an uncertain answer, read the Child's status and reconcile membership instead of repeating connect.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.child_status": entry({
+    resource: "hub",
+    verb: "child_status",
+    name: "goat_hub_child_status",
+    toolkit: "hostStatus",
+    summary: "Read this Child's device state and last verified Codex setup.",
+    description:
+      "Read this Child's OpenCodex device state and its last verified Codex setup for a Home. Never installs, changes provider routing, links a Home or starts a model request.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
+  "hub.device_setup": entry({
+    resource: "hub",
+    verb: "device_setup",
+    name: "goat_hub_device_setup",
+    toolkit: "hostStatus",
+    summary: "Retry or finish a Child's OpenCodex and Codex setup from this Home.",
+    description:
+      "Retry setup for an opted-in SSH host or a cloud machine this Home created, or finish a Child linked before setup existed. Ready needs a real model request. Read goat_host_status to see progress.",
+    guide:
+      "Needs the standing Child consent already given for the host (SSH opt-in or cloud auto-join); this call never gives consent. A linked Child is finished without linking it again. Setup installs and starts OpenCodex, links the machine, installs Codex there, routes one managed Codex instance through its local OpenCodex with no provider sign-in, and proves it with one model request whose answer must come through this Home. Concurrent calls join the running setup.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "One setup runs per machine and a concurrent call joins it; a valid proof is reused, and each new attempt starts from the Child's recorded progress.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
   "hub.device_verify": entry({
     resource: "hub",
     verb: "device_verify",

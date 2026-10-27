@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HubParityEvidence } from "./hubParity.ts";
+import {
+  ChildReadyFailure,
+  ChildReadyNextAction,
+  ChildReadyStep,
+  OpenCodexChildSetup,
+} from "./opencodexChildReady.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
 const Protocol = Schema.Int.check(Schema.isGreaterThan(0));
@@ -98,6 +104,7 @@ export const OpenCodexChildBootstrapStatus = Schema.Struct({
       "install_failed",
       "ocx_unusable",
       "runtime_unhealthy",
+      "setup_step_timeout",
       "unreachable",
       "link_failed",
       "consent_revoked",
@@ -106,6 +113,13 @@ export const OpenCodexChildBootstrapStatus = Schema.Struct({
   message: Schema.optional(Schema.String),
   /** OpenCodex on the machine once it answers. */
   version: Schema.optional(Schema.String),
+  /** The stage running or last reached; before the Child's own setup record exists too. */
+  step: ForwardCompatibleOptional(ChildReadyStep),
+  failure: ForwardCompatibleOptional(ChildReadyFailure),
+  nextAction: ForwardCompatibleOptional(ChildReadyNextAction),
+  actionable: ForwardCompatibleOptional(Schema.Boolean),
+  /** Linked is not Ready: only `readiness: "ready"` with its matching proof is. */
+  setup: ForwardCompatibleOptional(OpenCodexChildSetup),
 });
 export type OpenCodexChildBootstrapStatus = typeof OpenCodexChildBootstrapStatus.Type;
 

@@ -31,6 +31,7 @@ const CHILD_REASON_LABEL: Record<ChildSetupReason, string> = {
   unreachable: "machine unreachable",
   link_failed: "link failed",
   consent_revoked: "turned off because the session that allowed it lost access",
+  setup_step_timeout: "A setup step timed out. Retry setup.",
 };
 
 const CHILD_STATE = {

@@ -41,7 +41,6 @@ import {
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
   AuthEnvironmentScope,
-  AuthGrantScope,
   AuthTokenExchangeRequest,
   AuthSessionState,
   AuthWebSocketTicketParams,
@@ -68,7 +67,6 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
-import { RuntimeMode } from "./providerPolicy.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -615,34 +613,7 @@ export const RuntimeDrainResult = Schema.Struct({
 });
 export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
 
-/**
- * Issues a credential from the running server itself, for an SSH client attaching to a server it
- * did not start (the GOAT app's own). It takes the same loopback peer and runtime control token as
- * a drain. Running `goat auth` against that server's base directory instead would open its live
- * database with whatever CLI version the host has installed.
- */
-export const GOAT_RUNTIME_SESSION_PATH = "/.well-known/goat/runtime/session";
-
-const RuntimeCredentialTtl = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
-const RuntimeCredentialLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
-
-/** `session` answers like `goat auth session issue --json`, `pairing` like `goat auth pairing create --json`. */
-export const RuntimeSessionRequest = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("session"),
-    subject: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
-    scopes: Schema.NonEmptyArray(AuthGrantScope),
-    ttl: RuntimeCredentialTtl,
-    label: Schema.optionalKey(RuntimeCredentialLabel),
-    runtimeModeCeiling: Schema.optionalKey(RuntimeMode),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("pairing"),
-    ttl: Schema.optionalKey(RuntimeCredentialTtl),
-    label: Schema.optionalKey(RuntimeCredentialLabel),
-  }),
-]);
-export type RuntimeSessionRequest = typeof RuntimeSessionRequest.Type;
+export * from "./runtimeSessionRequest.ts";
 
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
   .add(

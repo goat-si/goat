@@ -33,6 +33,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.hubDeviceLeave]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceChildOptIn]: AuthSettingsWriteScope,
+  // The service also needs standing Child consent; this guard only hides the command.
+  [WS_METHODS.hubDeviceSetup]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerHostMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostSyncStart]: AuthProvidersManageScope,
   [WS_METHODS.providerHostSyncStatus]: AuthOrchestrationReadScope,

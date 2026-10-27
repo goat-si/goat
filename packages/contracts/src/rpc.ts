@@ -396,13 +396,15 @@ import {
   ServerGetHostStatusInput,
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
-import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
 import {
-  HubDeviceChildOptIn,
-  HubDeviceOperationInput,
-  HubDeviceOperationResult,
-} from "./hubDevice.ts";
+  HUB_DEVICE_WS_METHODS,
+  WsHubDeviceChildOptInRpc,
+  WsHubDeviceJoinRpc,
+  WsHubDeviceLeaveRpc,
+  WsHubDeviceRepairRpc,
+  WsHubDeviceVerifyRpc,
+} from "./hubDeviceRpc.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -662,11 +664,7 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
-  hubDeviceVerify: "hub.deviceVerify",
-  hubDeviceJoin: "hub.deviceJoin",
-  hubDeviceLeave: "hub.deviceLeave",
-  hubDeviceRepair: "hub.deviceRepair",
-  hubDeviceChildOptIn: "hub.deviceChildOptIn",
+  ...HUB_DEVICE_WS_METHODS,
   serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
   serverPlanOpenCodexSync: "server.planOpenCodexSync",
   serverSyncOpenCodex: "server.syncOpenCodex",
@@ -1227,13 +1225,6 @@ const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
-/** Read-only parity checks for one device, the same as goat_hub_device_verify. */
-const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
-  payload: GoatHubDeviceVerifyInput,
-  success: GoatHubDeviceVerifyResult,
-  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
-});
-
 /**
  * Runs the managed OpenCodex update check now, Home first and then each Child. Null when this
  * machine coordinates no managed update (hub or goatclaw off).
@@ -1264,28 +1255,6 @@ const WsServerSubscribeOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverSubscribeOpe
   success: Schema.NullOr(OpenCodexSyncReport),
   error: EnvironmentAuthorizationError,
   stream: true,
-});
-
-/** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
-const hubDeviceOperation = (
-  tag:
-    | typeof WS_METHODS.hubDeviceJoin
-    | typeof WS_METHODS.hubDeviceLeave
-    | typeof WS_METHODS.hubDeviceRepair,
-) =>
-  Rpc.make(tag, {
-    payload: HubDeviceOperationInput,
-    success: HubDeviceOperationResult,
-    error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
-  });
-const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
-const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
-const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
-/** A person turns an SSH host's OpenCodex Child setup on or off; agents have no equivalent. */
-const WsHubDeviceChildOptInRpc = Rpc.make(WS_METHODS.hubDeviceChildOptIn, {
-  payload: HubDeviceChildOptIn,
-  success: HubDeviceChildOptIn,
-  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {

@@ -95,6 +95,18 @@ describe("presentChildSetup", () => {
     expect(presentChildSetup(undefined)).toBeNull();
   });
 
+  it("labels a timed-out setup step with its retry guidance instead of an undefined reason", () => {
+    const setup = presentChildSetup({
+      state: "blocked",
+      reason: "setup_step_timeout",
+      checkedAt: 1,
+    });
+    expect(setup?.label).toBe(
+      "OpenCodex Child setup blocked: A setup step timed out. Retry setup.",
+    );
+    expect(setup?.label).not.toContain("undefined");
+  });
+
   it("explains that GOAT installs its runtime before retrying Child setup", () => {
     expect(
       presentChildSetup({

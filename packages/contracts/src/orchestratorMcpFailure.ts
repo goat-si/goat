@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { RunId } from "./baseSchemas.ts";
 import { CloudMachineErrorReason } from "./cloudMachines.ts";
 import { HandoffErrorReason } from "./handoff.ts";
+import { ChildReadyFailureCode } from "./opencodexChildReady.ts";
 import { OrchestrationV2ProviderFailureClass } from "./orchestrationV2.ts";
 import { ProviderHostSyncErrorCode } from "./providerHostSync.ts";
 
@@ -106,6 +107,7 @@ export const OrchestratorMcpFailureReason = Schema.Union([
   HandoffErrorReason,
   ProviderHostSyncErrorCode,
   ClientRequestReservationReason,
+  ChildReadyFailureCode,
   // A remote task with this id is already launching or launched.
   Schema.Literal("duplicate_task"),
   // A pending upload's file could not be removed; the caller still owns it.
