@@ -63,6 +63,8 @@ export interface OriginRun {
   readonly id: RunId;
   readonly userMessageId: MessageId;
   readonly requestedAt: DateTime.Utc;
+  /** Null while the run waits in the queue. */
+  readonly startedAt: DateTime.Utc | null;
   readonly completedAt: DateTime.Utc | null;
   /** Read only to find the run a thread sends from (senderOrigin). */
   readonly status?: string | undefined;
@@ -146,10 +148,13 @@ const MAX_DEPTH = 8;
 
 const millis = DateTime.toEpochMillis;
 
-/** The run that was in progress at `at`, else the last one requested before it. */
+/**
+ * The run that was executing at `at`, else the last one that had started by then. A run still
+ * waiting in the queue never sent anything, even when it was requested first.
+ */
 const runAt = (runs: ReadonlyArray<OriginRun>, at: DateTime.Utc): OriginRun | undefined => {
   const time = millis(at);
-  const started = runs.filter((run) => millis(run.requestedAt) <= time);
+  const started = runs.filter((run) => run.startedAt !== null && millis(run.startedAt) <= time);
   return (
     started.find((run) => run.completedAt === null || millis(run.completedAt) >= time) ??
     started.at(-1)

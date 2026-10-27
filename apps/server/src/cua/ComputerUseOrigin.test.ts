@@ -54,7 +54,13 @@ const run = (id: string, message: string, from: number, to: number | null = null
   id: RunId.make(id),
   userMessageId: MessageId.make(message),
   requestedAt: at(from),
+  startedAt: at(from),
   completedAt: to === null ? null : at(to),
+});
+/** A run requested at `from` that waits in the queue and has not started. */
+const waiting = (id: string, message: string, from: number): OriginRun => ({
+  ...run(id, message, from),
+  startedAt: null,
 });
 const typed = (createdAt = 0): OriginMessage => ({ createdAt: at(createdAt) });
 
@@ -581,5 +587,35 @@ describe("directedRun", () => {
         });
         assert.isTrue(yield* decide(world, {}, "answered"));
       }),
+  );
+});
+
+describe("a sender's run is the one executing when it wrote", () => {
+  it.effect("skips a person's run still waiting in the queue when a schedule ran first", () =>
+    Effect.gen(function* () {
+      const world: World = {
+        threads: { mine: {}, peer: {} },
+        runs: {
+          // The person's message was queued first; the scheduled run started ahead of it.
+          peer: [waiting("typed", "p1", 1), run("cron", "p2", 2)],
+          mine: [run("fromCron", "m1", 3)],
+        },
+        messages: {
+          p1: { createdAt: at(1), createdBy: "user", creationSource: "web" },
+          p2: { createdAt: at(2), scheduledTaskId: "task-1" },
+          m1: { createdAt: at(3), senderThreadId: ThreadId.make("peer") },
+        },
+      };
+      assert.deepEqual(yield* classify(world, "mine", "fromCron"), {
+        _tag: "unattended",
+        reason: "sent_by_unattended",
+      });
+      assert.isFalse(
+        yield* directedRun(
+          { ...reads(world), grantRun: () => Effect.undefined },
+          { threadId: ThreadId.make("mine"), runId: RunId.make("fromCron") },
+        ),
+      );
+    }),
   );
 });

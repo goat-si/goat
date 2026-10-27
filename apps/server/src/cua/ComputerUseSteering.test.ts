@@ -41,6 +41,7 @@ const steering = (
       id: RunId.make(run.id),
       userMessageId: MessageId.make(run.message),
       requestedAt: at(run.from),
+      startedAt: run.status === "queued" ? null : at(run.from),
       completedAt: run.to === undefined ? null : at(run.to),
       status: run.status ?? (run.to === undefined ? "running" : "completed"),
     }));

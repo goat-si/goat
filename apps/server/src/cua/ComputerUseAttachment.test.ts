@@ -516,6 +516,7 @@ describe("computerUseAttachment", () => {
                 id: runId,
                 userMessageId: MessageId.make("message:launch"),
                 requestedAt: at,
+                startedAt: at,
                 completedAt: null,
               },
             ]),
