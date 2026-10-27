@@ -1,3 +1,4 @@
+import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { serializeLegacyContextMessage } from "@goat/shared/composerContextLegacySend";
@@ -28,7 +29,6 @@ import {
   canDeletePullRequestBranch,
   buildFixFindingsHandoff,
   groupPullRequestTimelineConversations,
-  filterPullRequestConversationItems,
   pagePullRequestConversationItems,
   pullRequestConversationItemComments,
   pullRequestConversationItems,

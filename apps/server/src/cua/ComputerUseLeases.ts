@@ -150,9 +150,9 @@ export class ComputerUseLeases extends Context.Service<
       run?: { readonly person?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
-     * Apps a full access run named in a request. The desktop adds them to the driver's manifest,
-     * which otherwise holds only the apps open when the driver started, such as a dev build of
-     * GOAT launched by this turn. The manifest still leaves out the host GOAT and credential stores.
+     * Apps a run with every app or the whole screen named in a request. The host adds them to the
+     * driver's manifest, which otherwise holds only the apps open when the driver started, such
+     * as a dev build of GOAT launched by this turn. It still leaves out GOAT and credential stores.
      */
     readonly nameApps: (
       threadId: ThreadId,
@@ -297,7 +297,7 @@ interface ControlRecord extends ComputerUseControl {
   readonly uses: number;
   /** Admitted by full access rather than a grant; see everyAppControl. */
   readonly everyApp?: EveryAppKind;
-  /** Apps this full access control named for the driver's manifest; see nameApps. */
+  /** Apps this control named for the driver's manifest; see nameApps. */
   readonly named?: ReadonlyArray<string>;
   /** The run whose attachment last took this control up. */
   readonly runId?: RunId;
@@ -664,8 +664,7 @@ const make = Effect.gen(function* () {
       apps: ReadonlyArray<string>,
     ) {
       const record = controls.get(threadId);
-      if (record?.controlId !== controlId || record.everyApp === undefined || !acting(record))
-        return;
+      if (record?.controlId !== controlId || !acting(record)) return;
       const named = [...new Set([...(record.named ?? []), ...apps])].sort();
       if (named.length === (record.named?.length ?? 0)) return;
       controls.set(threadId, { ...record, named });
