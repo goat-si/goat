@@ -381,7 +381,6 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           onClick={runTakeover}
         />
       )}
-      {/* One toggle in one corner at both sizes, so the hand and keyboard focus stay put. */}
       <CornerButton
         label={large ? "Shrink to a card" : "Enlarge"}
         icon={large ? MinimizeIcon : MaximizeIcon}

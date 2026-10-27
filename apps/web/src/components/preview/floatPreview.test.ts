@@ -85,14 +85,18 @@ it("floats a person's own tab, and shows a tab an agent drives as its small card
   expect(usePreviewSessionStack.getState().expanded.size).toBe(0);
 });
 
-it("keeps a card the person enlarged large when its agent shows the tab again", () => {
+it("keeps the card the person enlarged when its agent shows another tab, and keeps a shrunk card small", () => {
   setup();
-  applyPreviewServerSnapshot(ref, tab("tab_agent", "agent-session"));
-  usePreviewSessionStack.getState().expand(agentTab("thread-1", "tab_agent"));
-  floatPreview(ref, browserMiniPlayerSource("tab_agent"), { by: "agent", force: true });
-  expect(usePreviewSessionStack.getState().expanded.get("env-1|thread-1")).toMatchObject({
-    sessionId: "browser:thread-1:tab_agent",
-  });
+  applyPreviewServerSnapshot(ref, tab("tab_a", "agent-session"));
+  applyPreviewServerSnapshot(ref, tab("tab_b", "agent-session"));
+  const large = () => usePreviewSessionStack.getState().expanded.get("env-1|thread-1");
+  usePreviewSessionStack.getState().expand(agentTab("thread-1", "tab_a"));
+  floatPreview(ref, browserMiniPlayerSource("tab_b"), { by: "agent", force: true });
+  expect(large()).toMatchObject({ sessionId: "browser:thread-1:tab_a" });
+
+  usePreviewSessionStack.getState().collapse("env-1|thread-1");
+  floatPreview(ref, browserMiniPlayerSource("tab_a"), { by: "agent", force: true });
+  expect(large()).toBeUndefined();
 });
 
 it("leaves the thread on screen's large card and hidden cards alone when another thread's agent opens a tab", () => {
