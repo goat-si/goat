@@ -58,9 +58,10 @@ Cua 축의 규칙은 [20_cua_cycle_runbook](./20_cua_cycle_runbook.md) 머리에
 1. upstream은 merge commit으로만 들인다. rebase, squash, cherry-pick은 merge-base를 전진시키지
    않아서 다음 사이클이 같은 충돌을 다시 만난다. 급한 hotfix만 cherry-pick을 허용하고, 다음
    사이클 머지가 그것을 흡수한다. dev 랜딩도 squash가 아니라 merge commit 또는 fast-forward다.
-   예외: 사용자가 정한 수동 선별 사이클(261028부터)은 커밋마다 take/adapt/skip을 판정해 주제 PR로
-   cherry-pick 또는 재구현하고 squash로 랜딩한다. 이 경우 merge-base는 전진하지 않으므로 reviewed-through는
-   MOC와 사이클 카드에 적은 값이 기준이다. 절차는 [020 수동 선별 사이클](./020_cycle_runbook.md#수동-선별-사이클)이다.
+   예외: 사용자가 정한 수동 선별 사이클(261028부터)은 커밋마다 take/adapt/skip을 판정해 주제 묶음으로
+   cherry-pick 또는 재구현하고, 묶음들을 하나의 combined PR로 합쳐 squash로 랜딩한다. 이 경우 merge-base는
+   전진하지 않으므로 reviewed-through는 MOC와 사이클 카드에 적은 값이 기준이다. 절차는
+   [020 수동 선별 사이클](./020_cycle_runbook.md#수동-선별-사이클)이다.
 2. 머지 대상은 스캔한 upstream SHA로 고정한다. 스캔과 머지 사이에 `upstream/main`이 움직여도
    카드가 설명하는 범위와 실제 머지 범위가 같아야 한다.
 3. 충돌 해결은 [010](./010_fork_delta.md)의 영역별 정책을 따른다. 정책으로 결정되지 않는 충돌,

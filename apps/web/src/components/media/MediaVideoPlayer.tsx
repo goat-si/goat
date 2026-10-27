@@ -1,7 +1,7 @@
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { PlayIcon, RotateCwIcon, TriangleAlertIcon } from "~/components/solar";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { observeIntersection } from "../../lib/observeIntersection";
 import { cn } from "../../lib/utils";
@@ -127,8 +127,8 @@ export function MediaVideoPlayer({
     );
   };
 
-  // Keep this ref stable: detaching it pauses playback, including on retry unmounts.
-  const attachVideo = useCallback((video: HTMLVideoElement | null) => {
+  // Keep this ref stable (the compiler memoizes it): detaching it pauses playback, including on retry unmounts.
+  const attachVideo = (video: HTMLVideoElement | null) => {
     videoRef.current = video;
     if (!video) return;
     const pauseWhenHidden = () => {
@@ -148,7 +148,7 @@ export function MediaVideoPlayer({
       video.removeEventListener("webkitendfullscreen", pauseWhenHidden);
       video.pause();
     };
-  }, []);
+  };
 
   const retry = async () => {
     if (retrying) return;
