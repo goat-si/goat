@@ -62,6 +62,23 @@ describe("threadRouteIsHydrating", () => {
     expect(threadRouteIsHydrating({ ...settled, detailStatus: "deleted" })).toBe(false);
   });
 
+  it("waits for the detail cache after shell synchronization fails (#1952)", () => {
+    const failedShell = {
+      ...settled,
+      shellHasError: true,
+      detailStatus: "empty" as const,
+    };
+    expect(threadRouteIsHydrating({ ...failedShell, localCacheRead: false })).toBe(true);
+    expect(threadRouteIsHydrating(failedShell)).toBe(false);
+    expect(
+      threadRouteIsHydrating({
+        ...failedShell,
+        localCacheRead: false,
+        detailStatus: "deleted",
+      }),
+    ).toBe(false);
+  });
+
   it("prioritizes terminal outcomes over unrelated hydration", () => {
     expect(
       threadRouteIsHydrating({

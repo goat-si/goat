@@ -12,7 +12,7 @@ export function threadRouteIsHydrating(input: {
   readonly detailStatus: EnvironmentThreadStatus;
   readonly detailHasError: boolean;
 }): boolean {
-  if (input.detailStatus === "deleted" || input.shellHasError || input.detailHasError) {
+  if (input.detailStatus === "deleted" || input.detailHasError) {
     return false;
   }
   if (input.isLoadingConnections) {
@@ -23,6 +23,9 @@ export function threadRouteIsHydrating(input: {
   }
   if (!input.localCacheRead) {
     return true;
+  }
+  if (input.shellHasError) {
+    return false;
   }
   // Only a first attempt is worth waiting out; a reconnecting environment has already failed.
   if (
