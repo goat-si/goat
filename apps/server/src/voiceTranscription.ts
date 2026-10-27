@@ -36,7 +36,10 @@ import {
   HttpServerRequest,
 } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { ProjectionStoreV2 } from "./orchestration-v2/ProjectionStore.ts";
+import {
+  ProjectionStoreV2,
+  layer as layerProjectionStoreV2,
+} from "./orchestration-v2/ProjectionStore.ts";
 import { ProjectStoreV2 } from "./orchestration-v2/ProjectStore.ts";
 import { makeCodexChatGptAuth } from "./provider/CodexChatGptAuth.ts";
 import { withCodexAppServerClient } from "./provider/CodexProvider.ts";
@@ -502,4 +505,6 @@ export const layerHttp = HttpApiBuilder.group(
   }),
 );
 
-export const layer = layerHttp.pipe(Layer.provide(layerSessions));
+export const layer = layerHttp.pipe(
+  Layer.provide(layerSessions.pipe(Layer.provide(layerProjectionStoreV2))),
+);
