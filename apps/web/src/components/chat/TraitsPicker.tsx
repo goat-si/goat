@@ -50,7 +50,7 @@ import {
   type ComposerControlSize,
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
-import { getTriggerDisplayModelName } from "./providerIconUtils";
+import { getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
@@ -802,8 +802,9 @@ function ComposerTraitsPicker({
   const normalizedModel = normalizeModelSlug(traitsInput.model, traitsInput.provider);
   const modelEntry = traitsInput.models.find((candidate) => candidate.slug === normalizedModel);
   const modelLabel = modelEntry
-    ? getTriggerDisplayModelName(modelEntry)
+    ? getTriggerDisplayModelName(modelEntry, traitsInput.provider)
     : (traitsInput.model ?? "");
+  const fullModelLabel = modelEntry ? getDisplayModelName(modelEntry) : modelLabel;
 
   return (
     <Popover open={open} onOpenChange={(next) => setOpen(next && !disabled)}>
@@ -842,7 +843,7 @@ function ComposerTraitsPicker({
                 <button
                   type="button"
                   className="flex max-w-full cursor-pointer items-center gap-0.5 rounded-sm px-1 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  aria-label={`Change model, current ${modelLabel}`}
+                  aria-label={`Change model, current ${fullModelLabel}`}
                   onClick={() => {
                     setOpen(false);
                     onOpenModelPicker();

@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
+import { makeAcpRequestRunner } from "./AcpRequestDeadline.ts";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
@@ -1336,36 +1337,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   const logRequest = (event: AcpSessionRequestLogEvent) =>
     options.requestLogger ? options.requestLogger(event) : Effect.void;
 
-  const runLoggedRequest = <A>(
-    method: string,
-    payload: unknown,
-    effect: Effect.Effect<A, EffectAcpErrors.AcpError>,
-  ): Effect.Effect<A, EffectAcpErrors.AcpError> =>
-    logRequest({ method, payload, status: "started" }).pipe(
-      Effect.flatMap(() =>
-        (options.onStderr ? Effect.raceFirst(effect, Deferred.await(stderrFailure)) : effect).pipe(
-          Effect.catch((error) =>
-            enrichProcessExitWithStderr(error).pipe(Effect.flatMap(Effect.fail)),
-          ),
-          Effect.tap((result) =>
-            logRequest({
-              method,
-              payload,
-              status: "succeeded",
-              result,
-            }),
-          ),
-          Effect.onError((cause) =>
-            logRequest({
-              method,
-              payload,
-              status: "failed",
-              cause,
-            }),
-          ),
-        ),
-      ),
-    );
+  const runLoggedRequest = yield* makeAcpRequestRunner({
+    scope: runtimeScope,
+    onStderr: options.onStderr !== undefined,
+    stderrFailure,
+    terminated: (error) =>
+      recordTermination(error).pipe(Effect.andThen(options.onTermination?.(error) ?? Effect.void)),
+    enrich: enrichProcessExitWithStderr,
+    log: logRequest,
+  });
 
   const spawnCommand =
     options.spawn.shell === false
@@ -1777,6 +1757,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ...options.clientCapabilities?.fs,
     },
     terminal: options.clientCapabilities?.terminal ?? false,
+    // ACP v1 agents send session notices only to clients that advertise them; v2 needs no capability.
+    session: { ...options.clientCapabilities?.session, notices: {} },
     ...(options.clientCapabilities?.auth ? { auth: options.clientCapabilities.auth } : {}),
     ...(options.clientCapabilities?.elicitation
       ? { elicitation: options.clientCapabilities.elicitation }
