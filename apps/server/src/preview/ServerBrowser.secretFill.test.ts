@@ -208,11 +208,13 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
         expect(JSON.stringify(logs)).toContain("typed [secret]");
 
         // While the field holds it, the agent's own script and pixels are refused.
-        const evaluated = yield* call(tabId, "evaluate", {
+        const evaluated = yield* call<object>(tabId, "evaluate", {
           expression: "document.querySelector('#pw').value",
         }).pipe(Effect.flip);
         expect(JSON.stringify(evaluated)).toContain("holds a password GOAT filled");
-        const pictured = yield* call(tabId, "snapshot", { captureImage: true }).pipe(Effect.flip);
+        const pictured = yield* call<object>(tabId, "snapshot", { captureImage: true }).pipe(
+          Effect.flip,
+        );
         expect(JSON.stringify(pictured)).toContain("holds a password GOAT filled");
 
         // After the page moves on, script runs again, and an exact echo is still masked.

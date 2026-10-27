@@ -103,11 +103,7 @@ import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
-import {
-  BrowserControlInterrupted,
-  requireAgentSession,
-  SessionControl,
-} from "./SessionControl.ts";
+import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -1640,7 +1636,7 @@ const make = Effect.gen(function* () {
   };
 
   const requireTab = async (request: PreviewAutomationRequest) => {
-    requireAgentSession(request);
+    SessionControl.requireAgentSession(request);
     const owned = [...tabs.values()].filter(
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
     );
@@ -1696,7 +1692,7 @@ const make = Effect.gen(function* () {
           (tab) => statusWithTitle(tab, request.agentSessionId),
         );
       case "open": {
-        requireAgentSession(request);
+        SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
         const reuse = open.reuseExistingTab ?? true;

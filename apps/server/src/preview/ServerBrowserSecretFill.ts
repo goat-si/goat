@@ -1,16 +1,8 @@
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
- * goat_preview_fill_secret: types an origin-bound secret into a password field of a server browser
- * tab. The value comes from the secret store here and reaches the page only as a CDP argument to a
- * script in an isolated world, so it never passes through the agent, the broker, or Playwright's
- * input and logging path. The isolated world reports the document's real security origin (a
- * sandboxed frame says "null"), and the element it filled is the one it found.
- *
- * While a filled field still holds the value, the tab refuses the agent its own script, image
- * snapshots and recordings; every response from the tab also has the thread's filled values
- * masked, an early warning for page code that echoes them.
- *
- * @module ServerBrowserSecretFill
+ * goat_preview_fill_secret: types an origin-bound secret into a password field over CDP in an
+ * isolated world, so the value never passes through the agent, the broker or Playwright's input and
+ * log paths. A filled field fences the agent's script, pixels and recordings until it is gone.
  */
 import {
   PreviewAutomationFillSecretInput,
@@ -25,11 +17,7 @@ import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
-import {
-  BrowserControlInterrupted,
-  requireAgentSession,
-  type SessionControl,
-} from "./SessionControl.ts";
+import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 /** The part of a server browser tab this module reads. */
 export interface SecretFillTab {
@@ -291,7 +279,7 @@ export const make = Effect.gen(function* () {
       throw refused(
         "Browser debug logging (DEBUG) is on, so GOAT will not type secrets. Unset it.",
       );
-    requireAgentSession(request);
+    SessionControl.requireAgentSession(request);
     const origin = await record(tab, "fillSecret", () =>
       tab.control.secret(
         request.agentSessionId,

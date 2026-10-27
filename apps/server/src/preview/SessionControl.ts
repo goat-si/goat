@@ -22,14 +22,6 @@ const PRIVATE_MESSAGE =
 const STOPPED_MESSAGE = "A person stopped agent control of this browser tab.";
 const HUMAN_MESSAGE = "A human controls this tab.";
 
-/** Narrows a request whose agent session the broker should always have supplied. */
-export function requireAgentSession<R extends { readonly agentSessionId?: string | undefined }>(
-  request: R,
-): asserts request is R & { readonly agentSessionId: string } {
-  if (!request.agentSessionId)
-    throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
-}
-
 /** What a secret fill may do from inside its queued turn. */
 export interface SecretFence {
   /** Throws once a person took control or stopped agents since the fill was requested. */
@@ -307,6 +299,14 @@ export class SessionControl {
 
   agentCanActNow(agentId: string) {
     return this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked();
+  }
+
+  /** Narrows a request whose agent session the broker should always have supplied. */
+  static requireAgentSession<R extends { readonly agentSessionId?: string | undefined }>(
+    request: R,
+  ): asserts request is R & { readonly agentSessionId: string } {
+    if (!request.agentSessionId)
+      throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
   }
 
   assertNoHumanControl() {
