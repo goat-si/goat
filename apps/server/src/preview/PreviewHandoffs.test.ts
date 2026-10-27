@@ -1,5 +1,13 @@
 import { it } from "@effect/vitest";
-import { CommandId, EnvironmentId, PREVIEW_HANDOFF_PATH, TurnItemId } from "@goat/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  EventId,
+  type OrchestrationV2DomainEvent,
+  PREVIEW_HANDOFF_PATH,
+  RunId,
+  TurnItemId,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -40,6 +48,8 @@ const world = (
     readonly quietHold?: boolean;
     /** A live event stream that fails at once, so only the stored records can say what ended. */
     readonly brokenStream?: boolean;
+    /** Record writes from the screen that fail before one goes through. */
+    readonly failedWrites?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -65,18 +75,24 @@ const world = (
     if (options.withholdEnds) surface.service.onHandoffEnd((ended) => void withheld.push(ended));
     // The screen's end is recorded once its transition command commits.
     const settled = yield* Deferred.make<string>();
+    let failing = options.failedWrites ?? 0;
     const dispatch = (
       command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
     ) =>
-      orchestrator
-        .dispatch(command)
-        .pipe(
-          Effect.tap(() =>
-            command.type === "handoff.transition"
-              ? Deferred.succeed(settled, command.state)
-              : Effect.void,
-          ),
-        );
+      command.type === "handoff.transition" && failing > 0
+        ? Effect.suspend(() => {
+            failing--;
+            return Effect.die("the record write failed");
+          })
+        : orchestrator
+            .dispatch(command)
+            .pipe(
+              Effect.tap(() =>
+                command.type === "handoff.transition"
+                  ? Deferred.succeed(settled, command.state)
+                  : Effect.void,
+              ),
+            );
     const desktop: Array<string> = [];
     const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 5 });
     const signals = yield* PubSub.unbounded<void>();
@@ -455,6 +471,80 @@ it.effect("ends a request without a wake when a person stops the turn that asked
       yield* Deferred.await(freed);
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       expect((yield* handoffs.read({ threadId, handoffId })).actor.type).toBe("agent");
+    }),
+  ),
+);
+
+it.effect("leaves a newer turn's request held when a Stop of an earlier turn arrives late", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const { requests, control, settled } = yield* world(orchestrator, { brokenStream: true });
+      yield* requests.request({ threadId, providerInstanceId: instanceId, reason, tabId: "tab-1" });
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+      const occurredAt = yield* DateTime.now;
+      const stopOf = (runId: RunId): OrchestrationV2DomainEvent => ({
+        type: "run.updated",
+        id: EventId.make(`event:stop:${runId}`),
+        threadId,
+        occurredAt,
+        payload: {
+          ...run,
+          id: runId,
+          status: "interrupted",
+          terminationCause: { kind: "person_stop" },
+        },
+      });
+      yield* requests.handle(stopOf(RunId.make("run:earlier")));
+      expect(control.handoffReason).toBe(reason);
+      expect(yield* Deferred.isDone(settled)).toBe(false);
+      yield* requests.handle(stopOf(run.id));
+      expect(yield* Deferred.await(settled)).toBe("cancelled");
+      expect(control.handoffReason).toBe(null);
+    }),
+  ),
+);
+
+it.effect("keeps a desktop hand back until its record is written, and says when it was not", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const { handoffs, requests, settled, desktop } = yield* world(orchestrator, {
+        brokenStream: true,
+        failedWrites: 1,
+      });
+      const result = yield* requests.request({ threadId, providerInstanceId: instanceId, reason });
+      const handoffId = TurnItemId.make(result.handoff.handoffId);
+      expect(yield* requests.handBackDesktop(controlId)).toBe(false);
+      // The person handed it back, so the hold ends now; the record follows on the next check.
+      expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
+      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("pending");
+      yield* TestClock.adjust("15 seconds");
+      expect(yield* Deferred.await(settled)).toBe("completed");
+      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
+    }),
+  ),
+);
+
+it.effect("retries a browser hand back whose record write failed", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const { handoffs, requests, control, settled } = yield* world(orchestrator, {
+        brokenStream: true,
+        failedWrites: 1,
+      });
+      const result = yield* requests.request({
+        threadId,
+        providerInstanceId: instanceId,
+        reason,
+        tabId: "tab-1",
+      });
+      yield* Effect.promise(async () => {
+        await control.take("viewer");
+        await control.release("viewer");
+      });
+      yield* TestClock.adjust("15 seconds");
+      expect(yield* Deferred.await(settled)).toBe("completed");
+      const handoffId = TurnItemId.make(result.handoff.handoffId);
+      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
     }),
   ),
 );

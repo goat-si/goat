@@ -502,7 +502,7 @@ it.effect("keeps handoff wakes pending while held and dispatches after release",
 );
 
 it.effect(
-  "tells an agent its screen is back after a hand back, and not to act after a person's stop",
+  "wakes an agent after a hand back or a decline, and leaves it stopped after a person's stop",
   () =>
     withWorld((world) =>
       Effect.gen(function* () {
@@ -513,21 +513,29 @@ it.effect(
           person,
         );
         yield* world.reactor.handle(yield* resolution(world, handedBack.handoffId));
+        const declined = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: declined.handoffId, action: "declined" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, declined.handoffId, "declined"));
         const stopped = yield* ask(world, PREVIEW_HANDOFF_PATH);
         yield* world.handoffs.respond(
           { threadId, handoffId: stopped.handoffId, action: "cancelled" },
           person,
         );
         yield* world.reactor.handle(yield* resolution(world, stopped.handoffId, "cancelled"));
+        yield* world.reactor.reconcile;
         const sent = yield* wakes(world);
         const textOf = (handoffId: string, state: string) =>
           sent.find((wake) => wake.id === `message:handoff-wake:${handoffId}:${state}`)?.text;
         expect(textOf(handedBack.handoffId, "completed")).toContain(
           "was handed back by a person. The screen is yours again.",
         );
-        expect(textOf(stopped.handoffId, "cancelled")).toContain(
-          "Do not act on that tab or screen again unless they ask",
-        );
+        expect(textOf(declined.handoffId, "declined")).toContain("was declined by a person.");
+        // Stop really stops: the record stays, and the agent reads it when a person wakes it.
+        expect(textOf(stopped.handoffId, "cancelled")).toBeUndefined();
+        expect(sent).toHaveLength(2);
       }),
     ),
 );

@@ -96,9 +96,7 @@ const continuation = (handoff: Handoff, applied: Applied | undefined) => {
   if (handoff.target.path === PREVIEW_HANDOFF_PATH)
     return handoff.state === "completed"
       ? "The screen is yours again. Observe it before acting: the page or window may have changed."
-      : handoff.state === "cancelled" && handoff.actor.type === "client"
-        ? "A person stopped it. Do not act on that tab or screen again unless they ask; tell them what you could not finish."
-        : "The step may not be done, and after a restart the tab or control may be gone. Observe again before acting, and tell the person what you could not finish.";
+      : "The step may not be done, and after a restart the tab or control may be gone. Observe again before acting, and tell the person what you could not finish.";
   if (handoff.state !== "completed")
     return "Nothing ran. Ask again only if the user still wants it.";
   if (applied !== undefined) return applied.text;
@@ -120,6 +118,14 @@ const handoffWake = (handoff: Handoff, applied?: Applied): LaunchWatchWake | und
   if (handoff.state === "expired" && endsWithItsRun(handoff)) return undefined;
   // The asking agent ended it itself.
   if (handoff.actor.type === "agent") return undefined;
+  // A person stopped the screen it asked about (or withdrew the request): Stop really stops, so
+  // the stopped agent reads the record when a person next wakes it.
+  if (
+    handoff.target.path === PREVIEW_HANDOFF_PATH &&
+    handoff.state === "cancelled" &&
+    handoff.actor.type === "client"
+  )
+    return undefined;
   const state = handoff.state as keyof typeof VERB;
   // The person's device label stays out of the agent's transcript.
   const by = handoff.actor.type === "server" ? "GOAT" : "a person";

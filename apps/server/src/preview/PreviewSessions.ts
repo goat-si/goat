@@ -368,7 +368,11 @@ const make = Effect.gen(function* () {
     else if (input.control === "handBack") {
       yield* leases.value.resume;
       // Ends this control's request only; another thread's stays held for the person.
-      if (Option.isSome(requests)) yield* requests.value.handBackDesktop(controlId);
+      const recorded = Option.isSome(requests)
+        ? yield* requests.value.handBackDesktop(controlId)
+        : true;
+      // The screen is handed back; its record retries until stored, and the person learns it lags.
+      if (!recorded) return { applied: false, reason: "not_allowed" } as const;
     } else {
       const threadId = ThreadId.make(live.control.threadId);
       const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);
