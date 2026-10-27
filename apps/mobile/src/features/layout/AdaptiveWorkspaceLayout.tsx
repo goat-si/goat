@@ -1,6 +1,6 @@
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 import { AdaptiveWorkspaceContext, useAdaptiveWorkspaceLayout } from "./adaptive-workspace-context";
-import { createDeferredNavigation } from "./deferred-navigation";
+import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@goat/contracts";
@@ -490,7 +490,7 @@ function AdaptiveWorkspaceLayoutContent(
   };
   const handleOpenSettings = () => openWorkspaceTab("settings");
 
-  const deferredThreadSelection = useMemo(() => createDeferredNavigation(), []);
+  const deferredThreadSelection = threadSelectionDeferral;
   /** The one way to show a page in the detail column; see `selectWorkspaceDetail`. */
   function handleSelectDetail(detail: WorkspaceDetail, sheet?: WorkspaceDetailSheet) {
     deferredThreadSelection.run(() => {

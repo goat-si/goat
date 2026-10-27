@@ -7,7 +7,6 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
-  createNavigationContainerRef,
   createStaticNavigation,
   getActionFromState,
   getStateFromPath,
@@ -53,6 +52,8 @@ import {
 import { workspaceDetailLinkAction } from "./features/workspace/workspace-detail-selection";
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
 
+import { rootNavigationRef as navigationRef } from "./lib/rootNavigation";
+import { pruneNewTaskBranchCheckouts } from "./features/threads/NewTaskDraftRouteScreen";
 import "../global.css";
 
 if (process.env.EXPO_PUBLIC_SHOWCASE === "1") {
@@ -85,7 +86,6 @@ const appLinking = {
 };
 
 const Navigation = createStaticNavigation(RootStack);
-const navigationRef = createNavigationContainerRef();
 
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
 
@@ -149,9 +149,16 @@ function AppContent() {
                     <Navigation
                       ref={navigationRef}
                       linking={appLinking}
-                      onReady={() => recordWorkspaceSelections(navigationRef.getRootState())}
+                      onReady={() => {
+                        const state = navigationRef.getRootState();
+                        recordWorkspaceSelections(state);
+                        if (state) pruneNewTaskBranchCheckouts(state);
+                      }}
                       theme={navigationTheme}
-                      onStateChange={recordWorkspaceSelections}
+                      onStateChange={(state) => {
+                        recordWorkspaceSelections(state);
+                        if (state) pruneNewTaskBranchCheckouts(state);
+                      }}
                     />
                   </IncomingShareProvider>
                   <Dialog.Host />
