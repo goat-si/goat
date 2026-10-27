@@ -177,13 +177,18 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     Option.isSome(current) &&
     current.value.everyApp &&
     (!foreground || (yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
-  )
+  ) {
+    if (wanted !== undefined)
+      yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
     return {
       kind: "available",
       message: foreground
         ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
-        : "This thread runs in full access: this turn can act on every app without approval.",
+        : wanted === undefined
+          ? "This thread runs in full access: this turn can act on every app without approval."
+          : `This thread runs in full access: this turn can act on every app without approval. ${wanted.join(", ")} ${wanted.length === 1 ? "is" : "are"} added to computer use in a moment if opened after it started; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again.`,
     } satisfies ComputerUseRequestResult;
+  }
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
   const granted = Option.isSome(own) ? own.value.apps : [];
