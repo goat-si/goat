@@ -21,6 +21,7 @@ import {
 
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import { assertNoticeInitialization } from "./AcpNoticeReplay.testkit.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DocumentText from "../../provider/DocumentText.ts";
@@ -1807,12 +1808,14 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: NodePath.join(import.meta.dirname, "../../../scripts/acp-mock-agent.ts"),
+            mockAgentPath: NodePath.join(
+              import.meta.dirname,
+              protocolVersion === 1
+                ? "../../../scripts/acp-mock-notice-v1-agent.ts"
+                : "../../../scripts/acp-mock-agent.ts",
+            ),
             protocolEvents,
-            environment: {
-              GOAT_ACP_EMIT_NOTICE: "1",
-              GOAT_ACP_PROTOCOL_VERSION: String(protocolVersion),
-            },
+            environment: { GOAT_ACP_EMIT_NOTICE: "1" },
           }),
         },
         selfInvocation: yield* resolveSelfInvocation(),
@@ -1846,12 +1849,7 @@ describe("AcpAdapterV2", () => {
         ),
       ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
 
-      const initialize = Array.from(yield* Queue.takeAll(protocolEvents)).find(
-        (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "initialize",
-      );
-      assert.deepInclude(initialize && rawProtocolRequestParam(initialize, "clientCapabilities"), {
-        session: { notices: {} },
-      });
+      assertNoticeInitialization(Array.from(yield* Queue.takeAll(protocolEvents)), protocolVersion);
       const title =
         "skill discovery warning: candidate was skipped because its metadata is invalid";
       const notices = items.filter((item) => item.type === "system_notice");
