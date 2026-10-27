@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 // @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
 import * as NodeSqlite from "node:sqlite";
 
@@ -154,3 +155,21 @@ describe("otherGoatHomes", () => {
       ),
   );
 });
+
+it.effect("reads foreign worktree ownership without preparing SQL on the server thread", () =>
+  withHome((home) => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const foreign = path.join(home, ".goat", "desktop-nightly", "userdata", "statev2.sqlite");
+    const checkout = path.join(home, "checkouts", "kept");
+    yield* fs.makeDirectory(checkout, { recursive: true });
+    yield* seedDatabase(foreign, [checkout]);
+    using prepare = vi.spyOn(NodeSqlite.DatabaseSync.prototype, "prepare");
+    const bindings = yield* readOtherHomeBindings({
+      ownDatabase: path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite"),
+    });
+    assert.isTrue(bindings.worktreePaths.has(checkout));
+    assert.deepEqual(bindings.unreadable, []);
+    assert.equal(prepare.mock.calls.length, 0);
+  })),
+);

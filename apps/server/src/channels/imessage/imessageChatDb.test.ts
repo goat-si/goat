@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+import { vi } from "vitest";
 // @effect-diagnostics nodeBuiltinImport:off -- synthetic SQLite file fixture only.
 import * as NodeSqlite from "node:sqlite";
 import * as NodeFS from "node:fs";
@@ -61,3 +63,30 @@ describe("iMessage read-only chat database", () => {
     }
   });
 });
+
+it.effect("opens and reads Messages without parent-thread native statements", () =>
+  Effect.gen(function* () {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-imsg-offloop-"));
+    try {
+      const file = NodePath.join(dir, "fixture.sqlite");
+      const seed = new NodeSqlite.DatabaseSync(file);
+      try {
+        seed.exec(`CREATE TABLE message (guid TEXT, text TEXT, attributedBody BLOB, handle_id INTEGER,
+          is_from_me INTEGER, date INTEGER, date_read INTEGER, cache_roomnames TEXT,
+          associated_message_type INTEGER, item_type INTEGER, balloon_bundle_id TEXT);
+          CREATE TABLE handle (id TEXT, service TEXT);
+          CREATE TABLE chat (guid TEXT, chat_identifier TEXT, style INTEGER);
+          CREATE TABLE chat_message_join (message_id INTEGER, chat_id INTEGER);
+          INSERT INTO message (guid,text,is_from_me,date,item_type) VALUES ('invented-guid','hello',0,0,0)`);
+      } finally { seed.close(); }
+      using prepare = vi.spyOn(NodeSqlite.DatabaseSync.prototype, "prepare");
+      const reader = openImessageChatDb(file);
+      try {
+        expect(reader.maxRowId()).toBe(1);
+        expect(reader.rowsAfter(0, 50).map((row) => row.rowid)).toEqual([1]);
+        expect(reader.rowById(1)?.guid).toBe("invented-guid");
+      } finally { reader.close(); }
+      expect(prepare.mock.calls).toHaveLength(0);
+    } finally { NodeFS.rmSync(dir, { recursive: true, force: true }); }
+  }),
+);
