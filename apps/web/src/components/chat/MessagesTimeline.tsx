@@ -1,6 +1,7 @@
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import { TimelineHistoryControl } from "./TimelineHistoryControl";
+import { timelineHeadingPins } from "./timelineHeadingPins";
 import { useSentCallReveal } from "./useSentCallReveal";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
@@ -786,6 +787,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const alwaysRenderIndices = restoringAlwaysRender?.indices ?? [];
   const alwaysRenderKeys = [
+    ...timelineHeadingPins(rows),
     ...(citationAlwaysRender?.keys ?? []),
     ...(fullscreenAppRowId === null ? [] : [fullscreenAppRowId]),
     ...new Set(
