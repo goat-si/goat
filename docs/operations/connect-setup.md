@@ -209,6 +209,36 @@ tunnel name cannot recover the original raw stage. Legacy credentials and tokens
 or refresh, and old queue/hook payloads are dropped. Roll back with a forward fix while admission
 stays closed; an old Worker does not enforce the new tables.
 
+Generation zero keeps its original endpoint digest. Later generations use a domain-separated
+JSON encoding. Before upgrading a stage that has already run the beta policy, inspect its
+identities with a read-only connection; substitute the deployed raw stage for `__legacy__`:
+
+```sql
+WITH candidates AS (
+  SELECT stage, user_id, environment_id, high_water_generation AS generation,
+    left(encode(sha256(convert_to(stage || ':' || user_id || ':' || environment_id ||
+      CASE WHEN high_water_generation = 0 THEN '' ELSE ':' || high_water_generation END,
+      'UTF8')), 'hex'), 16) AS endpoint_key
+  FROM relay_endpoint_identities
+  UNION
+  SELECT stage, user_id, environment_id, generation, endpoint_key
+  FROM relay_retired_endpoints
+)
+SELECT stage, endpoint_key, count(DISTINCT (user_id, environment_id, generation))
+FROM candidates
+GROUP BY stage, endpoint_key
+HAVING count(DISTINCT (user_id, environment_id, generation)) > 1;
+
+SELECT stage, user_id, environment_id, high_water_generation
+FROM relay_endpoint_identities WHERE high_water_generation > 0;
+```
+
+Any collision requires explicit operator resolution while admission stays closed. Any existing
+positive-generation identity also blocks this encoding upgrade: inventory its allocated and
+retired tunnel names and hostnames, retire the old names, and advance to unused identities
+before admitting traffic. Do not simply recompute a live positive-generation address or discard
+its historical names. A stage with only generation-zero identities needs no address migration.
+
 The relay CI lane includes real PostgreSQL migration and concurrency tests and local workerd
 restart tests. Hosted Linux runners may install PostgreSQL; self-hosted runners must provide
 `pg_config`, `initdb`, `postgres`, `pg_ctl`, and `psql` (or test-only `PG_BIN`). The prerequisite

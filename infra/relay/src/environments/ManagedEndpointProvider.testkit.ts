@@ -1,3 +1,6 @@
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
+import * as ManagedProvisioningIntents from "./ManagedProvisioningIntents.ts";
 import { policyUnitLayer, identityUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -396,4 +399,21 @@ export function expectedManagedHostname(environmentId: string, userId = "user_AB
 
 export function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
   return `goatrelay-managedendpoint-dev-alex-${expectedManagedEndpointHash(environmentId, userId)}`;
+}
+
+export function layerPostgresProvider(
+  pg: Parameters<typeof postgresPolicyLayer>[0],
+  tunnelClient: ManagedEndpointProvider.ManagedEndpointTunnelClient["Service"],
+  dnsClient: ManagedEndpointProvider.ManagedEndpointDnsClient["Service"],
+  rates: RelayRateLimits["Service"] = { charge: () => Effect.void },
+) {
+  const policy = postgresPolicyLayer(pg);
+  return ManagedEndpointProvider.layer.pipe(
+    Layer.provide(ManagedEndpointProvider.layerTunnelClient(tunnelClient)),
+    Layer.provide(ManagedEndpointProvider.layerDnsClient(dnsClient)),
+    Layer.provide(ManagedProvisioningIntents.layer.pipe(Layer.provide(policy))),
+    Layer.provide(Layer.succeed(RelayRateLimits, rates)),
+    Layer.provideMerge(policy),
+    Layer.provideMerge(NodeServices.layer),
+  );
 }

@@ -1,3 +1,4 @@
+import { makeHandle, unusedHttpClient } from "./ManagedEndpointRuntime.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -10,11 +11,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
-import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import type { RelayManagedEndpointRuntimeConfig } from "@goat/contracts/relay";
 import * as RelayClient from "@goat/shared/relayClient";
 
@@ -35,8 +35,6 @@ const layerRelayClientAvailable = Layer.succeed(
     pruneManagedVersions: Effect.void,
   }),
 );
-
-const unusedHttpClient = HttpClient.make(() => Effect.die("unused"));
 
 const runtimeDependencies = (
   spawner: ReturnType<typeof ChildProcessSpawner.make>,
@@ -70,31 +68,6 @@ const buildCloudManagedEndpointRuntime = (
       Effect.provide(context),
     );
   });
-
-function makeHandle(input: {
-  readonly pid: number;
-  readonly onKill: () => void;
-  readonly isRunning?: () => boolean;
-  readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode>;
-  readonly output?: Stream.Stream<Uint8Array>;
-}) {
-  return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(input.pid),
-    exitCode: input.exitCode ?? Effect.never,
-    isRunning: Effect.sync(() => input.isRunning?.() ?? true),
-    kill: () =>
-      Effect.sync(() => {
-        input.onKill();
-      }),
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.empty,
-    stderr: Stream.empty,
-    all: input.output ?? Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-}
 
 describe("CloudManagedEndpointRuntime", () => {
   it.effect("serializes updates to persisted cloud link state", () =>
@@ -928,3 +901,99 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 });
+
+it.effect(
+  "the ready connector probes public identity, resets timeout failures on success and configuration change, and recovers after two failures",
+  () =>
+    Effect.gen(function* () {
+      let mode: "healthy" | "deleted" | "retargeted" | "timeout" = "timeout";
+      let probes = 0;
+      const recoveries: RelayManagedEndpointRuntimeConfig[] = [];
+      const http = HttpClient.make((request) => {
+        if (request.url.startsWith("https://")) {
+          probes++;
+          if (mode === "timeout") return Effect.never;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                { environmentId: mode === "retargeted" ? "other-environment" : "env-fixture" },
+                { status: mode === "deleted" ? 404 : 200 },
+              ),
+            ),
+          );
+        }
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json(
+              request.url.endsWith("/config")
+                ? { config: { ingress: [{ hostname: "managed.example.test" }] } }
+                : { readyConnections: 1 },
+            ),
+          ),
+        );
+      });
+      let pid = 900;
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeHandle({
+            pid: ++pid,
+            onKill: () => {},
+            output: Stream.concat(
+              Stream.make(
+                new TextEncoder().encode(
+                  "Starting metrics server on 127.0.0.1:43210/metrics\nRegistered tunnel connection connIndex=0\n",
+                ),
+              ),
+              Stream.never,
+            ),
+          }),
+        ),
+      );
+      const runtime = yield* buildCloudManagedEndpointRuntime(
+        spawner,
+        layerRelayClientAvailable,
+        http,
+      );
+      yield* runtime.recoveryRequests.pipe(
+        Stream.runForEach((config) =>
+          Effect.sync(() => {
+            recoveries.push(config);
+          }),
+        ),
+        Effect.forkChild,
+      );
+      const original = {
+        providerKind: "cloudflare_tunnel" as const,
+        connectorToken: "old",
+        tunnelId: "old",
+      };
+      yield* runtime.applyConfig(original);
+      yield* TestClock.adjust("40 seconds");
+      expect(probes).toBe(1);
+      expect(recoveries).toEqual([]);
+      mode = "healthy";
+      yield* TestClock.adjust("10 minutes");
+      expect(recoveries).toEqual([]);
+      mode = "deleted";
+      yield* TestClock.adjust("10 minutes");
+      expect(recoveries).toEqual([]);
+      mode = "healthy";
+      yield* TestClock.adjust("10 minutes");
+      mode = "retargeted";
+      yield* TestClock.adjust("10 minutes");
+      expect(recoveries).toEqual([]);
+      const replacement = { ...original, connectorToken: "new", tunnelId: "new" };
+      yield* runtime.applyConfig(replacement);
+      mode = "deleted";
+      yield* TestClock.adjust("30 seconds");
+      expect(recoveries).toEqual([]);
+      mode = "retargeted";
+      yield* TestClock.adjust("10 minutes");
+      expect(recoveries).toEqual([replacement]);
+      mode = "healthy";
+      yield* TestClock.adjust("20 minutes");
+      expect(recoveries).toEqual([replacement]);
+    }),
+);

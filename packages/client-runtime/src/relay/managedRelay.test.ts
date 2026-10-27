@@ -11,6 +11,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import { RELAY_GATEWAY_TIMEOUT_MESSAGE, relayRequestFailureDetail } from "./errorPresentation.ts";
 import * as ManagedRelay from "./managedRelay.ts";
@@ -234,99 +235,110 @@ describe("ManagedRelayClient", () => {
     });
   });
 
-  it.effect("refreshes a persisted DPoP token once when the relay rejects it", () => {
-    let tokenExchangeCount = 0;
-    const statusTokens: Array<string | null> = [];
-    let persistedTokens: ReadonlyArray<ManagedRelay.ManagedRelayAccessTokenCacheEntry> = [
-      {
-        accountId: "user-1",
-        clientId: "goat-mobile",
-        relayUrl: "https://relay.example.test",
-        thumbprint: "client-thumbprint",
-        scopes: [RelayEnvironmentStatusScope],
-        accessToken: "stale-relay-token",
-        expiresAtMillis: Number.MAX_SAFE_INTEGER,
-      },
-    ];
-    const accessTokenStore: ManagedRelay.ManagedRelayAccessTokenStore = {
-      load: Effect.sync(() => persistedTokens),
-      save: (entries) =>
-        Effect.sync(() => {
-          persistedTokens = entries;
+  it.effect.each(["invalid_bearer", "stale_epoch"] as const)(
+    "refreshes a persisted DPoP token once for %s",
+    (reason) => {
+      let tokenExchangeCount = 0;
+      const statusTokens: Array<string | null> = [];
+      let persistedTokens: ReadonlyArray<ManagedRelay.ManagedRelayAccessTokenCacheEntry> = [
+        {
+          accountId: "user-1",
+          clientId: "goat-mobile",
+          relayUrl: "https://relay.example.test",
+          thumbprint: "client-thumbprint",
+          scopes: [RelayEnvironmentStatusScope],
+          accessToken: "stale-relay-token",
+          expiresAtMillis: Number.MAX_SAFE_INTEGER,
+        },
+      ];
+      const accessTokenStore: ManagedRelay.ManagedRelayAccessTokenStore = {
+        load: Effect.sync(() => persistedTokens),
+        save: (entries) =>
+          Effect.sync(() => {
+            persistedTokens = entries;
+          }),
+        clear: Effect.sync(() => {
+          persistedTokens = [];
         }),
-      clear: Effect.sync(() => {
-        persistedTokens = [];
-      }),
-    };
-    const fetchFn = ((input, init) => {
-      const url = String(input);
-      if (url.endsWith("/v1/client/dpop-token")) {
-        tokenExchangeCount += 1;
+      };
+      const fetchFn = ((input, init) => {
+        const url = String(input);
+        if (url.endsWith("/v1/client/dpop-token")) {
+          tokenExchangeCount += 1;
+          return Promise.resolve(
+            Response.json({
+              access_token: "fresh-relay-token",
+              issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+              token_type: "DPoP",
+              expires_in: 1_800,
+              scope: RelayEnvironmentStatusScope,
+            }),
+          );
+        }
+
+        const authorization = new Headers(init?.headers).get("authorization");
+        statusTokens.push(authorization);
+        if (authorization === "DPoP stale-relay-token") {
+          return Promise.resolve(
+            Response.json(
+              reason === "invalid_bearer"
+                ? {
+                    _tag: "RelayAuthInvalidError",
+                    code: "auth_invalid",
+                    reason: "invalid_bearer",
+                    traceId: "trace-stale-token",
+                  }
+                : {
+                    _tag: "RelayAccountEpochStaleError",
+                    code: "account_epoch_stale",
+                    credentialKind: "dpop",
+                    action: "refresh_token",
+                    traceId: "trace-stale-token",
+                  },
+              { status: 401 },
+            ),
+          );
+        }
         return Promise.resolve(
           Response.json({
-            access_token: "fresh-relay-token",
-            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
-            token_type: "DPoP",
-            expires_in: 1_800,
-            scope: RelayEnvironmentStatusScope,
+            environmentId: "env-1",
+            endpoint: {
+              httpBaseUrl: "https://desktop.example.test/",
+              wsBaseUrl: "wss://desktop.example.test/ws",
+              providerKind: "cloudflare_tunnel",
+            },
+            status: "online",
+            checkedAt: "2026-06-05T20:00:00.000Z",
+            descriptor: {
+              environmentId: "env-1",
+              label: "Desktop",
+              platform: { os: "darwin", arch: "arm64" },
+              serverVersion: "0.0.0-test",
+              capabilities: { repositoryIdentity: true },
+            },
           }),
         );
-      }
+      }) satisfies typeof globalThis.fetch;
 
-      const authorization = new Headers(init?.headers).get("authorization");
-      statusTokens.push(authorization);
-      if (authorization === "DPoP stale-relay-token") {
-        return Promise.resolve(
-          Response.json(
-            {
-              _tag: "RelayAuthInvalidError",
-              code: "auth_invalid",
-              reason: "invalid_bearer",
-              traceId: "trace-stale-token",
-            },
-            { status: 401 },
-          ),
-        );
-      }
-      return Promise.resolve(
-        Response.json({
-          environmentId: "env-1",
-          endpoint: {
-            httpBaseUrl: "https://desktop.example.test/",
-            wsBaseUrl: "wss://desktop.example.test/ws",
-            providerKind: "cloudflare_tunnel",
+      return Effect.gen(function* () {
+        const relayClient = yield* ManagedRelay.ManagedRelayClient;
+        const result = yield* relayClient.getEnvironmentStatus({
+          clerkToken: clerkToken("user-1", "session-1"),
+          scopes: [RelayEnvironmentStatusScope],
+          environmentId: EnvironmentId.make("env-1"),
+        });
+
+        expect(result.status).toBe("online");
+        expect(statusTokens).toEqual(["DPoP stale-relay-token", "DPoP fresh-relay-token"]);
+        expect(tokenExchangeCount).toBe(1);
+        expect(persistedTokens).toMatchObject([
+          {
+            accessToken: "fresh-relay-token",
           },
-          status: "online",
-          checkedAt: "2026-06-05T20:00:00.000Z",
-          descriptor: {
-            environmentId: "env-1",
-            label: "Desktop",
-            platform: { os: "darwin", arch: "arm64" },
-            serverVersion: "0.0.0-test",
-            capabilities: { repositoryIdentity: true },
-          },
-        }),
-      );
-    }) satisfies typeof globalThis.fetch;
-
-    return Effect.gen(function* () {
-      const relayClient = yield* ManagedRelay.ManagedRelayClient;
-      const result = yield* relayClient.getEnvironmentStatus({
-        clerkToken: clerkToken("user-1", "session-1"),
-        scopes: [RelayEnvironmentStatusScope],
-        environmentId: EnvironmentId.make("env-1"),
-      });
-
-      expect(result.status).toBe("online");
-      expect(statusTokens).toEqual(["DPoP stale-relay-token", "DPoP fresh-relay-token"]);
-      expect(tokenExchangeCount).toBe(1);
-      expect(persistedTokens).toMatchObject([
-        {
-          accessToken: "fresh-relay-token",
-        },
-      ]);
-    }).pipe(Effect.provide(layerManagedRelayTest(fetchFn, undefined, accessTokenStore)));
-  });
+        ]);
+      }).pipe(Effect.provide(layerManagedRelayTest(fetchFn, undefined, accessTokenStore)));
+    },
+  );
 
   it.effect("does not persist tokens when the Clerk subject cannot be decoded", () => {
     let persistedTokens: ReadonlyArray<ManagedRelay.ManagedRelayAccessTokenCacheEntry> = [];
@@ -459,4 +471,121 @@ describe("ManagedRelayClient", () => {
       }
     }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
   });
+});
+
+it.effect(
+  "connect cooldown spans targets and manual requests, isolates accounts, and survives a stale-token refresh",
+  () => {
+    let exchanges = 0;
+    let connects = 0;
+    const fetchFn: typeof globalThis.fetch = (input) => {
+      if (String(input).endsWith("/v1/client/dpop-token"))
+        return Promise.resolve(
+          Response.json({
+            access_token: `token-${++exchanges}`,
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            token_type: "DPoP",
+            expires_in: 1800,
+            scope: RelayEnvironmentConnectScope,
+          }),
+        );
+      connects++;
+      if (connects === 1)
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "RelayAccountEpochStaleError",
+              code: "account_epoch_stale",
+              credentialKind: "dpop",
+              action: "refresh_token",
+              traceId: "fixture",
+            },
+            { status: 401 },
+          ),
+        );
+      return Promise.resolve(
+        Response.json(
+          {
+            _tag: "RelayRateLimitExceededError",
+            code: "rate_limit_exceeded",
+            operation: "connect",
+            retryAfterSeconds: 60,
+            traceId: "fixture",
+          },
+          { status: 429, headers: { "retry-after": "60" } },
+        ),
+      );
+    };
+    return Effect.gen(function* () {
+      const client = yield* ManagedRelay.ManagedRelayClient;
+      const connect = (account: string, target: string) =>
+        client
+          .connectEnvironment({
+            clerkToken: clerkToken(account, "session"),
+            environmentId: EnvironmentId.make(target),
+            scopes: [RelayEnvironmentConnectScope],
+          })
+          .pipe(Effect.flip);
+      expect(yield* connect("owner", "a")).toMatchObject({ status: 429, retryAfterMillis: 60000 });
+      expect(exchanges).toBe(2);
+      expect(connects).toBe(2);
+      yield* connect("owner", "b");
+      yield* connect("owner", "a");
+      expect(exchanges).toBe(2);
+      expect(connects).toBe(2);
+      yield* connect("other", "a");
+      expect(exchanges).toBe(3);
+      expect(connects).toBe(3);
+      yield* TestClock.adjust("60 seconds");
+      yield* connect("owner", "b");
+      expect(connects).toBe(4);
+      expect(exchanges).toBe(3);
+    }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
+  },
+);
+
+it.effect("suspension denial does not exchange the accepted DPoP token again", () => {
+  let exchanges = 0;
+  let connects = 0;
+  const fetchFn: typeof globalThis.fetch = (input) => {
+    if (String(input).endsWith("/v1/client/dpop-token")) {
+      exchanges++;
+      return Promise.resolve(
+        Response.json({
+          access_token: "accepted-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 1800,
+          scope: RelayEnvironmentConnectScope,
+        }),
+      );
+    }
+    connects++;
+    return Promise.resolve(
+      Response.json(
+        {
+          _tag: "RelayAccountAccessDeniedError",
+          code: "account_access_denied",
+          reason: "suspended",
+          traceId: "fixture",
+        },
+        { status: 403 },
+      ),
+    );
+  };
+  return Effect.gen(function* () {
+    const client = yield* ManagedRelay.ManagedRelayClient;
+    for (const environmentId of ["a", "b"])
+      expect(
+        yield* client
+          .connectEnvironment({
+            clerkToken: clerkToken("owner", "session"),
+            environmentId: EnvironmentId.make(environmentId),
+            scopes: [RelayEnvironmentConnectScope],
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ status: 403 });
+    expect(exchanges).toBe(1);
+    expect(connects).toBe(2);
+  }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
 });

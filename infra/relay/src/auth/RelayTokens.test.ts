@@ -1,3 +1,6 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
@@ -179,3 +182,66 @@ describe("RelayTokens", () => {
     }).pipe(Effect.provide(layer)),
   );
 });
+
+it.live.each(["challenge", "dpop"] as const)(
+  "%s issuance denies missing invitations, suspension and an epoch changed during charging",
+  (kind) =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      let changeEpoch = false;
+      const runtime = RelayTokens.layer.pipe(
+        Layer.provide(RelayConfiguration.layer(config)),
+        Layer.provide(
+          Layer.succeed(RelayRateLimits, {
+            charge: () =>
+              Effect.sync(() => {
+                if (changeEpoch) pg.query("UPDATE relay_account_access SET account_epoch=3");
+              }),
+          }),
+        ),
+        Layer.provide(postgresPolicyLayer(pg)),
+      );
+      yield* Effect.gen(function* () {
+        const tokens = yield* RelayTokens.RelayTokens;
+        const input = {
+          userId: "owner",
+          jti: "fixture",
+          issuedAtEpochSeconds: 100,
+          expiresAtEpochSeconds: 200,
+        };
+        const issue =
+          kind === "challenge"
+            ? tokens.issueLinkChallenge({
+                ...input,
+                request: {
+                  notificationsEnabled: true,
+                  liveActivitiesEnabled: true,
+                  managedTunnelsEnabled: true,
+                },
+              })
+            : tokens.issueDpopAccessToken({
+                ...input,
+                proofKeyThumbprint: "fixture-key",
+                clientId: "goat-web",
+                scopes: ["environment:connect"],
+              });
+        expect(yield* Effect.flip(issue)).toMatchObject({
+          _tag: "RelayAccountAccessDeniedError",
+          reason: "not_invited",
+        });
+        pg.query(
+          "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','suspended',2)",
+        );
+        expect(yield* Effect.flip(issue)).toMatchObject({
+          _tag: "RelayAccountAccessDeniedError",
+          reason: "suspended",
+        });
+        pg.query("UPDATE relay_account_access SET status='allowed',account_epoch=1");
+        changeEpoch = true;
+        expect(yield* Effect.flip(issue)).toMatchObject({ _tag: "RelayAccountEpochStaleError" });
+        changeEpoch = false;
+        expect(typeof (yield* issue)).toBe("string");
+      }).pipe(Effect.provide(runtime));
+    }),
+);

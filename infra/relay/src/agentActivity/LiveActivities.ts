@@ -359,6 +359,18 @@ export const make = Effect.gen(function* () {
     markDelivery: Effect.fn("relay.live_activities.mark_delivery")(function* (input) {
       return yield* authorization.result(
         Effect.gen(function* () {
+          const target = yield* DeliveryAuthorization.DeliveryContext;
+          if (
+            !target ||
+            target.accountEpoch === null ||
+            target.userId !== input.userId ||
+            target.deviceId !== input.deviceId
+          )
+            return yield* new RelayAuthorizationUnavailableError({
+              code: "authorization_unavailable",
+              traceId: "relay",
+            });
+          const sameEpoch = sql`${relayLiveActivities.accountEpoch} = ${target.accountEpoch} AND ${relayLiveActivities.deliveryDisabledAt} IS NULL`;
           yield* Effect.annotateCurrentSpan({
             "relay.mobile.device_id": input.deviceId,
             "relay.delivery.kind": input.kind,
@@ -377,6 +389,8 @@ export const make = Effect.gen(function* () {
               .values({
                 userId: input.userId,
                 deviceId: input.deviceId,
+                accountEpoch: target.accountEpoch,
+                deliveryDisabledAt: null,
                 remoteStartedAt: input.kind === "live_activity_start" ? input.deliveredAt : null,
                 remoteStartQueuedAt: null,
                 endedAt: input.kind === "live_activity_end" ? input.deliveredAt : null,
@@ -388,25 +402,27 @@ export const make = Effect.gen(function* () {
               .onConflictDoUpdate({
                 target: [relayLiveActivities.userId, relayLiveActivities.deviceId],
                 set: {
+                  accountEpoch: target.accountEpoch,
+                  deliveryDisabledAt: null,
                   // Starts create new activity generations; only plain updates can reuse the previous update token.
                   activityPushToken:
                     input.kind === "live_activity_update"
-                      ? sql`${relayLiveActivities.activityPushToken}`
+                      ? sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.activityPushToken} ELSE NULL END`
                       : null,
                   remoteStartedAt:
                     input.kind === "live_activity_start"
                       ? input.deliveredAt
-                      : sql`coalesce(
+                      : sql`CASE WHEN ${sameEpoch} THEN coalesce(
                       ${relayLiveActivities.remoteStartedAt},
                       excluded.remote_started_at
-                    )`,
+                    ) ELSE NULL END`,
                   remoteStartQueuedAt: null,
                   endedAt:
                     input.kind === "live_activity_start"
                       ? null
                       : input.kind === "live_activity_end"
                         ? input.deliveredAt
-                        : relayLiveActivities.endedAt,
+                        : sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.endedAt} ELSE NULL END`,
                   lastAggregateJson: aggregateJson,
                   lastLiveActivityDeliveryAt: input.deliveredAt,
                   updatedAt: input.deliveredAt,
@@ -431,6 +447,18 @@ export const make = Effect.gen(function* () {
     markStartQueued: Effect.fn("relay.live_activities.mark_start_queued")(function* (input) {
       return yield* authorization.result(
         Effect.gen(function* () {
+          const target = yield* DeliveryAuthorization.DeliveryContext;
+          if (
+            !target ||
+            target.accountEpoch === null ||
+            target.userId !== input.userId ||
+            target.deviceId !== input.deviceId
+          )
+            return yield* new RelayAuthorizationUnavailableError({
+              code: "authorization_unavailable",
+              traceId: "relay",
+            });
+          const sameEpoch = sql`${relayLiveActivities.accountEpoch} = ${target.accountEpoch} AND ${relayLiveActivities.deliveryDisabledAt} IS NULL`;
           yield* Effect.annotateCurrentSpan({
             "relay.mobile.device_id": input.deviceId,
           });
@@ -439,6 +467,8 @@ export const make = Effect.gen(function* () {
             .values({
               userId: input.userId,
               deviceId: input.deviceId,
+              accountEpoch: target.accountEpoch,
+              deliveryDisabledAt: null,
               remoteStartQueuedAt: input.queuedAt,
               remoteStartedAt: null,
               endedAt: null,
@@ -448,10 +478,16 @@ export const make = Effect.gen(function* () {
             .onConflictDoUpdate({
               target: [relayLiveActivities.userId, relayLiveActivities.deviceId],
               set: {
-                remoteStartQueuedAt: sql`coalesce(
+                accountEpoch: target.accountEpoch,
+                deliveryDisabledAt: null,
+                activityPushToken: sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.activityPushToken} ELSE NULL END`,
+                remoteStartedAt: sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.remoteStartedAt} ELSE NULL END`,
+                lastAggregateJson: sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.lastAggregateJson} ELSE NULL END`,
+                lastLiveActivityDeliveryAt: sql`CASE WHEN ${sameEpoch} THEN ${relayLiveActivities.lastLiveActivityDeliveryAt} ELSE NULL END`,
+                remoteStartQueuedAt: sql`CASE WHEN ${sameEpoch} THEN coalesce(
               ${relayLiveActivities.remoteStartQueuedAt},
               excluded.remote_start_queued_at
-            )`,
+            ) ELSE excluded.remote_start_queued_at END`,
                 endedAt: null,
                 updatedAt: input.queuedAt,
               },

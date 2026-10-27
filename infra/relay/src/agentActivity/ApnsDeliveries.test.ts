@@ -1,3 +1,11 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { AccountLifecycle } from "../accounts/AccountLifecycle.ts";
+import { DeliveryAuthorization } from "./DeliveryAuthorization.ts";
+import { Devices } from "./Devices.ts";
+import * as DateTime from "effect/DateTime";
+import * as ApnsDeliveryQueueConsumer from "./ApnsDeliveryQueueConsumer.ts";
+import type * as Cloudflare from "alchemy/Cloudflare";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type {
   RelayAgentActivityAggregateState,
@@ -1158,3 +1166,99 @@ describe("signed APNs registration metadata", () => {
     );
   });
 });
+
+it.live(
+  "the actual APNs consumer acknowledges old signed and legacy jobs but retries a PG outage",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1)",
+      );
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* AccountLifecycle;
+        const devices = yield* Devices;
+        const authorization = yield* DeliveryAuthorization;
+        const registration = {
+          deviceId: "phone",
+          label: "Fixture",
+          platform: "ios" as const,
+          iosMajorVersion: 18,
+          pushToken: "same-token",
+          preferences: {
+            notificationsEnabled: true,
+            liveActivitiesEnabled: true,
+            notifyOnApproval: true,
+            notifyOnInput: true,
+            notifyOnCompletion: true,
+            notifyOnFailure: true,
+          },
+        };
+        yield* devices.register({ userId: "owner", registration });
+        const now = yield* DateTime.now;
+        const payload = makeApnsDeliveryJobPayload({
+          accountEpoch: 1,
+          kind: "push_notification",
+          userId: "owner",
+          deviceId: "phone",
+          token: "same-token",
+          aggregate: null,
+          notification: {
+            title: "Fixture",
+            body: "Ready",
+            environmentId: "env",
+            threadId: "thread",
+            deepLink: "/",
+          },
+          createdAt: DateTime.formatIso(now),
+          expiresAt: DateTime.formatIso(DateTime.add(now, { minutes: 5 })),
+          jobId: "old-epoch-job",
+        });
+        const job = signApnsDeliveryJob({ secret: config.apnsDeliveryJobSigningSecret, payload });
+        const suspend = yield* lifecycle.request({
+          userId: "owner",
+          kind: "suspend",
+          idempotencyKey: "suspend",
+        });
+        yield* lifecycle.resume(suspend.id);
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "allow" });
+        yield* devices.register({ userId: "owner", registration });
+        const outcomes: string[] = [];
+        let sends = 0;
+        const layer = layerFor({
+          authorization,
+          attempts: [],
+          execute: (request) =>
+            Effect.sync(() => {
+              sends++;
+              return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+            }),
+        });
+        const message = (id: string, body: unknown): Cloudflare.Queues.Message<unknown> => ({
+          id,
+          body,
+          timestamp: DateTime.toDateUtc(now),
+          attempts: 1,
+          ack: () => {
+            outcomes.push(`${id}:ack`);
+          },
+          retry: () => {
+            outcomes.push(`${id}:retry`);
+          },
+        });
+        yield* ApnsDeliveryQueueConsumer.processMessage(message("old", job)).pipe(
+          Effect.provide(layer),
+        );
+        yield* ApnsDeliveryQueueConsumer.processMessage(
+          message("legacy", { ...job, payload: { ...job.payload, version: 1 } }),
+        ).pipe(Effect.provide(layer));
+        pg.query("ALTER TABLE relay_account_access RENAME TO fixture_unavailable_access");
+        yield* ApnsDeliveryQueueConsumer.processMessage(message("outage", job)).pipe(
+          Effect.provide(layer),
+        );
+        expect(outcomes).toEqual(["old:ack", "legacy:ack", "outage:retry"]);
+        expect(sends).toBe(0);
+      }).pipe(Effect.provide(postgresPolicyLayer(pg)));
+    }),
+);

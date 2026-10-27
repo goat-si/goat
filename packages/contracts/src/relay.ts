@@ -940,7 +940,7 @@ const RelayServerGroup = HttpApiGroup.make("server")
       }),
       payload: RelayManagedEndpointRecoveryRequest,
       success: RelayManagedEndpointRecoveryResponse,
-      error: RelayAuthAndInternalErrors,
+      error: [...RelayAuthAndInternalErrors, RelayEnvironmentLinkLimitExceededError],
     }).annotate(OpenApi.Summary, "Recover an environment's managed tunnel"),
     HttpApiEndpoint.post(
       "publishAgentActivity",

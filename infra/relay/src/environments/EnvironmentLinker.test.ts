@@ -1,3 +1,6 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
 import type { ManagedEndpointAllocation } from "./ManagedEndpointAllocations.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
@@ -380,4 +383,51 @@ it.effect.each([true, false])(
       ),
     );
   },
+);
+
+it.live(
+  "a credential insert failure rolls back the link and owner activation in the actual signed-link service",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('user_123','allowed',1)",
+      );
+      pg.query(
+        "CREATE FUNCTION reject_fixture_credentials() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture credential outage'; END $$; CREATE TRIGGER reject_fixture_credentials BEFORE INSERT ON relay_environment_credentials FOR EACH ROW EXECUTE FUNCTION reject_fixture_credentials()",
+      );
+      const policy = postgresPolicyLayer(pg);
+      const rates = Layer.succeed(RelayRateLimits, { charge: () => Effect.void });
+      const configuration = RelayConfiguration.layer(config);
+      const tokens = RelayTokens.layer.pipe(
+        Layer.provide(configuration),
+        Layer.provide(rates),
+        Layer.provide(policy),
+      );
+      const runtime = EnvironmentLinker.layer.pipe(
+        Layer.provide(
+          Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {
+            deprovision: () => Effect.succeed(true),
+          }),
+        ),
+        Layer.provide(DpopProofs.layer.pipe(Layer.provide(policy))),
+        Layer.provideMerge(tokens),
+        Layer.provide(configuration),
+        Layer.provide(rates),
+        Layer.provide(policy),
+      );
+      yield* Effect.gen(function* () {
+        const { request } = yield* makeRequest;
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* linker.link({ userId: "user_123", request }).pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "EnvironmentCredentialCreatePersistenceError" },
+        });
+        expect(pg.query("SELECT count(*) FROM relay_environment_links").trim()).toBe("0");
+        expect(pg.query("SELECT count(*) FROM relay_environment_credentials").trim()).toBe("0");
+        expect(pg.query("SELECT state FROM relay_environment_owners").trim()).toBe("pending");
+      }).pipe(Effect.provide(runtime));
+    }),
 );

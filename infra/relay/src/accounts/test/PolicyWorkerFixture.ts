@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Rate from "../AccountRateLimitObject.ts";
-import type { HourlyOperation } from "../AccountLimits.ts";
+import { HOURLY_OPERATIONS, type HourlyOperation } from "../AccountLimits.ts";
 import * as Inbox from "../../hooks/HookInboxObject.ts";
 import * as Authorization from "../../hooks/HookDeliveryAuthorization.ts";
 import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
@@ -123,7 +123,12 @@ export const layer = PolicyWorker.make(
         const inbox = inboxes.getByName(account);
         switch (url.pathname) {
           case "/rate":
-            return HttpServerResponse.jsonUnsafe(yield* rate.consume("link_challenge"));
+            return HttpServerResponse.jsonUnsafe(
+              yield* rate.consume(
+                HOURLY_OPERATIONS.find((op) => op === url.searchParams.get("operation")) ??
+                  "link_challenge",
+              ),
+            );
           case "/rate-instance":
             return HttpServerResponse.text(yield* rate.instance());
           case "/rate-reset":

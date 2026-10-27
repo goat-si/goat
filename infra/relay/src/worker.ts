@@ -14,7 +14,6 @@ import * as RetiredEndpointCollector from "./environments/RetiredEndpointCollect
 import * as retiredInventoryBinding from "./environments/retiredInventoryBinding.ts";
 import * as DeliveryAuthorization from "./agentActivity/DeliveryAuthorization.ts";
 import * as HookDeliveryAuthorization from "./hooks/HookDeliveryAuthorization.ts";
-import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -304,54 +303,25 @@ export const layer = Api.make(
       }),
     });
 
-    const rateKeyCrypto = yield* Crypto.Crypto.pipe(Effect.provide(layerWebcrypto));
-    const layerRates = Layer.succeed(RelayRateLimits.RelayRateLimits, {
-      charge: Effect.fn("RelayRateLimits.charge")(function* (input) {
-        const crypto = rateKeyCrypto;
-        const key = yield* crypto
-          .digest(
-            "SHA-256",
-            new TextEncoder().encode(
-              (input.operation === "activity_publish"
-                ? [stage, input.environmentId ?? "", input.environmentPublicKey ?? ""]
-                : [stage, input.userId]
-              )
-                .map((part) => `${part.length}:${part}`)
-                .join(""),
-            ),
-          )
-          .pipe(
-            Effect.map((bytes) =>
-              Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
-            ),
-            Effect.mapError(
-              () =>
-                new RelayAuthorizationUnavailableError({
-                  code: "authorization_unavailable",
-                  traceId: "relay",
-                }),
-            ),
-          );
-        const result = yield* (
-          input.operation === "mobile_registration" || input.operation === "activity_publish"
-            ? (input.operation === "mobile_registration" ? mobileRate : publishRate)
-                .limit({ key })
-                .pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
-            : accountCounters.getByName(key).consume(input.operation)
-        ).pipe(
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-          Effect.catchCause(() =>
-            Effect.fail(
-              new RelayAuthorizationUnavailableError({
-                code: "authorization_unavailable",
-                traceId: "relay",
-              }),
-            ),
-          ),
-        );
-        yield* RelayRateLimits.enforceRateResult(input.operation, result);
-      }),
-    }).pipe(Layer.provide(layerWebcrypto));
+    const layerRates = Layer.succeed(
+      RelayRateLimits.RelayRateLimits,
+      yield* RelayRateLimits.makeWorkerRateLimits({
+        stage,
+        hourly: (key, operation) =>
+          accountCounters
+            .getByName(key)
+            .consume(operation)
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        mobile: (key) =>
+          mobileRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        publish: (key) =>
+          publishRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+      }).pipe(Effect.provide(layerWebcrypto)),
+    );
     const layerRuntime = Layer.empty
       .pipe(
         Layer.provideMerge(AccountLifecycle.layer),

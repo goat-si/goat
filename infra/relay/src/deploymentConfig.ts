@@ -91,7 +91,10 @@ export function managedEndpointDigestInput(
   if (!Number.isSafeInteger(generation) || generation < 0 || generation > 2147483646)
     throw new RangeError("Invalid endpoint generation");
   const legacy = `${stage}:${userId}:${environmentId}`;
-  return generation === 0 ? legacy : `${legacy}:${generation}`;
+  // NUL cannot begin a configured stage; JSON preserves component boundaries for later generations.
+  return generation === 0
+    ? legacy
+    : `\u0000${JSON.stringify(["goat-managed-endpoint-v1", stage, userId, environmentId, generation])}`;
 }
 
 export function managedEndpointHostname(stage: string, baseDomain: string, hash: string): string {

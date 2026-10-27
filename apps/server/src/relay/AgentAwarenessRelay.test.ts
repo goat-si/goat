@@ -768,3 +768,51 @@ vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
   isGoatConnectEnabled: () => true,
 }));
+
+it.effect(
+  "publisher 429 deadlines survive fresh events and preserve completion before its tombstone",
+  () =>
+    Effect.gen(function* () {
+      const { relay, currentShell, publications } = yield* makeTestRelay({
+        respond: (attempt) =>
+          attempt === 2
+            ? Response.json(
+                {
+                  _tag: "RelayRateLimitExceededError",
+                  code: "rate_limit_exceeded",
+                  operation: "activity_publish",
+                  retryAfterSeconds: 60,
+                  traceId: "fixture",
+                },
+                { status: 429, headers: { "retry-after": "60" } },
+              )
+            : Response.json({ ok: true, deliveries: [] }),
+      });
+      yield* relay.publishThread(THREAD_ID);
+      const completed = shell({ status: "completed" });
+      yield* Ref.set(currentShell, completed);
+      yield* relay.publishThread(THREAD_ID);
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 2);
+      yield* Ref.set(currentShell, {
+        ...completed,
+        settledOverride: "settled",
+        settledAt: yield* DateTime.now,
+      });
+      yield* relay.publishThread(THREAD_ID);
+      yield* relay.drain;
+      yield* TestClock.adjust("59 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 2);
+      yield* TestClock.adjust("1 second");
+      yield* relay.drain;
+      assert.deepEqual(
+        publications.map((p) => p.state?.phase ?? null),
+        ["running", "completed", "completed"],
+      );
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.at(-1)?.state, null);
+    }),
+);

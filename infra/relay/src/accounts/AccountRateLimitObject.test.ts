@@ -1,3 +1,4 @@
+import { HOURLY_OPERATIONS, DEFAULT_LIMITS } from "./AccountLimits.ts";
 // @effect-diagnostics anyUnknownInErrorContext:off -- Alchemy's test provider owns the local Worker lifecycle and exposes its framework error union.
 import { expect } from "@effect/vitest";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -37,29 +38,37 @@ test.provider("hourly DO admission persists after actual object destruction", (s
       ).toBe(true);
       const http = yield* HttpClient.HttpClient;
       const get = (path: string) => http.get(new URL(path, url).href);
-      const outcomes = yield* Effect.all(
-        Array.from({ length: 21 }, () => get("/rate").pipe(Effect.flatMap((r) => r.json))),
-        { concurrency: "unbounded" },
-      );
-      expect(
-        outcomes.filter(
-          (value) =>
-            typeof value === "object" &&
-            value !== null &&
-            "allowed" in value &&
-            value.allowed === true,
-        ),
-      ).toHaveLength(20);
+      for (const operation of HOURLY_OPERATIONS) {
+        const outcomes = yield* Effect.all(
+          Array.from({ length: DEFAULT_LIMITS[operation] + 1 }, () =>
+            get(`/rate?operation=${operation}`).pipe(Effect.flatMap((r) => r.json)),
+          ),
+          { concurrency: "unbounded" },
+        );
+        expect(
+          outcomes.filter(
+            (value) =>
+              typeof value === "object" &&
+              value !== null &&
+              "allowed" in value &&
+              value.allowed === true,
+          ),
+        ).toHaveLength(DEFAULT_LIMITS[operation]);
+      }
       const before = yield* get("/rate-instance").pipe(Effect.flatMap((r) => r.text));
       yield* get("/rate-reset");
       const after = yield* get("/rate-instance").pipe(Effect.flatMap((r) => r.text));
       expect(after).not.toBe(before);
-      expect(yield* get("/rate").pipe(Effect.flatMap((r) => r.json))).toMatchObject({
-        allowed: false,
-      });
-      expect(
-        yield* get("/rate?account=independent").pipe(Effect.flatMap((r) => r.json)),
-      ).toMatchObject({ allowed: true });
+      for (const operation of HOURLY_OPERATIONS) {
+        expect(
+          yield* get(`/rate?operation=${operation}`).pipe(Effect.flatMap((r) => r.json)),
+        ).toMatchObject({ allowed: false, retryAfterSeconds: 3600 });
+        expect(
+          yield* get(`/rate?account=independent&operation=${operation}`).pipe(
+            Effect.flatMap((r) => r.json),
+          ),
+        ).toMatchObject({ allowed: true });
+      }
     }).pipe(
       Effect.provideService(AlchemyContext, context),
       Effect.ensuring(stack.destroy().pipe(Effect.provideService(AlchemyContext, context))),

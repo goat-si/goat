@@ -1,3 +1,9 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
+import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentCredentials } from "./EnvironmentCredentials.ts";
+import type { RelayEnvironmentLinkProofPayload } from "@goat/contracts/relay";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -103,3 +109,82 @@ describe("EnvironmentLinks", () => {
     );
   });
 });
+
+it.live(
+  "final link contention includes publish-only links, permits refresh at cap, and rolls credentials back atomically",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1),('rollback','allowed',1)",
+      );
+      yield* Effect.gen(function* () {
+        const links = yield* EnvironmentLinks.EnvironmentLinks;
+        const credentials = yield* EnvironmentCredentials;
+        const tx = yield* AccountTransactions;
+        const link = (userId: string, id: string) =>
+          links.upsert({
+            userId,
+            request: {
+              notificationsEnabled: true,
+              liveActivitiesEnabled: false,
+              managedTunnelsEnabled: false,
+            },
+            proof: {
+              environmentId: EnvironmentId.make(id),
+              environmentPublicKey: id,
+              descriptor: { label: id },
+            } as RelayEnvironmentLinkProofPayload,
+            endpoint: {
+              httpBaseUrl: "https://publish.example.test/",
+              wsBaseUrl: "wss://publish.example.test/ws",
+              providerKind: "manual",
+            },
+          });
+        const outcomes = yield* Effect.all(
+          ["a", "b"].map((id) => link("owner", id).pipe(Effect.as(id), Effect.result)),
+          { concurrency: 2 },
+        );
+        expect(outcomes.filter((r) => r._tag === "Success")).toHaveLength(1);
+        expect(outcomes.filter((r) => r._tag === "Failure").map((r) => r.failure._tag)).toEqual([
+          "RelayAccountResourceLimitExceededError",
+        ]);
+        const winner = outcomes.find((r) => r._tag === "Success");
+        if (winner?._tag !== "Success") throw new Error("Expected admitted link");
+        yield* link("owner", winner.success);
+        expect(
+          pg
+            .query(
+              "SELECT count(*) FROM relay_environment_links WHERE user_id='owner' AND revoked_at IS NULL",
+            )
+            .trim(),
+        ).toBe("1");
+        pg.query(
+          "CREATE FUNCTION reject_fixture_credentials() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture credential outage'; END $$; CREATE TRIGGER reject_fixture_credentials BEFORE INSERT ON relay_environment_credentials FOR EACH ROW EXECUTE FUNCTION reject_fixture_credentials()",
+        );
+        const failed = yield* tx
+          .run(
+            { userIds: ["rollback"], environmentPublicKey: "rollback-env" },
+            link("rollback", "rollback-env").pipe(
+              Effect.andThen(
+                credentials.create({
+                  userId: "rollback",
+                  accountEpoch: 1,
+                  environmentId: "rollback-env",
+                  environmentPublicKey: "rollback-env",
+                }),
+              ),
+            ),
+          )
+          .pipe(Effect.result);
+        expect(failed._tag).toBe("Failure");
+        expect(
+          pg.query("SELECT count(*) FROM relay_environment_links WHERE user_id='rollback'").trim(),
+        ).toBe("0");
+        expect(
+          pg.query("SELECT count(*) FROM relay_environment_owners WHERE user_id='rollback'").trim(),
+        ).toBe("0");
+      }).pipe(Effect.provide(postgresPolicyLayer(pg, { limits: { environmentLinks: 1 } })));
+    }),
+);

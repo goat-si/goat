@@ -1,3 +1,10 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { AccountLifecycle } from "../accounts/AccountLifecycle.ts";
+import { DeliveryAuthorization } from "./DeliveryAuthorization.ts";
+import { Devices } from "./Devices.ts";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import { signDeliveryPayload } from "./deliveryJobSigning.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
@@ -91,7 +98,12 @@ const signedJob = (payload: FcmDeliveries.FcmDeliveryJob) => ({
   signature: signDeliveryPayload(config.apnsDeliveryJobSigningSecret, "fcm-v2", payload),
 });
 
-function harness() {
+function harness(options?: {
+  readonly authorization?: DeliveryAuthorization["Service"];
+  readonly activities?: LiveActivities.LiveActivities["Service"];
+  readonly beforeStateRead?: Effect.Effect<void>;
+  readonly transport?: FcmClient.FcmClient["Service"]["send"];
+}) {
   const sent: Array<Parameters<FcmClient.FcmClient["Service"]["send"]>[0]> = [];
   const queued: Parameters<FcmDeliveryQueueSender.FcmDeliveryQueueSender["Service"]["send"]>[0][] =
     [];
@@ -116,42 +128,52 @@ function harness() {
         }),
     }),
     Layer.succeed(FcmClient.FcmClient, {
-      send: (input) =>
-        Effect.suspend(() =>
-          current.deliveryFailure
-            ? Effect.fail(current.deliveryFailure)
-            : Effect.sync(() => {
-                sent.push(input);
-                return { unregistered: false };
-              }),
-        ),
+      send:
+        options?.transport ??
+        ((input) =>
+          Effect.suspend(() =>
+            current.deliveryFailure
+              ? Effect.fail(current.deliveryFailure)
+              : Effect.sync(() => {
+                  sent.push(input);
+                  return { unregistered: false };
+                }),
+          )),
     }),
-    Layer.succeed(LiveActivities.LiveActivities, {
-      register: () => Effect.void,
-      listTargets: () => Effect.sync(() => [current.target]),
-      listIdleArmedTargets: () => Effect.succeed([]),
-      markDelivery: (input) =>
-        Effect.sync(() => {
-          marked.push(input);
-          current.target.last_aggregate_json = input.aggregate ? encodeJson(input.aggregate) : null;
-        }),
-      markStartQueued: () => Effect.void,
-      clearStartQueued: () => Effect.void,
-      invalidateDeliveryToken: () => Effect.void,
-    }),
+    Layer.succeed(
+      LiveActivities.LiveActivities,
+      options?.activities ?? {
+        register: () => Effect.void,
+        listTargets: () => Effect.sync(() => [current.target]),
+        listIdleArmedTargets: () => Effect.succeed([]),
+        markDelivery: (input) =>
+          Effect.sync(() => {
+            marked.push(input);
+            current.target.last_aggregate_json = input.aggregate
+              ? encodeJson(input.aggregate)
+              : null;
+          }),
+        markStartQueued: () => Effect.void,
+        clearStartQueued: () => Effect.void,
+        invalidateDeliveryToken: () => Effect.void,
+      },
+    ),
     Layer.succeed(AgentActivityRows.AgentActivityRows, {
       upsert: () => Effect.void,
       remove: () => Effect.void,
       pruneTerminal: () => Effect.void,
       listForUser: () =>
-        Effect.sync(() =>
-          current.linked
-            ? [...(current.state ? [current.state] : []), ...current.otherStates].filter(
-                (row) =>
-                  !current.revokedEnvironments.includes(row.environmentId) &&
-                  !current.notificationOnlyEnvironments.includes(row.environmentId),
-              )
-            : [],
+        Effect.andThen(
+          options?.beforeStateRead ?? Effect.void,
+          Effect.sync(() =>
+            current.linked
+              ? [...(current.state ? [current.state] : []), ...current.otherStates].filter(
+                  (row) =>
+                    !current.revokedEnvironments.includes(row.environmentId) &&
+                    !current.notificationOnlyEnvironments.includes(row.environmentId),
+                )
+              : [],
+          ),
         ),
       getForUserThread: (input) =>
         Effect.sync(() =>
@@ -207,7 +229,17 @@ function harness() {
     queued,
     marked,
     current,
-    layer: FcmDeliveries.layer.pipe(Layer.provide(policyUnitLayer), Layer.provide(layerServices)),
+    layer: FcmDeliveries.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          policyUnitLayer,
+          options?.authorization
+            ? Layer.succeed(DeliveryAuthorization, options.authorization)
+            : Layer.empty,
+        ),
+      ),
+      Layer.provide(layerServices),
+    ),
     job: {
       version: 2,
       jobId: "fixture-job",
@@ -653,7 +685,7 @@ it("stops reducing five-character row fields and fits the remaining alert", () =
 
 describe("FCM queue message isolation", () => {
   it.effect.each(["invalid-job", "fcm-rejection"] as const)(
-    "retries only the %s message and delivers the rest of its batch",
+    "isolates %s: malformed jobs drop, transport failures retry, signed jobs deliver",
     (failure) => {
       const h = harness();
       const outcomes = new Map<string, "ack" | "retry">();
@@ -670,8 +702,9 @@ describe("FCM queue message isolation", () => {
         },
       });
       const batch = [
-        message("failed", failure === "invalid-job" ? {} : h.job),
-        message("healthy", h.job),
+        message("failed", failure === "invalid-job" ? {} : signedJob(h.job)),
+        message("legacy", h.job),
+        message("healthy", signedJob(h.job)),
       ];
       return Effect.gen(function* () {
         yield* Stream.fromIterable(batch).pipe(
@@ -688,7 +721,8 @@ describe("FCM queue message isolation", () => {
         // Cloudflare ignores Alchemy's final batch acknowledgements for already-retried messages.
         for (const item of batch) item.ack();
         expect([...outcomes]).toEqual([
-          ["failed", "retry"],
+          ["failed", failure === "invalid-job" ? "ack" : "retry"],
+          ["legacy", "ack"],
           ["healthy", "ack"],
         ]);
         expect(h.sent).toHaveLength(1);
@@ -697,3 +731,89 @@ describe("FCM queue message isolation", () => {
     },
   );
 });
+
+it.live.each(["before-guard", "in-transport"] as const)(
+  "FCM %s suspension drops stale results and retries an actual PG outage",
+  (boundary) =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('user','allowed',1)",
+      );
+      yield* Effect.gen(function* () {
+        const devices = yield* Devices;
+        const activities = yield* LiveActivities.LiveActivities;
+        const lifecycle = yield* AccountLifecycle;
+        const authorization = yield* DeliveryAuthorization;
+        const registration = {
+          deviceId: "phone",
+          label: "Fixture",
+          platform: "android" as const,
+          androidApiLevel: 35,
+          pushToken: "fcm-token",
+          preferences,
+        };
+        yield* devices.register({ userId: "user", registration });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const pause = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        let sends = 0;
+        const h = harness({
+          authorization,
+          activities,
+          beforeStateRead: boundary === "before-guard" ? pause : Effect.void,
+          transport: () =>
+            Effect.gen(function* () {
+              sends++;
+              if (boundary === "in-transport") yield* pause;
+              return { unregistered: false };
+            }),
+        });
+        const now = (yield* DateTime.now).epochMilliseconds;
+        h.current.state = { ...state, updatedAt: new Date(now).toISOString() };
+        const job = signedJob({ ...h.job, queuedAt: now, state: h.current.state });
+        let result: "ack" | "retry" | null = null;
+        const message: Cloudflare.Queues.Message<unknown> = {
+          id: "fixture",
+          body: job,
+          timestamp: new Date(now),
+          attempts: 1,
+          ack: () => {
+            result = "ack";
+          },
+          retry: () => {
+            result = "retry";
+          },
+        };
+        const consumer = yield* FcmDeliveryQueueConsumer.processMessage(message).pipe(
+          Effect.provide(h.layer),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(entered);
+        const suspend = yield* lifecycle.request({
+          userId: "user",
+          kind: "suspend",
+          idempotencyKey: "suspend",
+        });
+        yield* lifecycle.resume(suspend.id);
+        yield* lifecycle.request({ userId: "user", kind: "allow", idempotencyKey: "allow" });
+        yield* devices.register({ userId: "user", registration });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(consumer);
+        expect(result).toBe("ack");
+        expect(sends).toBe(boundary === "in-transport" ? 1 : 0);
+        expect(
+          (yield* activities.listTargets({ userId: "user" }))[0]?.last_aggregate_json,
+        ).toBeNull();
+        yield* FcmDeliveryQueueConsumer.processMessage(message).pipe(Effect.provide(h.layer));
+        expect(sends).toBe(boundary === "in-transport" ? 1 : 0);
+        pg.query("ALTER TABLE relay_account_access RENAME TO fixture_unavailable_access");
+        result = null;
+        yield* FcmDeliveryQueueConsumer.processMessage(message).pipe(Effect.provide(h.layer));
+        expect(result).toBe("retry");
+      }).pipe(Effect.provide(postgresPolicyLayer(pg)));
+    }),
+);

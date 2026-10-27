@@ -37,6 +37,12 @@ it.live(
         const success = outcomes.find((r) => r._tag === "Success");
         if (success?._tag !== "Success") throw new Error("Expected one owner");
         expect(outcomes.filter((r) => r._tag === "Success")).toHaveLength(1);
+        expect(outcomes.filter((r) => r._tag === "Failure").map((r) => r.failure)).toEqual([
+          expect.objectContaining({
+            _tag: "RelayEnvironmentOwnerConflictError",
+            code: "environment_owner_conflict",
+          }),
+        ]);
         const userId = success.success;
         const other = userId === "owner-a" ? "owner-b" : "owner-a";
         yield* sql`UPDATE relay_environment_owners SET state='active' WHERE user_id=${userId}`;

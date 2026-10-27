@@ -1463,7 +1463,18 @@ export const layerServerApi = HttpApiBuilder.group(
               relayInternalErrorResponse("upstream_unavailable"),
             ManagedEndpointDeprovisioningFailed: () =>
               relayInternalErrorResponse("upstream_unavailable"),
-            ManagedTunnelLimitExceeded: () => relayInternalErrorResponse("upstream_unavailable"),
+            ManagedTunnelLimitExceeded: (error) =>
+              currentTraceId.pipe(
+                Effect.flatMap((traceId) =>
+                  Effect.fail(
+                    new RelayEnvironmentLinkLimitExceededError({
+                      code: "environment_link_limit_exceeded",
+                      maxTunnels: error.maxTunnels,
+                      traceId,
+                    }),
+                  ),
+                ),
+              ),
           }),
           mapRelayCommonApiErrors("not_authorized"),
         ),

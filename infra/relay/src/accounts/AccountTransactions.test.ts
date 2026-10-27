@@ -71,3 +71,35 @@ it.live(
       }).pipe(Effect.provide(postgresPolicyLayer(pg)));
     }),
 );
+
+it.live(
+  "override two counts tombstoned held slots until explicit release and guards reacquisition",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1)",
+      );
+      pg.query("INSERT INTO relay_managed_tunnel_limits VALUES ('owner',2,'now','now')");
+      yield* Effect.gen(function* () {
+        const allocations = yield* ManagedEndpointAllocations;
+        const reserve = (environmentId: string) =>
+          allocations.reserve({
+            userId: "owner",
+            environmentId,
+            hostname: "ignored",
+            tunnelName: "ignored",
+          });
+        const a = yield* reserve("a");
+        const b = yield* reserve("b");
+        yield* allocations.remove(a);
+        expect((yield* Effect.flip(reserve("c")))._tag).toBe("ManagedTunnelLimitExceeded");
+        expect(yield* allocations.markCapacityReleased(b)).toBe(true);
+        const c = yield* reserve("c");
+        expect((yield* Effect.flip(reserve("b")))._tag).toBe("ManagedTunnelLimitExceeded");
+        expect(yield* allocations.markCapacityReleased(c)).toBe(true);
+        expect((yield* reserve("b")).capacityReleasedAt).toBeNull();
+      }).pipe(Effect.provide(postgresPolicyLayer(pg)));
+    }),
+);

@@ -1,3 +1,4 @@
+import { DeliveryAuthorization } from "./DeliveryAuthorization.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import type {
   RelayAgentActivityAggregateState,
@@ -134,6 +135,8 @@ export const target: LiveActivities.TargetRow = {
 };
 
 export function layerFor(input: {
+  readonly authorization?: DeliveryAuthorization["Service"];
+  readonly activities?: LiveActivities.LiveActivities["Service"];
   readonly attempts: Array<DeliveryAttempts.DeliveryAttemptInput>;
   readonly sourceJobClaims?: ReadonlyMap<string, DeliveryAttempts.DeliverySourceJobClaimResult>;
   readonly queuedJobs?: Array<SignedApnsDeliveryJob>;
@@ -158,7 +161,14 @@ export function layerFor(input: {
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse>;
 }) {
   return ApnsDeliveries.layer.pipe(
-    Layer.provide(policyUnitLayer),
+    Layer.provide(
+      Layer.merge(
+        policyUnitLayer,
+        input.authorization
+          ? Layer.succeed(DeliveryAuthorization, input.authorization)
+          : Layer.empty,
+      ),
+    ),
     Layer.provide(ApnsClient.layer),
     Layer.provide(ApnsProviderTokens.layer),
     Layer.provide(
@@ -215,27 +225,30 @@ export function layerFor(input: {
               }
             }),
         }),
-        Layer.succeed(LiveActivities.LiveActivities, {
-          register: () => Effect.void,
-          listTargets: () => Effect.succeed(input.currentTargets ?? [target]),
-          listIdleArmedTargets: () => Effect.succeed([]),
-          markStartQueued: (queued) =>
-            Effect.sync(() => {
-              input.queuedStarts?.push(queued);
-            }),
-          clearStartQueued: (cleared) =>
-            Effect.sync(() => {
-              input.clearedStarts?.push(cleared);
-            }),
-          markDelivery: (delivery) =>
-            Effect.sync(() => {
-              input.markedDeliveries?.push(delivery);
-            }),
-          invalidateDeliveryToken: (invalidated) =>
-            Effect.sync(() => {
-              input.invalidatedTokens?.push(invalidated);
-            }),
-        }),
+        Layer.succeed(
+          LiveActivities.LiveActivities,
+          input.activities ?? {
+            register: () => Effect.void,
+            listTargets: () => Effect.succeed(input.currentTargets ?? [target]),
+            listIdleArmedTargets: () => Effect.succeed([]),
+            markStartQueued: (queued) =>
+              Effect.sync(() => {
+                input.queuedStarts?.push(queued);
+              }),
+            clearStartQueued: (cleared) =>
+              Effect.sync(() => {
+                input.clearedStarts?.push(cleared);
+              }),
+            markDelivery: (delivery) =>
+              Effect.sync(() => {
+                input.markedDeliveries?.push(delivery);
+              }),
+            invalidateDeliveryToken: (invalidated) =>
+              Effect.sync(() => {
+                input.invalidatedTokens?.push(invalidated);
+              }),
+          },
+        ),
         RelayConfiguration.layer(input.config ?? config),
         input.execute
           ? Layer.succeed(HttpClient.HttpClient, HttpClient.make(input.execute))
