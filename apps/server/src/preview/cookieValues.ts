@@ -16,36 +16,44 @@ const MIN_TOKEN_LENGTH = 3;
 /** Pattern source per compiled RegExp; a page can hold thousands of cookies of up to 4 KiB. */
 const MAX_PATTERN_SOURCE = 32_768;
 
+type Span = readonly [number, number];
+
 /** Escapes text for use as a literal inside a RegExp. */
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const longestFirst = (forms: Iterable<string>) =>
   [...new Set(forms)].sort((left, right) => right.length - left.length);
 
-/** Applies one alternation of literals in batches small enough to compile. */
-function replaceInBatches(
+/** Runs an alternation of literals over the text in batches small enough to compile. */
+function matchInBatches(
   text: string,
   forms: ReadonlyArray<string>,
   source: (alternation: string) => string,
-  replacement: (match: string, ...groups: Array<string>) => string,
+  span: (match: RegExpExecArray) => Span,
 ) {
-  let result = text;
+  const spans: Array<Span> = [];
+  const run = (batch: ReadonlyArray<string>) => {
+    if (batch.length === 0) return;
+    const pattern = new RegExp(source(batch.join("|")), "g");
+    for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+      spans.push(span(match));
+      if (match[0] === "") pattern.lastIndex++;
+    }
+  };
   let batch: Array<string> = [];
   let size = 0;
-  const flush = () => {
-    if (batch.length === 0) return;
-    result = result.replace(new RegExp(source(batch.join("|")), "g"), replacement);
-    batch = [];
-    size = 0;
-  };
   for (const form of forms) {
     const escaped = literal(form);
-    if (size + escaped.length > MAX_PATTERN_SOURCE) flush();
+    if (size + escaped.length > MAX_PATTERN_SOURCE) {
+      run(batch);
+      batch = [];
+      size = 0;
+    }
     batch.push(escaped);
     size += escaped.length + 1;
   }
-  flush();
-  return result;
+  run(batch);
+  return spans;
 }
 
 /** Long literals grouped by their first characters, longest first within each group. */
@@ -59,76 +67,66 @@ function indexByPrefix(forms: ReadonlyArray<string>) {
 }
 
 /**
+ * Long literals in one left-to-right pass: at each position the longest one that starts there,
+ * then on past its end. No pattern is built from a whole value, and no offset is read twice.
+ */
+function longSpans(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
+  const spans: Array<Span> = [];
+  for (let at = 0; at + MIN_SECRET_LENGTH <= text.length;) {
+    const found = byPrefix
+      .get(text.slice(at, at + MIN_SECRET_LENGTH))
+      ?.find((form) => text.startsWith(form, at));
+    if (found === undefined) at++;
+    else {
+      spans.push([at, at + found.length]);
+      at += found.length;
+    }
+  }
+  return spans;
+}
+
+/**
  * A text cut to a limit can end partway through a long value, and that start no longer matches
  * it. The last token's tail goes when it is the start of one.
  */
-function redactCutTail(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
+function cutTailSpan(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
   const tail = /\S+$/u.exec(text);
-  if (tail === null) return text;
+  if (tail === null) return [];
   const token = tail[0];
   for (let at = 0; at + MIN_SECRET_LENGTH <= token.length; at++) {
     const rest = token.slice(at);
     const cut = byPrefix
       .get(rest.slice(0, MIN_SECRET_LENGTH))
       ?.some((form) => form.length > rest.length && form.startsWith(rest));
-    if (cut === true) return text.slice(0, tail.index + at) + REDACTED;
+    if (cut === true) return [[tail.index + at, text.length] as const];
   }
-  return text;
+  return [];
 }
 
-/**
- * Replaces every occurrence of long literals in one scan: a pattern of their first few
- * characters finds where one may start, and the longest literal that starts there is replaced.
- */
-function replaceLong(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
-  if (byPrefix.size === 0) return text;
-  const starts = [...byPrefix.keys()].map(literal);
-  // Prefixes are short, so even thousands of them stay a small pattern; batch past that anyway.
-  const scanners: Array<RegExp> = [];
-  for (let index = 0, size = 0, from = 0; index <= starts.length; index++) {
-    const next = starts[index];
-    if (next === undefined || size + next.length > MAX_PATTERN_SOURCE) {
-      if (index > from) scanners.push(new RegExp(starts.slice(from, index).join("|"), "g"));
-      from = index;
-      size = 0;
-    }
-    if (next !== undefined) size += next.length + 1;
-  }
-  // Every batch reads the original text, so one batch's match never hides a longer value from
-  // another; overlapping matches merge before anything is replaced.
-  const spans: Array<readonly [number, number]> = [];
-  for (const scanner of scanners)
-    for (let match = scanner.exec(text); match !== null; match = scanner.exec(text)) {
-      const at = match.index;
-      const found = byPrefix.get(match[0])?.find((form) => text.startsWith(form, at));
-      if (found !== undefined) spans.push([at, at + found.length]);
-      scanner.lastIndex = at + 1;
-    }
+/** The text with the spans, merged where they touch or overlap, replaced by REDACTED. */
+function replaceSpans(text: string, spans: ReadonlyArray<Span>) {
   if (spans.length === 0) return text;
-  spans.sort((left, right) => left[0] - right[0]);
+  const sorted = [...spans].sort((left, right) => left[0] - right[0]);
   let result = "";
+  let [from, to] = sorted[0] ?? [0, 0];
   let copied = 0;
-  let end = -1;
-  for (const [from, to] of spans) {
-    if (from < end) {
-      end = Math.max(end, to);
+  for (const [start, end] of sorted.slice(1)) {
+    if (start <= to) {
+      to = Math.max(to, end);
       continue;
     }
-    if (end >= 0) {
-      result += REDACTED;
-      copied = end;
-    }
-    result += text.slice(copied, from);
-    end = to;
+    result += text.slice(copied, from) + REDACTED;
+    copied = to;
+    [from, to] = [start, end];
   }
-  return result + REDACTED + text.slice(end);
+  return result + text.slice(copied, from) + REDACTED + text.slice(to);
 }
 
 /**
  * Each cookie is redacted wherever it appears as name=value, which is how an echoed Cookie or
  * Set-Cookie header looks. Its value is redacted anywhere once it has six characters, and as a
- * whole token from three; a one or two character value such as lang=en stays in ordinary text,
- * where redacting it would corrupt the page. No pattern is ever built from a whole long value.
+ * whole token from three. Every kind of match is found in the original text and only then
+ * replaced, so one never hides another; no pattern is ever built from a whole long value.
  */
 export const redactCookieValues = (
   text: string,
@@ -137,33 +135,42 @@ export const redactCookieValues = (
   const valued = cookies.filter((cookie) => cookie.value !== "");
   if (valued.length === 0) return text;
   // As sent, as a URL encodes it, and as JSON escapes it inside a string.
-  const formsOf = ({ value }: { readonly value: string }) => [
+  const formsOf = (value: string) => [
     value,
     encodeURIComponent(value),
     JSON.stringify(value).slice(1, -1),
   ];
-  // A long value goes wherever it appears, which covers name=value too.
   const byPrefix = indexByPrefix(
-    valued.filter(({ value }) => value.length >= MIN_SECRET_LENGTH).flatMap(formsOf),
+    valued
+      .filter(({ value }) => value.length >= MIN_SECRET_LENGTH)
+      .flatMap(({ value }) => formsOf(value)),
   );
-  let result = redactCutTail(replaceLong(text, byPrefix), byPrefix);
   const short = valued.filter(({ value }) => value.length < MIN_SECRET_LENGTH);
-  result = replaceInBatches(
-    result,
+  const pairs = matchInBatches(
+    text,
     longestFirst(
       short
         .filter(({ name }) => name !== "")
-        .flatMap(({ name, value }) => formsOf({ value }).map((form) => `${name}=${form}`)),
+        .flatMap(({ name, value }) => formsOf(value).map((form) => `${name}=${form}`)),
     ),
-    (pairs) => `(^|[^\\w-])(${pairs})(?![\\w%-])`,
-    (_match, before = "", pair = "") =>
-      `${before}${pair.slice(0, pair.indexOf("=") + 1)}${REDACTED}`,
+    (alternation) => `(?<![\\w-])(?:${alternation})(?![\\w%-])`,
+    (match): Span => [match.index + match[0].indexOf("=") + 1, match.index + match[0].length],
   );
   // A short value only as a whole token, so "ab12" never eats into "ab123" or a word.
-  return replaceInBatches(
-    result,
-    longestFirst(short.filter(({ value }) => value.length >= MIN_TOKEN_LENGTH).flatMap(formsOf)),
-    (tokens) => `(?<![A-Za-z0-9])(?:${tokens})(?![A-Za-z0-9])`,
-    () => REDACTED,
+  const tokens = matchInBatches(
+    text,
+    longestFirst(
+      short
+        .filter(({ value }) => value.length >= MIN_TOKEN_LENGTH)
+        .flatMap(({ value }) => formsOf(value)),
+    ),
+    (alternation) => `(?<![A-Za-z0-9])(?:${alternation})(?![A-Za-z0-9])`,
+    (match): Span => [match.index, match.index + match[0].length],
   );
+  return replaceSpans(text, [
+    ...longSpans(text, byPrefix),
+    ...cutTailSpan(text, byPrefix),
+    ...pairs,
+    ...tokens,
+  ]);
 };

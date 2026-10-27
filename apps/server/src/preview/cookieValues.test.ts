@@ -56,4 +56,33 @@ describe("redactCookieValues", () => {
       `log ${REDACTED} end`,
     );
   });
+  it("masks every kind of match against the original text, so no kind hides another", () => {
+    // A full short match inside a value cut off at the end.
+    expect(
+      redactCookieValues("sid=SessionSecret77", [
+        { name: "a", value: "Session" },
+        { name: "b", value: "SessionSecret77AndMuchMore" },
+      ]),
+    ).toBe(`sid=${REDACTED}`);
+    // A long value that is another cookie's name.
+    expect(
+      redactCookieValues("Session=ab", [
+        { name: "other", value: "Session" },
+        { name: "Session", value: "ab" },
+      ]),
+    ).toBe(`${REDACTED}=${REDACTED}`);
+  });
+
+  it("stays fast on thousands of near-identical long values", () => {
+    const base = "a".repeat(3_980);
+    const cookies = [
+      ...Array.from({ length: 3_000 }, (_, index) => ({
+        name: `c${index}`,
+        value: `${base}${index.toString(36).padStart(4, "0")}`,
+      })),
+      { name: "base", value: base },
+    ];
+    // Bounded by the test runner's own timeout: the scan must not recheck every offset.
+    expect(redactCookieValues("a".repeat(24_000), cookies)).not.toContain("aaaaaaaaaa");
+  });
 });
