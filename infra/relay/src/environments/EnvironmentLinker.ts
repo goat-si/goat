@@ -1,4 +1,5 @@
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
+import { strengthRequired } from "../auth/ConnectAuthentication.ts";
 import {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkProofInvalidReason,
@@ -246,6 +247,12 @@ const make = Effect.gen(function* () {
         },
         nowEpochSeconds: nowSeconds,
       });
+      if (
+        input.cliKeyThumbprint !== undefined &&
+        (challenge === null || challenge.cliKeyThumbprint !== input.cliKeyThumbprint)
+      ) {
+        return yield* strengthRequired("unsupported_authentication_flow");
+      }
       if (
         challenge === null ||
         verified.descriptor.connectAuthPolicyVersion !== 1 ||

@@ -97,6 +97,91 @@ function layerTest(input?: {
 }
 
 describe("EnvironmentLinker", () => {
+  it.effect.each([undefined, "another-cli-key"])(
+    "denies CLI linking without a matching approved key (%s) before persistence",
+    (approvedKey) => {
+      let persisted = false;
+      return Effect.gen(function* () {
+        const { request, payload } = yield* makeRequest;
+        const relayTokens = yield* RelayTokens.RelayTokens;
+        const challenge = yield* relayTokens.issueLinkChallenge({
+          assurance: makeAssurance(payload.iat),
+          intent,
+          userId: "user_123",
+          request,
+          ...(approvedKey ? { cliKeyThumbprint: approvedKey } : {}),
+          jti: "cli-challenge",
+          issuedAtEpochSeconds: payload.iat,
+          expiresAtEpochSeconds: payload.exp,
+        });
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* linker
+          .link({
+            userId: "user_123",
+            cliKeyThumbprint: "cli-key",
+            request: {
+              ...request,
+              proof: signTestJwt(
+                { ...payload, challenge },
+                RELAY_LINK_PROOF_TYP,
+                environmentKeyPair.privateKey,
+              ),
+            },
+          })
+          .pipe(Effect.result);
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({
+            _tag: "RelayAuthenticationStrengthError",
+            code: "authentication_strength_required",
+            reason: "unsupported_authentication_flow",
+          });
+        }
+        expect(persisted).toBe(false);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            upsert: () =>
+              Effect.sync(() => {
+                persisted = true;
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("allows CLI linking with a fresh challenge bound to its approved key", () =>
+    Effect.gen(function* () {
+      const { request, payload } = yield* makeRequest;
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const challenge = yield* relayTokens.issueLinkChallenge({
+        assurance: makeAssurance(payload.iat),
+        intent,
+        userId: "user_123",
+        request,
+        cliKeyThumbprint: "cli-key",
+        jti: "cli-challenge",
+        issuedAtEpochSeconds: payload.iat,
+        expiresAtEpochSeconds: payload.exp,
+      });
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const result = yield* linker.link({
+        userId: "user_123",
+        cliKeyThumbprint: "cli-key",
+        request: {
+          ...request,
+          proof: signTestJwt(
+            { ...payload, challenge },
+            RELAY_LINK_PROOF_TYP,
+            environmentKeyPair.privateKey,
+          ),
+        },
+      });
+      expect(result.environmentCredential).toBe("goatenv_credential_secret");
+    }).pipe(Effect.provide(layerTest())),
+  );
+
   it.effect("uses verified JWT claims when linking an environment", () => {
     let persistedEnvironmentId: string | null = null;
     return Effect.gen(function* () {
