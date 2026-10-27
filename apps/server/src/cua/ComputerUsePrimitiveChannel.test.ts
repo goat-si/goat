@@ -10,6 +10,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
@@ -77,7 +78,11 @@ type TurnState =
   | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
 
 /** One thread whose control state a test moves between turns, Stop and revocation. */
-const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
+const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (options?: {
+  readonly before?: (
+    channel: PrimitiveChannel.ComputerUsePrimitiveChannel["Service"],
+  ) => Effect.Effect<void>;
+}) {
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
   const leases = ComputerUseLeases.ComputerUseLeases.of({
@@ -92,6 +97,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
   const channel = yield* PrimitiveChannel.make.pipe(
     Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
   );
+  if (options?.before !== undefined) yield* options.before(channel);
   yield* channel.issue({ ...authority, controlId, expiresAt: 60_000 });
   const registration = yield* channel.registerStream({
     ...authority,
@@ -293,6 +299,74 @@ describe("ComputerUsePrimitiveChannel", () => {
         assert.equal(resumed.state, "primitive-request");
         yield* t.channel.cancel("run:one", "cell:one");
         assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a control that expires leaves the thread proxy authorized to report its cutoff and the next turn's ready",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* turnFixture();
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        yield* TestClock.adjust(60_000);
+        yield* t.setState({ _tag: "ended", reason: "expired" });
+        // The proxy's reporter stops for good on a 401, so the cutoff route must still authorize.
+        assert.equal(
+          yield* t.channel.authenticate({
+            threadId,
+            proxyChannelToken: authority.proxyChannelToken,
+          }),
+          authority.attachmentGeneration,
+        );
+        assert.isTrue(yield* t.channel.reportControlCutoff(t.report(authority, 0)));
+        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+
+        const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.setState({ _tag: "active" });
+        yield* t.channel.issue({ ...next, controlId, expiresAt: 120_000 });
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(next, 1)));
+        const waiter = yield* t.channel
+          .request({
+            threadId,
+            runId: "run:one",
+            turnId: "cell:one",
+            callId: 2,
+            deadlineMillis: 90_000,
+            tool: "click",
+            args: {},
+          })
+          .pipe(Effect.forkChild);
+        const resumed = Option.getOrThrow(yield* Stream.runHead(t.registration.requests));
+        assert.equal(resumed.state, "primitive-request");
+        yield* t.channel.cancel("run:one", "cell:one");
+        assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    ["idle", { _tag: "active", idle: true }],
+    ["stopped", { _tag: "ended", reason: "stopped" }],
+  ] as const)(
+    "an attachment that goes %s before its thread proxy registers still admits that proxy",
+    ([, state]) =>
+      Effect.gen(function* () {
+        const early = ThreadId.make("thread:proxy-not-yet-registered");
+        const earlyAuthority = { ...authority, threadId: early };
+        const t = yield* turnFixture({
+          before: (channel) => channel.issue({ ...earlyAuthority, controlId, expiresAt: 60_000 }),
+        });
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        const pending = yield* t.request().pipe(Effect.forkChild);
+        yield* Stream.runHead(t.registration.requests);
+        yield* t.setState(state);
+        // The sweep settles this thread's request after it has passed the earlier attachment.
+        assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
+        const late = yield* t.channel.registerStream({
+          ...earlyAuthority,
+          proxyInstanceId: "proxy:late",
+          kind: "thread",
+        });
+        assert.equal(late.status, "registered");
       }).pipe(Effect.scoped),
   );
 
