@@ -1,12 +1,10 @@
 import {
   CHILD_READY_PROOF_TTL_MS,
   type ChildReadyDeviceResult,
-  type ChildReadyFailure,
   type ChildReadyPrepareInput,
   type ChildReadyResult,
   type ChildReadyRevision,
   type ChildReadyStep,
-  childReadyProofIsCurrent,
   CodexSettings,
   type EnvironmentId,
   type OpenCodexChildSetup,
@@ -45,6 +43,7 @@ import {
   failureFor,
 } from "./childReadySetup.ts";
 import { localAccountsDigest, readLocalCredentials } from "./OpenCodexLocalAccounts.ts";
+import { bindingFailure, type ChildReadyFacts } from "./childReadyBinding.ts";
 
 const decodeCodex = Schema.decodeUnknownEffect(CodexSettings);
 const TERMINAL: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled"]);
@@ -199,6 +198,39 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       yield* journal.put(home, rest).pipe(storage(step));
     });
 
+    /**
+     * The stored bootstrap instance as this Home owns it. A missing one after ownership is the
+     * user's deletion and is never recreated; an existing one is adopted only when it is exactly
+     * the candidate recorded before the settings commit (a crash between commit and journal).
+     * Anything else is the user's change.
+     */
+    const claimOwnership = Effect.fn("OpenCodexChildReady.claimOwnership")(function* (
+      home: EnvironmentId,
+      operation: Journal.ChildReadyOperation | undefined,
+      current: ProviderInstanceConfig | undefined,
+      step: ChildReadyStep,
+    ) {
+      if (operation?.deleted === true) return yield* childError("instance_changed", step);
+      if (current === undefined) {
+        if (operation?.ownedFingerprint === undefined) return { operation, expected: null };
+        yield* journal.put(home, { ...operation, deleted: true }).pipe(storage(step));
+        return yield* childError("instance_changed", step);
+      }
+      const fingerprint = CodexRoute.instanceFingerprint(current);
+      if (operation !== undefined && fingerprint === operation.ownedFingerprint)
+        return { operation, expected: operation.ownedInstance ?? current };
+      if (
+        operation !== undefined &&
+        operation.ownedFingerprint === undefined &&
+        fingerprint === operation.desiredFingerprint
+      ) {
+        const adopted = { ...operation, ownedFingerprint: fingerprint, ownedInstance: current };
+        yield* journal.put(home, adopted).pipe(storage(step));
+        return { operation: adopted, expected: current };
+      }
+      return yield* childError("instance_changed", step);
+    });
+
     const installCodex = Effect.fn("OpenCodexChildReady.installCodex")(function* (
       input: ChildReadyPrepareInput,
       scope: McpInvocationScope,
@@ -208,15 +240,15 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       yield* requireRevision(input.expectedRevision, step);
       yield* requireLink(input, step);
       const id = bootstrapInstanceId(input.homeEnvironmentId);
-      const previous = yield* journal.read(input.homeEnvironmentId).pipe(storage(step));
+      const read = yield* journal.read(input.homeEnvironmentId).pipe(storage(step));
       const current = yield* storedInstance(id, step);
       // A deterministic id this journal never wrote is the user's instance: never adopt it.
-      if (
-        current !== undefined &&
-        (previous?.ownedFingerprint === undefined ||
-          previous.ownedFingerprint !== CodexRoute.instanceFingerprint(current))
-      )
-        return yield* childError("instance_changed", step);
+      const { operation: previous } = yield* claimOwnership(
+        input.homeEnvironmentId,
+        read,
+        current,
+        step,
+      );
       const base: Journal.ChildReadyOperation = {
         ...previous,
         operationId: input.operationId,
@@ -347,41 +379,37 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       const desired = desiredFor(input.homeEnvironmentId, linked.port);
       if (CodexRoute.instanceFingerprint(desired) !== operation.desiredFingerprint)
         return yield* childError("stale_configuration", step);
-      let refusal: "stale_configuration" | "instance_changed" | undefined;
-      const refuse = (code: "stale_configuration" | "instance_changed") => {
-        refusal = code;
-        return Effect.fail(
-          new ServerSettingsError({
-            settingsPath: "<child-ready>",
-            operation: "normalize",
-            providerInstanceId: id,
-            code: "provider_instance_stale",
-          }),
-        );
-      };
+      const owned = yield* claimOwnership(
+        input.homeEnvironmentId,
+        operation,
+        yield* storedInstance(id, step),
+        step,
+      );
+      let refusal: "stale_configuration" | "instance_changed" = "instance_changed";
+      // The revision is checked again inside the settings lock, and the stored instance must
+      // still be exactly what this Home owns (null only on the first create).
       yield* settings
-        .updateSettingsWith(
-          (current) => {
-            if (!sameRevision(input.expectedRevision)) return refuse("stale_configuration");
-            const stored = current.providerInstances[id];
-            if (
-              stored !== undefined &&
-              CodexRoute.instanceFingerprint(stored) !== operation.ownedFingerprint
-            )
-              return refuse("instance_changed");
-            return Effect.succeed({ providerInstances: { [id]: desired } });
+        .updateProviderInstance(
+          {
+            operation: "upsert",
+            instanceId: id,
+            instance: desired,
+            expectedInstance: owned.expected,
           },
-          deps.authorize(input, scope).pipe(
-            Effect.mapError(
-              () =>
-                new ServerSettingsError({
-                  settingsPath: "<child-ready>",
-                  operation: "normalize",
-                }),
-            ),
-          ),
+          undefined,
+          undefined,
+          Effect.suspend(() => {
+            const refused = new ServerSettingsError({
+              settingsPath: "<child-ready>",
+              operation: "normalize",
+            });
+            if (sameRevision(input.expectedRevision))
+              return deps.authorize(input, scope).pipe(Effect.mapError(() => refused));
+            refusal = "stale_configuration";
+            return Effect.fail(refused);
+          }),
         )
-        .pipe(Effect.mapError(() => childError(refusal ?? "stale_configuration", step)));
+        .pipe(Effect.mapError(() => childError(refusal, step)));
       const stored = yield* storedInstance(id, step);
       if (stored === undefined) return yield* childError("instance_changed", step);
       // Settings write first, journal second: a crash between them leaves an exact desired
@@ -396,8 +424,9 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       };
       yield* journal
         .put(input.homeEnvironmentId, {
-          ...operation,
+          ...(owned.operation ?? operation),
           ownedFingerprint: CodexRoute.instanceFingerprint(stored),
+          ownedInstance: stored,
           setup,
         })
         .pipe(storage(step));
@@ -420,16 +449,66 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       return status.value.localCredentials.generation;
     });
 
+    /** Every fact a proof binds, read now; nothing here starts a request. */
+    const currentFacts = Effect.fn("OpenCodexChildReady.currentFacts")(function* (
+      observed: ChildObservation,
+      instanceId: ReturnType<typeof bootstrapInstanceId>,
+      step: ChildReadyStep,
+    ) {
+      const instance = yield* storedInstance(instanceId, step).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const executable = yield* codex.resolve({ managedOnly: true }).pipe(
+        Effect.map((found) => ({ path: found.executablePath, version: found.version })),
+        Effect.orElseSucceed(() => undefined),
+      );
+      const { device } = observed.device;
+      const generation =
+        device.ocx.path === null
+          ? undefined
+          : yield* attestation(device.ocx.path, step).pipe(Effect.orElseSucceed(() => undefined));
+      return {
+        now: yield* Clock.currentTimeMillis,
+        device,
+        listenerInstanceId: observed.listenerInstanceId,
+        settingsDigest: observed.settingsDigest,
+        catalogDigest: observed.catalogDigest,
+        instance,
+        executable,
+        localAccountsDigest:
+          generation === undefined
+            ? undefined
+            : yield* localAccountsDigest(crypto, generation).pipe(
+                Effect.orElseSucceed(() => undefined),
+              ),
+      } satisfies ChildReadyFacts;
+    });
+    // A completed request this process could not record: never repeated for that operation.
+    const uncertain = new Set<string>();
+    const uncertainKey = (input: ChildReadyPrepareInput) =>
+      `${input.homeEnvironmentId}\u0000${input.operationId}`;
+
     const runProbe = Effect.fn("OpenCodexChildReady.runProbe")(function* (
       input: ChildReadyPrepareInput,
       scope: McpInvocationScope,
     ) {
       const step = "inference_verified" as const;
       const operation = yield* operationFor(input, step);
+      const id = bootstrapInstanceId(input.homeEnvironmentId);
+      // A proof this operation already earned is answered again while every binding holds.
+      const recorded = operation.setup.proof;
+      if (recorded !== undefined && recorded.operationId === input.operationId) {
+        const facts = yield* currentFacts(yield* deps.observe(input), id, step);
+        if (bindingFailure(recorded, facts) === undefined)
+          return { kind: "ok" as const, setup: operation.setup } satisfies ChildReadyResult;
+      }
+      // One paid request per operation: a recorded outcome is answered again, and a request
+      // that may have completed unrecorded is never repeated automatically.
+      if (operation.probeStarted === true || uncertain.has(uncertainKey(input)))
+        return yield* childError(operation.setup.failure?.code ?? "interrupted", step);
       if (operation.catalog === undefined || operation.ownedFingerprint === undefined)
         return yield* childError("route_unverified", step);
       yield* requireRevision(input.expectedRevision, step);
-      const id = bootstrapInstanceId(input.homeEnvironmentId);
       const instance = yield* storedInstance(id, step);
       if (
         instance === undefined ||
@@ -453,6 +532,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         .put(input.homeEnvironmentId, {
           ...operation,
           running: step,
+          probeStarted: true,
           setup: { ...operation.setup, readiness: "verifying", steps: stepStates(step, "running") },
         })
         .pipe(storage(step));
@@ -467,10 +547,15 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
           ).pipe(Effect.mapError(() => childError("route_unverified", step))),
         })
         .pipe(Effect.mapError((error) => childError(error.code, step)));
-      // The same link, listener and credential generation before and after, or no proof.
+      // The same link, listener, settings, catalog and credential generation afterwards.
       const after = yield* requireLink(input, step);
       if (after.linkId !== before.linkId || after.listenerInstanceId !== before.listenerInstanceId)
         return yield* childError("link_changed", step);
+      if (
+        after.settingsDigest !== before.settingsDigest ||
+        after.catalogDigest !== before.catalogDigest
+      )
+        return yield* childError("route_unverified", step);
       if ((yield* attestation(after.ocxPath, step)) !== generation)
         return yield* childError("attribution_unproven", step);
       yield* deps.authorize(input, scope);
@@ -505,7 +590,14 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         },
       };
       const { failure: _failure, ...clean } = setup;
-      yield* finishStage(input.homeEnvironmentId, { ...operation, setup: clean }, step);
+      // Published only when every bound fact still holds against a fresh read.
+      if (setup.proof === undefined) return yield* childError("route_unverified", step);
+      const broken = bindingFailure(setup.proof, yield* currentFacts(after, id, step));
+      if (broken !== undefined) return yield* childError(broken, step);
+      const { probeStarted: _started, ...settled } = operation;
+      yield* finishStage(input.homeEnvironmentId, { ...settled, setup: clean }, step).pipe(
+        Effect.tapError(() => Effect.sync(() => uncertain.add(uncertainKey(input)))),
+      );
       return { kind: "ok" as const, setup: clean } satisfies ChildReadyResult;
     });
 
@@ -543,31 +635,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       const proof = setup?.proof;
       if (operation === undefined || setup === undefined || proof === undefined) return setup;
       const step = "inference_verified" as const;
-      const instance = yield* storedInstance(proof.instanceId, step).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
-      const { device } = observed.device;
-      const generation =
-        device.ocx.path === null
-          ? undefined
-          : yield* attestation(device.ocx.path, step).pipe(Effect.orElseSucceed(() => undefined));
-      const code: ChildReadyFailure["code"] | undefined = !childReadyProofIsCurrent(
-        proof,
-        yield* Clock.currentTimeMillis,
-      )
-        ? "proof_expired"
-        : device.connection.role !== "client" || device.connection.linkId !== proof.linkId
-          ? "link_changed"
-          : observed.listenerInstanceId !== proof.listenerInstanceId ||
-              instance === undefined ||
-              CodexRoute.instanceFingerprint(instance) !== proof.configFingerprint
-            ? "route_unverified"
-            : generation === undefined ||
-                (yield* localAccountsDigest(crypto, generation).pipe(
-                  Effect.orElseSucceed(() => ""),
-                )) !== proof.localAccountsDigest
-              ? "attribution_unproven"
-              : undefined;
+      const code = bindingFailure(proof, yield* currentFacts(observed, proof.instanceId, step));
       if (code === undefined) return setup;
       const invalid = withFailure(setup, failureFor(code, step));
       yield* journal.put(home, { ...operation, setup: invalid });

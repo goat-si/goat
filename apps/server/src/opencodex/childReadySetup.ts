@@ -34,6 +34,8 @@ const MESSAGES: Partial<Record<ChildReadyFailure["code"], string>> = {
     "Update OpenCodex on this Child to a release with local-credential attestation, then retry verification.",
   proof_expired: "The last verification expired. Retry setup to verify again.",
   storage_failed: "Setup records on this Child could not be saved.",
+  interrupted:
+    "A previous check may have completed without being recorded. Retry setup to verify again.",
   purpose_expired: "A setup step timed out. Retry setup.",
   phase_timeout: "A setup step timed out. Retry setup.",
 };

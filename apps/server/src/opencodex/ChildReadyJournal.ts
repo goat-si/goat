@@ -2,6 +2,7 @@ import {
   ChildReadyStep,
   EnvironmentId,
   OpenCodexChildSetup,
+  ProviderInstanceConfig,
   ProviderInstanceId,
   TrimmedNonEmptyString,
 } from "@goat/contracts";
@@ -34,7 +35,11 @@ export const ChildReadyOperation = Schema.Struct({
   instanceId: Schema.optional(ProviderInstanceId),
   desiredFingerprint: Schema.optional(Schema.String),
   ownedFingerprint: Schema.optional(Schema.String),
+  /** The owned envelope as stored, the expectedInstance of the next settings commit. */
+  ownedInstance: Schema.optional(ProviderInstanceConfig),
   deleted: Schema.optional(Schema.Boolean),
+  /** A paid request began for this operation; without a recorded outcome it is never repeated. */
+  probeStarted: Schema.optional(Schema.Boolean),
   catalog: Schema.optional(
     Schema.Struct({
       home: Schema.String,

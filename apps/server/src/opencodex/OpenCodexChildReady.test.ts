@@ -6,8 +6,13 @@ import {
   EnvironmentId,
   type OpenCodexInventorySnapshot,
   OrchestratorMcpFailure,
+  type ServerSettings,
+  ServerSettingsError,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -69,6 +74,12 @@ interface ChildState {
   revoked: boolean;
   /** The Home the caller's signed purpose names; another address is refused. */
   purposeHome: EnvironmentId;
+  codexVersion: string;
+  settingsDigest: string;
+  /** Wraps each settings commit of a provider instance: hold it, or fail after it lands. */
+  commit: (
+    write: Effect.Effect<ServerSettings, ServerSettingsError>,
+  ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 }
 const snapshotOf = (state: ChildState): OpenCodexInventorySnapshot => ({
   installed: state.binary !== undefined,
@@ -87,7 +98,7 @@ const snapshotOf = (state: ChildState): OpenCodexInventorySnapshot => ({
     observedAt: 0,
     healthRole: state.role,
     instanceId: state.listener,
-    settingsDigest: "settings-digest",
+    settingsDigest: state.settingsDigest,
     catalogDigest: "catalog-digest",
     ...(state.role === "client" ? { childLinkId: state.linkId } : {}),
   },
@@ -113,6 +124,9 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
     installFailure: undefined,
     revoked: false,
     purposeHome: home,
+    codexVersion: "0.156.1",
+    settingsDigest: "settings-digest",
+    commit: (write) => write,
     ...overrides,
   };
   const probes = yield* Ref.make(0);
@@ -185,7 +199,7 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
       resolve: (options) => {
         resolveCalls.push(options?.managedOnly);
         return state.managedCodex
-          ? Effect.succeed(executable)
+          ? Effect.succeed({ ...executable, version: state.codexVersion })
           : Effect.fail(
               new CodexInstallation.CodexInstallationError({
                 operation: "resolve",
@@ -238,10 +252,21 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
         ),
     }),
   );
+  // The test settings, with each instance commit passed through `state.commit`.
+  const settingsLayer = Layer.effect(
+    Settings.ServerSettingsService,
+    Effect.map(Settings.ServerSettingsService, (real) =>
+      Settings.ServerSettingsService.of({
+        ...real,
+        updateProviderInstance: (mutation, patch, approval, authorizeAtCommit) =>
+          state.commit(real.updateProviderInstance(mutation, patch, approval, authorizeAtCommit)),
+      }),
+    ),
+  ).pipe(Layer.provide(Settings.ServerSettingsService.layerTest()));
   const service = ChildReady.layer.pipe(
-    Layer.provide(Journal.layer),
+    Layer.provideMerge(Journal.layer),
     Layer.provide(boundary),
-    Layer.provideMerge(Settings.ServerSettingsService.layerTest()),
+    Layer.provideMerge(settingsLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-child-ready-" })),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -278,6 +303,12 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
       settings.getSettings.pipe(Effect.map((current) => current.providerInstances[instanceId])),
     ),
   );
+  const removeInstance = run(
+    Effect.flatMap(Settings.ServerSettingsService, (settings) =>
+      settings.updateProviderInstance({ operation: "remove", instanceId }),
+    ),
+  );
+  const journal = Context.get(ready, Journal.ChildReadyJournal);
   const seedInstance = run(
     Effect.flatMap(Settings.ServerSettingsService, (settings) =>
       settings.updateSettings({
@@ -298,6 +329,8 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
     call,
     status,
     routed,
+    removeInstance,
+    journal,
     storedInstance,
     seedInstance,
     probes: Ref.get(probes),
@@ -388,16 +421,114 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
     }),
   );
 
-  it.effect("rejects a stale configuration revision inside the settings commit", () =>
+  it.effect("rejects a revision that changes while the settings commit waits for its lock", () =>
     Effect.gen(function* () {
-      const f = yield* fixture();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const f = yield* fixture({
+        commit: (write) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(write),
+          ),
+      });
       expect((yield* f.call("installCodex")).kind).toBe("ok");
       expect((yield* f.call("syncCatalog")).kind).toBe("ok");
-      // A concurrent settings change on the Child moves the revision under the caller.
-      const stale = f.state.revision;
-      f.state.revision = { ...stale, sequence: stale.sequence + 1 };
-      expect(failureCode(yield* f.call("configure", stale))).toBe("stale_configuration");
+      const pending = yield* Effect.forkChild(f.call("configure"));
+      yield* Deferred.await(entered);
+      // A concurrent settings change lands after configure's own check, before the commit's.
+      f.state.revision = { ...f.state.revision, sequence: f.state.revision.sequence + 1 };
+      yield* Deferred.succeed(release, undefined);
+      expect(failureCode(yield* Fiber.join(pending))).toBe("stale_configuration");
       expect(yield* f.storedInstance).toBeUndefined();
+    }),
+  );
+
+  it.effect("adopts the exact committed instance after the ownership record was lost", () =>
+    Effect.gen(function* () {
+      let crashAfterCommit = true;
+      const f = yield* fixture({
+        commit: (write) =>
+          write.pipe(
+            Effect.filterOrFail(
+              () => !crashAfterCommit,
+              () => new ServerSettingsError({ settingsPath: "<test>", operation: "normalize" }),
+            ),
+          ),
+      });
+      yield* f.call("installCodex");
+      yield* f.call("syncCatalog");
+      // The settings commit lands but its answer is lost, as a crash before the journal would.
+      expect((yield* f.call("configure")).kind).toBe("error");
+      expect(yield* f.storedInstance).toBeDefined();
+      crashAfterCommit = false;
+      expect((yield* f.call("configure")).kind).toBe("ok");
+      expect((yield* f.call("probe")).kind).toBe("ok");
+    }),
+  );
+
+  it.effect("refuses to recreate a bootstrap instance the user deleted", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      yield* f.removeInstance;
+      expect(failureCode(yield* f.call("installCodex"))).toBe("instance_changed");
+      expect(failureCode(yield* f.call("configure"))).toBe("instance_changed");
+      expect(yield* f.storedInstance).toBeUndefined();
+    }),
+  );
+
+  it.effect("reuses a recorded proof for the same operation without another request", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      expect((yield* f.call("probe")).kind).toBe("ok");
+      expect(yield* f.call("probe")).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+      expect(yield* f.probes).toBe(1);
+    }),
+  );
+
+  it.effect("never repeats a request whose outcome was not recorded", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      const operation = yield* f.journal.read(home);
+      if (operation === undefined) return yield* Effect.die("Expected a setup operation");
+      // A request began and this process stopped before recording how it ended.
+      yield* f.journal.put(home, { ...operation, probeStarted: true });
+      expect(failureCode(yield* f.call("probe"))).toBe("interrupted");
+      expect(yield* f.probes).toBe(0);
+    }),
+  );
+
+  it.effect.each([
+    [
+      "the managed Codex release",
+      (state: ChildState): void => void (state.codexVersion = "0.157.0"),
+    ],
+    [
+      "the Home settings digest",
+      (state: ChildState): void => void (state.settingsDigest = "other"),
+    ],
+  ] as const)("invalidates stored proof when %s changes", ([, change]) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      yield* f.call("probe");
+      change(f.state);
+      expect(yield* f.status).toMatchObject({
+        setup: { readiness: "invalid", failure: { code: "route_unverified" } },
+      });
+    }),
+  );
+
+  it.effect("withholds proof when the Home settings change during the request", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({}, (state) => {
+        state.settingsDigest = "changed-mid-request";
+      });
+      yield* f.routed;
+      expect(failureCode(yield* f.call("probe"))).toBe("route_unverified");
     }),
   );
 

@@ -199,10 +199,22 @@ const make = Effect.gen(function* () {
         operationId: input.operationId,
         homeEnvironmentId: input.homeEnvironmentId,
         destinationEnvironmentId: input.destinationEnvironmentId,
-        ...(previous?.instanceId === undefined ? {} : { instanceId: previous.instanceId }),
-        ...(previous?.ownedFingerprint === undefined
+        // Ownership outlives an operation: the next one adopts, refuses or reconciles from it.
+        ...(previous === undefined
           ? {}
-          : { ownedFingerprint: previous.ownedFingerprint }),
+          : {
+              ...(previous.instanceId === undefined ? {} : { instanceId: previous.instanceId }),
+              ...(previous.ownedFingerprint === undefined
+                ? {}
+                : { ownedFingerprint: previous.ownedFingerprint }),
+              ...(previous.ownedInstance === undefined
+                ? {}
+                : { ownedInstance: previous.ownedInstance }),
+              ...(previous.desiredFingerprint === undefined
+                ? {}
+                : { desiredFingerprint: previous.desiredFingerprint }),
+              ...(previous.deleted === undefined ? {} : { deleted: previous.deleted }),
+            }),
       })
       .pipe(storage("opencodex_running"));
     // Keeps a compatible ocx (2.66.0 or later); installs GOAT's pinned release otherwise.
