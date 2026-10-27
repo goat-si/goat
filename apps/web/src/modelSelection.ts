@@ -1,3 +1,4 @@
+import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -85,13 +86,17 @@ function appendUnavailableDynamicModelSelection(
   return [...options, { slug, name: slug, isCustom: false, isUnavailable: true }];
 }
 
-function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
+function toAppModelOption(
+  model: ServerProvider["models"][number],
+  driver: ProviderDriverKind,
+): AppModelOption {
   const option: AppModelOption = {
     slug: model.slug,
     name: model.name,
     isCustom: model.isCustom,
   };
-  if (model.shortName) option.shortName = model.shortName;
+  const shortName = resolveModelShortName(model, driver);
+  if (shortName) option.shortName = shortName;
   if (model.subProvider) option.subProvider = model.subProvider;
   if (model.aliases) option.aliases = model.aliases;
   if (model.badge) option.badge = model.badge;
@@ -159,7 +164,7 @@ function getAppModelOptions(
   // Server custom-model snapshots can lag removals; rebuild custom rows from settings.
   const options: AppModelOption[] = rawModels
     .filter((model) => !model.isCustom)
-    .map(toAppModelOption);
+    .map((model) => toAppModelOption(model, provider));
   const seen = new Set(options.map((option) => option.slug));
   const builtInModelSlugs = new Set(
     Arr.filterMap(getProviderModels(providers, provider), (model) =>
@@ -175,7 +180,8 @@ function getAppModelOptions(
     }
 
     seen.add(entry.slug);
-    options.push({ slug: entry.slug, name: entry.name, isCustom: true });
+    const shortName = resolveModelShortName(entry, provider);
+    options.push({ ...entry, isCustom: true, ...(shortName ? { shortName } : {}) });
   }
 
   const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
@@ -195,7 +201,7 @@ export function getAppModelOptionsForInstance(
 ): AppModelOption[] {
   const options: AppModelOption[] = entry.models
     .filter((model) => !model.isCustom)
-    .map(toAppModelOption);
+    .map((model) => toAppModelOption(model, entry.driverKind));
   const seen = new Set(options.map((option) => option.slug));
   const builtInModelSlugs = new Set(
     Arr.filterMap(entry.models, (model) =>
@@ -210,7 +216,8 @@ export function getAppModelOptionsForInstance(
     }
 
     seen.add(custom.slug);
-    options.push({ slug: custom.slug, name: custom.name, isCustom: true });
+    const shortName = resolveModelShortName(custom, entry.driverKind);
+    options.push({ ...custom, isCustom: true, ...(shortName ? { shortName } : {}) });
   }
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);

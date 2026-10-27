@@ -119,7 +119,36 @@ const harness = Effect.fn("agentThreadSteeringHarness")(function* (
           // The turn is accepted but reports running only when the test says so.
           startTurn: (turn) => Effect.sync(() => void started.push(turn)),
           steerTurn: (turn) => Effect.sync(() => void steered.push(turn)),
-          interruptTurn: (turn) => Effect.sync(() => void interrupted.push(turn)),
+          interruptTurn: (turn) =>
+            Effect.gen(function* () {
+              interrupted.push(turn);
+              const accepted = started.find(
+                (candidate) =>
+                  ProviderTurnId.make("provider-turn:" + candidate.attemptId) ===
+                  turn.providerTurnId,
+              );
+              if (accepted === undefined)
+                return yield* Effect.die("Interrupt has no accepted turn");
+              const now = yield* DateTime.now;
+              const providerTurn = {
+                ...providerTurnFor(accepted, now),
+                status: "interrupted" as const,
+                completedAt: now,
+              };
+              yield* Queue.offerAll(events, [
+                { type: "provider_turn.updated", driver, providerTurn },
+                {
+                  type: "turn.terminal",
+                  driver,
+                  providerThreadId: providerTurn.providerThreadId,
+                  providerTurnId: providerTurn.id,
+                  runOrdinal: accepted.runOrdinal,
+                  status: "interrupted",
+                  failure: null,
+                  threadDisposition: "reusable",
+                },
+              ]);
+            }),
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => Effect.die("unused"),
           rollbackThread: () => Effect.die("unused"),
@@ -435,6 +464,7 @@ it.effect("an agent's message restarts the turn on a provider that steers by res
         yield* worker.drain();
         assert.equal(sent.delivery, "steered");
         assert.deepEqual(steered, []);
+        assert.equal(started.length, 2);
         assert.deepEqual(
           interrupted.map((turn) => turn.providerTurnId),
           [ProviderTurnId.make("provider-turn:" + started[0]!.attemptId)],
@@ -689,6 +719,7 @@ it.effect("another thread's restart still restarts on the saved selection", () =
         yield* worker.drain();
         assert.equal(sent.delivery, "restarted");
         assert.equal(interrupted.length, 1);
+        assert.equal(started.length, 2);
         assert.deepEqual(sent.run.modelSelection, nextTurn);
       }).pipe(Effect.provide(layer));
     }),

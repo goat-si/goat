@@ -16,6 +16,12 @@ import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import {
+  OrchestrationV2LimitRecovery,
+  OrchestrationV2LimitRecoveryUpdate,
+  OrchestrationV2LatestAnswerExcerpt,
+} from "./orchestrationV2ThreadFields.ts";
+export * from "./orchestrationV2ThreadFields.ts";
 
 import {
   CheckpointId,
@@ -435,30 +441,6 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
-export const OrchestrationV2LimitRecovery = Schema.Struct({
-  requestId: Schema.optional(CommandId),
-  runId: RunId,
-  resetAt: IsoDateTime,
-  autoResume: Schema.Boolean,
-  snooze: Schema.optional(Schema.Boolean),
-});
-export type OrchestrationV2LimitRecovery = typeof OrchestrationV2LimitRecovery.Type;
-
-export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
-  runId: RunId,
-  resetAt: IsoDateTime,
-  autoResume: Schema.optional(Schema.Boolean),
-  snooze: Schema.optional(Schema.Boolean),
-}).check(
-  Schema.makeFilter(
-    (update) =>
-      update.autoResume !== undefined ||
-      update.snooze !== undefined ||
-      "A recovery update must include autoResume or snooze.",
-  ),
-);
-export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
-
 /**
  * A side chat (`/side`) is a hidden thread that answers questions about its parent
  * without adding to the parent's history. Clients keep it out of thread lists and show it
@@ -516,6 +498,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  latestAnswerExcerpt: OrchestrationV2LatestAnswerExcerpt,
   /**
    * Where the thread's tool history lives when not in the database: `archived` restores when the
    * thread is opened, `deleted` is gone. Absent while the history is in the database.
@@ -2210,6 +2193,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  latestAnswerExcerpt: OrchestrationV2LatestAnswerExcerpt,
   /**
    * Where the thread's tool history lives when not in the database: `archived` restores when the
    * thread is opened, `deleted` is gone. Absent while the history is in the database.

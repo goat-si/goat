@@ -297,11 +297,21 @@ const make = Effect.gen(function* () {
     DISPLAY: env.DISPLAY ?? "",
     XAUTHORITY: env.XAUTHORITY,
   });
+  // One probe while the display stays the same, so it keeps the bus and app it already found.
+  let focusProbe:
+    | { readonly key: string; readonly probe: ReturnType<typeof makeSecureFocusProbe> }
+    | undefined;
+  const focus = (env: Readonly<Record<string, string>>, pid: number) => {
+    const key = JSON.stringify([env.DBUS_SESSION_BUS_ADDRESS, env.DISPLAY, env.XAUTHORITY]);
+    if (focusProbe?.key !== key)
+      focusProbe = { key, probe: makeSecureFocusProbe(gdbusRunner(env)) };
+    return focusProbe.probe(pid);
+  };
   return yield* makeLinuxFrameSource(platform, {
     session,
     placement: (env, target) =>
       makeX11WindowPlacement(display(env))([{ pid: target.pid, windowId: target.windowId }]),
-    focus: (env, pid) => makeSecureFocusProbe(gdbusRunner(env))(pid),
+    focus,
     listApps,
     capture: (env, target) =>
       captureX11Window(display(env), target.windowId, frameSize(target.maxWidth)),
