@@ -27,9 +27,9 @@ For another deployment, set these values in the repository-root `.env` or `.env.
 
 ```dotenv
 GOAT_CLERK_PUBLISHABLE_KEY=<publishable key>
-GOAT_CLERK_JWT_TEMPLATE=<JWT template name>
 GOAT_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
 GOAT_RELAY_URL=https://relay.example.com
+GOAT_HOSTED_APP_URL=https://app.trygoat.ai
 ```
 
 Process variables take precedence over `.env.local`, then `.env`. Use these canonical names;
@@ -37,7 +37,7 @@ the build loader supplies framework-specific aliases. These values are public id
 `CLERK_SECRET_KEY` belongs only in the relay's secrets, never in client configuration.
 
 Client and bundled-server builds embed the public values, so set them before building.
-EAS preview and production environments need the publishable key, JWT template name, and relay URL.
+EAS preview and production environments need the publishable key, relay URL, and hosted origin.
 Bundled servers also accept runtime overrides for operator-managed deployments.
 
 Copy `infra/relay/.env.example` to `infra/relay/.env` for relay deployment settings.
@@ -51,24 +51,38 @@ In Clerk's OAuth applications settings:
 1. Create a public OAuth application for the GOAT CLI, using authorization-code exchange with PKCE.
 2. Allow the redirect URI `http://127.0.0.1:34338/callback`.
 3. Enable the `openid`, `profile`, `email`, and `offline_access` scopes.
-4. Enable **Device authorization grant** on the application. Headless and SSH authorization use
-   it, and Clerk only advertises the device endpoint once it is on. The feature is in beta and
-   Clerk enables it per account on request.
-5. Set `GOAT_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
-   build environments.
+4. Disable **Device authorization grant**. Standalone device codes, `--headless`, SSH-inferred headless and the H fallback cannot authorize beta links.
+5. Set `GOAT_CLERK_CLI_OAUTH_CLIENT_ID` in client builds and the identical `CLERK_CLI_OAUTH_CLIENT_ID` in the relay.
 
-## JWT template
+The normal CLI flow first obtains a two-minute browser approval bound to its target host, local origin, capabilities, proof key, state and separate S256 verifier. The browser posts approval to `/approval` on the loopback listener before navigating to Clerk OAuth; the CLI waits for both callbacks. It installs the link immediately and writes desired-link state only after installation. A direct Clerk OAuth login or refreshed CLI token cannot link a host. Cached credentials remain sufficient for account-owned unlink/release only.
 
-Create a Clerk JWT template named `goat-relay` with claims:
+## Required Clerk authentication policy
 
-```json
-{ "aud": "goat-relay" }
-```
+These are operator prerequisites; this change does not configure a Clerk account or enable Connect.
+Use a dedicated production Clerk application with a plan that supports required MFA and passkeys.
+Enable **Require multi-factor authentication**, TOTP and backup codes. Pending `setup-mfa` sessions cannot discover environments. Configure Clerk-owned password, email, passkey, MFA and backup-code changes to require both factors within ten minutes. There is no GOAT reset bypass.
 
-Set `GOAT_CLERK_JWT_TEMPLATE=goat-relay` for clients and
-`CLERK_JWT_AUDIENCE=goat-relay` for the relay. The production relay deployment environment
-also defines `CLERK_JWT_TEMPLATE`. The audience stays the same across relay stages; the relay
-URL selects the deployment.
+Customize the **session token**, not a JWT template, with `aud` equal to the exact relay issuer (for example `https://relay.example.com`). Set the relay's `CLERK_JWT_AUDIENCE` to that same origin. Session JWT V2 must carry signed `sub`, `sid`, `iss`, `azp`, `iat`, `exp` and two verified `fva` ages. Clients request a session token with `skipCache:true` and no template. Retire `GOAT_CLERK_JWT_TEMPLATE`/`CLERK_JWT_TEMPLATE`; template tokens, OAuth consent, token issuance time, enrollment flags and native biometric unlock are not evidence of recent MFA.
+
+Set `CLERK_AUTHORIZED_PARTIES` to a comma-separated list of exact admitted browser origins, including the production hosted app and the actual Clerk account portal. There is no suffix trust. The relay derives its exact Clerk issuer from its publishable key, checks the audience, rejects impersonation and verifies active session ownership through Clerk's Backend API. Provider failure denies issuance with a retryable 503. Keep `CLERK_SECRET_KEY` exclusively in relay secrets.
+
+Prove Clerk's minute-age rounding and clock behavior before admission. GOAT conservatively subtracts `(age + 1)` minutes from signed token issuance time and requires both factor bounds to be less than ten minutes old for links and new client keys. Refreshing a token does not refresh authentication. Test first-factor-only and pending accounts, cancelled verification, inactive/revoked sessions, and passkey-only accounts whose actual signed evidence must satisfy the same check. Clerk's reverification APIs are public beta; the operator must accept that maturity or exclude the affected flow.
+
+Capture signed Electron/iOS/Android token evidence and actual callbacks before allowing their origins. Do not invent browser `azp` for a native client or broadly trust native schemes. Unsupported native factor evidence is excluded from beta; use full MFA sign-in when its reverification UI is unavailable. Keep existing native callback registrations below for compatibility without granting them relay admission automatically.
+
+## Hosted app and release admission
+
+Production uses `https://app.trygoat.ai/`; ordinary sign-in and own-environment discovery start at `/`. `/connect` is exclusively the versioned CLI approval entry. Keep tunnel hosts on a separate apex. A tunnel page links to the hosted root without carrying credentials or arbitrary return URLs.
+
+Build staging separately for `https://staging.app.trygoat.ai` with matching isolated Clerk/relay configuration. Rebuild production for its own origin; a staging build must never be promoted as production bytes. Record source SHA, artifact digest and the allowlisted public config for each. Worker static assets need SPA fallback for root/deep links and a noncached shell; authentication remains in the relay. Domain provisioning, hosting deployment and promotion belong to the infrastructure lane.
+
+Before inviting anyone, record the exact first published nightly containing wp2, wp3 and wp7 as the minimum supported host/client release for auth policy 1. No semver minimum is assumed by this change. Quarantine legacy relay links, withdraw old relay tokens/client keys, and revoke pending host cloud grants and existing cloud sessions through the trusted upgrade path, then explicitly re-link. The nullable migration column deliberately leaves older records unsupported. Preserve direct access for upgrading; relay withdrawal cannot erase a directly reachable offline host session. wp2 owns local hub-consent/bootstrap generations and wp3 owns account suspension/security-reset generation changes; they must be integrated before admission. Account lifecycle writes must use the same per-account advisory lock as key admission and preserve suspended/deleted tombstones. The relay account generation, key admission ID and local hub-consent generation are separate authorities.
+
+The beta is **reachability only**. Push and Live Activities remain unavailable regardless of APNs/Firebase key availability. Relay mobile-registration scopes are denied; queued push work is drained without delivery. Native registration and provider startup stay disabled. A separate audited push work-phase is required before activation.
+
+Run the exact-artifact negative suite in staging, then repeat fresh-browser root/deep-link and normal CLI login on production. Confirm the production loopback receiver rejects the staging Origin. Browser loopback POST/CSP/local-network compatibility, live Clerk MFA/passkey evidence, EAS environment/config extraction, and signed Electron/iOS/Android clean/retained-state checks are launch gates, not claims established by unit tests.
+
+Rollback must retain policy-1 enforcement and the additive tables/nullable legacy marker. Close Connect admission before rolling back to any earlier permissive relay. Do not treat old links as strong during rollback.
 
 ## Desktop OAuth redirects
 

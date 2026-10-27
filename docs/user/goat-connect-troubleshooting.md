@@ -4,6 +4,12 @@ Managed GOAT Connect routes are currently unavailable in GOAT. Use
 [direct pairing or Tailscale](./remote-access.md) to connect devices. The checks below
 apply to builds with GOAT Connect enabled.
 
+In an enabled beta build, start ordinary account sign-in at [the hosted app](https://app.trygoat.ai/). Connect requires MFA. If GOAT asks for recent verification, verify both factors and retry; on native clients without a verification prompt, sign out and sign in with MFA again. Update both host and client when GOAT asks for a supported release, then re-link the host.
+
+The beta provides remote reachability. Push notifications and Live Activities are unavailable. `goat connect` needs a local browser and a matching browser approval; device codes and headless linking are unavailable. For a headless host, pair an updated browser over local networking, Tailscale or SSH and link in Settings.
+
+`goat connect logout` removes local authorization even if remote revocation is unavailable. When it reports **remote revocation pending**, retry the printed command or withdraw the environment from your hosted account. Signing out locally alone does not prove remote access was revoked.
+
 A GOAT Connect connection goes through four parts, in this order:
 
 1. **This device** reaches GOAT Connect over the internet.
@@ -35,7 +41,7 @@ Fix:
 1. Make sure the host is awake and GOAT runs on it.
 2. On the host, run `goat connect status`. It names the problem on the host's side.
 3. If the host was offline for a long time, GOAT Connect removes its tunnel. Start
-   GOAT on the host and update it to the latest version. It gets a new tunnel.
+   GOAT on the host and update it to a supported version. Run `goat connect` again, or re-link in Settings, and verify both authentication factors.
 
 ## Port 7844 is blocked on the host
 
@@ -72,7 +78,7 @@ The host's tunnel is up, but it cannot reach GOAT on the host. Common causes:
   sends requests to `127.0.0.1`, so the server must also listen there.
 
 Fix: restart GOAT on the host. For the background service, run
-`goat service restart`. Then run `goat connect status` on the host.
+`goat service restart`. If the local port changed, explicitly re-link with `goat connect` or Settings. Then run `goat connect status`.
 
 <a id="the-t3-connect-address-does-not-resolve-or-answer"></a>
 
