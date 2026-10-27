@@ -34,7 +34,7 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
-import { CodexModelRoute, DEFAULT_OPENCODEX_BASE_URL } from "./codexRoute.ts";
+import { CodexHomeSettingsFields, CodexModelRoute } from "./codexRoute.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
@@ -616,10 +616,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("default" as const)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    opencodexBaseUrl: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed(DEFAULT_OPENCODEX_BASE_URL)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
+    ...CodexHomeSettingsFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
