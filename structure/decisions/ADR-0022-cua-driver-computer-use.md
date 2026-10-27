@@ -244,8 +244,8 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   until it loses focus. The control counts these pauses, so a proxy that only sees the state after a
   pause has already ended still ends the call it overlapped. Narrowing a thread's approved apps ends
   the call in flight. Interactive
-  turns run where the helper cannot report these yet, with the gap shown as unsupported; unattended
-  turns require private-mode detection but not human-input detection. Controls and pauses are
+  and unattended turns run where the helper cannot report these yet, with the gap shown as
+  unsupported. Controls and pauses are
   in memory, ended by a restart like the provider processes they serve.
 - **Proxy.** Every attached provider runs `goat cua-lease-proxy --control` in place of
   `cua-driver mcp`. It holds the thread's own MCP credential and reads

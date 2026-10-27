@@ -16,6 +16,10 @@
   pointer input no longer pauses an agent with approved control, unattended attachment requires
   private-mode detection but not human-input detection, and human-input detection remains for
   input arbitration and reports only. The Safety bullet below states the amended decision.
+- Amended 2026-10-28, D7 and D16 (owner decision, Jun, 2026-10-28): no detection signal gates
+  admission, so unattended work no longer needs private-mode detection, and a thread launched
+  from another environment counts as one a person directs. The Safety bullet and D16 below
+  state the amended decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
@@ -151,8 +155,8 @@
     Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
     the settings contract so older clients and settings files still decode, and the server ignores
     it. What differs by origin stays: only a person's run takes the foreground without asking,
-    while unattended work asks for it, holds the screen one thread at a time and still needs
-    private-mode detection (D7). The password-manager exclusions, pause, Stop and stop all, each
+    while unattended work asks for it and holds the screen one thread at a time. The
+    password-manager exclusions, pause, Stop and stop all, each
     call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
     the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the
     approval flow. Owner decision (Jun, 2026-10-25), implemented in #1649 after #1617; it replaces
@@ -198,9 +202,8 @@
     Stop and the global kill switch end the transport at once. An agent with approved control
     keeps working while a person uses the same desktop; the person's keyboard and pointer input
     is not a pause condition. Stop, stop all, takeover and hand-back, lease expiry and the
-    private-field pause still stop or pause it. Unattended attachment requires private-mode
-    detection and does not require human-input detection, which opens the macOS unattended path
-    that #1426 had closed by turning off the human-input advertisement. Human-input detection
+    private-field pause still stop or pause it. No detection signal gates attachment, for
+    unattended work either (2026-10-28). Human-input detection
     (#1426, #1477, #1504, #1512) remains for input arbitration and reports; it is neither an
     admission gate nor a pause condition. Owner decision (Jun, 2026-10-25), #1550.
   - **Screen code mode (D17).** One agent tool runs a short JavaScript cell in a QuickJS

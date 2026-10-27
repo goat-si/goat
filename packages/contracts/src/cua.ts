@@ -820,8 +820,8 @@ export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Typ
  * The desktop host's computer use helper: each readiness step and which safety signals it
  * raises, sent when either changes and again for every helper launch. generation counts the
  * desktop's helper launches, so a report from an earlier launch that arrives late is dropped.
- * The signals here are the only word on what the host detects: unattended turns run only where
- * both are supported (#1235), and a host that never reports has neither.
+ * The signals here are the only word on what the host detects; a host that never reports has
+ * neither.
  */
 export const DesktopCuaReadinessReport = Schema.Struct({
   version: Schema.Literal(1),
