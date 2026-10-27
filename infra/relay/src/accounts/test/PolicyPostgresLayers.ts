@@ -73,9 +73,13 @@ export function postgresPolicyLayer(
     Layer.provideMerge(AccountTransactions.layer),
     Layer.provideMerge(
       Layer.succeed(HookInbox.HookInbox, {
-        hold: () => Effect.die("No network in PostgreSQL fixtures"),
-        wake: () => Effect.die("No network in PostgreSQL fixtures"),
-        clear: options?.clear ?? (() => Effect.void),
+        hold: Effect.fn("HookInbox.HookInbox.hold")(function* () {
+          return yield* Effect.die("No network in PostgreSQL fixtures");
+        }),
+        wake: Effect.fn("HookInbox.HookInbox.wake")(function* () {
+          return yield* Effect.die("No network in PostgreSQL fixtures");
+        }),
+        clear: options?.clear ?? Effect.fn("HookInbox.HookInbox.clear")(function* () {}),
       }),
     ),
     Layer.provideMerge(

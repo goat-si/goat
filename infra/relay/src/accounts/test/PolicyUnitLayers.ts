@@ -22,55 +22,84 @@ import type { RelayConfiguration } from "../../Config.ts";
 
 export const policyUnitLayer = Layer.mergeAll(
   Layer.succeed(AccountAccess, {
-    admit: (userId) => Effect.succeed({ userId, accountEpoch: 1 }),
-    capture: (userId) => Effect.succeed({ userId, accountEpoch: 1 }),
-    requireAllowed: (input) => Effect.succeed({ userId: input.userId, accountEpoch: 1 }),
+    admit: Effect.fn("AccountAccess.admit")(function* (userId) {
+      return { userId, accountEpoch: 1 };
+    }),
+    capture: Effect.fn("AccountAccess.capture")(function* (userId) {
+      return { userId, accountEpoch: 1 };
+    }),
+    requireAllowed: Effect.fn("AccountAccess.requireAllowed")(function* (input) {
+      return { userId: input.userId, accountEpoch: 1 };
+    }),
   }),
-  Layer.succeed(AccountTransactions, { run: (_input, effect) => effect }),
-  Layer.succeed(RelayRateLimits, { charge: () => Effect.void }),
+  Layer.succeed(AccountTransactions, {
+    run: Effect.fn("AccountTransactions.run")(function* (_input, effect) {
+      return yield* effect;
+    }),
+  }),
+  Layer.succeed(RelayRateLimits, {
+    charge: Effect.fn("RelayRateLimits.charge")(function* () {}),
+  }),
   Layer.succeed(AccountLimits, DEFAULT_LIMITS),
   Layer.succeed(EnvironmentOwnership, {
-    beginRelease: () => Effect.succeed([]),
-    finishRelease: () => Effect.succeed(true),
-    claim: () => Effect.void,
-    assertActive: () => Effect.void,
+    beginRelease: Effect.fn("EnvironmentOwnership.beginRelease")(function* () {
+      return [];
+    }),
+    finishRelease: Effect.fn("EnvironmentOwnership.finishRelease")(function* () {
+      return true;
+    }),
+    claim: Effect.fn("EnvironmentOwnership.claim")(function* () {}),
+    assertActive: Effect.fn("EnvironmentOwnership.assertActive")(function* () {}),
   }),
   Layer.succeed(AccountDeviceAdmission, {
-    write: (_input, body) => body(1),
-    unregister: (_userId, body) => body,
+    write: Effect.fn("AccountDeviceAdmission.write")(function* (_input, body) {
+      return yield* body(1);
+    }),
+    unregister: Effect.fn("AccountDeviceAdmission.unregister")(function* (_userId, body) {
+      return yield* body;
+    }),
   }),
   Layer.succeed(ManagedProvisioningIntents, {
-    prepare: () => Effect.succeed("10000000-0000-4000-8000-000000000001"),
-    record: () => Effect.void,
+    prepare: Effect.fn("ManagedProvisioningIntents.prepare")(function* () {
+      return "10000000-0000-4000-8000-000000000001";
+    }),
+    record: Effect.fn("ManagedProvisioningIntents.record")(function* () {}),
   }),
   Layer.succeed(DeliveryAuthorization, {
-    eligible: () => Effect.succeed(true),
-    result: (effect) => effect,
+    eligible: Effect.fn("DeliveryAuthorization.eligible")(function* () {
+      return true;
+    }),
+    result: Effect.fn("DeliveryAuthorization.result")(function* (effect) {
+      return yield* effect;
+    }),
   }),
   Layer.succeed(HookDeliveryAuthorization, {
-    allowed: () => Effect.succeed(true),
+    allowed: Effect.fn("HookDeliveryAuthorization.allowed")(function* () {
+      return true;
+    }),
   }),
-  Layer.succeed(ManagedTunnelLimits, { ensureCapacity: () => Effect.void }),
+  Layer.succeed(ManagedTunnelLimits, {
+    ensureCapacity: Effect.fn("ManagedTunnelLimits.ensureCapacity")(function* () {}),
+  }),
 );
 
 export const identityUnitLayer = (config: RelayConfiguration["Service"]) =>
   Layer.succeed(EndpointIdentity, {
-    resolve: (input) =>
-      Effect.sync(() => {
-        const stage = config.managedEndpointNamespace ?? "prod";
-        const hash = createHash("sha256")
-          .update(managedEndpointDigestInput(stage, input.userId, input.environmentId))
-          .digest("hex");
-        return {
-          endpointGeneration: 0,
-          endpointKey: hash.slice(0, 16),
-          hostname: managedEndpointHostname(
-            stage,
-            config.managedEndpointBaseDomain ?? "example.test",
-            hash,
-          ),
-          tunnelName: managedEndpointTunnelName(stage, hash),
-        };
-      }),
-    check: () => Effect.void,
+    resolve: Effect.fn("EndpointIdentity.resolve")(function* (input) {
+      const stage = config.managedEndpointNamespace ?? "prod";
+      const hash = createHash("sha256")
+        .update(managedEndpointDigestInput(stage, input.userId, input.environmentId))
+        .digest("hex");
+      return {
+        endpointGeneration: 0,
+        endpointKey: hash.slice(0, 16),
+        hostname: managedEndpointHostname(
+          stage,
+          config.managedEndpointBaseDomain ?? "example.test",
+          hash,
+        ),
+        tunnelName: managedEndpointTunnelName(stage, hash),
+      };
+    }),
+    check: Effect.fn("EndpointIdentity.check")(function* () {}),
   });
