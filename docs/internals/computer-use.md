@@ -158,6 +158,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   synthetic, or foreground) and does not switch routes or windows after an unknown outcome.
 - Results say whether the helper saw the effect. Input that never left is a refusal, never an
   outcome, and a missed deadline counts as unverifiable, not refused.
+- On macOS the pinned driver posts a background pixel click to the app's pid and reads nothing
+  back, so it reports `unverifiable` even when it landed. Some apps drop pid-posted mouse events
+  entirely, KakaoTalk reportedly among them, so an unchanged window after such a click is an unknown
+  outcome to observe, not a coordinate bug ([token first](../../apps/server/src/cua/ComputerUseTokenFirst.ts)).
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
 - Refusals name their cause. A person's Stop and a person's takeover have their own
