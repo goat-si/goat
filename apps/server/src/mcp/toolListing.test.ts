@@ -58,8 +58,12 @@ const callers: Readonly<
 };
 
 const names = (tools: ReadonlyArray<ListedTool>) => tools.map((tool) => tool.name).sort();
+// These callers have no browser or computer use attached, so goat_screen_run is withheld.
 const listed = (filter: (entry: (typeof entries)[number]) => boolean) =>
-  entries.filter(filter).map(listedToolName).sort();
+  entries
+    .filter((entry) => entry.path !== "surface.screen_run" && filter(entry))
+    .map(listedToolName)
+    .sort();
 const textOf = (result: { readonly content: ReadonlyArray<unknown> }) =>
   JSON.stringify(result.content);
 /** The message of a refusal, which travels as an encoded OrchestratorMcpFailure. */

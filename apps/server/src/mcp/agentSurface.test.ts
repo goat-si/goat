@@ -730,7 +730,7 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
     const listed = (yield* http.listTools("thread")).map((tool) => tool.name);
-    const forThreads = entries.filter((entry) => entry.requires !== "client");
+    const forThreads = entries.filter((e) => e.requires !== "client" && e.verb !== "screen_run");
     expect(listed.toSorted()).toEqual(forThreads.map(listedToolName).sort());
     expect(listed).toContain("goat_task_create");
     expect(listed).not.toContain("delegate_task");
