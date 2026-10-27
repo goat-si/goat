@@ -387,7 +387,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       let touched = cut;
-      if (cut && cellId) bridge.cutCellNow(runId, turnId, cellId, change.kind);
+      if (cut && cellId) {
+        bridge.cutCellNow(runId, turnId, cellId, change.kind);
+        supervisor?.cutCellNow(runId, turnId, cellId);
+      }
       for (const [targetId, route] of routes) {
         if (route.runId !== runId || route.turnId !== turnId) continue;
         if (!cut && change.tabId !== undefined && route.tabId !== change.tabId) continue;
