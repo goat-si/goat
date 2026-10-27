@@ -56,7 +56,10 @@ interface WireMessage {
 
 function readArgValues(name: string): ReadonlyArray<string> {
   const args = process.argv.slice(2);
-  return args.flatMap((arg, index) => (arg === name && args[index + 1] ? [args[index + 1]!] : []));
+  return args.flatMap((arg, index) => {
+    const value = args[index + 1];
+    return arg === name && value ? [value] : [];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

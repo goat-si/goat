@@ -1,4 +1,5 @@
 import { assert, describe } from "@effect/vitest";
+import * as NodeFS from "node:fs";
 
 import { createOxlintRuleHarness } from "../test/utils.ts";
 
@@ -22,6 +23,14 @@ const parenthesizedAnyCast = [
 ].join(" ");
 
 describe("goat/code-budget", () => {
+  harness("apps/server/scripts/record-fx-acp-replay-fixture.ts").valid(
+    "the fx replay recorder satisfies the production assertion budget (#1938)",
+    NodeFS.readFileSync(
+      new URL("../../apps/server/scripts/record-fx-acp-replay-fixture.ts", import.meta.url),
+      "utf8",
+    ),
+  );
+
   harness("apps/demo/src/Big.ts").valid(
     "allows a recorded file at its recorded length",
     linesOf(1200),
