@@ -18,6 +18,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Electron from "electron";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopConfig from "./DesktopConfig.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { makeHarness as makeUpdatesHarness } from "../updates/updatesTestHarness.ts";
@@ -27,6 +28,8 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopStartupRecovery from "./DesktopStartupRecovery.ts";
 import { ACTION_ORIGIN, buildStartupRecoveryHtml } from "./DesktopStartupRecoveryView.ts";
+
+const decodeDesktopUpdateState = Schema.decodeEffect(DesktopUpdateStateSchema);
 
 const updateState = (patch: Partial<DesktopUpdateState>): DesktopUpdateState => ({
   ...createInitialDesktopUpdateState(
@@ -118,7 +121,8 @@ const makeRecoveryHarness = Effect.fn("test.makeRecoveryHarness")(function* (
       renderCount += 1;
       const html = decodeURIComponent(url.split(",").slice(1).join(","));
       rendered.resolve(html);
-      return Effect.runPromise(Queue.offer(pages, html)).then(() => undefined);
+      Queue.offerUnsafe(pages, html);
+      return Promise.resolve();
     },
     once: () => undefined,
     close: () => {
@@ -140,14 +144,24 @@ const makeRecoveryHarness = Effect.fn("test.makeRecoveryHarness")(function* (
       readFileString: () => Effect.succeed("0.1.2-nightly.20261026.280"),
       writeFileString: (_path, value) => Queue.offer(written, value).pipe(Effect.asVoid),
     }),
-    Layer.mock(DesktopEnvironment.DesktopEnvironment)({
-      path,
-      stateDir: "/sandbox",
-      logDir: "/sandbox/logs",
+    DesktopEnvironment.layer({
+      dirname: "/repo/apps/desktop/src",
+      homeDirectory: "/sandbox",
       appVersion: initial.currentVersion,
       platform: "darwin",
       processArch: "arm64",
-    }),
+      appPath: "/repo",
+      isPackaged: true,
+      resourcesPath: "/repo/resources",
+      runningUnderArm64Translation: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(Path.Path, path),
+          DesktopConfig.layerTest({ GOAT_HOME: "/sandbox" }),
+        ),
+      ),
+    ),
     Layer.mock(ElectronApp.ElectronApp)({
       on: () => Effect.void,
       quit: Queue.offer(quit, undefined).pipe(Effect.asVoid),
@@ -221,7 +235,7 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const harness = yield* makeRecoveryHarness(
-        Schema.decodeSync(DesktopUpdateStateSchema)(
+        yield* decodeDesktopUpdateState(
           updateState({ status: "downloaded", downloadedVersion: "0.1.4" }),
         ),
       );
