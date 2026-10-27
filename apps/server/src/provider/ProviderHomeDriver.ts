@@ -30,18 +30,10 @@ export const withProviderHomeRoute = <C, R, U>(
         ...(cause === undefined ? {} : { cause }),
       });
     const leases = yield* Routes.CodexRouteState;
-    // The effective entry the registry hydrated; an identical rebuild keeps the same identity.
-    const generation = yield* leases
-      .bindRuntime(
-        input.instanceId,
-        Routes.instanceFingerprint({
-          driver: driver.driverKind,
-          environment: input.environment,
-          enabled: input.enabled,
-          config: input.config,
-        }),
-        yield* Routes.HydratingRevision,
-      )
+    const revision = yield* Routes.HydratingRevision;
+    // Skip the export when this snapshot is already superseded.
+    yield* leases
+      .assertCurrent(input.instanceId, revision)
       .pipe(Effect.mapError((cause) => unavailable(cause.message, cause)));
     const route = yield* decodeRoute(input.config).pipe(
       Effect.mapError(() => unavailable("This instance's Home route settings are invalid.")),
@@ -58,6 +50,19 @@ export const withProviderHomeRoute = <C, R, U>(
     const instance = yield* driver.create(
       home === undefined ? input : { ...input, environment: home.environment },
     );
+    // Bound only after the asynchronous export and construction, in the registry's instance scope.
+    const generation = yield* leases
+      .bindRuntime(
+        input.instanceId,
+        Routes.instanceFingerprint({
+          driver: driver.driverKind,
+          environment: input.environment,
+          enabled: input.enabled,
+          config: input.config,
+        }),
+        revision,
+      )
+      .pipe(Effect.mapError((cause) => unavailable(cause.message, cause)));
     return guardProviderHomeInstance(instance, home, leases, generation);
   }),
 });

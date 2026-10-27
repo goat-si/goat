@@ -16,6 +16,7 @@ import { PiSettings } from "@goat/provider-pi/settings";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -43,6 +44,7 @@ const passGate = (gate: Gate | undefined) =>
   gate === undefined
     ? Effect.void
     : Deferred.succeed(gate.started, undefined).pipe(Effect.andThen(Deferred.await(gate.release)));
+const makeGate = Effect.all({ started: Deferred.make<void>(), release: Deferred.make<void>() });
 
 /**
  * A provider at its process boundary: it records each launch environment, session open and
@@ -277,6 +279,71 @@ it.effect("refuses a runtime hydrated from a superseded snapshot and binds the n
     assert.equal((yield* open(retained, "native/model"))._tag, "Failure");
     assert.equal((yield* open(current, "native/model"))._tag, "Success");
   }).pipe(Effect.provide(layerOpenCodex(() => [])), Effect.scoped),
+);
+
+it.effect.each(["the Home export", "driver construction"] as const)(
+  "refuses to publish a runtime when a commit lands during %s",
+  (phase) =>
+    Effect.gen(function* () {
+      const gate = yield* makeGate;
+      return yield* Effect.gen(function* () {
+        const state = yield* Routes.CodexRouteState;
+        const { driver } = fakeDriver("pi", phase === "driver construction" ? { gate } : {});
+        const routed = { modelRoute: "opencodex", opencodexBaseUrl: HOME };
+        const building = yield* create(driver, routed, state.revision()).pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(gate.started);
+        const newer = yield* state.committed(
+          settingsWith(piEntry(routed)),
+          settingsWith(piEntry({ ...routed, launchArgs: "--newer" })),
+        );
+        yield* Deferred.succeed(gate.release, undefined);
+        const result = yield* Fiber.join(building);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.include(result.failure.detail, "changed again");
+        // The newer snapshot builds and is admitted.
+        const rebuilt = yield* create(driver, { ...routed, launchArgs: "--newer" }, newer);
+        assert.equal((yield* open(rebuilt, "opencodex/provider/model"))._tag, "Success");
+      }).pipe(
+        Effect.provide(
+          layerOpenCodex(
+            () => ["provider/model"],
+            phase === "the Home export" ? { exportGate: gate } : {},
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
+);
+
+it.effect("leaves an instance unavailable when a commit lands during initial hydration", () =>
+  Effect.gen(function* () {
+    const gate = yield* makeGate;
+    return yield* Effect.gen(function* () {
+      const state = yield* Routes.CodexRouteState;
+      const pi = fakeDriver("pi", { gate });
+      const { registry, hydrate } = yield* makeRegistry([pi.driver]);
+      // The registry starts from the snapshot the server read at startup.
+      const initial = state.revision();
+      const hydrating = yield* hydrate({ [instanceId]: piEntry() }, initial).pipe(Effect.forkChild);
+      yield* Deferred.await(gate.started);
+      const newer = yield* state.committed(
+        settingsWith(piEntry()),
+        settingsWith(piEntry({ launchArgs: "--newer" })),
+      );
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(hydrating);
+      assert.isUndefined(yield* registry.getInstance(instanceId));
+      assert.deepEqual(
+        (yield* registry.listUnavailable).map((provider) => provider.instanceId),
+        [instanceId],
+      );
+      yield* hydrate({ [instanceId]: piEntry({ launchArgs: "--newer" }) }, newer);
+      const live = yield* liveInstance(registry);
+      assert.equal((yield* open(live, "native/model"))._tag, "Success");
+    }).pipe(Effect.provide(layerOpenCodex(() => [])));
+  }).pipe(Effect.scoped),
 );
 
 it.effect("rebuilds a reconnected Pi runtime with Home's current models and files together", () => {

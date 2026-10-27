@@ -121,9 +121,18 @@ export class CodexRouteState extends Context.Service<
     readonly admission: Semaphore.Semaphore;
     readonly revision: () => SettingsRevision;
     /**
+     * Refuses a construction whose settings snapshot is older than the instance's latest committed
+     * change; the newer snapshot rebuilds it.
+     */
+    readonly assertCurrent: (
+      id: ProviderInstanceId,
+      revision: SettingsRevision | undefined,
+    ) => Effect.Effect<void, ServerSettingsError>;
+    /**
      * Binds a runtime built from an effective entry for the lifetime of the caller's scope, the
      * registry's per-instance scope. Removal, replacement by any driver and a failed replacement
-     * close it, so a retained reference stops being admitted. A superseded snapshot is refused.
+     * close it, so a retained reference stops being admitted. Supersession is checked again here,
+     * after construction, so an obsolete runtime is never published.
      */
     readonly bindRuntime: (
       id: ProviderInstanceId,
@@ -208,6 +217,9 @@ const makeState = Effect.gen(function* () {
   return CodexRouteState.of({
     admission,
     revision,
+    assertCurrent: Effect.fn("CodexRouteState.assertCurrent")(function* (id, hydrating) {
+      yield* admission.withPermits(1)(assertCurrent(id, hydrating));
+    }),
     bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity, hydrating) {
       return yield* Effect.acquireRelease(
         admission.withPermits(1)(

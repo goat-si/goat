@@ -209,6 +209,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
       admission: Semaphore.makeUnsafe(1),
       revision: () => state.revision,
       bindRuntime: (_id, identity) => Effect.succeed(identity),
+      assertCurrent: () => Effect.void,
       assertGeneration: () => Effect.void,
       reserveUse: () =>
         state.routeBusy
