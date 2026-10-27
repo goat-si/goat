@@ -2,11 +2,13 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import { parseNote } from "./frontmatter.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { supervise } from "../backgroundSupervision.ts";
 
 export class NotesGit extends Context.Service<
   NotesGit,
@@ -16,12 +18,16 @@ export class NotesGit extends Context.Service<
   }
 >()("goat/notes/NotesGit") {}
 
+class NotesGitCommandError extends Schema.TaggedError<NotesGitCommandError>()(
+  "NotesGitCommandError",
+  { exitCode: Schema.NullOr(Schema.Number) },
+) {}
+
 const make = Effect.gen(function* () {
   const { notesDir } = yield* ServerConfig.ServerConfig;
   const runner = yield* ProcessRunner.ProcessRunner;
   const signals = yield* Queue.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
-  let disabled = false;
   let initialized = false;
   const run = (args: ReadonlyArray<string>) =>
     runner.run({
@@ -47,19 +53,25 @@ const make = Effect.gen(function* () {
       timeout: "30 seconds",
       maxOutputBytes: 64 * 1024,
     });
-  const flush = lock.withPermits(1)(
+  const checked = Effect.fn("NotesGit.checked")(function* (
+    args: ReadonlyArray<string>,
+    allowed: ReadonlyArray<number> = [0],
+  ) {
+    const result = yield* run(args);
+    if (result.code === null || !allowed.includes(result.code))
+      return yield* new NotesGitCommandError({ exitCode: result.code });
+    return result;
+  });
+  const flushOnce = lock.withPermits(1)(
     Effect.gen(function* () {
-      if (disabled) return;
       if (!initialized) {
-        const init = yield* run(["init"]);
-        if (init.code !== 0) return;
+        yield* checked(["init"]);
         initialized = true;
       }
-      if ((yield* run(["add", "-A", "--", "."])).code !== 0) return;
-      const diff = yield* run(["diff", "--cached", "--quiet"]);
+      yield* checked(["add", "-A", "--", "."]);
+      const diff = yield* checked(["diff", "--cached", "--quiet"], [0, 1]);
       if (diff.code !== 1) return;
-      const changed = yield* run(["diff", "--cached", "--name-only", "-z"]);
-      if (changed.code !== 0) return;
+      const changed = yield* checked(["diff", "--cached", "--name-only", "-z"]);
       const names = changed.stdout.split("\0").filter(Boolean);
       let message = names.length > 1 ? `notes: ${names.length} changes` : "notes: update notes";
       if (names.length === 1) {
@@ -73,7 +85,7 @@ const make = Effect.gen(function* () {
             : null;
         message = `notes: ${staged.code === 0 ? "update" : "delete"} ${name.replace(/[\r\n]/gu, " ")}${author ? ` (${author})` : ""}`;
       }
-      yield* run([
+      yield* checked([
         "-c",
         "user.name=GOAT Notes",
         "-c",
@@ -82,16 +94,21 @@ const make = Effect.gen(function* () {
         "-m",
         message,
       ]);
-    }).pipe(
-      Effect.catch((error) => {
-        if (error._tag === "ProcessSpawnError") disabled = true;
-        return Effect.logWarning("Notes auto-commit unavailable", { reason: error._tag });
-      }),
+    }),
+  );
+  const flush = flushOnce.pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("Notes auto-commit pending", { reason: error._tag }).pipe(
+        Effect.andThen(Queue.offer(signals, undefined)),
+        Effect.asVoid,
+      ),
     ),
   );
   yield* Stream.fromQueue(signals).pipe(
     Stream.debounce("2 seconds"),
-    Stream.runForEach(() => flush),
+    Stream.runForEach(() =>
+      supervise("NotesGit.flush", () => flushOnce, { restartOnSuccess: false }),
+    ),
     Effect.forkScoped,
   );
   return NotesGit.of({ changed: Queue.offer(signals, undefined).pipe(Effect.asVoid), flush });

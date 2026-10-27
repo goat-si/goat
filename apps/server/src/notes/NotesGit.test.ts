@@ -55,13 +55,13 @@ it.effect("coalesces edits into one commit at the Clock deadline", () =>
   }),
 );
 
-it.effect("a missing git executable disables commits without failing notes", () => {
+it.effect("unclassified spawn errors remain retryable without failing notes", () => {
   let spawns = 0;
   return Effect.gen(function* () {
     const git = yield* Git.NotesGit;
     yield* git.flush;
     yield* git.flush;
-    assert.strictEqual(spawns, 1);
+    assert.strictEqual(spawns, 2);
   }).pipe(
     Effect.provide(
       Git.layer.pipe(
@@ -85,6 +85,109 @@ it.effect("a missing git executable disables commits without failing notes", () 
     ),
   );
 });
+
+it.effect("retries one dirty notes commit after a transient spawn failure", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    let commits = 0;
+    const attempted = yield* Deferred.make<void>();
+    const runner = Layer.succeed(Runner.ProcessRunner, {
+      run: (input) =>
+        Effect.gen(function* () {
+          if (++attempts === 1) {
+            yield* Deferred.succeed(attempted, undefined);
+            return yield* new Runner.ProcessSpawnError({
+              command: "git",
+              argumentCount: input.args.length,
+              cause: new Error("transient spawn exhaustion"),
+            });
+          }
+          if (input.args.includes("commit")) commits++;
+          return {
+            stdout: "",
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(input.args.includes("--quiet") ? 1 : 0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const git = yield* Git.NotesGit;
+      yield* git.changed;
+      yield* TestClock.adjust("2 seconds");
+      yield* Deferred.await(attempted);
+      assert.strictEqual(commits, 0);
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(commits, 1);
+    }).pipe(
+      Effect.provide(
+        Git.layer.pipe(
+          Layer.provide(runner),
+          Layer.provide(Config.layerTest("/tmp", { prefix: "notes-git-retry-" })),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect.each(
+  (["init", "add", "commit"] as const).flatMap((command) => [
+    { command, exit: "nonzero", code: ChildProcessSpawner.ExitCode(2) },
+    { command, exit: "null", code: null },
+  ]),
+)("retains a dirty notes commit after $exit $command exit", ({ command, code }) =>
+  Effect.gen(function* () {
+    let failed = false;
+    let commits = 0;
+    const attempted = yield* Deferred.make<void>();
+    const runner = Layer.succeed(Runner.ProcessRunner, {
+      run: (input) =>
+        Effect.gen(function* () {
+          const fail = input.args.includes(command) && !failed;
+          if (fail) {
+            failed = true;
+            yield* Deferred.succeed(attempted, undefined);
+          } else if (input.args.includes("commit")) commits++;
+          return {
+            stdout: "",
+            stderr: "",
+            code: fail
+              ? code
+              : ChildProcessSpawner.ExitCode(input.args.includes("--quiet") ? 1 : 0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          };
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const git = yield* Git.NotesGit;
+      yield* git.changed;
+      yield* TestClock.adjust("2 seconds");
+      yield* Deferred.await(attempted);
+      assert.strictEqual(commits, 0);
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(commits, 1);
+      yield* TestClock.adjust("1 minute");
+      assert.strictEqual(commits, 1);
+    }).pipe(
+      Effect.provide(
+        Git.layer.pipe(
+          Layer.provide(runner),
+          Layer.provide(Config.layerTest("/tmp", { prefix: "notes-git-exit-retry-" })),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+  }),
+);
 
 it.live("initializes an isolated repository and commits own and external edits", () =>
   Effect.gen(function* () {

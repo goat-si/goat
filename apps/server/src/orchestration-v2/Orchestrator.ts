@@ -3,6 +3,7 @@ import {
   completionDeliveryMessage,
 } from "./goat/DelegatedCompletionMerge.ts";
 import { markThreadUnread } from "./ProjectionRunNotification.ts";
+import { runUpdateReactors } from "./runUpdateReactors.ts";
 import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
@@ -13125,27 +13126,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // Projections already contain historical terminals; replaying them delays startup queue promotion with database size.
   const terminalEventsAfterSequence = yield* eventSink.latestSequence().pipe(Effect.orDie);
-  // Filter run updates before buffering so blocked queue promotion does not retain unrelated tool bodies.
-  yield* eventSink
-    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "run.updated" })
-    .pipe(
-      Stream.filter(
-        (stored) =>
-          stored.event.type === "run.updated" &&
-          !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
-          ((stored.event.payload.delegatedTaskId !== undefined &&
-            (stored.event.payload.status === "queued" ||
-              stored.event.payload.status === "starting")) ||
-            stored.event.payload.status === "completed" ||
-            stored.event.payload.status === "interrupted" ||
-            stored.event.payload.status === "failed" ||
-            stored.event.payload.status === "cancelled" ||
-            stored.event.payload.status === "rolled_back"),
-      ),
-      Stream.runForEach(handleRunUpdate),
-      Effect.forkDetach,
-    );
-
   // A child whose run ends while its background tasks or its own subagents still run has no
   // result yet. When that work settles there is no run update to finalize it, so these events
   // do it. A background roster counts once it empties after it was seen non-empty.
@@ -13161,16 +13141,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     return providerThreadsWithBackgroundWork.delete(event.payload.id);
   };
-  yield* Stream.merge(
-    eventSink.stream({
-      afterSequence: terminalEventsAfterSequence,
-      eventType: "provider-thread.updated",
-    }),
-    eventSink.stream({ afterSequence: terminalEventsAfterSequence, eventType: "subagent.updated" }),
-  ).pipe(
-    Stream.filter(settlesChildWork),
-    Stream.runForEach((stored) =>
-      Effect.gen(function* () {
+  yield* runUpdateReactors({
+    afterSequence: terminalEventsAfterSequence,
+    // Filter run updates before buffering so blocked queue promotion does not retain unrelated tool bodies.
+    stream: (input) =>
+      eventSink
+        .stream(input)
+        .pipe(
+          Stream.filter(
+            (stored) =>
+              input.eventType !== "run.updated" ||
+              (stored.event.type === "run.updated" &&
+                !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
+                ((stored.event.payload.delegatedTaskId !== undefined &&
+                  (stored.event.payload.status === "queued" ||
+                    stored.event.payload.status === "starting")) ||
+                  stored.event.payload.status === "completed" ||
+                  stored.event.payload.status === "interrupted" ||
+                  stored.event.payload.status === "failed" ||
+                  stored.event.payload.status === "cancelled" ||
+                  stored.event.payload.status === "rolled_back")),
+          ),
+        ),
+    handleRun: handleRunUpdate,
+    handleChild: (stored) => {
+      if (!settlesChildWork(stored)) return Effect.void;
+      return Effect.gen(function* () {
         const childThreadId = stored.event.threadId;
         const parentThreadId = yield* appOwnedSubagentParentThreadId(childThreadId);
         if (parentThreadId === undefined) return;
@@ -13183,10 +13179,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause,
           }),
         ),
-      ),
-    ),
-    Effect.forkDetach,
-  );
+      );
+    },
+  }).pipe(Effect.forkDetach);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
     yield* projectionStore.getRecoveryThreadIds("subagent-results").pipe(
