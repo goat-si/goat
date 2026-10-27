@@ -13,6 +13,8 @@ import {
 import { act, fakeTimers, stubGlobal } from "../../test/render";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
+import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import * as Cause from "effect/Cause";
 import {
@@ -22,7 +24,7 @@ import {
   SshWorkspaceError,
   type SshHostStatus,
 } from "@goat/contracts";
-import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   AVAILABLE_CONNECTION_STATE,
   ConnectionTransientError,
@@ -36,6 +38,7 @@ import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import ChatView from "./ChatView";
 import * as disconnectDelay from "../hooks/useEnvironmentDisconnectDelay";
+import { useRightPanelStore } from "../rightPanelStore";
 vi.mock("../hooks/useEnvironmentDisconnectDelay", async (original) => {
   const actual = await original<typeof import("../hooks/useEnvironmentDisconnectDelay")>();
   return { ...actual, useEnvironmentStateHeldFor: vi.fn(actual.useEnvironmentStateHeldFor) };
@@ -612,6 +615,66 @@ it("requires a new explicit send after a definitive prelaunch failure", async ()
     await state.composer!.onSend();
   });
   expect(state.launch).toHaveBeenCalledTimes(2);
+});
+
+describe("right panel in narrow windows", () => {
+  async function setupPanel(options: { maximized?: boolean; requestMaximize?: boolean } = {}) {
+    await using stack = new AsyncDisposableStack();
+    const savedPanelState = useRightPanelStore.getState();
+    stack.defer(() => useRightPanelStore.setState(savedPanelState));
+    const fixture = stack.use(await setup());
+    state.narrowRightPanel = true;
+    state.keybindings = compileResolvedKeybindingsConfig([
+      { key: "ctrl+shift+m", command: "rightPanel.toggleMaximized" },
+    ]);
+    const ref = scopeThreadRef(local, store().getDraftSession(id)!.threadId);
+    useRightPanelStore.setState({ byThreadKey: {}, pendingMaximizeThreadKey: null });
+    useRightPanelStore.getState().open(ref, "files");
+    if (options.maximized) useRightPanelStore.getState().setMaximized(ref, true);
+    if (options.requestMaximize) useRightPanelStore.getState().requestMaximize(ref);
+    await fixture.mount();
+    const chatColumn = page.elementLocator(
+      fixture.container.querySelector<HTMLElement>("[data-chat-column-maximized-away]")!,
+    );
+    const owned = stack.move();
+    return { chatColumn, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+  }
+
+  it("maximizes from the sheet controls and restores the sheet with the shortcut", async () => {
+    await using panel = await setupPanel();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: "Maximize panel", exact: true }).click();
+    await expect
+      .element(panel.chatColumn)
+      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    await expect.element(page.getByRole("button", { name: "Restore panel size" })).toBeVisible();
+
+    await userEvent.keyboard("{Control>}{Shift>}m{/Shift}{/Control}");
+    await expect
+      .element(panel.chatColumn)
+      .toHaveAttribute("data-chat-column-maximized-away", "false");
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Maximize panel", exact: true }))
+      .toBeVisible();
+  });
+
+  it("honors a saved maximized panel despite the narrow viewport", async () => {
+    await using panel = await setupPanel({ maximized: true });
+    await expect
+      .element(panel.chatColumn)
+      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    await page.getByRole("button", { name: "Restore panel size" }).click();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+  });
+
+  it("consumes a linked-thread maximize request in a narrow viewport", async () => {
+    await using panel = await setupPanel({ requestMaximize: true });
+    await expect
+      .element(panel.chatColumn)
+      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    expect(useRightPanelStore.getState().pendingMaximizeThreadKey).toBeNull();
+  });
 });
 
 // Reuse this ChatView integration harness for scroll behavior as well as SSH sends.
