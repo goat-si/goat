@@ -9,6 +9,9 @@
 Branch `codex/agent-surface-token-diet` from dev `61343d617e`. One PR to `dev`, squash-merged
 after `goat-ci-result` passes on its head.
 
+**Status: done in [#1799](https://github.com/goat-si/goat/pull/1799).** The unit moved to
+`devlog/_fin` in that pull request.
+
 ## Baseline (dev `61343d617e`, 2026-10-27)
 
 From `node scripts/agent-surface/context-budget.ts` and `--listing full`:
