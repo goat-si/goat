@@ -298,6 +298,10 @@ describe("MessagesTimeline agent messages", () => {
     ]);
     expect(screen.text()).toContain("Sent by Coordinator from another thread");
     expect(screen.buttons(/^Open /)).toHaveLength(0);
+    // Expanded, the footer still names the action and says why it is unavailable.
+    await click(screen.button("Review finished"));
+    expect(screen.text()).toContain("Open thread");
+    expect(screen.buttons("Open thread")).toHaveLength(0);
   });
 
   it("names the toggle after the sender when the message has no text", async () => {

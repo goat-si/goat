@@ -690,6 +690,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         >
           <div className="flex shrink-0 items-center gap-2">
+            {sender.kind === "remote" && !sender.connected ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span tabIndex={0} className="text-muted-foreground/70 text-xs" />}
+                >
+                  Open thread
+                </TooltipTrigger>
+                <TooltipPopup>{`Connect ${machine ?? "that machine"} to open this thread`}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             {footerSender !== null ? (
               <InlineButton
                 onClick={() =>

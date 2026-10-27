@@ -1,20 +1,22 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentId, RemoteSenderAttribution, ThreadId } from "@goat/contracts";
-import * as Option from "effect/Option";
 import * as Haptics from "expo-haptics";
 import { Pressable, type ColorValue } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useQuietThreadShell } from "../../state/entities";
-import { usePreparedConnection } from "../../state/session";
+import { useEnvironmentLive } from "../../state/threads";
 import { ThreadDisclosureChevron } from "./thread-work-log";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
-// A sender on another machine opens only through a connection this app holds to that machine.
-function useOpenableRemoteSender(remoteSender: RemoteSenderAttribution | undefined) {
-  const connection = usePreparedConnection(remoteSender?.environmentId ?? null);
-  return remoteSender !== undefined && Option.isSome(connection) ? remoteSender : null;
+// A sender on another machine opens only while this app is live on that machine.
+function useOpenableRemoteSender(
+  environmentId: EnvironmentId,
+  remoteSender: RemoteSenderAttribution | undefined,
+) {
+  const live = useEnvironmentLive(remoteSender?.environmentId ?? null, environmentId);
+  return remoteSender !== undefined && live ? remoteSender : null;
 }
 
 /**
@@ -31,7 +33,7 @@ export function AgentMessageSentByLabel(props: {
   const senderShell = useQuietThreadShell(
     props.senderThreadId ? scopeThreadRef(props.environmentId, props.senderThreadId) : null,
   );
-  const openableRemote = useOpenableRemoteSender(remoteSender);
+  const openableRemote = useOpenableRemoteSender(props.environmentId, remoteSender);
   const openLinkedThread = useOpenLinkedThread();
   const title = remoteSender?.title ?? (senderShell?.title.trim() || "Untitled thread");
   const label =
@@ -120,9 +122,8 @@ export function OpenSenderThreadButton(props: {
   readonly remoteSender?: RemoteSenderAttribution | undefined;
 }) {
   const openLinkedThread = useOpenLinkedThread();
-  const openableRemote = useOpenableRemoteSender(
-    props.senderThreadId ? undefined : props.remoteSender,
-  );
+  const remoteSender = props.senderThreadId ? undefined : props.remoteSender;
+  const openableRemote = useOpenableRemoteSender(props.environmentId, remoteSender);
   const target = props.senderThreadId
     ? { environmentId: String(props.environmentId), threadId: String(props.senderThreadId) }
     : openableRemote !== null
@@ -131,7 +132,12 @@ export function OpenSenderThreadButton(props: {
           threadId: String(openableRemote.threadId),
         }
       : null;
-  if (target === null) return null;
+  if (target === null)
+    return remoteSender === undefined ? null : (
+      <Text className="text-xs text-foreground-muted">
+        {`Connect ${remoteSender.environmentLabel} to open`}
+      </Text>
+    );
   return (
     <Pressable accessibilityRole="link" hitSlop={6} onPress={() => openLinkedThread(target)}>
       <Text className="font-goat-medium text-xs text-foreground-secondary">Open thread</Text>

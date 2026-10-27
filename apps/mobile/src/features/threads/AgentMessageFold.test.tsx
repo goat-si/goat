@@ -9,13 +9,11 @@ const harness = vi.hoisted(() => ({
   open: vi.fn(),
   live: new Set<string>(),
 }));
-vi.mock("../../state/session", async () => {
-  const Option = await import("effect/Option");
-  return {
-    usePreparedConnection: (environmentId: string | null) =>
-      environmentId !== null && harness.live.has(environmentId) ? Option.some({}) : Option.none(),
-  };
-});
+vi.mock("../../state/threads", () => ({
+  // Only a live environment opens; a prepared connection that is still opening does not.
+  useEnvironmentLive: (environmentId: string | null) =>
+    environmentId !== null && harness.live.has(environmentId),
+}));
 vi.mock("../../state/entities", () => ({ useQuietThreadShell: () => null }));
 vi.mock("./useOpenLinkedThread", () => ({ useOpenLinkedThread: () => harness.open }));
 vi.mock("./thread-work-log", () => ({ ThreadDisclosureChevron: () => null }));
@@ -97,6 +95,8 @@ describe("a message sent from another machine", () => {
     using view = mount(both);
     expect(view.container.textContent).toContain("Sent by Coordinator from another thread");
     expect(view.container.querySelectorAll("button")).toHaveLength(0);
+    // The footer stays, saying how to open the thread instead.
+    expect(view.container.textContent).toContain("Connect mac-studio to open");
     expect(view.container.querySelector("span")?.dataset.hint).toBe(
       "Connect mac-studio to open this thread.",
     );

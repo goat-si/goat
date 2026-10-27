@@ -90,3 +90,9 @@ export function useEnvironmentThread(
   ) as EnvironmentThreadState;
   return state;
 }
+
+/** Whether this app is live on that environment now; a prepared connection may still be opening. */
+export function useEnvironmentLive(environmentId: EnvironmentId | null, fallback: EnvironmentId) {
+  const status = useAtomValue(environmentShell.stateValueAtom(environmentId ?? fallback)).status;
+  return environmentId !== null && status === "live";
+}

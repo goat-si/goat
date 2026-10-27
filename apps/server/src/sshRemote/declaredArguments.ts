@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
+
+export const DECLARED_ARGUMENTS_TIMEOUT = "5 seconds";
 
 interface ToolRequest {
   readonly endpoint: string;
@@ -26,7 +29,11 @@ export function declaredRequest(
   const plain = { ...request, arguments: call.arguments };
   if (optional.length === 0) return Effect.succeed(plain);
   return listTools({ endpoint: request.endpoint, authorization: request.authorization }).pipe(
-    Effect.map((tools) => {
+    // A host that answers slowly sends without the optional metadata rather than holding the call.
+    Effect.timeoutOption(DECLARED_ARGUMENTS_TIMEOUT),
+    Effect.map((listed) => {
+      if (Option.isNone(listed)) return plain;
+      const tools = listed.value;
       const declared = new Set(tools.find((tool) => tool.name === request.tool)?.argumentNames);
       const accepted = optional.filter(([name]) => declared.has(name));
       return accepted.length === 0

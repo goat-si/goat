@@ -1,8 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import { AcpMcpBridgeError, type AcpMcpListedTool } from "../mcp/AcpMcpStdioBridge.ts";
-import { declaredRequest } from "./declaredArguments.ts";
+import { DECLARED_ARGUMENTS_TIMEOUT, declaredRequest } from "./declaredArguments.ts";
 
 const request = {
   endpoint: "https://mini/mcp",
@@ -67,4 +69,14 @@ it.effect("a call without optional arguments never lists the host's tools", () =
     assert.deepEqual(sent, { ...request, arguments: call.arguments });
     assert.equal(listed, 0);
   }),
+);
+
+it.effect(
+  "a host that does not answer the listing in time gets the call without the optional arguments",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(argumentsFor(() => Effect.never));
+      yield* TestClock.adjust(DECLARED_ARGUMENTS_TIMEOUT);
+      assert.deepEqual(yield* Fiber.join(fiber), call.arguments);
+    }),
 );
