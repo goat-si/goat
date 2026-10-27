@@ -16,7 +16,11 @@ export interface RequestTicket {
  * lock with a count of waiting users so ready-only requests can refuse instead of queueing.
  * One per manager, around that manager's target locks.
  */
-export function makeTargetAdmission(targetLocks: KeyedLock.KeyedLock<string>) {
+export function makeTargetAdmission(
+  targetLocks: KeyedLock.KeyedLock<string>,
+  /** Copy for a host that recovers on its own, in place of the call to prepare it. */
+  recovering?: (key: string, host: string) => string | undefined,
+) {
   // Ensure and disconnect requests for one target are ordered by arrival. Both
   // resolve the alias before taking the target lock, so a reconnect sent after a
   // disconnect can reach the lock first. Tickets let each request see whether a
@@ -53,9 +57,11 @@ export function makeTargetAdmission(targetLocks: KeyedLock.KeyedLock<string>) {
       () => targetLocks.withLock(key, effect),
       () => releaseLockUser(key),
     );
-  const notReady = (target: DesktopSshEnvironmentTarget) =>
+  const notReady = (target: DesktopSshEnvironmentTarget, key = targetConnectionKey(target)) =>
     new SshLaunchError({
-      message: `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry ${goatCallText("provider.diagnose")}.`,
+      message:
+        recovering?.(key, target.alias) ??
+        `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry ${goatCallText("provider.diagnose")}.`,
       stdout: "",
     });
   const withIdleTargetLock = <A, E, R>(
@@ -70,7 +76,7 @@ export function makeTargetAdmission(targetLocks: KeyedLock.KeyedLock<string>) {
         return true;
       }),
       (acquired): Effect.Effect<A, E | SshLaunchError, R> =>
-        acquired ? targetLocks.withLock(key, effect) : Effect.fail(notReady(target)),
+        acquired ? targetLocks.withLock(key, effect) : Effect.fail(notReady(target, key)),
       (acquired) => (acquired ? releaseLockUser(key) : Effect.void),
     );
   return {
