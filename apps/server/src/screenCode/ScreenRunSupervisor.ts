@@ -157,6 +157,10 @@ export function createScreenRunSupervisor(deps: {
     if (session.child.exitCode === null) session.child.kill("SIGKILL");
     session.lines.close();
   };
+  const abortCellNow = (runId: string, turnId: string, cellId: string) => {
+    const session = sessions.get(key(runId, turnId));
+    if (session?.active === cellId) session.abortActive?.("stopped");
+  };
   return {
     runCell: Effect.fn("ScreenRunSupervisor.runCell")(function* (
       identity: ScreenRunIdentity,
@@ -377,9 +381,10 @@ export function createScreenRunSupervisor(deps: {
       reason: string,
     ) {
       yield* deps.hostBridge.cutCell(runId, turnId, cellId, reason);
-      const session = sessions.get(key(runId, turnId));
-      if (session?.active === cellId) session.abortActive?.("stopped");
+      abortCellNow(runId, turnId, cellId);
     }),
+    /** Ends the cell before the child can turn a cut reply it caught into a completed result. */
+    cutCellNow: abortCellNow,
     finishTurn: Effect.fn("ScreenRunSupervisor.finishTurn")(function* (
       runId: string,
       turnId: string,
