@@ -396,7 +396,8 @@ export const make = Effect.gen(function* () {
       });
     };
 
-    const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
+    // Untraced: the sweep visits every candidate thread each minute and its span covers them.
+    const settleThread = Effect.fnUntraced(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
         const currentSettings = resolveProjectSettings(
           yield* settingsService.getSettings,

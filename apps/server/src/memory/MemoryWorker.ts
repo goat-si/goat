@@ -27,6 +27,7 @@ import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
+import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -77,7 +78,6 @@ const encodeGenerationMessage = Schema.encodeEffect(
   ),
 );
 const strict = { onExcessProperty: "error" } as const;
-const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
 export const memoryRetryDelay = (attempt: number) =>
   [5000, 30000, 120000][Math.max(0, attempt - 1)] ?? 600000;
 /** A rejected output repeats on retry; past this the work fails until the thread's next run. */
@@ -992,9 +992,9 @@ const make = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Ref.set(started, false).pipe(Effect.andThen(Ref.set(queue, undefined))),
     );
-    const wakes = yield* store.subscribeWake;
-    yield* Stream.runForEach(wakes, () => wake).pipe(Effect.forkScoped);
+    yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
     yield* events.stream({ afterSequence: yield* store.readThreadHookWatermark() }).pipe(
+      catchUpWakes,
       Stream.runForEach(() => wake),
       Effect.catch(() => Effect.void),
       Effect.forkScoped,

@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -20,6 +22,7 @@ import * as Quota from "./MemoryQuotaService.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Worker from "./MemoryWorker.ts";
+import { countingTracer } from "./MemoryWorker.testkit.ts";
 
 const environmentId = M.EnvironmentId.make("fresh-database");
 const database = Layer.unwrap(
@@ -41,7 +44,11 @@ const service = Service.layer.pipe(
     Layer.mock(Repository.RepositoryIdentityResolver)({ resolve: () => Effect.succeed(null) }),
   ),
 );
-const live = (hub = false, configured = false) =>
+const live = (
+  hub = false,
+  configured = false,
+  stream: () => Stream.Stream<M.OrchestrationV2StoredEvent> = () => Stream.empty,
+) =>
   Worker.layer.pipe(
     Layer.provideMerge(service),
     Layer.provideMerge(Maintenance.layer.pipe(Layer.provideMerge(quota))),
@@ -71,7 +78,7 @@ const live = (hub = false, configured = false) =>
       ),
     ),
     Layer.provide(Layer.succeed(RuntimeIdentity.RuntimeIdentity, { instanceId: "fresh-worker" })),
-    Layer.provide(Layer.mock(Events.EventSinkV2)({ stream: () => Stream.empty })),
+    Layer.provide(Layer.mock(Events.EventSinkV2)({ stream })),
     Layer.provide(
       Layer.mock(Generation.TextGeneration)({
         generateMemorySummary: () => Effect.die("empty database must not invoke a provider"),
@@ -155,6 +162,85 @@ it.effect.each(["catch-up", "maintenance"] as const)(
     );
   },
 );
+
+it.effect.each([
+  { name: "streaming message updates", wakes: false },
+  { name: "a run end", wakes: true },
+])("a started worker sweeps again for $name only when it wakes catch-up", ({ wakes }) => {
+  const spans = new Map<string, number>();
+  const go = Deferred.makeUnsafe<void>();
+  const done = Deferred.makeUnsafe<void>();
+  const at = DateTime.makeUnsafe("2026-10-15T00:00:00.000Z");
+  const thread = M.ThreadId.make("woken-thread");
+  const runId = M.RunId.make("woken-run");
+  const deltas = Array.from({ length: 20 }, (_, index): M.OrchestrationV2StoredEvent => ({
+    sequence: index + 1,
+    commandId: null,
+    event: {
+      id: M.EventId.make(`delta-${index}`),
+      threadId: thread,
+      occurredAt: at,
+      type: "message.updated",
+      payload: {
+        id: M.MessageId.make("streaming"),
+        threadId: thread,
+        runId,
+        nodeId: null,
+        createdBy: "agent",
+        creationSource: "provider",
+        role: "assistant",
+        text: "x".repeat(index + 1),
+        attachments: [],
+        streaming: true,
+        createdAt: at,
+        updatedAt: at,
+      },
+    },
+  }));
+  const runEnd: M.OrchestrationV2StoredEvent = {
+    sequence: 21,
+    commandId: null,
+    event: {
+      id: M.EventId.make("run-end"),
+      threadId: thread,
+      occurredAt: at,
+      type: "run.updated",
+      payload: {
+        id: runId,
+        threadId: thread,
+        ordinal: 1,
+        providerInstanceId: M.ProviderInstanceId.make("codex"),
+        modelSelection: { instanceId: M.ProviderInstanceId.make("codex"), model: "fixture" },
+        providerThreadId: null,
+        userMessageId: M.MessageId.make("prompt"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "completed",
+        requestedAt: at,
+        startedAt: at,
+        completedAt: at,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    },
+  };
+  const stream = () =>
+    Stream.fromEffect(Deferred.await(go)).pipe(
+      Stream.flatMap(() => Stream.fromIterable(wakes ? [...deltas, runEnd] : deltas)),
+      Stream.ensuring(Deferred.succeed(done, undefined)),
+    );
+  return Effect.gen(function* () {
+    const worker = yield* Worker.MemoryWorker;
+    yield* worker.start().pipe(Effect.withTracer(countingTracer(spans)));
+    yield* worker.drain;
+    const before = spans.get("MemoryWorker.sweepDue") ?? 0;
+    yield* Deferred.succeed(go, undefined);
+    yield* Deferred.await(done);
+    yield* worker.drain;
+    // drain itself sweeps once; any further sweep came from an event wake.
+    assert.strictEqual((spans.get("MemoryWorker.sweepDue") ?? 0) - before > 1, wakes);
+  }).pipe(Effect.scoped, Effect.provide(live(false, false, stream)));
+});
 
 it.effect("r3 disabled maintenance continues report pages and waits after a complete pass", () =>
   Effect.gen(function* () {

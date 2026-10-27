@@ -604,6 +604,16 @@ it.live("terminal run cleanup is exact and a queued user message invalidates old
             ],
           }) as unknown as OrchestrationV2ThreadProjection,
       ),
+    getThreadRecords: (() =>
+      Effect.sync(
+        () =>
+          ({
+            runs: [
+              { id: "run-a", status: runAStatus },
+              { id: "run-b", status: "running" },
+            ],
+          }) as unknown as OrchestrationV2ThreadProjection,
+      )) as never,
   });
   const serviceLayer = ScreenRunService.layerWithRuntime({
     invocation: {
@@ -713,6 +723,10 @@ it.live.each(["new message", "turn end"] as const)(
           Effect.sync(
             () => ({ runs: [{ id: "run", status }] }) as unknown as OrchestrationV2ThreadProjection,
           ),
+        getThreadRecords: (() =>
+          Effect.sync(
+            () => ({ runs: [{ id: "run", status }] }) as unknown as OrchestrationV2ThreadProjection,
+          )) as never,
       });
       const serviceLayer = ScreenRunService.layerWithRuntime({
         invocation: {

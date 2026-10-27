@@ -9,8 +9,15 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 
 const OPEN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
+type DomainEvent = import("@goat/contracts").OrchestrationV2DomainEvent;
+
+/** Most events are text deltas; filtering first keeps them from opening a span each. */
+const concernsScreenRun = (event: DomainEvent) =>
+  (event.type === "message.updated" && event.payload.role === "user") ||
+  (event.type === "run.updated" && !OPEN.has(event.payload.status));
+
 export const handleScreenRunEvent = Effect.fn("ScreenRunTurnEnd.handleEvent")(function* (input: {
-  readonly event: import("@goat/contracts").OrchestrationV2DomainEvent;
+  readonly event: DomainEvent;
   readonly screen: ScreenRunService["Service"];
   readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
 }) {
@@ -20,9 +27,11 @@ export const handleScreenRunEvent = Effect.fn("ScreenRunTurnEnd.handleEvent")(fu
     return;
   }
   if (event.type !== "run.updated" || OPEN.has(event.payload.status)) return;
-  const projection = yield* orchestrator.getThreadProjection(event.threadId).pipe(Effect.option);
-  if (Option.isNone(projection)) return;
-  const run = projection.value.runs.find((candidate) => candidate.id === event.payload.id);
+  const records = yield* orchestrator
+    .getThreadRecords(event.threadId, ["runs"])
+    .pipe(Effect.option);
+  if (Option.isNone(records)) return;
+  const run = records.value.runs.find((candidate) => candidate.id === event.payload.id);
   if (!run || OPEN.has(run.status)) return;
   yield* screen.finishRun({ threadId: event.threadId, runId: run.id, reason: "turnEnded" });
 });
@@ -33,10 +42,14 @@ export const layer = Layer.effectDiscard(
     const screen = yield* ScreenRunService;
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     yield* forkParked(
-      Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-        handleScreenRunEvent({ event, screen, orchestrator }).pipe(
-          Effect.catchCause((cause) => Effect.logWarning("screen turn cleanup failed", { cause })),
-        ),
+      Stream.runForEach(
+        orchestrator.streamDomainEvents.pipe(Stream.filter(concernsScreenRun)),
+        (event) =>
+          handleScreenRunEvent({ event, screen, orchestrator }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("screen turn cleanup failed", { cause }),
+            ),
+          ),
       ),
     );
   }),
