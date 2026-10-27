@@ -21,6 +21,7 @@ import {
 
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
+import { assertNoticeInitialization } from "./AcpNoticeReplay.testkit.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DocumentText from "../../provider/DocumentText.ts";
@@ -1792,6 +1793,82 @@ describe("AcpAdapterV2", () => {
       );
       assert.isFalse(
         items.some((item) => item.threadId === threadId && item.type === "dynamic_tool"),
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([1, 2])("projects ACP %s notices without replay", (protocolVersion) =>
+    Effect.gen(function* () {
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-notice");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+            mockAgentPath: NodePath.join(
+              import.meta.dirname,
+              protocolVersion === 1
+                ? "../../../scripts/acp-mock-notice-v1-agent.ts"
+                : "../../../scripts/acp-mock-agent.ts",
+            ),
+            protocolEvents,
+            environment: { GOAT_ACP_EMIT_NOTICE: "1" },
+          }),
+        },
+        selfInvocation: yield* resolveSelfInvocation(),
+      });
+      const threadId = ThreadId.make("thread-acp-notice");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-notice"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+      );
+      const items = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
+
+      assertNoticeInitialization(Array.from(yield* Queue.takeAll(protocolEvents)), protocolVersion);
+      const title =
+        "skill discovery warning: candidate was skipped because its metadata is invalid";
+      const notices = items.filter((item) => item.type === "system_notice");
+      assert.deepEqual(
+        notices.map((item) => [item.message, item.severity]),
+        [
+          [title, "info"],
+          ["Optional integration unavailable\n\nContinuing without the integration.", "warning"],
+          ["Future announcement", "warning"],
+        ],
+      );
+      assert.isFalse(items.some((item) => item.type === "dynamic_tool"));
+      const replies = new Map(
+        items.flatMap((item) => (item.type === "assistant_message" ? [[item.id, item.text]] : [])),
+      );
+      assert.deepEqual(
+        [...replies.values()],
+        ["before the notice, after the notice"],
+        "a notice neither joins the reply nor splits it",
       );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );

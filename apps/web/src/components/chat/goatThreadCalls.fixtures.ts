@@ -1,4 +1,4 @@
-import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
+import { RunId, ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
@@ -12,11 +12,12 @@ export function callTimelineEntry(
   status: OrchestrationV2TurnItem["status"] = "completed",
   id = "tool",
   senderThreadId = "thread-sender",
+  runId: string | null = null,
 ) {
   const item: OrchestrationV2TurnItem = {
     id: TurnItemId.make(id),
     threadId: ThreadId.make(senderThreadId),
-    runId: null,
+    runId: runId === null ? null : RunId.make(runId),
     nodeId: null,
     providerThreadId: null,
     providerTurnId: null,
