@@ -80,8 +80,12 @@ describe("macOS input tool errors after dispatch reach the agent as may-have-act
       { code: "bring_to_front_window_not_found", activated: false, request_accepted: false },
       { code: "paste_target_is_browser_chrome", delivered: false },
     ]) {
-      const line = reply(structured);
-      assert.equal(markUnverified("click", line), line, structured.code);
+      const out = parsed(markUnverified("click", reply(structured)));
+      assert.notProperty(out.result.structuredContent, "effect", structured.code);
+      assert.notInclude(out.result.content.at(-1)?.text ?? "", "may have acted");
+      assert.isFalse(
+        (out.result.structuredContent.safety as { possibleCommit: boolean }).possibleCommit,
+      );
     }
   });
 

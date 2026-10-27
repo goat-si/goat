@@ -2,7 +2,13 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  call,
+  CONTROL,
+  harness,
+  unknownWriteSafety,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 const window = { pid: 4, window_id: 9 };
 const result = (id: unknown, structuredContent: object, text = "") =>
@@ -61,6 +67,11 @@ describe("read-back after input the driver could not verify", () => {
           ax_changed: true,
           snapshot_id: "s2",
         });
+        // The read-back confirmed it, so the input committed.
+        assert.deepInclude(answer.result.structuredContent.safety as object, {
+          possibleCommit: true,
+          writeStatus: "committed",
+        });
         const added = answer.result.content.at(-1)?.text ?? "";
         assert.include(added, "s2:N");
         assert.include(added, "~ [3] AXRadioButton (Dark) selected");
@@ -80,6 +91,10 @@ describe("read-back after input the driver could not verify", () => {
         ax_changed: false,
         snapshot_id: "s2",
       });
+      assert.deepInclude(answer.result.structuredContent.safety as object, {
+        possibleCommit: true,
+        writeStatus: "may_have_applied",
+      });
     }),
   );
 
@@ -91,7 +106,10 @@ describe("read-back after input the driver could not verify", () => {
       yield* h.nextToDriver;
       yield* h.reply(result(1, { effect: "unverifiable" }));
       const answer = (yield* h.nextToProvider) as unknown as Answer;
-      assert.deepEqual(answer.result.structuredContent, { effect: "unverifiable" });
+      assert.deepEqual(answer.result.structuredContent, {
+        effect: "unverifiable",
+        safety: unknownWriteSafety,
+      });
       assert.equal(yield* h.driverQueued, 0);
     }),
   );
@@ -108,7 +126,15 @@ describe("read-back after input the driver could not verify", () => {
       yield* h.nextToDriver;
       yield* h.reply(result(2, { effect: "confirmed" }));
       const answer = (yield* h.nextToProvider) as unknown as Answer;
-      assert.deepEqual(answer.result.structuredContent, { effect: "confirmed" });
+      assert.deepEqual(answer.result.structuredContent, {
+        effect: "confirmed",
+        safety: {
+          possibleCommit: true,
+          retryClass: "never",
+          writeStatus: "committed",
+          code: "write_committed",
+        },
+      });
       assert.equal(yield* h.driverQueued, 0);
     }),
   );
