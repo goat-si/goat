@@ -15,6 +15,7 @@ import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -208,7 +209,7 @@ export const makeGrokAcpRuntime = Effect.fn("GrokAcpSupport.makeGrokAcpRuntime")
       spawn: buildGrokAcpSpawnInput(
         input.grokSettings,
         input.cwd,
-        { ...input.environment, ...input.processEnvironment },
+        McpProviderSession.mergeThreadEnvironment(input.environment, input.processEnvironment),
         input.runtimeMode,
       ),
       authMethodId: resolveGrokAuthMethodId(input.environment),

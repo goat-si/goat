@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import {
-  withThreadMcpEnvironment,
+  withThreadAgentEnvironment,
   carriesScreenCodeSkill,
   type McpProviderSessionConfig,
 } from "@goat/provider-core/server/mcpSession";
@@ -292,7 +292,7 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = withThreadMcpEnvironment(
+  const environment = withThreadAgentEnvironment(
     input.environment,
     hasGoatMcp ? input.mcpSession : undefined,
   );
