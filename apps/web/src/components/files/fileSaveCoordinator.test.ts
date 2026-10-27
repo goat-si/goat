@@ -207,6 +207,60 @@ describe("FileSaveCoordinator", () => {
 });
 
 describe("FileSaveSession", () => {
+  it("flushes only after the last surface leaves and clears its pending marker", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new FileSaveSession();
+      const sourcePending = vi.fn();
+      const markdownPending = vi.fn();
+      const persist = vi.fn().mockResolvedValue(AsyncResult.success(undefined));
+      const options = { debounceMs: 500, persist, onConfirmed: vi.fn() };
+      const source = session.acquire(options, sourcePending);
+      source.coordinator.change("source draft");
+      const markdown = session.acquire(options, markdownPending);
+      source.release();
+      expect(persist).not.toHaveBeenCalled();
+      markdown.coordinator.change("latest Markdown edit");
+      markdown.release();
+      markdown.release();
+      await vi.runAllTimersAsync();
+      expect(persist).toHaveBeenCalledExactlyOnceWith("latest Markdown edit");
+      expect(markdownPending).toHaveBeenLastCalledWith(false);
+      expect(session.status).toBe("saved");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares a release flush with a new surface and writes its newest edit next", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new FileSaveSession();
+      const firstWrite = deferred();
+      const persist = vi
+        .fn()
+        .mockReturnValueOnce(firstWrite.promise)
+        .mockResolvedValue(AsyncResult.success(undefined));
+      const options = { debounceMs: 500, persist, onConfirmed: vi.fn() };
+      const sourcePending = vi.fn();
+      const markdownPending = vi.fn();
+      const source = session.acquire(options, sourcePending);
+      source.coordinator.change("first draft");
+      source.release();
+      const markdown = session.acquire(options, markdownPending);
+      markdown.coordinator.change("newest draft");
+      expect(persist).toHaveBeenCalledExactlyOnceWith("first draft");
+      firstWrite.resolve(AsyncResult.success(undefined));
+      await vi.runAllTimersAsync();
+      expect(persist.mock.calls).toEqual([["first draft"], ["newest draft"]]);
+      expect(sourcePending).toHaveBeenLastCalledWith(false);
+      expect(markdownPending).toHaveBeenLastCalledWith(false);
+      markdown.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("discards recovered drafts in every view before closing", async () => {
     vi.useFakeTimers();
     const session = new FileSaveSession();
