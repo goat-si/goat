@@ -69,7 +69,7 @@ describe("CursorAdapterV2", () => {
           providerInstanceId: instanceId,
           endpoint: "http://127.0.0.1:43123/mcp",
           authorizationHeader: "Bearer synthetic-cursor-token",
-          browserToolsAvailable: true,
+          browserToolsAvailable: status === "finished",
         });
         let sentWithMcpOverride = true;
         const modelSelection = { instanceId, model: "composer-2.5" };
@@ -92,10 +92,10 @@ describe("CursorAdapterV2", () => {
                 close: Effect.void,
                 send: (input) =>
                   Effect.gen(function* () {
-                    assert.notInclude(
-                      typeof input.message === "string" ? input.message : input.message.text,
-                      "GOAT memory tools:",
-                    );
+                    const text =
+                      typeof input.message === "string" ? input.message : input.message.text;
+                    assert.notInclude(text, "GOAT memory tools:");
+                    assert.equal(text.includes("## GOAT browser"), status === "finished");
                     sentWithMcpOverride = Object.hasOwn(input.options ?? {}, "mcpServers");
                     // Recorded tasks stream partial args before start, then end without completion; live runs cannot force this.
                     const taskToolCall = {

@@ -3192,7 +3192,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           skills: mcpSession,
           computerUse: state.cua !== undefined,
         }),
-        goatOrchestrationSystemPrompt(mcpAvailable),
+        goatOrchestrationSystemPrompt(mcpAvailable, mcpSession?.browserToolsAvailable),
         availability.read || availability.write || availability.source
           ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
           : undefined,

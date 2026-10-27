@@ -6,7 +6,7 @@ import {
 } from "@goat/provider-core/server/runtimeInstructions";
 
 import {
-  GOAT_BROWSER_TOOL_INSTRUCTIONS,
+  goatBrowserInstructions,
   GOAT_ORCHESTRATION_SECTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
@@ -45,7 +45,7 @@ const toolInstructions = (availability: boolean | GoatToolAvailability): string 
   const tools = normalizeAvailability(availability);
   return [
     CODEX_CODE_MODE_TOOLS,
-    tools.browser ? GOAT_BROWSER_TOOL_INSTRUCTIONS : "",
+    goatBrowserInstructions(tools.browser),
     tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : "",
   ]
     .filter(Boolean)

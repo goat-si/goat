@@ -25,6 +25,25 @@ const mcpSession = {
 };
 
 describe("pi GOAT MCP injection", () => {
+  it.each([undefined, false, true])(
+    "passes only attached browser availability to the extension, browser=%s",
+    (browserToolsAvailable) => {
+      const launch = buildPiRpcLaunch({
+        launchArgs: [],
+        environment: { GOAT_BROWSER_TOOLS: "on" },
+        mcpSession:
+          browserToolsAvailable === undefined
+            ? undefined
+            : { ...mcpSession, browserToolsAvailable },
+        extensionPath: "/tmp/pi-goat-mcp-extension.ts",
+      });
+      assert.equal(
+        launch.env.GOAT_BROWSER_TOOLS,
+        browserToolsAvailable === undefined ? undefined : browserToolsAvailable ? "on" : "off",
+      );
+    },
+  );
+
   it("passes the attached screen guide and turn gate into Pi's extension", () => {
     const launch = buildPiRpcLaunch({
       launchArgs: [],

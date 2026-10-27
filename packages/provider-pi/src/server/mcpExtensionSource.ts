@@ -9,7 +9,10 @@ import {
   legacyAgentSurfacePaths,
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
-import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import {
+  GOAT_BROWSER_TOOL_INSTRUCTIONS,
+  GOAT_ORCHESTRATION_INSTRUCTIONS,
+} from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import {
   COMPUTER_USE_INSTRUCTIONS,
@@ -29,6 +32,7 @@ export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
  * process launched with, anything else (Plan, read-only, a changed driver) closes it for the turn.
  */
 export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
+export const GOAT_BROWSER_TOOLS_ENV = "GOAT_BROWSER_TOOLS";
 export const GOAT_SCREEN_CODE_SKILL_ENV = "GOAT_SCREEN_CODE_SKILL";
 export const GOAT_SCREEN_CODE_SKILL_GATE_ENV = "GOAT_SCREEN_CODE_SKILL_GATE";
 
@@ -66,6 +70,8 @@ const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
+const BROWSER_TOOLS_ENV = ${JSON.stringify(GOAT_BROWSER_TOOLS_ENV)};
+const BROWSER_INSTRUCTIONS = ${JSON.stringify(GOAT_BROWSER_TOOL_INSTRUCTIONS.trim())};
 const SCREEN_CODE_SKILL_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_ENV)};
 const SCREEN_CODE_SKILL_GATE_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_GATE_ENV)};
 const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
@@ -425,12 +431,15 @@ async function readCuaSkill(): Promise<boolean> {
   }
 }
 
-async function readScreenCodeSkill(): Promise<boolean> {
+async function readTurnSkill(key: "screenCode" | "browser", environmentName: string): Promise<boolean> {
   const path = env(SCREEN_CODE_SKILL_GATE_ENV);
-  if (path === undefined) return env(SCREEN_CODE_SKILL_ENV) === "on";
+  if (path === undefined) return env(environmentName) === "on";
   try {
     const { readFile } = await import("node:fs/promises");
-    return (await readFile(path, "utf8")).trim() === "on";
+    const text = (await readFile(path, "utf8")).trim();
+    if (text === "on" || text === "off") return key === "screenCode" && text === "on";
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && key in value && value[key] === true;
   } catch {
     return false;
   }
@@ -765,12 +774,15 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       cuaOpen = open;
     }
     const withComputerUse = computerUse && cuaOpen && (await readCuaSkill());
-    const withScreenCode = await readScreenCodeSkill();
+    const withScreenCode = await readTurnSkill("screenCode", SCREEN_CODE_SKILL_ENV);
+    const withBrowser = await readTurnSkill("browser", BROWSER_TOOLS_ENV);
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
       sections.goat_code_development = DEVELOPMENT_INSTRUCTIONS;
       sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
+      if (withBrowser) sections.goat_browser = BROWSER_INSTRUCTIONS;
+      else delete sections.goat_browser;
       if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
       else delete sections.goat_computer_use;
       if (withScreenCode) sections.goat_screen_code = SCREEN_CODE_INSTRUCTIONS;
@@ -784,6 +796,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         DEVELOPMENT_INSTRUCTIONS +
         "\\n\\n" +
         ORCHESTRATION_INSTRUCTIONS +
+        (withBrowser ? "\\n\\n" + BROWSER_INSTRUCTIONS : "") +
         (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : "") +
         (withScreenCode ? "\\n\\n" + SCREEN_CODE_INSTRUCTIONS : ""),
     };

@@ -44,6 +44,16 @@ describe("buildCodexAdditionalContext", () => {
     });
   });
 
+  it.each([false, true])("gates browser routing on the attachment, browser=%s", (browser) => {
+    const text = Object.values(
+      buildCodexAdditionalContext({ model: "test-model" }, { browser, device: false }),
+    )
+      .map((entry) => entry.value)
+      .join("\n");
+    NodeAssert.equal(text.includes("## GOAT browser"), browser);
+    NodeAssert.equal(text.includes("goat_preview_read"), browser);
+  });
+
   it("a browser-only attachment gives Codex the screen-code guide", () => {
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex" },
