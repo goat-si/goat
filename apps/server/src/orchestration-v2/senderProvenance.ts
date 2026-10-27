@@ -22,12 +22,18 @@ interface RunReads<E> {
   >;
 }
 
-const EXECUTING: ReadonlyArray<OrchestrationV2Run["status"]> = ["starting", "running", "waiting"];
+const EXECUTING: ReadonlyArray<OrchestrationV2Run["status"]> = ["starting", "running"];
 
-/** The run executing in a thread now, if any; a failed read records none. */
+/**
+ * The one run executing in a thread now. An agent acts from inside its executing turn, so that is
+ * the sender; none, several, or only a waiting run is ambiguous and records none (unknown).
+ */
 const executingRun = <E>(store: RunReads<E>, threadId: ThreadId) =>
   store.getThreadRecords(threadId, ["runs"]).pipe(
-    Effect.map((records) => records.runs.find((run) => EXECUTING.includes(run.status))?.id),
+    Effect.map((records) => {
+      const executing = records.runs.filter((run) => EXECUTING.includes(run.status));
+      return executing.length === 1 ? executing[0]?.id : undefined;
+    }),
     Effect.orElseSucceed(() => undefined),
   );
 

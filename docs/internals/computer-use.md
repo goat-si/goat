@@ -455,8 +455,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   run on every message that names a sender (`senderRunId`) and the launcher's executing run on a
   local launch (`launchedBy.runId`), replacing any value a command carried
   (`orchestration-v2/senderProvenance.ts`). Classification follows exactly that run, so a restart
-  or a reordered queue cannot move authority; a message or launch recorded without one counts as
-  `unknown`, except a sender known by itself (GOAT Bot, a channel worker).
+  or a reordered queue cannot move authority. MCP credentials name no run, so the executing run is
+  the one run that is starting or running; a waiting run, or several executing ones, record none.
+  A message or launch recorded without one counts as `unknown`, except a sender known by itself
+  (GOAT Bot, a channel worker).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
