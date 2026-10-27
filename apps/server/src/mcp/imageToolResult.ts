@@ -1,4 +1,5 @@
 import {
+  ActionOutcomeSafety,
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PreviewAutomationError,
@@ -7,10 +8,12 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as ErrorReporter from "effect/ErrorReporter";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const decodeSafety = Schema.decodeUnknownOption(ActionOutcomeSafety);
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
 const isCapabilityError = Schema.is(
   Schema.Union([McpCapabilityUnavailableError, PreviewAutomationUnavailableError]),
@@ -70,6 +73,10 @@ export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   const refusal = refusalFields(firstFailure);
   const message =
     refusal?.message ?? (isPreviewAutomationError(firstFailure) ? firstFailure.message : undefined);
+  const safety =
+    typeof firstFailure === "object" && firstFailure !== null && "safety" in firstFailure
+      ? Option.getOrUndefined(decodeSafety(firstFailure.safety))
+      : undefined;
   const result = new McpSchema.CallToolResult({
     isError: true,
     structuredContent: {
@@ -79,6 +86,7 @@ export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
         failureCount: failures.length,
         ...refusal,
         ...(message === undefined ? {} : { message }),
+        ...(safety === undefined ? {} : { safety }),
       },
     },
     // Some clients show only the text content and others only structuredContent, so both carry it.

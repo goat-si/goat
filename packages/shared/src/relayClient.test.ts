@@ -2,12 +2,14 @@ import { sha256 } from "@noble/hashes/sha2";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -203,6 +205,127 @@ describe("RelayClient", () => {
     }).pipe(Effect.scoped, Effect.provide(layerInstallRuntime(windowsHost ? "win32" : "linux"))),
   );
 
+  it.effect.each([
+    [
+      "darwin",
+      "arm64",
+      "cloudflared-darwin-arm64.tgz",
+      "68b6bc4080ac1330234db2a9002d07f98b000537a1bd531a687b660d4160fa7f",
+    ],
+    [
+      "darwin",
+      "x64",
+      "cloudflared-darwin-amd64.tgz",
+      "f11fbef4207d715892331917dafd437f032cf4b7137ed64dea3008338c1c613d",
+    ],
+    [
+      "linux",
+      "arm64",
+      "cloudflared-linux-arm64",
+      "2b7203b4fb0ba28a0c1e12f8855ce2c25f76d266a8d5edafac5540b6812acff6",
+    ],
+    [
+      "linux",
+      "x64",
+      "cloudflared-linux-amd64",
+      "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42",
+    ],
+    [
+      "win32",
+      "x64",
+      "cloudflared-windows-amd64.exe",
+      "411b16d40c8d872243efeb52c550053d00af0a8a97fbb32e730fb8aba429eaa8",
+    ],
+    [
+      "win32",
+      "arm64",
+      "cloudflared-windows-amd64.exe",
+      "411b16d40c8d872243efeb52c550053d00af0a8a97fbb32e730fb8aba429eaa8",
+    ],
+  ] as const)(
+    "installs the 2026.10.4 release for %s-%s with its published checksum",
+    ([platform, arch, assetName, checksum]) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const crypto = yield* Crypto.Crypto;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-cloudflared-test-",
+        });
+        const urls: Array<string> = [];
+        const executableName = platform === "win32" ? "cloudflared.exe" : "cloudflared";
+        const executablePath = path.join(
+          baseDir,
+          "tools",
+          "cloudflared",
+          "2026.10.4",
+          `${platform}-${arch}`,
+          executableName,
+        );
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (ChildProcess.isStandardCommand(command) && command.command === "tar") {
+              yield* writeExecutable(`${command.args.at(-1)}/cloudflared`).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+              );
+            }
+            return makeHandle(0, "cloudflared version 2026.10.4\n");
+          }),
+        );
+        const manager = yield* RelayClient.makeCloudflaredRelayClient({ baseDir }).pipe(
+          // Simulated POSIX targets need executable mode bits on Windows test hosts too.
+          Effect.provideService(
+            FileSystem.FileSystem,
+            windowsHost
+              ? FileSystem.make({
+                  ...fileSystem,
+                  stat: (filePath) =>
+                    fileSystem
+                      .stat(filePath)
+                      .pipe(Effect.map((info) => ({ ...info, mode: info.mode | 0o111 }))),
+                })
+              : fileSystem,
+          ),
+          // Supply published digests without storing multi-megabyte release binaries in fixtures.
+          Effect.provideService(Crypto.Crypto, {
+            ...crypto,
+            digest: () => Effect.succeed(Buffer.from(checksum, "hex")),
+          }),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              urls.push(request.url);
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(request, new Response(testBinary.buffer)),
+              );
+            }),
+          ),
+        );
+        expect(yield* manager.install).toEqual({
+          status: "available",
+          executablePath,
+          source: "managed",
+          version: "2026.10.4",
+        });
+        expect(urls).toEqual([
+          `https://github.com/cloudflare/cloudflared/releases/download/2026.10.4/${assetName}`,
+        ]);
+        expect(yield* fileSystem.readFileString(executablePath)).toBe(
+          platform === "darwin" ? "cloudflared" : "test-cloudflared-binary",
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            layerHostRuntime({ PATH: "" }, platform),
+            Layer.succeed(HostProcess.Architecture, arch),
+          ),
+        ),
+      ),
+  );
+
   it.effect("cancels a contended install without removing the other installer's lock", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -396,8 +519,9 @@ describe("RelayClient", () => {
       ),
   );
 
-  it.effect("rejects downloads whose checksum does not match the pinned manifest", () =>
-    Effect.gen(function* () {
+  it.effect("rejects downloads whose checksum does not match the pinned manifest", () => {
+    const commands: Array<string> = [];
+    return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "goat-cloudflared-test-",
@@ -414,6 +538,10 @@ describe("RelayClient", () => {
       const error = yield* manager.install.pipe(Effect.flip);
       expect(error).toBeInstanceOf(RelayClient.RelayClientInstallError);
       expect(error.reason).toBe("invalid_checksum");
+      expect(commands).toEqual([]);
+      expect(
+        yield* fileSystem.exists(managedPathFor(baseDir, RelayClient.CLOUDFLARED_VERSION)),
+      ).toBe(false);
       expect(
         yield* fileSystem.exists(
           `${baseDir}/tools/cloudflared/${RelayClient.CLOUDFLARED_VERSION}/linux-x64/cloudflared.lock`,
@@ -425,12 +553,12 @@ describe("RelayClient", () => {
         Layer.mergeAll(
           NodeServices.layer,
           layerHttpClient(new TextEncoder().encode("tampered")),
-          layerSpawner([]),
+          layerSpawner(commands),
           layerHostRuntime(),
         ),
       ),
-    ),
-  );
+    );
+  });
 
   it.effect.skipIf(windowsHost)("serializes concurrent installs within one runtime", () => {
     const commands: Array<string> = [];
@@ -614,6 +742,34 @@ describe("RelayClient", () => {
             });
             const error = yield* manager.install.pipe(withEnv, Effect.flip);
             expect(error.reason).toBe("override_missing");
+          }),
+        { versions },
+      );
+    });
+
+    it.effect("keeps an explicit 2025.6.1 override instead of installing the managed pin", () => {
+      const versions: Record<string, string> = {};
+      return run(
+        (baseDir) =>
+          Effect.gen(function* () {
+            const overridePath = `${baseDir}/override/cloudflared`;
+            yield* writeExecutable(overridePath);
+            versions[overridePath] = "2025.6.1";
+            const manager = yield* RelayClient.makeCloudflaredRelayClient({ baseDir }).pipe(
+              Effect.provideService(HostProcess.Platform, windowsHost ? "win32" : "linux"),
+            );
+            const withEnv = Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromEnv({ env: { GOAT_CLOUDFLARED_PATH: overridePath } }),
+            );
+            const expected = {
+              status: "available",
+              executablePath: overridePath,
+              source: "override",
+              version: "2025.6.1",
+            };
+            expect(yield* manager.resolve.pipe(withEnv)).toEqual(expected);
+            expect(yield* manager.install.pipe(withEnv)).toEqual(expected);
           }),
         { versions },
       );
