@@ -81,7 +81,11 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
   const leases = ComputerUseLeases.ComputerUseLeases.of({
-    currentControl: () => Effect.succeedSome({ controlId }),
+    // An ended control keeps its record with the reason, as ComputerUseLeases.end writes it.
+    currentControl: () =>
+      Effect.sync(() =>
+        Option.some(state._tag === "ended" ? { controlId, ended: state.reason } : { controlId }),
+      ),
     controlState: () => Effect.sync(() => state),
     subscribe: PubSub.subscribe(signals),
   } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);

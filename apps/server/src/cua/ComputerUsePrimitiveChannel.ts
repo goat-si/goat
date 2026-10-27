@@ -251,7 +251,7 @@ export const make = Effect.gen(function* () {
             ? yield* leases
                 .controlState(threadId, current.controlId)
                 .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })))
-            : { _tag: "ended" as const };
+            : { _tag: "ended" as const, reason: current.ended };
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         const record = registered?.controls.get(current.controlId);
         if (registered?.kind === "thread" && keepsRegistration(state)) {
