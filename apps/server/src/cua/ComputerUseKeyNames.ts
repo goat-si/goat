@@ -1,11 +1,6 @@
 /**
- * Key names in press_key and hotkey calls, resolved before the call reaches the driver. Agents
- * write keys as xdotool and Codex do (`*`, `asterisk`, `super+c`, `KP_0`); the pinned macOS
- * driver knows only named keys, letters, digits and unshifted US symbols, and reported the rest
- * after targeting as delivery_failed, which reads as "may have acted". Here a symbol typed with
- * Shift becomes its key plus shift, a combination in the key is split, and a key no driver can
- * press is refused before anything is sent.
- *
+ * press_key and hotkey keys resolved before dispatch: the pinned macOS driver failed `*`,
+ * `super+c` or `KP_0` only after targeting, as delivery_failed that reads as "may have acted".
  * @module ComputerUseKeyNames
  */
 // Provider lines are JSON-RPC; only press_key and hotkey arguments are rewritten.
