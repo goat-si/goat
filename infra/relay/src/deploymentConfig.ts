@@ -86,8 +86,12 @@ export function managedEndpointDigestInput(
   stage: string,
   userId: string,
   environmentId: string,
+  generation = 0,
 ): string {
-  return `${stage}:${userId}:${environmentId}`;
+  if (!Number.isSafeInteger(generation) || generation < 0 || generation > 2147483646)
+    throw new RangeError("Invalid endpoint generation");
+  const legacy = `${stage}:${userId}:${environmentId}`;
+  return generation === 0 ? legacy : `${legacy}:${generation}`;
 }
 
 export function managedEndpointHostname(stage: string, baseDomain: string, hash: string): string {
