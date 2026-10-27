@@ -5,6 +5,7 @@ import {
   type ChildReadyFailure,
   type ChildReadyNextAction,
   type ChildReadyResult,
+  DEFAULT_SERVER_SETTINGS,
   OpenCodexChildBootstrapStatus,
   OpenCodexChildSetup,
 } from "@goat/contracts";
@@ -13,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 
 import { presentSetupAction } from "./childBootstrapStatus.ts";
@@ -56,6 +58,61 @@ const legacy = Effect.fn("OpenCodexChildBootstrapSetupTest.legacy")(function* (
   );
   return { ...home, ...(yield* build(home.baseDir, home.machine, home.calls)) };
 });
+
+/** A Child protocol double for production dispatch that holds `action` until released. */
+const transportDouble = (
+  action: string,
+  entered: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+) =>
+  ReadyDispatch.make({
+    callHostTool: (call, beforeSend) =>
+      Effect.gen(function* () {
+        yield* beforeSend;
+        const purpose = call.childSetupPurpose;
+        if (purpose === undefined) return yield* Effect.die("Expected a setup purpose");
+        const address = {
+          destinationEnvironmentId: purpose.destinationEnvironmentId,
+          homeEnvironmentId: purpose.homeEnvironmentId,
+        };
+        const requested =
+          call.tool === "goat_hub_child_status" ? "status" : String(call.arguments.action);
+        if (requested === action) {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+        }
+        if (requested === "status" || requested === "opencodexHealth")
+          return {
+            kind: "device",
+            ...address,
+            healthy: true,
+            revision: { epoch: "r2", sequence: 1 },
+            device: {
+              platform: "linux",
+              arch: "x64",
+              ocx: { path: "/fixture/ocx", version: "2.92.0", ownership: "managed" },
+              connection: { role: "client", linkId: "r2-link" },
+            },
+          } satisfies ChildReadyDeviceResult;
+        if (["installCodex", "syncCatalog", "configure", "probe"].includes(requested))
+          return {
+            kind: "ok",
+            setup: {
+              ...setupForTest("none", "probe_failed"),
+              ...address,
+              operationId: purpose.operationId,
+            },
+          } satisfies ChildReadyResult;
+        return {
+          kind: "prelink",
+          ...address,
+          operationId: purpose.operationId,
+          step: "opencodex_running",
+          healthy: true,
+          version: "2.92.0",
+        } satisfies ChildReadyResult;
+      }),
+  });
 
 it("keeps nested GOAT update guidance visible and non-actionable", () => {
   const status = presentSetupAction({
@@ -183,54 +240,7 @@ it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const ready = ReadyDispatch.make({
-          callHostTool: (call, beforeSend) =>
-            Effect.gen(function* () {
-              yield* beforeSend;
-              const purpose = call.childSetupPurpose;
-              if (purpose === undefined) return yield* Effect.die("Expected a setup purpose");
-              const address = {
-                destinationEnvironmentId: purpose.destinationEnvironmentId,
-                homeEnvironmentId: purpose.homeEnvironmentId,
-              };
-              const requested =
-                call.tool === "goat_hub_child_status" ? "status" : String(call.arguments.action);
-              if (requested === action) {
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(release);
-              }
-              if (requested === "status" || requested === "opencodexHealth")
-                return {
-                  kind: "device",
-                  ...address,
-                  healthy: true,
-                  revision: { epoch: "r2", sequence: 1 },
-                  device: {
-                    platform: "linux",
-                    arch: "x64",
-                    ocx: { path: "/fixture/ocx", version: "2.92.0", ownership: "managed" },
-                    connection: { role: "client", linkId: "r2-link" },
-                  },
-                } satisfies ChildReadyDeviceResult;
-              if (["installCodex", "syncCatalog", "configure", "probe"].includes(requested))
-                return {
-                  kind: "ok",
-                  setup: {
-                    ...setupForTest("none", "probe_failed"),
-                    ...address,
-                    operationId: purpose.operationId,
-                  },
-                } satisfies ChildReadyResult;
-              return {
-                kind: "prelink",
-                ...address,
-                operationId: purpose.operationId,
-                step: "opencodex_running",
-                healthy: true,
-                version: "2.92.0",
-              } satisfies ChildReadyResult;
-            }),
-        });
+        const ready = transportDouble(action, entered, release);
         const home = yield* setup({ readyDispatch: ready });
         const pending = yield* Effect.forkChild(home.bootstrap.ensure("boat-builder"));
         yield* Deferred.await(entered);
@@ -247,5 +257,35 @@ it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
         expect(saved["boat-builder"]?.step).toBe(step);
         expect(saved["boat-builder"]?.setup?.readiness).not.toBe("ready");
       }),
+  );
+
+  it.effect("turning the cloud switch off then on revokes and fails an in-flight Child setup", () =>
+    Effect.gen(function* () {
+      const action = "configure";
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const revoked = yield* Deferred.make<void>();
+      const ready = transportDouble(action, entered, release);
+      const home = yield* setup({
+        readyDispatch: ready,
+        onRevoke: () => Deferred.succeed(revoked, undefined).pipe(Effect.asVoid),
+      });
+      const pending = yield* Effect.forkChild(home.bootstrap.ensure("boat-builder"));
+      yield* Deferred.await(entered);
+      const hub = (autoJoinCloudMachines: boolean) => ({
+        ...DEFAULT_SERVER_SETTINGS,
+        hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled: true, autoJoinCloudMachines },
+      });
+      home.machine.autoJoin = false;
+      yield* PubSub.publish(home.machine.settingsChanges, hub(false));
+      // Withdrawal revokes the delegated Child sessions at once.
+      yield* Deferred.await(revoked);
+      home.machine.autoJoin = true;
+      yield* PubSub.publish(home.machine.settingsChanges, hub(true));
+      yield* Deferred.succeed(release, undefined);
+      const status = yield* Fiber.join(pending);
+      expect(status?.setup?.readiness).not.toBe("ready");
+      expect(["setup_approval_revoked", "setup_approval_stale"]).toContain(status?.failure?.code);
+    }),
   );
 });

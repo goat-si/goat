@@ -26,6 +26,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
@@ -559,6 +560,36 @@ const make = Effect.gen(function* () {
     return !(previous?.state === "blocked" && now - previous.checkedAt < RETRY_AFTER_MS);
   });
 
+  // Every cloud setup binds this generation. Each committed change of the cloud switch bumps it,
+  // so an off-then-on during a request still fails that request's post-reply check, and turning
+  // it off revokes the sessions already delegated. The epoch keeps ids unique per process.
+  const cloudEpoch = NodeCrypto.randomUUID();
+  let cloudGeneration = 0;
+  const changes = yield* settings.subscribeChanges.pipe(Scope.provide(serviceScope));
+  let cloudOn = yield* cloudAllowed;
+  let hubOn = yield* hubEnabled;
+  yield* changes.pipe(
+    Stream.runForEach((next) =>
+      Effect.gen(function* () {
+        const hub = next.hub.enabled;
+        const cloudNow = hub && next.hub.autoJoinCloudMachines;
+        const withdrawnHub = hubOn && !hub;
+        const withdrawnCloud = cloudOn && !cloudNow;
+        if (cloudNow !== cloudOn) cloudGeneration++;
+        hubOn = hub;
+        cloudOn = cloudNow;
+        if (!withdrawnHub && !withdrawnCloud) return;
+        const aliases = new Set(
+          [...setupBindings.values()]
+            .filter((held) => withdrawnHub || hasCloudMachineAliasPrefix(held.alias))
+            .map((held) => held.alias),
+        );
+        for (const alias of aliases) yield* revokeSetupForAlias(alias);
+      }),
+    ),
+    Effect.ignore({ log: true }),
+    Effect.forkIn(serviceScope),
+  );
   const cloudGate = (alias: string): Gate => ({
     admission: cloudAllowed.pipe(
       Effect.map((allowed): Admission => ({ state: allowed ? "allowed" : "withdrawn" })),
@@ -568,8 +599,8 @@ const make = Effect.gen(function* () {
     grant: Effect.all([cloudAllowed, cloud.owns(alias)]).pipe(
       Effect.map(([allowed, owned]) => ({
         enabled: allowed && owned,
-        grantId: `cloud:${alias}`,
-        grantRevision: 0,
+        grantId: `cloud:${alias}:${cloudEpoch}`,
+        grantRevision: cloudGeneration,
       })),
     ),
   });

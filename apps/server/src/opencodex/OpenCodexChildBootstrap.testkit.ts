@@ -1,6 +1,8 @@
 import {
   AuthSessionId,
   type ChildReadyFailure,
+  type ChildSetupBinding,
+  type ServerSettings,
   DEFAULT_SERVER_SETTINGS,
   CloudMachineError,
   EnvironmentId,
@@ -13,6 +15,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 
@@ -85,6 +89,10 @@ export interface Machine {
   runtime: boolean;
   /** The Child's own setup after linking: a refusal, or Ready when undefined. */
   completeFailure: ChildReadyFailure | undefined;
+  /** Committed settings changes, as ServerSettingsService publishes them. */
+  settingsChanges: PubSub.PubSub<ServerSettings>;
+  /** Runs when the Home revokes a setup binding's Child sessions. */
+  onRevoke: (binding: ChildSetupBinding) => Effect.Effect<void>;
   /** Each Child completion the Home asked for, as "alias linkId". */
   completed: string[];
   /** Home link records beyond the fleet fixture's. */
@@ -227,7 +235,7 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
           // Setup must never mint an ordinary MCP session; identity comes over pinned SSH.
           callHostTool: () => Effect.die("Child setup minted an ordinary MCP session"),
           identifyTarget: () => Effect.succeed(EnvironmentId.make("child-env")),
-          revokeChildSetupSessions: () => Effect.void,
+          revokeChildSetupSessions: (binding) => Effect.suspend(() => machine.onRevoke(binding)),
         }),
       ),
       Layer.provide(
@@ -322,6 +330,7 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(Settings.ServerSettingsService)({
+          subscribeChanges: Effect.succeed(Stream.fromPubSub(machine.settingsChanges)),
           // As in serverSettings: a full read can answer from state captured before it waited.
           getSettings: Effect.sync(() => ({
             ...DEFAULT_SERVER_SETTINGS,
@@ -395,6 +404,8 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     runtime: true,
     duringEnsure: Effect.void,
     completeFailure: undefined,
+    settingsChanges: yield* PubSub.unbounded<ServerSettings>(),
+    onRevoke: () => Effect.void,
     completed: [],
     extraLinks: [],
     readyDispatch: undefined,
