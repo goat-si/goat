@@ -35,6 +35,10 @@ const fixtureSupervisor = (input: {
     runCallback: (effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined),
   });
 
+// Leaves only the child's own wall limit, so a deadline test never races the supervisor's backstop,
+// a timer in another process.
+const childDeadlineOnly = () => () => {};
+
 const context = (cellId: string, limits: ReturnType<typeof screenRunLimits>) => ({
   runId: "r",
   turnId: "t",
@@ -251,14 +255,13 @@ it.live("a deadline stops a queued call before it dispatches and journals it und
               Effect.as({ value: true, category: "confirmed" as const }),
             ),
     });
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    const supervisor = fixtureSupervisor({
+      asset,
+      limits,
+      hostBridge: bridge,
+      scheduleDeadline: childDeadlineOnly,
+    });
     yield* Effect.gen(function* () {
-      // A booted child, so its wall limit and the supervisor's start together.
-      yield* supervisor.runCell(
-        { runId: "r", turnId: "t", context: context("warmup", limits) },
-        "return true;",
-        false,
-      );
       // The second click waits behind the first on the window's gate when the deadline hits.
       const result = yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("queued", limits) },
@@ -370,7 +373,12 @@ it.live("a deadline during an awaited host call reports deadline and keeps the c
           Effect.as({ value: true, category: "confirmed" as const }),
         ),
     });
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    const supervisor = fixtureSupervisor({
+      asset,
+      limits,
+      hostBridge: bridge,
+      scheduleDeadline: childDeadlineOnly,
+    });
     yield* supervisor.runCell(
       { runId: "r", turnId: "t", context: context("warmup", limits) },
       "return true;",
@@ -397,7 +405,12 @@ it.live("busy loop reaches the child deadline without preserving its turn", () =
     Effect.gen(function* () {
       const asset = yield* resolveScreenRuntimeAsset("dev");
       const limits = screenRunLimits({ cellWallMs: 1000 });
-      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      const supervisor = fixtureSupervisor({
+        asset,
+        limits,
+        hostBridge: new ScreenHostBridge(),
+        scheduleDeadline: childDeadlineOnly,
+      });
       yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
       yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("warmup", limits) },
@@ -477,7 +490,9 @@ it.live("Stop kills only the child owned by the cut turn", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const asset = yield* resolveScreenRuntimeAsset("dev");
-      const limits = screenRunLimits({ cellWallMs: 5000 });
+      // The default wall limit lies far beyond the Stop, so only the Stop ends the spinning cell
+      // while the other turn's child boots.
+      const limits = screenRunLimits();
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
       yield* Effect.addFinalizer(() =>
         Effect.all(
