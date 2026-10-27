@@ -412,27 +412,40 @@ sleep() {
   );
 
   it.live(
-    "Windows host probes still ask every time and never record or prune facts",
+    "a Windows host probe records executable answers, so slow goat starts fit the SSH timeout",
     () =>
       Effect.gen(function* () {
         const f = yield* liveFixture;
         yield* f.shiftHostClock(60);
+        // Git Bash: uname reports MINGW and ps has no -o, so live answers cannot be keyed.
         f.setScriptPrefix(
-          'uname() { if [ "$1" = -s ]; then echo MINGW64_NT; else command uname "$@"; fi; }\n',
+          'uname() { if [ "$1" = -s ]; then echo MINGW64_NT; else command uname "$@"; fi; }\n' +
+            'ps() { case "$1" in -o) return 1 ;; esac; command ps "$@"; }\n',
         );
+        const facts = `${f.home}/.goat/ssh-launch/facts`;
+        const starts = Effect.map(
+          f.fs.readFileString(`${f.test}/events`),
+          (events) => events.split("\n").filter((line) => line.includes('"type":"exec"')).length,
+        );
+        // Before: nothing could be recorded, so every question started goat again.
+        yield* f.fs.writeFileString(facts, "");
+        const before = yield* starts;
         yield* probe(f);
-        const first = yield* recordableAsks(f);
-        assert.isAbove(first.own, 0);
-        assert.isFalse(yield* f.fs.exists(`${f.home}/.goat/ssh-launch/facts`));
-        const stale = `${f.home}/.goat/ssh-launch/facts/own.1.0.0.exe`;
-        yield* f.fs.makeDirectory(`${f.home}/.goat/ssh-launch/facts`);
-        yield* f.fs.writeFileString(stale, "untouched\n");
+        const uncached = (yield* starts) - before;
+        yield* f.fs.remove(facts);
+        const cold = yield* starts;
         yield* probe(f);
-        assert.isAbove((yield* recordableAsks(f)).own, first.own);
-        assert.equal(yield* f.fs.readFileString(stale), "untouched\n");
-        assert.deepEqual(yield* f.fs.readDirectory(`${f.home}/.goat/ssh-launch/facts`), [
-          "own.1.0.0.exe",
-        ]);
+        const first = (yield* starts) - cold;
+        const warm = yield* starts;
+        yield* probe(f);
+        const second = (yield* starts) - warm;
+        // goat.exe took 6.5 s per start on the Windows host whose 60 s probe kept timing out.
+        const windowsStartMs = 6_530;
+        assert.isAbove(uncached * windowsStartMs, 60_000);
+        assert.isAtMost(first * windowsStartMs, 60_000);
+        // Later probes start goat only for the live server, whose answers Windows cannot key.
+        assert.equal(second, 2);
+        assert.isTrue((yield* f.fs.readDirectory(facts)).some((name) => name.startsWith("own.")));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
