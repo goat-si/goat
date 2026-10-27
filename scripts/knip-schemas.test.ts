@@ -10,6 +10,51 @@ const require = NodeModule.createRequire(import.meta.url);
 const cli = NodePath.join(NodePath.dirname(require.resolve("knip")), "cli.js");
 const preprocessor = NodePath.join(import.meta.dirname, "knip-schemas.ts");
 
+it("keeps the standalone replay CLI reachable without hiding unused scripts", () => {
+  const cwd = NodeFS.mkdtempSync(NodePath.join(import.meta.dirname, ".knip-test-"));
+  try {
+    NodeFS.writeFileSync(
+      NodePath.join(cwd, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["scripts"] }),
+    );
+    NodeFS.mkdirSync(NodePath.join(cwd, "scripts/agent-surface/eval"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(cwd, "scripts/package.json"),
+      JSON.stringify({ name: "replay-entry-fixture", private: true, type: "module" }),
+    );
+    for (const file of ["replay-run.ts", "unused.ts"])
+      NodeFS.writeFileSync(
+        NodePath.join(cwd, "scripts/agent-surface/eval", file),
+        "console.log(1);",
+      );
+    const result = NodeChildProcess.spawnSync(
+      NodeProcess.execPath,
+      [
+        cli,
+        "--directory",
+        cwd,
+        "--config",
+        NodePath.join(import.meta.dirname, "../knip.jsonc"),
+        "--workspace",
+        "scripts",
+        "--include",
+        "files",
+        "--no-config-hints",
+        "--reporter",
+        "json",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr + result.stdout).toBe(1);
+    const issues = JSON.parse(result.stdout).issues;
+    expect(issues.map((issue: { file: string }) => issue.file)).toEqual([
+      "scripts/agent-surface/eval/unused.ts",
+    ]);
+  } finally {
+    NodeFS.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 it("allows types and schemas through the real Knip CLI without hiding runtime or file findings", () => {
   // Keeping the disposable project here gives it the same Effect installation as the scripts.
   const cwd = NodeFS.mkdtempSync(NodePath.join(import.meta.dirname, ".knip-test-"));
