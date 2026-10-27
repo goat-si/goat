@@ -21,6 +21,7 @@ describe("goat-discipline built-in skill contract", () => {
       "claudeAgent",
       "codex",
       "cursor",
+      "fx",
       "grok",
       "opencode",
       "pi",
