@@ -143,7 +143,8 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /**
      * Connects, disconnects or restarts the device's OpenCodex through its own GOAT's
-     * goat_hub_child_connection, which selects the executable there. Never a script or argv.
+     * goat_hub_child_connection, which selects the executable there. A POSIX device whose GOAT
+     * does not serve that tool disconnects and restarts through the ocx script instead.
      */
     readonly connection: (
       alias: string,
@@ -380,17 +381,31 @@ const make = Effect.gen(function* () {
     return output;
   });
 
-  const connection = Effect.fn("HubOcx.connection")(function* (
+  const devicePlatform = Effect.fn("HubOcx.devicePlatform")(
+    function* (alias: string) {
+      const result = yield* dispatch.runHostScript({
+        host: alias,
+        script: platformScript,
+        timeoutMs: 30_000,
+      });
+      const output = parseDeviceOutput(result.stdout);
+      return output?.code === 0 ? platformOf(output.stdout) : undefined;
+    },
+    Effect.orElseSucceed(() => undefined),
+  );
+
+  const refused = (message: string) => new HubOcxError({ reason: "unreachable", message });
+  const authorized = (admission: HubChildConnectionAdmission) =>
+    admission.authorize.pipe(
+      Effect.mapError(() => refused("Approval for this membership change is no longer active.")),
+    );
+  /** The device's own GOAT runs the change; `unserved` when no GOAT there has the tool. */
+  const childConnection = Effect.fn("HubOcx.childConnection")(function* (
     alias: string,
     operation: ChildReadyConnectionInput["opencodexConnection"],
     timeoutMs: number,
     admission: HubChildConnectionAdmission,
   ) {
-    // Uncertain outcomes need membership reconciliation, never a retried invite or a script.
-    const refused = (message: string) => new HubOcxError({ reason: "unreachable", message });
-    yield* admission.authorize.pipe(
-      Effect.mapError(() => refused("Approval for this membership change is no longer active.")),
-    );
     const identify = dispatch
       .identifyTarget({ alias, hostname: alias, username: null, port: null })
       .pipe(Effect.orElseSucceed(() => null));
@@ -400,7 +415,7 @@ const make = Effect.gen(function* () {
       ((yield* dispatch.ensureRuntime(alias).pipe(Effect.orElseSucceed(() => false)))
         ? yield* identify
         : null);
-    if (destination === null) return yield* refused(`GOAT on ${alias} did not identify itself.`);
+    if (destination === null) return { unserved: `GOAT on ${alias} did not identify itself.` };
     const input: ChildReadyConnectionInput = {
       destinationEnvironmentId: destination,
       homeEnvironmentId: admission.homeEnvironmentId,
@@ -419,16 +434,15 @@ const make = Effect.gen(function* () {
         },
         admission.authorize,
       )
-      .pipe(
-        Effect.mapError((error) =>
-          refused(
-            error._tag === "SshRemoteDispatchError" && error.reason === "remote_outdated"
-              ? `Update GOAT on ${alias}; it cannot change its OpenCodex connection yet.`
-              : `${alias} refused the connection change; check its membership before retrying.`,
-          ),
-        ),
-      );
-    const result = yield* decodeConnection(answer).pipe(
+      .pipe(Effect.result);
+    if (answer._tag === "Failure")
+      return answer.failure._tag === "SshRemoteDispatchError" &&
+        answer.failure.reason === "remote_outdated"
+        ? { unserved: `Update GOAT on ${alias}; it cannot change its OpenCodex connection yet.` }
+        : yield* refused(
+            `${alias} refused the connection change; check its membership before retrying.`,
+          );
+    const result = yield* decodeConnection(answer.success).pipe(
       Effect.mapError(() => refused(`Update GOAT on ${alias}; its answer was not understood.`)),
     );
     if (
@@ -439,6 +453,28 @@ const make = Effect.gen(function* () {
     )
       return yield* refused(`${alias} answered for another connection change.`);
     return { code: result.code, stdout: "" } satisfies OcxOutput;
+  });
+
+  const connection = Effect.fn("HubOcx.connection")(function* (
+    alias: string,
+    operation: ChildReadyConnectionInput["opencodexConnection"],
+    timeoutMs: number,
+    admission: HubChildConnectionAdmission,
+  ) {
+    // Uncertain outcomes need membership reconciliation, never a retried invite or a script.
+    yield* authorized(admission);
+    const served = yield* childConnection(alias, operation, timeoutMs, admission);
+    if (!("unserved" in served)) return served;
+    // Nothing ran there. OpenCodex alone or an older GOAT on a POSIX device still disconnects
+    // and restarts through the ocx script that preceded the tool; Windows needs the tool.
+    if (operation.kind === "connectHubClient" || (yield* devicePlatform(alias)) !== "posix")
+      return yield* refused(served.unserved);
+    yield* authorized(admission);
+    return yield* runDevice(
+      alias,
+      deviceScript(operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"]),
+      timeoutMs,
+    );
   });
 
   return HubOcx.of({
@@ -459,29 +495,10 @@ const make = Effect.gen(function* () {
     }),
     syncDevice: (alias, options, timeoutMs) =>
       runDevice(alias, guardedSyncScript(options.linkId, options.restartCodex), timeoutMs),
-    devicePlatform: Effect.fn("HubOcx.devicePlatform")(
-      function* (alias) {
-        const result = yield* dispatch.runHostScript({
-          host: alias,
-          script: platformScript,
-          timeoutMs: 30_000,
-        });
-        const output = parseDeviceOutput(result.stdout);
-        return output?.code === 0 ? platformOf(output.stdout) : undefined;
-      },
-      Effect.orElseSucceed(() => undefined),
-    ),
+    devicePlatform,
     connectHubClient: Effect.fn("HubOcx.connectHubClient")(function* (alias, timeoutMs, admission) {
       // Nothing is minted for a caller whose approval already ended.
-      yield* admission.authorize.pipe(
-        Effect.mapError(
-          () =>
-            new HubOcxError({
-              reason: "unreachable",
-              message: "Approval for this membership change is no longer active.",
-            }),
-        ),
-      );
+      yield* authorized(admission);
       const minted = yield* home(["hub", "invite", "--json"], 60_000);
       const invite =
         minted.code === 0 ? Option.getOrUndefined(decodeInvite(minted.stdout.trim())) : undefined;

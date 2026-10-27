@@ -589,3 +589,94 @@ it.effect("a withdrawn Hub client approval mints no invite and contacts no devic
     expect(calls).toEqual([]);
   }),
 );
+
+/** A device whose GOAT is older than goat_hub_child_connection, or absent, answering `uname`. */
+const unservedWorld = (
+  uname: string,
+  goat: "outdated" | "absent",
+  scripts: Array<string>,
+  calls: Array<Dispatch.SshHostToolCall>,
+) =>
+  hubOcxLayer.pipe(
+    Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+    Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+    Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
+    Layer.provide(
+      Layer.mock(Dispatch.SshRemoteDispatch)({
+        identifyTarget: () =>
+          Effect.succeed(goat === "absent" ? null : EnvironmentId.make("child-env")),
+        ensureRuntime: () => Effect.succeed(false),
+        callHostTool: (call, authorize) =>
+          authorize.pipe(
+            Effect.andThen(
+              Effect.sync(() => void calls.push(call)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new Dispatch.SshRemoteDispatchError({
+                      reason: "remote_outdated",
+                      message: "No goat_hub_child_connection there.",
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        runHostScript: ({ script }) =>
+          Effect.sync(() => {
+            scripts.push(script);
+            const stdout = script.startsWith("uname") ? `${uname}\n` : "";
+            return { stdout: `${stdout}\n__goat_ocx_exit=0\n`, stderr: "" };
+          }),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+it.effect.each([
+  { name: "an older GOAT", goat: "outdated" as const, toolCalls: 1 },
+  { name: "OpenCodex alone", goat: "absent" as const, toolCalls: 0 },
+])(
+  "a POSIX device with $name still disconnects and restarts through the ocx script",
+  ({ goat, toolCalls }) =>
+    Effect.gen(function* () {
+      const scripts: Array<string> = [];
+      const calls: Array<Dispatch.SshHostToolCall> = [];
+      const ocx = yield* HubOcx.pipe(Effect.provide(unservedWorld("Linux", goat, scripts, calls)));
+      const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+      for (const kind of ["disconnect", "restart"] as const)
+        expect(
+          yield* ocx.connection("lidge", { kind, expectedLinkId: "lnk_1" }, 60_000, admission),
+        ).toEqual({ code: 0, stdout: "" });
+      expect(calls).toHaveLength(toolCalls * 2);
+      expect(scripts.filter((script) => !script.startsWith("uname"))).toEqual([
+        deviceScript(["disconnect", "--json"]),
+        deviceScript(["restart"]),
+      ]);
+
+      // A withdrawn approval runs no script, even where the tool is missing.
+      const withdrawn = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(false));
+      scripts.length = 0;
+      const refused = yield* ocx
+        .connection("lidge", { kind: "disconnect", expectedLinkId: "lnk_1" }, 60_000, withdrawn)
+        .pipe(Effect.flip);
+      expect(refused.reason).toBe("unreachable");
+      expect(scripts).toEqual([]);
+    }),
+);
+
+it.effect("a Windows device whose GOAT lacks goat_hub_child_connection runs no ocx script", () =>
+  Effect.gen(function* () {
+    const scripts: Array<string> = [];
+    const calls: Array<Dispatch.SshHostToolCall> = [];
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(unservedWorld("MINGW64_NT-10.0-26200", "outdated", scripts, calls)),
+    );
+    const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+    const refused = yield* ocx
+      .connection("mini", { kind: "disconnect", expectedLinkId: "lnk_1" }, 60_000, admission)
+      .pipe(Effect.flip);
+    expect(refused.message).toContain("Update GOAT on mini");
+    expect(calls).toHaveLength(1);
+    expect(scripts.every((script) => script.startsWith("uname"))).toBe(true);
+  }),
+);
