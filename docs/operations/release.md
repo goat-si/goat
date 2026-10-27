@@ -14,6 +14,11 @@ must also open a seeded thread in a temporary GOAT home before their assets can 
 publication. A failed desktop launch keeps its logs and screenshot in the run's staging drafts;
 the fixture starts at schema 69 so the packaged server must apply GOAT's later migrations.
 
+Linux ARM64 CLI executables must build on a Linux ARM64 host. They temporarily use
+postject instead of `--build-sea` so they load on 16 and 64 KiB page kernels
+([nodejs/node#67048](https://github.com/nodejs/node/issues/67048)). Archive assembly
+rejects incompatible ELF layouts. Development runtime archives still use the selected Node runtime.
+
 <a id="what-the-workflow-does"></a>
 
 ## Upstream reference (disabled)

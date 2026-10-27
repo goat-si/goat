@@ -1,4 +1,5 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Constructs raw MCP JSON-RPC response lines.
+import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import {
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
@@ -18,6 +19,7 @@ import {
   READ_CUT_OFF,
 } from "./ComputerUseLeaseMessages.ts";
 
+import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 import type { Stopping } from "./leaseUpdateFences.ts";
 
 export type JsonRpcId = string | number;
@@ -45,7 +47,11 @@ export const refusal = (
   app?: string,
   holderThreadId?: import("@goat/contracts").ThreadId,
 ) => {
-  const refused = { refused: computerUseRefusalReason(detail), detail };
+  const refused = {
+    refused: computerUseRefusalReason(detail),
+    detail,
+    safety: refusalSafety(detail),
+  };
   return JSON.stringify(
     method === "tools/call"
       ? {
@@ -90,6 +96,11 @@ export const interruptionRefusal = (cause: Interruption) =>
  */
 export const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interruption) => {
   const read = tool !== undefined && READ_ONLY_TOOLS.has(tool);
+  const safety = classifyActionOutcome({
+    effect: read ? "read" : "write",
+    status: "indeterminate",
+    dispatched: true,
+  });
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
   const detail = interruptionDetail(cause);
   const text =
@@ -104,8 +115,8 @@ export const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interrupt
     result: {
       content: [{ type: "text", text }],
       structuredContent: read
-        ? { code: "interrupted", detail }
-        : { effect: "unverifiable", code: "interrupted", detail },
+        ? { code: "interrupted", detail, safety }
+        : { effect: "unverifiable", code: "interrupted", detail, safety },
       isError: true,
     },
   });
@@ -145,6 +156,11 @@ export const offScreenAnswer = (
             effect: "unverifiable",
             code: "interrupted",
             detail: "wrong_display",
+            safety: classifyActionOutcome({
+              effect: "write",
+              status: "indeterminate",
+              dispatched: true,
+            }),
           },
           isError: true,
         },

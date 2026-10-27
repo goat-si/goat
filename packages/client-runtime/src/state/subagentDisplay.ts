@@ -1,3 +1,4 @@
+import { resolveModelShortName } from "../modelShortName.ts";
 import type {
   OrchestrationV2TurnItemStatus,
   OrchestrationV2ThreadShell,
@@ -70,7 +71,7 @@ export function resolveSubagentMetadata(input: {
     : model;
   const catalogModel = input.provider?.models.find((candidate) => candidate.slug === slug);
   const reportedLabel = catalogModel
-    ? catalogModel.shortName || catalogModel.name
+    ? (resolveModelShortName(catalogModel, input.provider?.driver) ?? catalogModel.name)
     : model
       ? formatModelSlugName(model)
       : "Not reported";

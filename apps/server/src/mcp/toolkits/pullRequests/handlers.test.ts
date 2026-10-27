@@ -225,6 +225,30 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
 });
 
 describe("pull request toolkit handlers", () => {
+  it.effect.each([false, true])(
+    "asks a delegated child to report its PR, including an already-linked PR (%s)",
+    (alreadyLinked) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          thread: {
+            ...makeThread(alreadyLinked ? [makeLink(1)] : []),
+            lineage: {
+              rootThreadId: ThreadId.make("parent"),
+              parentThreadId: ThreadId.make("parent"),
+              relationshipToParent: "subagent",
+            },
+          },
+        });
+        expect(
+          yield* harness.call("link_pull_request", { repository: "sample-tools/goat", number: 1 }),
+        ).toMatchObject({
+          alreadyLinked,
+          next: "End your reply with: PR <full URL>, head <SHA>, checks and reviews <state>.",
+        });
+        expect(yield* Ref.get(harness.commands)).toHaveLength(alreadyLinked ? 0 : 1);
+      }),
+  );
+
   it.effect("refuses a credential without the pull-requests capability", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
