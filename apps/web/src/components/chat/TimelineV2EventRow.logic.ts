@@ -6,8 +6,8 @@ import {
   GitForkIcon,
   type IconComponent,
   MinusIcon,
+  SquareIcon,
   WrenchIcon,
-  XIcon,
   ZapIcon,
 } from "~/components/solar";
 import * as DateTime from "effect/DateTime";
@@ -38,15 +38,15 @@ export function v2EventPresentation(item: OrchestrationV2TurnItem): {
       return {
         label: "Interrupt requested",
         detail: item.message,
-        tone: "warning",
-        icon: CircleAlertIcon,
+        tone: "muted",
+        icon: SquareIcon,
       };
     case "run_interrupt_result":
       return {
         label: "Run interrupted",
         detail: item.message,
-        tone: "danger",
-        icon: XIcon,
+        tone: "muted",
+        icon: SquareIcon,
       };
     case "handoff":
       return {
