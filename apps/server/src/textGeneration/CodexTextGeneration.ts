@@ -1,7 +1,9 @@
 import * as HomeRoute from "../provider/OpenCodexRoute.ts";
+import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { withCodexAppServerClient } from "../provider/CodexProvider.ts";
 import { usesAuthlessCodexHome } from "../provider/CodexHomeRouteConfig.ts";
 import { ProviderDriverKind } from "@goat/contracts";
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
@@ -38,6 +40,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 
 const CODEX_TIMEOUT_MS = 180_000;
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
 /**
  * Channel reception answers from its prompt alone: no user config (and so no configured MCP
  * servers), no exec rules, and no shell, apps, plugins, browser, computer, image, or hook tools.
@@ -93,6 +96,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   memoryRunnerContext?: MemoryGenerationRunnerContext,
 ) {
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
+  const routeState = yield* Effect.serviceOption(CodexRoutes.CodexRouteState);
+  const host = yield* Effect.serviceOption(ProviderHost.ProviderHost);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -116,6 +121,38 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
 
   const removeTempFileDir = (filePath: string): Effect.Effect<void, never> =>
     fileSystem.remove(path.dirname(filePath), { recursive: true }).pipe(Effect.ignore);
+
+  /**
+   * Holds the instance's route lease in the caller's scope, as conversations do, so a route or
+   * Home authentication change waits for this Codex process to exit. A change admitted before the
+   * lease means this instance's captured settings are stale; the rebuilt instance must run it.
+   */
+  const fenceRoute = Effect.fn("CodexTextGeneration.fenceRoute")(function* (operation: string) {
+    const instanceId = memoryRunnerContext?.providerInstanceId;
+    if (instanceId === undefined || Option.isNone(routeState)) return;
+    yield* routeState.value
+      .reserveUse(instanceId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
+        ),
+      );
+    if (Option.isNone(host)) return;
+    const current = (yield* host.value.settings.get.pipe(
+      Effect.mapError(
+        (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
+      ),
+    )).providerInstances[instanceId];
+    if (
+      current !== undefined &&
+      CodexRoutes.codexRouteKey(current) !==
+        CodexRoutes.codexRouteKey({ driver: CODEX_DRIVER, config: codexConfig })
+    )
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Codex settings changed while this request was starting. Retry.",
+      });
+  });
 
   /**
    * Reception's own home keeps the user's global AGENTS.md out. Home routes get only a catalog
@@ -356,6 +393,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     );
 
     const runCodexCommand = Effect.fn("runCodexJson.runCodexCommand")(function* () {
+      yield* fenceRoute(operation);
       const resolved = resolveRuntime
         ? yield* resolveRuntime.pipe(
             Effect.mapError(
@@ -603,11 +641,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     "CodexTextGeneration",
     (request) => runCodexJson(request).pipe(Effect.map((selected) => selected.result)),
     {
-      memoryRunner: withMemoryExecution(
-        memoryRunnerContext,
-        ProviderDriverKind.make("codex"),
-        runCodexJson,
-      ),
+      memoryRunner: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
       channelReception: true,
     },
   );

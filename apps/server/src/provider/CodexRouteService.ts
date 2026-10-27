@@ -63,7 +63,8 @@ class RouteSettingsError extends ServerSettingsError {
   }
 }
 const decodeCodex = Schema.decodeUnknownOption(CodexSettings);
-const routeKey = (instance: ProviderInstanceConfig | undefined) => {
+/** Route identity an active use fences: model route, Home authentication and base URL. */
+export const codexRouteKey = (instance: ProviderInstanceConfig | undefined) => {
   if (instance?.driver !== "codex") return undefined;
   const config = decodeCodex(instance.config ?? {});
   if (Option.isNone(config)) return "invalid";
@@ -183,7 +184,8 @@ const makeState = Effect.gen(function* () {
               "Provider settings are awaiting application. Refresh and retry.",
             );
           if (
-            routeKey(current.providerInstances[id]) !== routeKey(next.providerInstances[id]) &&
+            codexRouteKey(current.providerInstances[id]) !==
+              codexRouteKey(next.providerInstances[id]) &&
             (leases.get(id) ?? 0) > 0
           )
             return yield* new ProviderInstanceBusyError({
