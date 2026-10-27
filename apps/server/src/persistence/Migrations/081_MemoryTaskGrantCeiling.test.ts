@@ -72,6 +72,7 @@ it.effect(
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },

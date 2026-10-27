@@ -123,6 +123,7 @@ describe("V2 preview upgrade", () => {
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -256,6 +257,7 @@ describe("V2 preview upgrade", () => {
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

@@ -75,6 +75,7 @@ it.effect(
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

@@ -1,40 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-// Frozen copy of the shell's idle-compaction rule: GOAT's own /compact stays read unless it fails.
-const quietIdleCompaction = (
-  sql: SqlClient.SqlClient,
-  input: {
-    readonly thread: string;
-    readonly run: string;
-    readonly status: string;
-    readonly prompt: string;
-  },
-) => sql`(
-  ${sql.literal(input.status)} IS NOT 'failed'
-  AND EXISTS (
-    SELECT 1 FROM orchestration_v2_projection_messages prompt
-    WHERE prompt.message_id = ${sql.literal(input.prompt)} AND prompt.role = 'user'
-      AND lower(trim(json_extract(prompt.payload_json, '$.text'),
-        char(9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195,
-          8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279)
-      )) = '/compact'
-      AND coalesce(json_array_length(prompt.payload_json, '$.attachments'), 0) = 0
-      AND (
-        json_extract(prompt.payload_json, '$.idleCompaction') IS NOT NULL
-        OR (
-          json_extract(prompt.payload_json, '$.createdBy') = 'agent'
-          AND json_extract(prompt.payload_json, '$.creationSource') = 'server'
-        )
-      )
-  ) AND NOT EXISTS (
-    SELECT 1 FROM orchestration_v2_projection_turn_items compaction
-    WHERE compaction.thread_id = ${sql.literal(input.thread)}
-      AND compaction.run_id = ${sql.literal(input.run)}
-      AND compaction.type = 'compaction' AND compaction.status = 'failed'
-  )
-)`;
-
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const tasks = yield* sql<{ readonly name: string }>`PRAGMA table_info(scheduled_tasks)`;
@@ -47,26 +13,14 @@ export default Effect.gen(function* () {
     yield* sql`ALTER TABLE orchestration_v2_projection_runs ADD COLUMN completion_notification TEXT`;
   // Fold event metadata as well: a reopened legacy run no longer carries its earlier completion.
   yield* sql`WITH eligible AS (
-    SELECT r.thread_id, r.completed_at FROM orchestration_v2_projection_runs r
-      WHERE r.completed_at IS NOT NULL AND r.completion_notification IS NOT 'silent'
-        AND NOT ${quietIdleCompaction(sql, {
-          thread: "r.thread_id",
-          run: "r.run_id",
-          status: "r.status",
-          prompt: "json_extract(r.payload_json, '$.userMessageId')",
-        })}
+    SELECT thread_id, completed_at FROM orchestration_v2_projection_runs
+      WHERE completed_at IS NOT NULL AND completion_notification IS NOT 'silent'
     UNION ALL
-    SELECT e.stream_id, json_extract(e.payload_json, '$.completedAt') FROM orchestration_events e
-      WHERE e.application_event_version = 2 AND e.aggregate_kind = 'thread'
-        AND e.event_type IN ('run.created', 'run.updated')
-        AND json_type(e.payload_json, '$.completedAt') = 'text'
-        AND json_extract(e.payload_json, '$.completionNotification') IS NOT 'silent'
-        AND NOT ${quietIdleCompaction(sql, {
-          thread: "e.stream_id",
-          run: "json_extract(e.payload_json, '$.id')",
-          status: "json_extract(e.payload_json, '$.status')",
-          prompt: "json_extract(e.payload_json, '$.userMessageId')",
-        })}
+    SELECT stream_id, json_extract(payload_json, '$.completedAt') FROM orchestration_events
+      WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+        AND event_type IN ('run.created', 'run.updated')
+        AND json_type(payload_json, '$.completedAt') = 'text'
+        AND json_extract(payload_json, '$.completionNotification') IS NOT 'silent'
   ), cursors AS (
     SELECT thread_id, max(completed_at) AS completed_at FROM eligible GROUP BY thread_id
   ) UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json,
