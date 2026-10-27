@@ -51,18 +51,20 @@ export type DpopFailureReason = typeof DpopFailureReason.Type;
 export const IsoDateTime = Schema.String;
 export type IsoDateTime = typeof IsoDateTime.Type;
 
+/** Missing or unknown values decode to an absent key, and undefined encodes as absent: undefined is not JSON. */
 export const ForwardCompatibleOptional = <Value extends Schema.Top>(value: Value) => {
   const decodeValue = Schema.decodeUnknownOption(value as never);
-  return Schema.optionalKey(
-    Schema.Unknown.pipe(
-      Schema.decodeTo(
-        Schema.UndefinedOr(value),
-        SchemaTransformation.transform<Value["Encoded"] | undefined, unknown>({
-          decode: (raw) =>
-            Option.isSome(decodeValue(raw)) ? (raw as Value["Encoded"]) : undefined,
-          encode: (raw) => raw,
-        }),
-      ),
+  return Schema.optionalKey(Schema.Unknown).pipe(
+    Schema.decodeTo(
+      Schema.optionalKey(Schema.UndefinedOr(value)),
+      SchemaTransformation.transformOptional<Value["Encoded"] | undefined, unknown>({
+        decode: (raw) =>
+          Option.isSome(raw) && Option.isSome(decodeValue(raw.value))
+            ? Option.some(raw.value as Value["Encoded"])
+            : Option.none(),
+        encode: (raw) =>
+          Option.isSome(raw) && raw.value !== undefined ? Option.some(raw.value) : Option.none(),
+      }),
     ),
   );
 };
