@@ -200,9 +200,8 @@ function prepare(cookies: Cookies) {
 /**
  * Each cookie is redacted wherever it appears as name=value, which is how an echoed Cookie or
  * Set-Cookie header looks. Its value is redacted anywhere once it has six characters, and as a
- * whole token from three; a filled secret anywhere. Every kind of match, the caller's `marked`
- * spans included, is found in the original text and only then replaced, so one never hides
- * another; no pattern is built from a value.
+ * whole token from three; a filled secret anywhere. Every match, `marked` spans included, is found
+ * in the original text before any is replaced, so none hides another.
  */
 export const redactCookieValues = (
   text: string,
