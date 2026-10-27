@@ -8,7 +8,7 @@
  *
  * @module blockingLayers
  */
-import type { Page } from "playwright-core";
+import type { Frame, Page } from "playwright-core";
 import type { SessionControl } from "./SessionControl.ts";
 
 export interface LayerCandidate {
@@ -21,7 +21,10 @@ export interface LayerCandidate {
   readonly pointerEvents: string;
   /** Computed z-index; "auto" when the element sets none. */
   readonly zIndex: string;
+  /** aria-modal, or a native dialog opened with showModal(): the rest of the page is inert. */
   readonly ariaModal: boolean;
+  /** In the browser's top layer as an open popover or a modal dialog, above any z-index. */
+  readonly topLayer?: boolean;
   /** Page content lay beneath it at some sampled point. */
   readonly overContent: boolean;
   /** The document, its body, <main> or role=main: content, never an overlay. */
@@ -73,8 +76,18 @@ const LAYERS_SCRIPT = `(gridSize) => {
     }
     return element;
   };
+  // :modal is a dialog opened with showModal(); it makes the rest of the page inert without ARIA.
+  const matches = (element, selector) => {
+    try {
+      return element.matches(selector);
+    } catch {
+      return false;
+    }
+  };
+  const roleOf = (element) =>
+    (element.getAttribute("role") || "").toLowerCase() || (element.tagName === "DIALOG" ? "dialog" : "");
   const isDialog = (element) => {
-    const role = (element.getAttribute("role") || "").toLowerCase();
+    const role = roleOf(element);
     return role === "dialog" || role === "alertdialog" || element.getAttribute("aria-modal") === "true";
   };
   const qualifies = (element) => {
@@ -103,8 +116,9 @@ const LAYERS_SCRIPT = `(gridSize) => {
   // an overlay split into panels is one layer, and an app shell or root around it is not chosen.
   // A small modal filled by a wrapper or button still counts as the modal, not the child hit.
   const isModal = (element) =>
-    (element.getAttribute("role") || "").toLowerCase() === "alertdialog" ||
-    element.getAttribute("aria-modal") === "true";
+    roleOf(element) === "alertdialog" ||
+    element.getAttribute("aria-modal") === "true" ||
+    matches(element, ":modal");
   const promote = (hit, stack) => {
     let overlay = null;
     let dialog = null;
@@ -198,7 +212,7 @@ const LAYERS_SCRIPT = `(gridSize) => {
     const visible =
       Math.max(0, Math.min(rect.right, width) - Math.max(rect.left, 0)) *
       Math.max(0, Math.min(rect.bottom, height) - Math.max(rect.top, 0));
-    const role = (element.getAttribute("role") || "").toLowerCase();
+    const role = roleOf(element);
     const mainContent =
       element === document.documentElement ||
       element === document.body ||
@@ -214,7 +228,8 @@ const LAYERS_SCRIPT = `(gridSize) => {
       position: style.position,
       pointerEvents: style.pointerEvents,
       zIndex: style.zIndex,
-      ariaModal: element.getAttribute("aria-modal") === "true",
+      ariaModal: element.getAttribute("aria-modal") === "true" || matches(element, ":modal"),
+      topLayer: matches(element, ":modal") || matches(element, ":popover-open"),
       overContent,
       mainContent,
       empty: element.childElementCount === 0 && !collapse(element.textContent),
@@ -249,6 +264,8 @@ const isBlocking = (candidate: LayerCandidate) => {
     return !candidate.mainContent && isConsentBar(candidate);
   if (candidate.role === "dialog") return true;
   if (candidate.mainContent) return false;
+  // Nothing on the page can stack above the top layer, whatever lies beneath it.
+  if (candidate.topLayer === true) return true;
   // A scrim holds nothing itself, so it blocks even where the page beneath it is blank.
   if (!candidate.overContent)
     return candidate.empty && candidate.position === "fixed" && candidate.zIndex !== "auto";
@@ -293,8 +310,33 @@ const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
   target.evaluate(`(${LAYERS_SCRIPT})(${grid})`) as Promise<Sampled>;
 
 /**
+ * The part of the viewport a frame shows, clipped by every frame around it: a nested frame's own
+ * box can be far larger than the window its parent gives it. Null when it cannot be measured.
+ */
+const visibleArea = async (frame: Frame, viewport: Sampled["viewport"]) => {
+  let left = 0;
+  let top = 0;
+  let right = viewport.width;
+  let bottom = viewport.height;
+  for (let current: Frame | null = frame; current?.parentFrame();) {
+    const box = await current
+      .frameElement()
+      .then((element) => element.boundingBox())
+      .catch(() => null);
+    if (box === null) return null;
+    left = Math.max(left, box.x);
+    top = Math.max(top, box.y);
+    right = Math.min(right, box.x + box.width);
+    bottom = Math.min(bottom, box.y + box.height);
+    current = current.parentFrame();
+  }
+  return Math.max(0, right - left) * Math.max(0, bottom - top);
+};
+
+/**
  * A modal inside an iframe blocks that frame's part of the page. Only modals count there, so a
- * frame's own header or full-frame app root never reads as blocking the page.
+ * frame's own header or full-frame app root never reads as blocking the page, and a frame out of
+ * sight blocks nothing.
  */
 const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["viewport"]) => {
   if (typeof page.frames !== "function" || typeof page.mainFrame !== "function") return [];
@@ -305,15 +347,12 @@ const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["vi
       .frames()
       .filter((frame) => frame !== main)
       .map(async (frame) => {
-        const [sampled, box] = await Promise.all([
+        const [sampled, visible] = await Promise.all([
           sampleIn(frame, grid).catch(() => null),
-          frame
-            .frameElement()
-            .then((element) => element.boundingBox())
-            .catch(() => null),
+          visibleArea(frame, viewport),
         ]);
-        if (!sampled || !Array.isArray(sampled.candidates) || !box || area <= 0) return [];
-        const share = (box.width * box.height) / area;
+        if (!sampled || !Array.isArray(sampled.candidates) || !visible || area <= 0) return [];
+        const share = visible / area;
         return sampled.candidates.filter(isModal).map((candidate) => ({
           ...candidate,
           coverage: Math.min(1, candidate.coverage * share),

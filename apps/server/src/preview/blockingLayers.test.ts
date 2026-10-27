@@ -151,6 +151,69 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     );
   });
 
+  it("reports a native modal dialog and a full-screen popover, and not a small popover menu", async () => {
+    await page.setContent(
+      article + '<dialog id="confirm"><h2>Delete this draft?</h2><button>Delete</button></dialog>',
+    );
+    await page.evaluate("document.getElementById('confirm').showModal()");
+    const modal = await describeLayers(page, control);
+    expect(modal.blocking).toMatchObject({
+      role: "dialog",
+      name: "Delete this draft?",
+      selectorHint: "#confirm",
+    });
+
+    await page.setContent(
+      article +
+        '<div popover id="promo" style="inset:0;width:100vw;height:100vh;margin:0;border:0;background:#fff"><h2>Subscribe for more</h2></div>',
+    );
+    await page.evaluate("document.getElementById('promo').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toMatchObject({
+      name: "Subscribe for more",
+      selectorHint: "#promo",
+    });
+
+    await page.setContent(
+      article +
+        '<div popover id="menu" style="width:160px;height:120px"><button>Copy</button></div>',
+    );
+    await page.evaluate("document.getElementById('menu').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toBeNull();
+  });
+
+  it("scales a nested frame's modal by what its ancestors leave visible, and skips one off screen", async () => {
+    const wall =
+      '<div role="dialog" aria-modal="true" aria-label="Framed wall" style="position:fixed;inset:0;background:#fff">Sign in</div>';
+    await page.route("https://layers.test/inner", (route) =>
+      route.fulfill({ contentType: "text/html", body: wall }),
+    );
+    await page.route("https://layers.test/outer", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://layers.test/inner" style="border:0;width:800px;height:800px"></iframe></body>',
+      }),
+    );
+    const framed = async (style: string) => {
+      await page.route("https://layers.test/", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body:
+            article +
+            `<iframe id="outer" src="https://layers.test/outer" style="position:absolute;border:0;${style}"></iframe>`,
+        }),
+      );
+      await page.goto("https://layers.test/");
+      await page.frameLocator("#outer").frameLocator("iframe").getByText("Sign in").waitFor();
+      await page.unroute("https://layers.test/");
+      return describeLayers(page, control);
+    };
+    const clipped = await framed("left:0;top:0;width:100px;height:100px");
+    expect(clipped.blocking?.name).toBe("Framed wall");
+    // 100 x 100 of a 1000 x 800 viewport, though the inner frame itself is 800 x 800.
+    expect(clipped.blocking?.coverage).toBeLessThan(0.02);
+    expect((await framed("left:-2000px;top:0;width:100px;height:100px")).blocking).toBeNull();
+  });
+
   it("finds an overlay that lives inside an open shadow root", async () => {
     await page.setContent(article + '<x-wall id="host"></x-wall>');
     await page.evaluate(`
