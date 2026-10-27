@@ -63,6 +63,8 @@ export interface ChildState {
   role: "standalone" | "client";
   linkId: string;
   listener: string;
+  /** The local OpenCodex listener's port, which the bootstrap instance routes to. */
+  port: number;
   binary: { path: string; version: string } | undefined;
   localCredentials: { count: number; generation: string } | undefined;
   /** OpenCodex's link connection generation; undefined for a release that does not report it. */
@@ -87,7 +89,7 @@ const snapshotOf = (state: ChildState): OpenCodexInventorySnapshot => ({
   ownership: state.binary === undefined ? "none" : "managed",
   service: { available: true },
   runtime: {
-    port: 10100,
+    port: state.port,
     healthy: state.binary !== undefined,
     ready: true,
     role: state.role,
@@ -116,6 +118,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     role: "client",
     linkId: "link-1",
     listener: "listener-1",
+    port: 10100,
     binary: { path: "/fixture/ocx", version: "2.92.0" },
     localCredentials: { count: 0, generation: "gen-1" },
     connectionGeneration: "connection-1",

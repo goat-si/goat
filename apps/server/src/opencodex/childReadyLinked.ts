@@ -200,9 +200,9 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
 
     /**
      * The stored bootstrap instance as this Home owns it. A missing one after ownership is the
-     * user's deletion and is never recreated; an existing one is adopted only when it is exactly
-     * the candidate recorded before the settings commit (a crash between commit and journal).
-     * Anything else is the user's change.
+     * user's deletion and is never recreated. An existing one is adopted only when it is exactly
+     * the candidate recorded before a settings commit whose journal write was lost, whether that
+     * commit created the instance or updated the owned one. Anything else is the user's change.
      */
     const claimOwnership = Effect.fn("OpenCodexChildReady.claimOwnership")(function* (
       home: EnvironmentId,
@@ -219,11 +219,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       const fingerprint = CodexRoute.instanceFingerprint(current);
       if (operation !== undefined && fingerprint === operation.ownedFingerprint)
         return { operation, expected: operation.ownedInstance ?? current };
-      if (
-        operation !== undefined &&
-        operation.ownedFingerprint === undefined &&
-        fingerprint === operation.desiredFingerprint
-      ) {
+      if (operation !== undefined && fingerprint === operation.desiredFingerprint) {
         const adopted = { ...operation, ownedFingerprint: fingerprint, ownedInstance: current };
         yield* journal.put(home, adopted).pipe(storage(step));
         return { operation: adopted, expected: current };
