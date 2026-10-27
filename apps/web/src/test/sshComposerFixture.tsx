@@ -57,57 +57,20 @@ vi.mock("/src/components/ui/toast", () => ({
   toastManager: { add: state.toast },
   stackedThreadToast: (v: unknown) => v,
 }));
-vi.mock("@tanstack/react-router", async (original) => ({
-  ...(await original<typeof import("@tanstack/react-router")>()),
-  useRouter: () => ({ latestLocation: { pathname: "/", state: {} } }),
-  useNavigate: () => state.navigate,
-  useLocation: ({ select }: { select: (v: unknown) => unknown }) =>
-    select({ href: "/", state: {} }),
-  useParams: () => ({}),
-}));
-vi.mock("/src/hooks/useSettings", async (original) => ({
-  ...(await original<typeof import("~/hooks/useSettings")>()),
-  useEnvironmentSettings: () => ({
-    ...DEFAULT_SERVER_SETTINGS,
-    ...DEFAULT_CLIENT_SETTINGS,
-    ...(state.data!.realComposer
-      ? { providerInstances: { antigravity: { driver: "antigravity", enabled: true } } }
-      : {}),
-  }),
-  useEnvironmentIdentificationMode: () => "none",
-  useClientSettings: (select?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
-    select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS,
-  useClientSettingsHydrated: () => true,
-}));
+vi.mock("@tanstack/react-router", { spy: true });
+vi.mock("/src/hooks/useSettings", { spy: true });
+vi.mock("/src/hooks/useTheme", { spy: true });
+vi.mock("/src/hooks/useThreadActions", { spy: true });
+vi.mock("/src/state/session", { spy: true });
+vi.mock("/src/state/query", { spy: true });
+vi.mock("/src/state/terminalSessions", { spy: true });
+vi.mock("/src/state/projectClones", { spy: true });
+vi.mock("/src/state/device", { spy: true });
+vi.mock("/src/state/environments", { spy: true });
+vi.mock("/src/state/entities", { spy: true });
 vi.mock("/src/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
-vi.mock("/src/hooks/useTheme", async (original) => ({
-  ...(await original<typeof import("~/hooks/useTheme")>()),
-  useTheme: () => ({ resolvedTheme: "light" }),
-  useRenderedAppearance: () => "light",
-}));
 vi.mock("/src/hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
 vi.mock("/src/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
-vi.mock("/src/hooks/useThreadActions", async (original) => ({
-  ...(await original<typeof import("~/hooks/useThreadActions")>()),
-  useThreadActions: () => ({}),
-  useAcknowledgeThreadWoke: () => vi.fn(),
-}));
-vi.mock("/src/state/session", async (original) => ({
-  ...(await original<typeof import("~/state/session")>()),
-  useEnvironmentScope: () => true,
-  readEnvironmentScope: () => true,
-  readPreparedConnection: () => Option.none(),
-}));
-vi.mock("/src/state/query", async (original) => ({
-  ...(await original<typeof import("~/state/query")>()),
-  useEnvironmentQuery: (atom: unknown) => ({
-    data: state.queryData?.(atom) ?? null,
-    isPending: false,
-    isSuccess: true,
-    error: null,
-    refresh: () => {},
-  }),
-}));
 vi.mock("/src/state/use-orchestration-command", () => ({
   useOrchestrationCommand: () => state.normal,
 }));
@@ -120,64 +83,13 @@ vi.mock("/src/state/use-atom-command", () => ({
         ? state.retry
         : state.noopCommand,
 }));
-vi.mock("/src/state/terminalSessions", async (original) => ({
-  ...(await original<typeof import("~/state/terminalSessions")>()),
-  useKnownTerminalSessions: () => null,
-  useThreadRunningTerminalIds: () => [],
-}));
-vi.mock("/src/state/projectClones", async (original) => ({
-  ...(await original<typeof import("~/state/projectClones")>()),
-  useProjectClone: () => null,
-}));
-vi.mock("/src/state/device", async (original) => ({
-  ...(await original<typeof import("~/state/device")>()),
-  useDeviceState: () => ({
-    state: { onboardingCompleted: false, hosts: [], sessions: {} },
-    isReady: true,
-  }),
-}));
-vi.mock("/src/state/environments", async (original) => ({
-  ...(await original<typeof import("~/state/environments")>()),
-  useEnvironments: () => ({
-    environments: [
-      state.primaryConnection
-        ? { ...state.data!.primary, connection: state.primaryConnection }
-        : state.data!.primary,
-    ],
-  }),
-  usePrimaryEnvironment: () => state.data!.primary,
-  usePrimaryEnvironmentId: () => local,
-  useEnvironment: () => state.data!.primary,
-  useEnvironmentProviders: () =>
-    new Map([[local, state.data!.primary.serverConfig?.providers ?? []]]),
-}));
-vi.mock("/src/state/entities", async (original) => ({
-  ...(await original<typeof import("~/state/entities")>()),
-  useProject: () => state.data!.project,
-  useProjects: () => [state.data!.project],
-  useThreadShell: () => null,
-  useThreadProjection: () => null,
-  useThreadStatus: () => null,
-  useThreadHistory: () => ({ hasMoreHistory: false }),
-  useThreadVisibleTurnItems: () => state.empty,
-  useThreadCheckpointSummaries: () => state.empty,
-  useThreadRefs: () => state.empty,
-  useEnvironmentThreadRefs: () => state.empty,
-  useChildThreadInputs: () => state.empty,
-  useEnvironmentSupportsServerBrowser: () => false,
-  resolveThreadDetailRef: () => null,
-  waitForThreadShell: state.shell,
-}));
 vi.mock("/src/hooks/useLoadBalancedEnvironment", () => ({
   useLoadBalancedEnvironment: () => ({ refresh: () => {}, pending: false, environmentId: null }),
 }));
 vi.mock("/src/hooks/useScratchProject", () => ({
   useScratchProject: () => ({ scratchWorkspaceRootFor: () => null, openScratchProject: vi.fn() }),
 }));
-vi.mock("/src/remoteOpen", async (original) => ({
-  ...(await original<typeof import("~/remoteOpen")>()),
-  useRemoteOpenState: () => ({}),
-}));
+vi.mock("/src/remoteOpen", { spy: true });
 vi.mock("/src/components/chat/useAutoBalanceUpdateBanner", () => ({
   useAutoBalanceUpdateBanner: () => null,
 }));
@@ -199,21 +111,7 @@ vi.mock("/src/components/ui/sidebar", () => ({
   useSidebar: () => ({ state: "expanded", isMobile: false }),
   SidebarInset: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
-// Browser mocks snapshot exports; forward method reads to the registry under test.
-vi.mock("/src/rpc/atomRegistry", async (original) => {
-  const actual = await original<typeof import("~/rpc/atomRegistry")>();
-  state.registry = actual.appAtomRegistry;
-  return {
-    ...actual,
-    appAtomRegistry: new Proxy(actual.appAtomRegistry, {
-      get: (_target, key) => {
-        const value = Reflect.get(state.registry!, key);
-        return typeof value === "function" ? value.bind(state.registry) : value;
-      },
-    }),
-  };
-});
-import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
+import { AppAtomRegistryProvider, appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { vcsEnvironment } from "~/state/vcs";
 import {
@@ -221,20 +119,105 @@ import {
   primaryServerKeybindingsAtom,
   environmentServerConfigsAtom,
 } from "~/state/server";
-vi.mock("@effect/atom-react", async (original) => {
-  const actual = await original<typeof import("@effect/atom-react")>();
-  return {
-    ...actual,
-    useAtomValue: (atom: Atom.Atom<unknown>) => {
-      if (atom === environmentCatalog.catalogValueAtom) return state.data!.catalog;
-      if (atom === primaryServerAvailableEditorsAtom) return [];
-      if (atom === primaryServerKeybindingsAtom) return DEFAULT_RESOLVED_KEYBINDINGS;
-      if (atom === environmentServerConfigsAtom) return new Map();
-      if (atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)) return true;
-      return actual.useAtomValue(atom);
-    },
-  };
-});
+import * as router from "@tanstack/react-router";
+import * as settings from "~/hooks/useSettings";
+import * as theme from "~/hooks/useTheme";
+import * as threadActions from "~/hooks/useThreadActions";
+import * as session from "~/state/session";
+import * as query from "~/state/query";
+import * as terminalSessions from "~/state/terminalSessions";
+import * as projectClones from "~/state/projectClones";
+import * as device from "~/state/device";
+import * as environments from "~/state/environments";
+import * as entities from "~/state/entities";
+import * as remoteOpen from "~/remoteOpen";
+state.registry = appAtomRegistry;
+// Store snapshots must be stable, or useSyncExternalStore re-renders forever.
+const noEditors: never[] = [];
+const noServerConfigs = new Map();
+// Spy-mode mocks keep the real modules; these overrides replace only what the fixture controls.
+function overrideModuleSpies() {
+  vi.mocked(router.useRouter).mockReturnValue({
+    latestLocation: { pathname: "/", state: {} },
+  } as never);
+  vi.mocked(router.useNavigate).mockReturnValue(state.navigate);
+  vi.mocked(router.useLocation).mockImplementation((({
+    select,
+  }: {
+    select: (v: unknown) => unknown;
+  }) => select({ href: "/", state: {} })) as never);
+  vi.mocked(router.useParams).mockReturnValue({} as never);
+  vi.mocked(settings.useEnvironmentSettings).mockImplementation(
+    () =>
+      ({
+        ...DEFAULT_SERVER_SETTINGS,
+        ...DEFAULT_CLIENT_SETTINGS,
+        ...(state.data!.realComposer
+          ? { providerInstances: { antigravity: { driver: "antigravity", enabled: true } } }
+          : {}),
+      }) as never,
+  );
+  vi.mocked(settings.useEnvironmentIdentificationMode).mockReturnValue("none" as never);
+  vi.mocked(settings.useClientSettings).mockImplementation(((
+    select?: (value: typeof DEFAULT_CLIENT_SETTINGS) => unknown,
+  ) => (select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS)) as never);
+  vi.mocked(settings.useClientSettingsHydrated).mockReturnValue(true);
+  vi.mocked(theme.useTheme).mockReturnValue({ resolvedTheme: "light" } as never);
+  vi.mocked(theme.useRenderedAppearance).mockReturnValue("light" as never);
+  vi.mocked(threadActions.useThreadActions).mockReturnValue({} as never);
+  vi.mocked(threadActions.useAcknowledgeThreadWoke).mockReturnValue(vi.fn() as never);
+  vi.mocked(session.useEnvironmentScope).mockReturnValue(true as never);
+  vi.mocked(session.readEnvironmentScope).mockReturnValue(true as never);
+  vi.mocked(session.readPreparedConnection).mockReturnValue(Option.none() as never);
+  vi.mocked(query.useEnvironmentQuery).mockImplementation(((atom: unknown) => ({
+    data: state.queryData?.(atom) ?? null,
+    isPending: false,
+    isSuccess: true,
+    error: null,
+    refresh: () => {},
+  })) as never);
+  vi.mocked(terminalSessions.useKnownTerminalSessions).mockReturnValue(null as never);
+  vi.mocked(terminalSessions.useThreadRunningTerminalIds).mockReturnValue([] as never);
+  vi.mocked(projectClones.useProjectClone).mockReturnValue(null as never);
+  vi.mocked(device.useDeviceState).mockReturnValue({
+    state: { onboardingCompleted: false, hosts: [], sessions: {} },
+    isReady: true,
+  } as never);
+  vi.mocked(environments.useEnvironments).mockImplementation(
+    () =>
+      ({
+        environments: [
+          state.primaryConnection
+            ? { ...state.data!.primary, connection: state.primaryConnection }
+            : state.data!.primary,
+        ],
+      }) as never,
+  );
+  vi.mocked(environments.usePrimaryEnvironment).mockImplementation(
+    () => state.data!.primary as never,
+  );
+  vi.mocked(environments.usePrimaryEnvironmentId).mockReturnValue(local as never);
+  vi.mocked(environments.useEnvironment).mockImplementation(() => state.data!.primary as never);
+  vi.mocked(environments.useEnvironmentProviders).mockImplementation(
+    () => new Map([[local, state.data!.primary.serverConfig?.providers ?? []]]) as never,
+  );
+  vi.mocked(entities.useProject).mockImplementation(() => state.data!.project as never);
+  vi.mocked(entities.useProjects).mockImplementation(() => [state.data!.project] as never);
+  vi.mocked(entities.useThreadShell).mockReturnValue(null as never);
+  vi.mocked(entities.useThreadProjection).mockReturnValue(null as never);
+  vi.mocked(entities.useThreadStatus).mockReturnValue(null as never);
+  vi.mocked(entities.useThreadHistory).mockReturnValue({ hasMoreHistory: false } as never);
+  vi.mocked(entities.useThreadVisibleTurnItems).mockReturnValue(state.empty);
+  vi.mocked(entities.useThreadCheckpointSummaries).mockReturnValue(state.empty);
+  vi.mocked(entities.useThreadRefs).mockReturnValue(state.empty);
+  vi.mocked(entities.useEnvironmentThreadRefs).mockReturnValue(state.empty);
+  vi.mocked(entities.useChildThreadInputs).mockReturnValue(state.empty);
+  vi.mocked(entities.useEnvironmentSupportsServerBrowser).mockReturnValue(false);
+  vi.mocked(entities.resolveThreadDetailRef).mockReturnValue(null as never);
+  vi.mocked(entities.waitForThreadShell).mockImplementation(((...args: unknown[]) =>
+    state.shell(...args)) as never);
+  vi.mocked(remoteOpen.useRemoteOpenState).mockReturnValue({} as never);
+}
 // Loaded here, after the mocks above and outside any test, so the first test does not spend its
 // timeout importing the chat view graph on a busy CI runner.
 const { ThreadRouteView } = await import("~/components/ThreadRouteView");
@@ -329,6 +312,7 @@ export async function setupSshComposer(realComposer = false) {
     vi.unstubAllGlobals();
   });
   const { selection, project, primary } = (state.data = createSshData(realComposer));
+  overrideModuleSpies();
   state.primaryConnection = null;
   state.queryData = null;
   state.noopCommand.mockReset().mockResolvedValue({ _tag: "Success", value: { providers: [] } });
@@ -399,7 +383,13 @@ export async function setupSshComposer(realComposer = false) {
       ? state.data!.catalog
       : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
         ? true
-        : get(atom)) as typeof registry.get);
+        : atom === primaryServerAvailableEditorsAtom
+          ? noEditors
+          : atom === primaryServerKeybindingsAtom
+            ? DEFAULT_RESOLVED_KEYBINDINGS
+            : atom === environmentServerConfigsAtom
+              ? noServerConfigs
+              : get(atom)) as typeof registry.get);
   // This fixture supplies navigation directly; the router would add an unrelated route context.
   const screen = stack.use(await render(<div />, { router: false }));
   stack.defer(() => act(() => state.composer?.onMultipleModelSelectionsChange(null)));
