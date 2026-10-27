@@ -9,14 +9,8 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import {
-  GET_TRAY_ICON_ENABLED_CHANNEL,
-  SET_TRAY_ICON_ENABLED_CHANNEL,
-  SET_TRAY_MENU_CHANNEL,
-  TRAY_ACTION_CHANNEL,
-} from "../ipc/channels.ts";
+import { SET_TRAY_MENU_CHANNEL, TRAY_ACTION_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
-import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import {
   trayMenuTemplate,
@@ -68,7 +62,6 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
-  const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const desktopState = yield* DesktopState.DesktopState;
   const { platform, displayName } = environment;
   const nativeHeaders = platform === "darwin" && macOSMajor() >= 14;
@@ -153,7 +146,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
     tray = null;
   };
   yield* Effect.addFinalizer(() => Effect.sync(hideIcon));
-  if ((yield* appSettings.get).trayIconEnabled) showIcon();
+  showIcon();
 
   // The lifecycle cancels the first before-quit while backends stop; only the one it lets through
   // is the real quit.
@@ -213,33 +206,6 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
           if (window !== null) keepWhenClosed(window);
           listen(sender);
         }),
-    }),
-  );
-  yield* ipc.handleSync(
-    DesktopIpc.makeSyncIpcMethod({
-      channel: GET_TRAY_ICON_ENABLED_CHANNEL,
-      result: Schema.Boolean,
-      handler: () => appSettings.get.pipe(Effect.map((settings) => settings.trayIconEnabled)),
-    }),
-  );
-  yield* ipc.handle(
-    DesktopIpc.makeIpcMethod({
-      channel: SET_TRAY_ICON_ENABLED_CHANNEL,
-      payload: Schema.Boolean,
-      result: Schema.Void,
-      handler: Effect.fn("desktop.tray.setIconEnabled")(function* (enabled) {
-        yield* appSettings.setTrayIconEnabled(enabled);
-        if (enabled) {
-          showIcon();
-          return;
-        }
-        hideIcon();
-        // A window closed to the tray while this saved would have no way back.
-        const hidden = [...closingWindows].some(
-          (id) => Electron.BrowserWindow.fromId(id)?.isVisible() === false,
-        );
-        if (hidden) yield* desktopWindow.activate;
-      }),
     }),
   );
 });

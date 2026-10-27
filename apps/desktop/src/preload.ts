@@ -139,10 +139,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.TRAY_ACTION_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.TRAY_ACTION_CHANNEL, handler);
   },
-  getTrayIconEnabled: () =>
-    ipcRenderer.sendSync(IpcChannels.GET_TRAY_ICON_ENABLED_CHANNEL) !== false,
-  setTrayIconEnabled: (enabled) =>
-    ipcRenderer.invoke(IpcChannels.SET_TRAY_ICON_ENABLED_CHANNEL, enabled),
   onTrackpadScrollEnd: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);

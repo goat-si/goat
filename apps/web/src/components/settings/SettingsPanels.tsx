@@ -25,7 +25,7 @@ import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { APP_VERSION } from "../../branding";
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
-import { DesktopAppSettingsRows } from "./DesktopAppSettingsRows";
+import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
   canCheckForUpdate,
@@ -415,7 +415,7 @@ function AboutVersionSection() {
         />
       ) : null}
       {showNightlyMobileBeta ? <NightlyMobileBetaRow /> : null}
-      {hasDesktopBridge ? <DesktopAppSettingsRows /> : null}
+      {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
     </>
   );
 }

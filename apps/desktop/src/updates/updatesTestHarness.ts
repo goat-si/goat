@@ -268,7 +268,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
     setHeadlessServerAttachEnabled: () => Effect.die("unexpected headless server toggle"),
-    setTrayIconEnabled: () => Effect.die("unexpected tray icon toggle"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),

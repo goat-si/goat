@@ -21,6 +21,4 @@ type DesktopTrayAction =
 export interface DesktopTrayBridge {
   setTrayMenu?: (menu: DesktopTrayMenu) => Promise<void>;
   onTrayAction?: (listener: (action: DesktopTrayAction) => void) => () => void;
-  getTrayIconEnabled?: () => boolean;
-  setTrayIconEnabled?: (enabled: boolean) => Promise<void>;
 }

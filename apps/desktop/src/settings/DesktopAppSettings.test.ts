@@ -32,7 +32,6 @@ const DesktopSettingsPatch = Schema.Struct({
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
-  trayIconEnabled: Schema.optionalKey(Schema.Boolean),
   updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
   pendingUpdate: Schema.optionalKey(DesktopUpdatePendingRecordSchema),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
@@ -107,26 +106,6 @@ describe("DesktopSettings", () => {
         assert.isTrue((yield* settings.load).previewSessionStackPoppedOut);
         yield* settings.setPreviewSessionStackPoppedOut(false);
         assert.isFalse((yield* settings.load).previewSessionStackPoppedOut);
-      }),
-    ),
-  );
-  it.effect("keeps the tray icon on until turned off, and writes only the off state", () =>
-    withSettings(
-      Effect.gen(function* () {
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const settings = yield* DesktopAppSettings.DesktopAppSettings;
-        assert.isTrue((yield* settings.load).trayIconEnabled);
-        yield* settings.setTrayIconEnabled(false);
-        assert.isFalse((yield* settings.load).trayIconEnabled);
-        assert.deepEqual(
-          yield* decodeDesktopSettingsPatch(
-            yield* fileSystem.readFileString(environment.desktopSettingsPath),
-          ),
-          { trayIconEnabled: false },
-        );
-        yield* settings.setTrayIconEnabled(true);
-        assert.isTrue((yield* settings.load).trayIconEnabled);
       }),
     ),
   );
@@ -253,7 +232,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
-          trayIconEnabled: true,
           updateInstallPolicy: "restart-when-idle",
           pendingUpdate: null,
           updateChannel: "latest",
@@ -355,7 +333,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          trayIconEnabled: true,
           updateInstallPolicy: "restart-when-idle",
           pendingUpdate: null,
           updateChannel: "nightly",
@@ -391,7 +368,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          trayIconEnabled: true,
           updateInstallPolicy: "restart-when-idle",
           pendingUpdate: null,
           updateChannel: "latest",
