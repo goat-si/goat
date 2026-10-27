@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { driverExitReason } from "./ComputerUseDriverExit.ts";
-import { driverOutcomeSafety, markUnverified } from "./ComputerUseDriverOutcome.ts";
+import { captureStalled, driverOutcomeSafety, markUnverified } from "./ComputerUseDriverOutcome.ts";
 
 const reply = (structuredContent: unknown, isError = true) =>
   JSON.stringify({
@@ -234,6 +234,46 @@ describe("every driver answer maps onto the shared outcome contract", () => {
     assert.equal(
       answer({ effect: "unverifiable", ax_changed: false }, false).writeStatus,
       "may_have_applied",
+    );
+  });
+});
+
+describe("a stalled native capture is read from the driver's error, never from window text", () => {
+  const stall =
+    "capture_backend_stalled: 2 earlier native captures never completed, so native capture is off for this driver process; restart the driver";
+  const line = (result: unknown) => JSON.stringify({ jsonrpc: "2.0", id: 7, result });
+  it("a window that only shows the word is no stall", () => {
+    const shown = { type: "text", text: '- [4] AXStaticText "capture_backend_stalled"' };
+    assert.isFalse(
+      captureStalled(line({ content: [shown], structuredContent: { tree_markdown: shown.text } })),
+    );
+    // An error that quotes window text is not the driver's stall message either.
+    assert.isFalse(
+      captureStalled(
+        line({
+          isError: true,
+          content: [{ type: "text", text: "AX error near capture_backend_stalled" }],
+        }),
+      ),
+    );
+  });
+  it("the driver's stall message or code is a stall", () => {
+    assert.isTrue(
+      captureStalled(line({ isError: true, content: [{ type: "text", text: stall }] })),
+    );
+    assert.isTrue(
+      captureStalled(
+        line({
+          isError: true,
+          content: [],
+          structuredContent: { code: "px_capture_unavailable", reason: stall },
+        }),
+      ),
+    );
+    assert.isTrue(
+      captureStalled(
+        JSON.stringify({ jsonrpc: "2.0", id: 7, error: { code: -32000, message: stall } }),
+      ),
     );
   });
 });

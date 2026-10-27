@@ -17,8 +17,36 @@ import { READ_ONLY_TOOLS } from "./ComputerUseLeaseMessages.ts";
 
 export { driverExitReason } from "./ComputerUseDriverExit.ts";
 
-/** Whether a driver reply says its native screen capture is stuck until the driver restarts. */
-export const captureStalled = (line: string): boolean => line.includes("capture_backend_stalled");
+const STALL_CODE = "capture_backend_stalled";
+// The driver's refusal once native capture is off (cua-driver platform-macos capture.rs).
+const STALL_MESSAGE = /capture_backend_stalled: \d+ earlier native captures never completed/u;
+
+/**
+ * Whether a driver reply says its native screen capture is stuck until the driver restarts. Only
+ * an error's code, reason or message counts: a window can show the word in its own text.
+ */
+export const captureStalled = (line: string): boolean => {
+  if (!line.includes(STALL_CODE)) return false;
+  let message: unknown;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  if (!isRecord(message)) return false;
+  const error = isRecord(message.error) ? message.error : undefined;
+  const result = isRecord(message.result) ? message.result : undefined;
+  if (error === undefined && result?.isError !== true) return false;
+  const structured = error?.data ?? result?.structuredContent;
+  const fields = isRecord(structured) ? structured : {};
+  if (fields.code === STALL_CODE) return true;
+  const content = Array.isArray(result?.content) ? result.content : [];
+  return [
+    fields.reason,
+    error?.message,
+    ...content.map((block) => isRecord(block) && block.text),
+  ].some((text) => typeof text === "string" && STALL_MESSAGE.test(text));
+};
 
 const UNVERIFIED_INPUT_NOTE =
   "GOAT: this input was already sent when the driver reported the error, so it may have acted. Do not resend it unchanged; observe the window before retrying.";

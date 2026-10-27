@@ -103,12 +103,62 @@ const textOf = (result: Readonly<Record<string, unknown>> | undefined) =>
     .map((block) => String(block?.text))
     .join("\n");
 
+/** A tree row's [N] index and indentation, in reading order. */
+type Row = { readonly index: number; readonly indent: number };
+
+const ROW = /^( *)- \[(\d+)\]/u;
+
+/** The rows of a tree read's reply, as the driver renders them. */
+function rowsOf(line: string): ReadonlyArray<Row> {
+  const rows: Array<Row> = [];
+  for (const text of textOf(record(parse(line)?.result)).split("\n")) {
+    const match = ROW.exec(text);
+    if (match?.[1] !== undefined && match[2] !== undefined)
+      rows.push({ index: Number(match[2]), indent: match[1].length });
+  }
+  return rows;
+}
+
+/** Rows indexed [start, end] around a target: its parent's subtree, siblings included. */
+type Neighbourhood = { readonly start: number; readonly end: number };
+
+/** Where in the read a change would show the input landed, or undefined when unknown. */
+function neighbourhood(rows: ReadonlyArray<Row>, target: number): Neighbourhood | undefined {
+  const at = rows.findIndex((row) => row.index === target);
+  const row = rows[at];
+  if (row === undefined) return undefined;
+  let parent = at - 1;
+  while (parent >= 0 && (rows[parent]?.indent ?? 0) >= row.indent) parent--;
+  const floor = parent >= 0 ? (rows[parent]?.indent ?? -1) : -1;
+  let last = at;
+  while (last + 1 < rows.length && (rows[last + 1]?.indent ?? -1) > floor) last++;
+  return { start: rows[Math.max(parent, 0)]?.index ?? target, end: rows[last]?.index ?? target };
+}
+
+/** The element an input names, by token of the baseline snapshot or by index. */
+function targetIndex(args: unknown, snapshotId: string | undefined): number | undefined {
+  const given = record(args);
+  if (typeof given?.element_index === "number") return given.element_index;
+  const token = typeof given?.element_token === "string" ? given.element_token : undefined;
+  const match = token === undefined ? undefined : /^(.+):(\d+)$/u.exec(token);
+  return match?.[2] !== undefined && match[1] === snapshotId ? Number(match[2]) : undefined;
+}
+
+/** Whether a diff's +, ~ or - rows touch the neighbourhood. */
+const touches = (diffText: string, around: Neighbourhood | undefined) =>
+  around !== undefined &&
+  diffText.split("\n").some((text) => {
+    const index = /^[+~-] \[(\d+)\]/u.exec(text)?.[1];
+    return index !== undefined && Number(index) >= around.start && Number(index) <= around.end;
+  });
+
 /**
  * The input's answer with the diff read's outcome added, or the answer unchanged when the read
- * failed. Only "diff" and "too_much_changed" confirm; "no_change" says nothing moved in the tree;
- * a fallback full read only names the new snapshot.
+ * failed. Only a "diff" whose rows touch the target's neighbourhood confirms: a clock or spinner
+ * elsewhere changes the tree too. "no_change" says nothing moved; a fallback full read, or most of
+ * the tree changing, only names the new snapshot.
  */
-function withTreeDiff(line: string, diff: unknown): string {
+function withTreeDiff(line: string, diff: unknown, around: Neighbourhood | undefined): string {
   const message = parse(line);
   const result = record(message?.result);
   const diffResult = record(record(diff)?.result);
@@ -118,18 +168,21 @@ function withTreeDiff(line: string, diff: unknown): string {
   const status = diffStructured.since_status;
   const snapshotId = diffStructured.snapshot_id;
   if (typeof snapshotId !== "string") return line;
-  const changed = status === "diff" || status === "too_much_changed";
+  const treeChanged = status === "diff" || status === "too_much_changed";
   const unchanged = status === "no_change";
   const structured = record(result.structuredContent) ?? {};
   let diffText = textOf(diffResult);
+  const changed = status === "diff" && touches(diffText, around);
   if (diffText.length > MAX_DIFF_CHARS)
     diffText =
       diffText.slice(0, MAX_DIFF_CHARS) + "\n… (diff cut short; read the window for the rest)";
   const lead = changed
-    ? "GOAT re-read the window after this input and its accessibility tree changed, so the input landed."
-    : unchanged
-      ? "GOAT re-read the window after this input and its accessibility tree did not change. The input may still have changed only pixels; check a screenshot before resending."
-      : "GOAT re-read the window after this input as a full read.";
+    ? "GOAT re-read the window after this input and the accessibility tree around its target changed, so the input landed."
+    : treeChanged
+      ? "GOAT re-read the window after this input; its accessibility tree changed, but not where GOAT could tie it to this input's target, so it may or may not have landed. Check the target before resending."
+      : unchanged
+        ? "GOAT re-read the window after this input and its accessibility tree did not change. The input may still have changed only pixels; check a screenshot before resending."
+        : "GOAT re-read the window after this input as a full read.";
   const note = `${lead} The window's snapshot is now ${snapshotId}: earlier element tokens are stale, use ${snapshotId}:N.`;
   const content = Array.isArray(result.content) ? result.content : [];
   const verified = {
@@ -143,7 +196,7 @@ function withTreeDiff(line: string, diff: unknown): string {
       structuredContent: {
         ...structured,
         ...(changed ? { effect: "confirmed", verified: true, verified_by: "goat_ax_diff" } : {}),
-        ...(changed || unchanged ? { ax_changed: changed } : {}),
+        ...(treeChanged || unchanged ? { ax_changed: treeChanged } : {}),
         snapshot_id: snapshotId,
         since_status: status,
       },
@@ -175,7 +228,15 @@ export const makeInputVerifier = (input: {
   readonly live: (child: Running) => boolean;
 }) => {
   /** Each window's last tree read, with the driver child that holds its snapshot. */
-  const reads = new Map<number, { readonly read: TreeRead; readonly child: Running }>();
+  const reads = new Map<
+    number,
+    {
+      readonly read: TreeRead;
+      readonly child: Running;
+      readonly rows: ReadonlyArray<Row>;
+      readonly snapshotId: string | undefined;
+    }
+  >();
   const ask = Effect.fn("ComputerUseInputVerify.ask")(function* (child: Running, read: TreeRead) {
     const id = input.nextId();
     const answered = yield* Deferred.make<Envelope | undefined>();
@@ -204,7 +265,17 @@ export const makeInputVerifier = (input: {
       if (treeRead !== undefined)
         return {
           answer: (line, status, context) => {
-            if (!replyFailed(line)) reads.set(treeRead.window_id, { read: treeRead, child });
+            if (!replyFailed(line)) {
+              const snapshotId = record(
+                record(parse(line)?.result)?.structuredContent,
+              )?.snapshot_id;
+              reads.set(treeRead.window_id, {
+                read: treeRead,
+                child,
+                rows: rowsOf(line),
+                snapshotId: typeof snapshotId === "string" ? snapshotId : undefined,
+              });
+            }
             return sink.answer(line, status, context);
           },
         };
@@ -215,10 +286,14 @@ export const makeInputVerifier = (input: {
           if (baseline?.child !== child || !replyUnverified(line) || !input.live(child))
             return sink.answer(line, status, context);
           return ask(child, baseline.read).pipe(
-            // A pause, end or dropped lease stream during the read-back withholds what it saw.
-            Effect.map((diff) =>
-              diff === undefined || !input.live(child) ? line : withTreeDiff(line, diff),
-            ),
+            Effect.map((diff) => {
+              // A pause, end or dropped lease stream during the read-back withholds what it saw.
+              if (diff === undefined || !input.live(child)) return line;
+              const target = targetIndex(message?.params?.arguments, baseline.snapshotId);
+              const around =
+                target === undefined ? undefined : neighbourhood(baseline.rows, target);
+              return withTreeDiff(line, diff, around);
+            }),
             Effect.catchCause(() => Effect.succeed(line)),
             Effect.flatMap((final) => sink.answer(final, status, context)),
             Effect.forkIn(input.scope),

@@ -35,6 +35,65 @@ const readThenClick = Effect.fn(function* () {
   return h;
 });
 
+const settingsTree = [
+  '- [0] AXWindow "Settings"',
+  '  - [1] AXGroup "Appearance"',
+  "    - [2] AXRadioButton (Light)",
+  "    - [3] AXRadioButton (Dark)",
+  '  - [4] AXStaticText "12:00"',
+].join("\n");
+
+const clickDarkThenDiff = Effect.fn(function* (since: object, diffText: string) {
+  const h = yield* harness({ verifyInputByTreeDiff: true });
+  yield* h.push(active());
+  yield* h.send(call(1, "get_window_state", { ...window, session: "s" }));
+  yield* h.nextToDriver;
+  yield* h.reply(result(1, { snapshot_id: "s1" }, settingsTree));
+  yield* h.nextToProvider;
+  yield* h.send(call(2, "click", { ...window, element_token: "s1:3" }));
+  yield* h.nextToDriver;
+  yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
+  const reread = yield* h.nextToDriver;
+  yield* h.reply(result(reread.id, since, diffText));
+  return ((yield* h.nextToProvider) as unknown as Answer).result;
+});
+
+describe("read-back confirms only a change around the element the input aimed at", () => {
+  it.effect("a clock that ticked elsewhere in the window is no confirmation", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "diff", snapshot_id: "s2" },
+        '~ [4] AXStaticText "12:01"',
+      );
+      assert.equal(answer.structuredContent.effect, "unverifiable");
+      assert.include(answer.content.at(-1)?.text ?? "", '~ [4] AXStaticText "12:01"');
+      assert.isTrue(
+        (answer.structuredContent.safety as { possibleCommit: boolean }).possibleCommit,
+      );
+    }),
+  );
+
+  it.effect("most of the tree changing says nothing about the target", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "too_much_changed", snapshot_id: "s2" },
+        "full read",
+      );
+      assert.equal(answer.structuredContent.effect, "unverifiable");
+    }),
+  );
+
+  it.effect("a sibling the click switched off confirms it", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "diff", snapshot_id: "s2" },
+        "~ [2] AXRadioButton (Light) unselected",
+      );
+      assert.equal(answer.structuredContent.effect, "confirmed");
+    }),
+  );
+});
+
 describe("read-back after input the driver could not verify", () => {
   it.effect(
     "drops a read-back that answers after the lease stream dropped, keeping the input's own answer",

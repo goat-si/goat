@@ -1,7 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The cases are MCP JSON-RPC lines.
 import { assert, describe, it } from "@effect/vitest";
 
-import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
+import { driverPressesKeypad, resolveKeyCall } from "./ComputerUseKeyNames.ts";
 
 const call = (name: string, args: Record<string, unknown>) =>
   JSON.stringify({
@@ -79,5 +79,46 @@ describe("key names before a call reaches the driver", () => {
         dispatched: false,
       });
     }
+  });
+
+  it("resolving a resolved call again changes nothing, so the driver's own pass agrees", () => {
+    const names = [
+      "*",
+      "asterisk",
+      "?",
+      "+",
+      "super+c",
+      "ctrl+shift+Tab",
+      "Prior",
+      "Next",
+      "KP_0",
+      "KP_Add",
+      "KP_Enter",
+      "PgDn",
+      "ArrowLeft",
+      "Return",
+      "a",
+    ];
+    for (const keypad of [false, true])
+      for (const key of names) {
+        const once = resolveKeyCall(call("press_key", { ...window, key }), { keypad });
+        assert.isTrue("line" in once, key);
+        const line = (once as { line: string }).line;
+        assert.deepEqual(resolveKeyCall(line, { keypad }), { line }, key);
+      }
+  });
+
+  it("passes keypad keys through to a driver that presses them", () => {
+    assert.isFalse(driverPressesKeypad("0.38.0-goat.3"));
+    assert.isTrue(driverPressesKeypad("0.38.0-goat.4"));
+    for (const key of ["KP_0", "KP_9", "KP_Add", "kp_decimal"]) {
+      const line = call("press_key", { ...window, key });
+      assert.deepEqual(resolveKeyCall(line, { keypad: true }), { line }, key);
+    }
+    // KP_Enter is the Return key on both sides.
+    const enter = resolveKeyCall(call("press_key", { ...window, key: "KP_Enter" }), {
+      keypad: true,
+    });
+    assert.isTrue("line" in enter && enter.line.includes('"key":"KP_Enter"'));
   });
 });
