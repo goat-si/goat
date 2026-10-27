@@ -8,10 +8,15 @@ import { routeTree } from "../../routeTree.gen";
 // The real root and chat shells bootstrap server auth and the whole app; keep only their outlets.
 vi.mock("../../routes/__root", async () => {
   const { createRootRoute, Outlet } = await import("@tanstack/react-router");
+  const { SidebarProvider } = await import("../ui/sidebar");
   return {
     Route: createRootRoute({
       beforeLoad: () => ({ authGateState: { status: "authenticated" } as const }),
-      component: Outlet,
+      component: () => (
+        <SidebarProvider>
+          <Outlet />
+        </SidebarProvider>
+      ),
     }),
   };
 });
@@ -35,7 +40,7 @@ async function openSettings(url: string) {
 
 it("mounts every /settings page under the settings layout that provides its scope", () => {
   const router = createRouter({ routeTree, history: createMemoryHistory() });
-  const outsideLayout = router.flatRoutes
+  const outsideLayout = Object.values(router.routesById)
     .filter((route) => route.fullPath.startsWith("/settings/"))
     .filter((route) => {
       for (let parent = route.parentRoute; parent; parent = parent.parentRoute) {
