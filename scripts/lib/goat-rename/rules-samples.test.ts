@@ -56,6 +56,15 @@ describe("sample names", () => {
     expect(apply("src/legacy.ts", '"t3code#22889"')).toBe('"t3code#22889"');
   });
 
+  it("renames the upstream worktree setup fixture without changing legacy fixtures elsewhere", () => {
+    const input = 'branch: "t3/feature", worktreePath: "/repo/.t3/worktrees/feature"';
+    const path = "apps/web/src/components/chat/WorktreeSetupCard.browser.test.tsx";
+    const renamed = 'branch: "goat/feature", worktreePath: "/repo/.goat/worktrees/feature"';
+    expect(apply(path, input)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    expect(apply("apps/web/src/legacy.test.ts", input)).toBe(input);
+  });
+
   it.each([
     ["packages/shared/src/paletteSearch.test.ts", '"t3code#22889"', '"goat#22889"'],
     [
