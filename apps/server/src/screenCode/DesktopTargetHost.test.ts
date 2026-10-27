@@ -321,6 +321,44 @@ it.effect("ambiguous app/window binding refuses input", () =>
   }),
 );
 
+// Linux list_apps reports every /proc process and installed launcher; on a real Ubuntu desktop
+// that reply passes the lease proxy's 64 KiB cap and arrives as this placeholder.
+it.effect("a window binds when the driver's app list exceeds the primitive channel limit", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_apps: { message: "Driver reply exceeded the primitive channel limit." },
+      list_windows: (args: { app?: string }) =>
+        args.app === "org.example.Editor" ? windows : { windows: [] },
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    expect(sent.map((entry) => [entry.tool, entry.args])).toEqual([
+      ["list_apps", {}],
+      ["list_windows", { app: "org.example.Editor" }],
+    ]);
+    const observed = yield* host.observe(
+      call("get_window_state", {}, bound.value as ScreenTargetRef),
+      context,
+    );
+    expect(observed.value).toMatchObject({ indexedText: "Apply" });
+    expect(sent.at(-1)?.args).toMatchObject({ pid: 42, window_id: 7 });
+  }),
+);
+
+it.effect("binding an app the driver does not list reports it missing", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({ list_apps: { apps: [] } });
+    const result = yield* host
+      .bindApp(call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }), context)
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.code).toBe("target_missing");
+    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps"]);
+  }),
+);
+
 it.effect(
   "ScreenObservations alone mints desktop refs and stale element refs refuse before driver send",
   () =>

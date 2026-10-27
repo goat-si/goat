@@ -186,18 +186,21 @@ export const createDesktopTargetHost = (deps: {
       const requestedWindow = integer(args.window_id) ?? integer(args.windowId);
       if (!appId || !requestedWindow) return yield* Effect.fail(fail("invalid_argument"));
       const appsReply = yield* request("list_apps", {}, call, context);
-      const apps = array(object(driverValue(appsReply))?.apps)
+      const listed = object(driverValue(appsReply))?.apps;
+      const matches = array(listed)
         .map(object)
-        .filter((app) => app !== undefined);
-      const matches = apps.filter((app) =>
-        bundleId ? app.bundle_id === bundleId : app.name === name,
-      );
-      if (matches.length !== 1) return yield* Effect.fail(fail("target_ambiguous"));
-      const pid = integer(matches[0]?.pid);
-      if (!pid) return yield* Effect.fail(fail("target_missing"));
+        .filter((app) => app !== undefined)
+        .filter((app) => (bundleId ? app.bundle_id === bundleId : app.name === name));
+      if (Array.isArray(listed) && matches.length === 0)
+        return yield* Effect.fail(fail("target_missing"));
+      if (matches.length > 1) return yield* Effect.fail(fail("target_ambiguous"));
+      const listedPid = integer(matches[0]?.pid);
+      if (Array.isArray(listed) && !listedPid) return yield* Effect.fail(fail("target_missing"));
+      // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
+      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows.
       const windowsReply = yield* request(
         "list_windows",
-        { pid },
+        listedPid ? { pid: listedPid } : { app: appId },
         call,
         context,
         appsReply.connectionGeneration,
@@ -207,6 +210,9 @@ export const createDesktopTargetHost = (deps: {
       const windows = array(object(driverValue(windowsReply))?.windows)
         .map(object)
         .filter((window) => window !== undefined);
+      const pid =
+        listedPid ?? integer(windows.find((window) => window.window_id === requestedWindow)?.pid);
+      if (!pid) return yield* Effect.fail(fail("target_missing"));
       const matchingWindows = windows.filter(
         (window) => window.pid === pid && window.window_id === requestedWindow,
       );
