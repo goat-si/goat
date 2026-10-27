@@ -67,6 +67,7 @@ export const listen: Effect.Effect<
   const windowRef = yield* Ref.make(Option.none<Electron.BrowserWindow>());
   const failureRef = yield* Ref.make(Option.none<BackendStartupFailure>());
   const renderedHtmlRef = yield* Ref.make("");
+  const actionMessageRef = yield* Ref.make<string | null>(null);
   const checkedRef = yield* Ref.make(false);
   const { latest, changes: updateChanges } = yield* updates.subscribe;
   const updateStateRef = yield* Ref.make(latest);
@@ -84,7 +85,7 @@ export const listen: Effect.Effect<
       failure: failure.value,
       offer: yield* offer,
       logDir: environment.logDir,
-      updateMessage: (yield* Ref.get(updateStateRef)).message,
+      updateMessage: (yield* Ref.get(actionMessageRef)) ?? (yield* Ref.get(updateStateRef)).message,
     });
     if ((yield* Ref.getAndSet(renderedHtmlRef, html)) === html) return;
     yield* Effect.tryPromise(() =>
@@ -96,6 +97,13 @@ export const listen: Effect.Effect<
     );
   });
 
+  const showActionMessage = Effect.fn("desktop.startupRecovery.showActionMessage")(function* (
+    message: string,
+  ) {
+    yield* Ref.set(actionMessageRef, message);
+    yield* render();
+  });
+
   const runAction = Effect.fn("desktop.startupRecovery.runAction")(function* (
     action: StartupRecoveryAction,
   ) {
@@ -104,12 +112,48 @@ export const listen: Effect.Effect<
     switch (action) {
       case "update": {
         if (current._tag !== "Update") return;
-        const state = yield* updates.getState;
-        if (state.downloadedVersion === null) {
-          const download = yield* updates.download;
-          if (!download.completed) return;
-        }
-        yield* updates.installPrepared(current.version, { waitForCheck: true });
+        yield* Ref.set(actionMessageRef, null);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            // Electron's download promise can finish before pending-update persistence publishes state.
+            const { latest, changes } = yield* updates.subscribe;
+            if (latest.downloadedVersion !== current.version) {
+              const download = yield* updates.download;
+              if (!download.completed) {
+                yield* showActionMessage(
+                  download.state.message ?? "GOAT could not download the update. Try again.",
+                );
+                return;
+              }
+              const settled = yield* Stream.concat(Stream.make(download.state), changes).pipe(
+                Stream.filter(
+                  (state) =>
+                    state.downloadedVersion === current.version ||
+                    state.status === "error" ||
+                    state.errorContext === "download" ||
+                    !state.enabled ||
+                    state.channel !== latest.channel ||
+                    (state.availableVersion !== null && state.availableVersion !== current.version),
+                ),
+                Stream.runHead,
+              );
+              if (Option.isNone(settled) || settled.value.downloadedVersion !== current.version) {
+                yield* showActionMessage(
+                  Option.isSome(settled) && settled.value.message
+                    ? settled.value.message
+                    : "GOAT could not prepare the downloaded update. Try again.",
+                );
+                return;
+              }
+            }
+            const install = yield* updates.installPrepared(current.version, { waitForCheck: true });
+            if (!install.accepted || install.failed) {
+              yield* showActionMessage(
+                install.state.message ?? "GOAT could not start installing the update. Try again.",
+              );
+            }
+          }),
+        );
         return;
       }
       case "reinstall":
