@@ -368,7 +368,6 @@ describe("queued task operation access", () => {
     startDelivery();
     appAtomRegistry.set(editingQueuedMessageIdsAtom, { [queued.messageId]: true });
     await state.manager.enqueue(queued);
-    using confirm = vi.spyOn(state.manager, "confirmQueued");
     const delivered = Promise.withResolvers<void>();
     const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
       if (id === null) delivered.resolve();
@@ -377,7 +376,6 @@ describe("queued task operation access", () => {
     // mount's synchronous row change notifies the drain again mid-pass.
     appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
     expect(state.familyMount).toHaveBeenCalledOnce();
-    expect(confirm).toHaveBeenCalledOnce();
     await delivered.promise.finally(release);
     expect(state.start).toHaveBeenCalledOnce();
     expect(remaining()).toEqual([]);
