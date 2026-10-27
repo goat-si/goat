@@ -22,7 +22,33 @@ const MAX_PREVIEW_URL_LENGTH = 2048;
 const PREVIEW_OPEN_TIMEOUT_MS = 20_000;
 const THREAD_CHECK_TIMEOUT_MS = 5_000;
 const SYSTEM_OPENER_SETTLE_MS = 3_000;
-const THREAD_CREDENTIAL_VARIABLE = /^(?:GOAT|T3|T3CODE|T3_CODE)_(?:ACP_MCP|MCP|CUA_LEASE)_/; // goat-rename: legacy
+// What open, xdg-open and the WSL launcher need to reach the desktop session; a thread's
+// environment carries credentials under many names, so nothing else is passed on.
+const SYSTEM_OPENER_VARIABLES = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "TMPDIR",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "DESKTOP_SESSION",
+  "KDE_FULL_SESSION",
+  "KDE_SESSION_VERSION",
+  "GNOME_DESKTOP_SESSION_ID",
+  "WSL_DISTRO_NAME",
+  "WSL_INTEROP",
+  "SYSTEMROOT",
+  "WINDIR",
+  "__CF_USER_TEXT_ENCODING",
+]);
+const SYSTEM_OPENER_PREFIXES = ["XDG_", "LC_"];
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Credential = { readonly endpoint: string; readonly authorization: string };
@@ -52,13 +78,16 @@ const previewableUrl = (raw: string): boolean => {
   }
 };
 
-/** The system opener never sees the thread credential or the BROWSER that led here. */
+/** The system opener never sees the thread's credentials or the BROWSER that led here. */
 const systemOpenerEnvironment = (env: Env): Record<string, string | undefined> => {
   const next: Record<string, string | undefined> = {};
   for (const [name, value] of Object.entries(env)) {
-    if (name === "BROWSER" || name === "ELECTRON_RUN_AS_NODE") continue;
-    if (THREAD_CREDENTIAL_VARIABLE.test(name)) continue;
-    next[name] = value;
+    const key = name.toUpperCase();
+    if (
+      SYSTEM_OPENER_VARIABLES.has(key) ||
+      SYSTEM_OPENER_PREFIXES.some((prefix) => key.startsWith(prefix))
+    )
+      next[name] = value;
   }
   next[URL_OPENER_FALLBACK_ENV] = "1";
   return next;

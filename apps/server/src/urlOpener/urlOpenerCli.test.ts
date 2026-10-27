@@ -1,4 +1,8 @@
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
+import {
+  withAgentDeviceEnvironment,
+  withThreadAgentEnvironment,
+} from "@goat/provider-core/server/mcpSession";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -120,6 +124,58 @@ describe("GOAT's BROWSER for a thread", () => {
     });
     expect(await runUrlOpener(["https://example.com/"], shell.io)).toBe(0);
     expect(shell.systemCalls.map((call) => call.url)).toEqual(["https://example.com/"]);
+  });
+
+  it("gives the system browser none of a Pi thread's secrets, only what an opener needs", async () => {
+    const leaseBearer = "Bearer lease-secret-0123456789";
+    // A Pi thread with device access and an attached Cua Driver, as GOAT launches it.
+    const piEnvironment = {
+      ...withAgentDeviceEnvironment(
+        withThreadAgentEnvironment(
+          {
+            PATH: "/usr/bin",
+            HOME: "/home/user",
+            DISPLAY: ":0",
+            XDG_RUNTIME_DIR: "/run/user/1000",
+            DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+            LANG: "en_US.UTF-8",
+            OPENAI_API_KEY: "provider-secret",
+          },
+          {
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer thread-token",
+            urlOpener: SHIM,
+          },
+        ),
+        {
+          agentDeviceEnvironment: {
+            PATH: "/goat/device/bin",
+            AGENT_DEVICE_DAEMON_BASE_URL: "http://127.0.0.1:9000",
+            AGENT_DEVICE_DAEMON_AUTH_TOKEN: "device-secret",
+          },
+        },
+      ),
+      GOAT_MCP_URL: "http://127.0.0.1:43123/mcp",
+      GOAT_MCP_BEARER_TOKEN: "thread-token",
+      GOAT_CUA_MCP: JSON.stringify({
+        command: "/goat/node",
+        args: ["cua-lease-proxy"],
+        env: { GOAT_CUA_LEASE_AUTHORIZATION: leaseBearer },
+      }),
+    };
+    const shell = harness(opened, piEnvironment);
+    await runUrlOpener(["file:///home/user/report.html"], shell.io);
+
+    const handed = JSON.stringify(shell.systemCalls[0]?.env);
+    for (const secret of ["thread-token", "lease-secret", "device-secret", "provider-secret"])
+      expect(handed, secret).not.toContain(secret);
+    expect(shell.systemCalls[0]?.env).toMatchObject({
+      HOME: "/home/user",
+      DISPLAY: ":0",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      LANG: "en_US.UTF-8",
+    });
   });
 
   it("ends after one hop when the system opener leads back to GOAT's opener", async () => {
