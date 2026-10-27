@@ -23,6 +23,7 @@ import {
 } from "./appServer.ts";
 import {
   ARCHIVE,
+  makeRunningProcess,
   makeSuccessfulProcess,
   remoteShell,
   testHttpClient,
@@ -115,6 +116,10 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   const scripts: Array<string> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
+      // The forward stays up: a real ssh -N to this fake host exits within milliseconds, and
+      // whether a forward check saw it first decided these tests.
+      if (command._tag === "StandardCommand" && command.args.includes("-N"))
+        return makeRunningProcess(() => undefined);
       if (command._tag !== "StandardCommand" || !command.command.endsWith("ssh"))
         return yield* real.spawn(command);
       const stdin = command.options.stdin;
