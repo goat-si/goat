@@ -98,7 +98,9 @@ const runDriverFixture = Effect.fn("ComputerUseLeaseProxyCli.testDriver")(functi
           releaseFirst();
         }
         yield* Queue.take(reports);
-        const ending = { driverEnded: { reason: "helper_refused", exitCode: 77 } };
+        const ending: DriverWatchReport = {
+          driverEnded: { reason: "helper_refused", exitCode: 77 },
+        };
         assert.deepEqual(collected, input.ready ? [{ driverEnded: false }, ending] : [ending]);
         return undefined;
       }),
