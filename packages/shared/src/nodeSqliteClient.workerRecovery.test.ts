@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as NodeWorkerThreads from "node:worker_threads";
+import * as NodeSqlite from "node:sqlite";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -698,4 +699,47 @@ it.effect(
         }),
       { enableWal: false },
     ),
+);
+
+it.effect(
+  "rejects leaving WAL before lazy worker initialization when SQLite workers are enabled",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (const workers of [
+        { readerWorker: true, checkpointWorker: false },
+        { readerWorker: false, checkpointWorker: true },
+        { readerWorker: true, checkpointWorker: true },
+      ]) {
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sqlite-wal-guard-" });
+        const filename = path.join(directory, "state.sqlite");
+        // Seed before client construction so an initialized checkpoint connection cannot block DELETE.
+        const seed = new NodeSqlite.DatabaseSync(filename);
+        try {
+          seed.exec(
+            "PRAGMA journal_mode = WAL; CREATE TABLE entries(name TEXT NOT NULL); INSERT INTO entries VALUES ('first')",
+          );
+        } finally {
+          seed.close();
+        }
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const checkpointWorker = workers.checkpointWorker ? startedWorkers.at(-1) : undefined;
+          assert.equal((yield* sql`PRAGMA journal_mode`)[0]?.journal_mode, "wal");
+          for (const statement of [
+            "PRAGMA journal_mode = DELETE",
+            "PRAGMA main.JOURNAL_MODE('delete')",
+          ]) {
+            const error = yield* sql.unsafe(statement).pipe(Effect.flip);
+            assert.equal(error._tag, "SqlError");
+            assert.equal((yield* sql`PRAGMA journal_mode`)[0]?.journal_mode, "wal");
+          }
+          yield* sql`PRAGMA journal_mode = WAL`;
+          yield* sql`INSERT INTO entries VALUES ('after rejection')`;
+          if (checkpointWorker !== undefined) yield* checkpointWorkerReply(checkpointWorker);
+          assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 2);
+        }).pipe(Effect.provide(SqliteClient.layer({ filename, ...workers })));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

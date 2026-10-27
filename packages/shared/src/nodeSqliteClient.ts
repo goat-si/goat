@@ -1040,13 +1040,27 @@ const make = Effect.fn("makeWithDatabase")(function* (
         activeClassification = previous;
       }
     };
-    if (checkpoint !== undefined) {
+    if (checkpoint !== undefined || (isFileDatabase && options.readerWorker)) {
+      if (typeof db.setAuthorizer !== "function") {
+        return yield* failed(
+          new Error("Node SQLite lacks statement-authorizer support"),
+          "SQLite worker mode unsupported",
+          "open",
+        );
+      }
       // SQLite may reprepare an expired statement while it executes. Keep this
       // callback installed and collect only around that statement's prepare/run.
       db.setAuthorizer((actionCode, action, argument) => {
-        const classification = activeClassification;
-        if (classification === undefined) return NodeSqlite.constants.SQLITE_OK;
         const constants = NodeSqlite.constants;
+        if (
+          actionCode === constants.SQLITE_PRAGMA &&
+          action?.toLowerCase() === "journal_mode" &&
+          argument !== null &&
+          argument.toLowerCase() !== "wal"
+        )
+          return constants.SQLITE_DENY;
+        const classification = activeClassification;
+        if (checkpoint === undefined || classification === undefined) return constants.SQLITE_OK;
         if (actionCode === constants.SQLITE_TRANSACTION) {
           classification.backpressure ||= action === "BEGIN";
           classification.check ||= action === "COMMIT" || action === "ROLLBACK";
