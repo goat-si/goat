@@ -149,6 +149,21 @@ const goat2WindowState = (
             }
           : goat2Read(goat2Full("s0000000a"), args);
 
+/** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
+class DriverError {
+  readonly structuredContent: Record<string, unknown>;
+  constructor(structuredContent: Record<string, unknown>) {
+    this.structuredContent = structuredContent;
+  }
+}
+// The lease proxy's typed refusal fields (ComputerUseAutomationRefusal.ts, #1820) on a driver reply.
+const typedRefusal = {
+  effect: "refused",
+  refused: "appNotAllowed",
+  detail: "app_not_approved",
+  app: "org.example.Editor",
+};
+
 const fixture = (
   override: Partial<Record<string, unknown>> = {},
   connection = { id: "driver:1" },
@@ -188,7 +203,10 @@ const fixture = (
             return {
               status: "settled",
               connectionGeneration: connection.id,
-              result: { structuredContent: value },
+              result:
+                value instanceof DriverError
+                  ? { isError: true, structuredContent: value.structuredContent }
+                  : { structuredContent: value },
               ...(request.tool === "get_window_state" &&
               typeof (value as { image?: unknown }).image === "object"
                 ? { image: (value as { image: unknown }).image }
@@ -709,3 +727,83 @@ it.live("a guest binds and clicks an app window through the admitted channel", (
     ),
   );
 });
+
+it.live(
+  "a driver refusal keeps its refused, detail and app in the cell's error and receipt",
+  () => {
+    const { host, sent } = fixture({ click: new DriverError(typedRefusal) });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      // The cell's awaited click fails the run with the host's typed error.
+      const error = yield* service
+        .runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source:
+            "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return await app.click({x: 1, y: 2});",
+        })
+        .pipe(Effect.flip);
+      const refusal = {
+        refused: "appNotAllowed",
+        detail: "app_not_approved",
+        app: "org.example.Editor",
+      };
+      expect(error).toMatchObject({
+        code: "permission_denied",
+        effectStarted: false,
+        ...refusal,
+      });
+      expect("receipts" in error ? error.receipts?.at(-1) : undefined).toMatchObject({
+        method: "click",
+        category: "refused",
+        dispatched: false,
+        ...refusal,
+      });
+      expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows", "click"]);
+      yield* service.finishTurn({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "test",
+      });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: host }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);
+
+it.effect("a refused status without an effect is a refusal with nothing started", () =>
+  Effect.gen(function* () {
+    const { effect: _effect, ...fields } = typedRefusal;
+    const { host } = fixture({ click: new DriverError({ ...fields, status: "refused" }) });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const result = yield* host
+      .invoke(call("click", { x: 1, y: 2 }, bound.value as ScreenTargetRef), context)
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure).toMatchObject({
+        code: "permission_denied",
+        effectStarted: false,
+        refused: "appNotAllowed",
+        detail: "app_not_approved",
+        app: "org.example.Editor",
+      });
+  }),
+);

@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 
 const id = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(200));
 const text = (max: number) => Schema.String.check(Schema.isMaxLength(max));
@@ -10,6 +11,17 @@ const natural = Schema.Int.check(
 );
 const positive = (max: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: max }));
 const finite = Schema.Number.check(Schema.makeFilter(Number.isFinite));
+
+/**
+ * A driver refusal's typed account, as the lease proxy names it (ComputerUseRefusalReason; detail
+ * is a ComputerUseRefusalDetail, kept a string here because cua.ts already imports this module).
+ */
+const refusalFields = {
+  refused: Schema.optionalKey(ComputerUseRefusalReason),
+  detail: Schema.optionalKey(text(80)),
+  /** The bundle id or app the refusal names, when the proxy knew it. */
+  app: Schema.optionalKey(id),
+};
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 const utf8Text = (max: number) =>
   Schema.String.check(
@@ -225,6 +237,7 @@ export const ScreenEffectReceipt = Schema.Struct({
   ]),
   dispatched: Schema.Boolean,
   evidence: Schema.Array(text(200)).check(Schema.isMaxLength(16)),
+  ...refusalFields,
 });
 export type ScreenEffectReceipt = typeof ScreenEffectReceipt.Type;
 
@@ -261,6 +274,7 @@ export const ScreenRunError = Schema.Struct({
     "context_reset",
   ]),
   reason: Schema.optionalKey(Schema.Literal("desktop_not_ready")),
+  ...refusalFields,
   callId: Schema.optionalKey(natural),
   targetId: Schema.optionalKey(id),
   effectStarted: Schema.Boolean,

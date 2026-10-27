@@ -285,6 +285,7 @@ export class ScreenHostBridge {
       journalState: ScreenJournalEntry["receipt"]["journalState"] = "settled",
       dispatched?: boolean,
       evidence: readonly string[] = [],
+      refusal: Pick<ScreenRunError, "refused" | "detail" | "app"> = {},
     ) => {
       if (admittedIndex === undefined) return;
       const entry = state.journal[admittedIndex];
@@ -297,6 +298,7 @@ export class ScreenHostBridge {
           journalState,
           dispatched: dispatched ?? entry.receipt.dispatched,
           evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)),
+          ...refusal,
         },
       };
     };
@@ -358,10 +360,17 @@ export class ScreenHostBridge {
     }
     if (result._tag === "Failure") {
       if (callDispatched && !result.failure.effectStarted) state.effectsStarted--;
+      const { refused: reason, detail, app } = result.failure;
       settle(
         result.failure.effectStarted ? "unknown_outcome" : "refused",
         result.failure.effectStarted ? "unknown" : "settled",
         result.failure.effectStarted,
+        [],
+        {
+          ...(reason === undefined ? {} : { refused: reason }),
+          ...(detail === undefined ? {} : { detail }),
+          ...(app === undefined ? {} : { app }),
+        },
       );
       return refused(call, { ...result.failure, callId: call.callId });
     }

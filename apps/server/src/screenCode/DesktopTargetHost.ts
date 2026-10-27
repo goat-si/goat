@@ -11,6 +11,7 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
+import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import type {
@@ -22,6 +23,8 @@ import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 
 const isJson = Schema.is(Schema.Json);
+const isRefusalReason = Schema.is(ComputerUseRefusalReason);
+const isRefusalDetail = Schema.is(ComputerUseRefusalDetail);
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -51,9 +54,24 @@ const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefin
     return { ...fail("unknown_outcome"), effectStarted: true };
   if (reply.status === "not_started") return fail("unavailable");
   const result = object(reply.result);
-  if (object(result?.structuredContent)?.effect === "refused") return fail("permission_denied");
+  const structured = object(result?.structuredContent);
+  // The lease proxy's rule: the driver's own refusal; an explicit other effect wins over a status.
+  if (
+    structured !== undefined &&
+    (structured.effect === undefined
+      ? structured.status === "refused"
+      : structured.effect === "refused")
+  ) {
+    const app = string(structured.app);
+    return {
+      ...fail("permission_denied"),
+      ...(isRefusalReason(structured.refused) ? { refused: structured.refused } : {}),
+      ...(isRefusalDetail(structured.detail) ? { detail: structured.detail } : {}),
+      ...(app !== undefined && app.length <= 200 ? { app } : {}),
+    };
+  }
   if (result?.isError === true || reply.error !== undefined)
-    return object(result?.structuredContent)?.effect === "unverifiable"
+    return structured?.effect === "unverifiable"
       ? { ...fail("unknown_outcome"), effectStarted: true }
       : fail("downstream_failure");
   return undefined;
