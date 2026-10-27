@@ -352,6 +352,46 @@ it.live("masks a link label whose dropped brackets join escapes, symbols or a cu
   );
 });
 
+it.live(
+  "leaves refs and GOAT's own fields alone when only a short skeleton or a field matches",
+  () => {
+    const { tab } = makeTab();
+    return withFill(
+      async (fill) => {
+        for (let i = 0; i < 2; i++) await fill.fill(tab, fillRequest, later(), record);
+        // "[ ] / e1" drops to "e1", too short to compare that way: refs stay.
+        const tree = '- button "Go" [ref=e1]';
+        expect(
+          fill.mask(request("snapshot", {}))({ ok: true, result: { accessibilityTree: tree } }),
+        ).toEqual({
+          ok: true,
+          result: { accessibilityTree: tree },
+        });
+        expect(
+          fill.mask(request("status", {}))({
+            ok: true,
+            result: { status: "ready-for-input", text: "page says ready-for-input" },
+          }),
+        ).toEqual({ ok: true, result: { status: "ready-for-input", text: "page says [secret]" } });
+      },
+      undefined,
+      ["[ ] / e1", "ready-for-input"],
+    );
+  },
+);
+
+it.live("masks a long page text only up to a little past the caller's cut", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    // The value straddles the cut at 100, in a text far longer than anything scanned.
+    const text = `${"a ".repeat(45)}${PASSWORD}${"z".repeat(1_000_000)}`;
+    const masked = fill.maskText(threadId)(text, 100);
+    expect(masked.length).toBeLessThan(1_000);
+    expect(masked.slice(0, 100)).toBe(`${"a ".repeat(45)}[secret]zz`);
+  });
+});
+
 it.live("masks a very long filled value without failing the answer", () => {
   const { tab } = makeTab();
   const long = "a".repeat(40_000);

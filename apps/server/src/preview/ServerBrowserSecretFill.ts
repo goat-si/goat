@@ -20,6 +20,7 @@ import { rememberSecret } from "./pageSecrets.ts";
 import {
   compileSecretForms,
   compileSkeletonForms,
+  longestForm,
   secretSpans,
   skeletonSpans,
 } from "./secretForms.ts";
@@ -218,7 +219,7 @@ const settledPrivate = (control: SessionControl) =>
 const maskWith = (values: ReadonlySet<string>) => {
   const forms = compileSecretForms(values);
   const skeletons = compileSkeletonForms(values);
-  return (text: string, cut = false) => {
+  const mask = (text: string, cut = false) => {
     const spans = [...secretSpans(text, forms, cut), ...skeletonSpans(text, skeletons, cut)];
     if (spans.length === 0) return text;
     let masked = "";
@@ -234,14 +235,35 @@ const maskWith = (values: ReadonlySet<string>) => {
     }
     return masked + MASK + text.slice(shown);
   };
+  // An echo can be wider than its form (escapes triple it); four times leaves room for that.
+  return Object.assign(mask, {
+    slack: 4 * longestForm(forms, skeletons.raw, skeletons.decoded),
+  });
 };
+
+/** Fields GOAT itself fills in its answers; masking one would only corrupt the answer's shape. */
+const SERVER_KEYS = new Set([
+  "_tag",
+  "reason",
+  "phase",
+  "status",
+  "level",
+  "requestId",
+  "tabId",
+  "id",
+  "ref",
+]);
 
 const walk = (value: unknown, mask: (text: string) => string, keys: boolean): unknown => {
   if (typeof value === "string") return mask(value);
   if (Array.isArray(value)) return value.map((each) => walk(each, mask, keys));
   if (value === null || typeof value !== "object") return value;
+  // Page-made JSON (`keys`) is the page's throughout; only server-built shapes keep their fields.
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [keys ? mask(key) : key, walk(each, mask, keys)]),
+    Object.entries(value).map(([key, each]) => [
+      keys ? mask(key) : key,
+      !keys && SERVER_KEYS.has(key) && typeof each === "string" ? each : walk(each, mask, keys),
+    ]),
   );
 };
 
@@ -439,9 +461,16 @@ export const make = Effect.gen(function* () {
     };
 
   /** Masks the thread's filled values in one text, for collectors that cut what they keep. */
-  const maskText = (threadId: string) => (text: string) => {
+  /**
+   * Masks the thread's filled values in one text. With `limit`, a text the caller will cut there is
+   * cut first a little past it and masked as cut, so a huge page text is never scanned whole.
+   */
+  const maskText = (threadId: string) => (text: string, limit?: number) => {
     const values = filledValues.get(ThreadId.make(threadId));
-    return values === undefined || values.size === 0 ? text : maskWith(values)(text);
+    if (values === undefined || values.size === 0) return text;
+    const masker = maskWith(values);
+    if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
+    return masker(text.slice(0, limit + masker.slack), true);
   };
 
   return { fill, guard, mask, maskText };

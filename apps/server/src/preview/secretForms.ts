@@ -102,58 +102,91 @@ export const secretSpans = (text: string, forms: ReadonlyArray<SecretForm>, cut 
 };
 
 /** What a fetch's renderer drops or rewrites: spaces, link brackets, and slashes (URLs turn \ into /). */
-const DROPPED = /[\s[\]/\\]/u;
+const ASCII_DROPPED = new Uint8Array(128);
+for (const code of [0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x2f, 0x5b, 0x5c, 0x5d])
+  ASCII_DROPPED[code] = 1;
+const dropped = (code: number) =>
+  code < 128 ? ASCII_DROPPED[code] === 1 : /\s/u.test(String.fromCharCode(code));
 
-/**
- * The text without spaces and brackets, each kept character mapped to the span it came from.
- * Decoded, a percent-escape run counts as what it encodes; raw, as written, since dropping a
- * bracket can join a value's own "%" and digits into what looks like an escape.
- */
-/**
- * The character the escapes at `at` encode, one to four of them as UTF-8 needs; undefined when
- * none decode, so one bad escape in a run leaves the others decoded.
- */
-const decodedAt = (run: string, at: number) => {
-  for (let escapes = 1; escapes <= 4; escapes++) {
-    const part = run.slice(at, at + escapes * 3);
-    if (part.length < escapes * 3) return undefined;
-    try {
-      return { text: decodeURIComponent(part), length: part.length };
-    } catch {
-      // A multi-byte character needs more escapes; try the next length.
-    }
-  }
-  return undefined;
+/** Skeletons shorter than this, or than half their value, would match a page's own refs and words. */
+const MIN_SKELETON = 4;
+
+const hexDigit = (code: number) =>
+  code >= 0x30 && code <= 0x39
+    ? code - 0x30
+    : code >= 0x41 && code <= 0x46
+      ? code - 0x37
+      : code >= 0x61 && code <= 0x66
+        ? code - 0x57
+        : -1;
+
+/** The byte the escape at `at` encodes, or -1 when there is no escape there. */
+const escapedByte = (text: string, at: number) => {
+  if (text.charCodeAt(at) !== 0x25) return -1;
+  const high = hexDigit(text.charCodeAt(at + 1));
+  const low = hexDigit(text.charCodeAt(at + 2));
+  return high < 0 || low < 0 ? -1 : high * 16 + low;
 };
 
-const skeleton = (text: string, decode: boolean) => {
-  let kept = "";
-  const from: Array<number> = [];
-  const to: Array<number> = [];
-  const keep = (char: string, start: number, end: number) => {
-    if (DROPPED.test(char)) return;
-    kept += char;
-    for (let unit = 0; unit < char.length; unit++) {
-      from.push(start);
-      to.push(end);
-    }
-  };
-  for (const { 0: token, index } of text.matchAll(
-    decode ? /(?:%[0-9a-f]{2})+|[\s\S]/giu : /[\s\S]/gu,
-  )) {
-    const escapes = decode && token.length > 1 && token.startsWith("%");
-    for (let at = 0; at < token.length;) {
-      const decoded = escapes && token[at] === "%" ? decodedAt(token, at) : undefined;
-      if (decoded === undefined) {
-        keep(token[at] ?? "", index + at, index + at + 1);
-        at += 1;
-        continue;
-      }
-      for (const char of decoded.text) keep(char, index + at, index + at + decoded.length);
-      at += decoded.length;
-    }
+/**
+ * The character the escapes at `at` encode, as many as its UTF-8 lead byte says; undefined
+ * when they do not decode, so one bad escape in a run leaves the others decoded.
+ */
+const decodedAt = (text: string, at: number) => {
+  const lead = escapedByte(text, at);
+  if (lead < 0) return undefined;
+  if (lead < 0x80) return { text: String.fromCharCode(lead), length: 3 };
+  const bytes = lead >= 0xf5 ? 0 : lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc2 ? 2 : 0;
+  if (bytes === 0) return undefined;
+  for (let next = 1; next < bytes; next++)
+    if (escapedByte(text, at + next * 3) < 0) return undefined;
+  try {
+    return { text: decodeURIComponent(text.slice(at, at + bytes * 3)), length: bytes * 3 };
+  } catch {
+    // Continuation bytes out of range, or an overlong or surrogate encoding.
+    return undefined;
   }
-  return { kept: foldHex(kept), from, to };
+};
+
+interface Skeleton {
+  readonly kept: string;
+  readonly from: Int32Array;
+  readonly to: Int32Array;
+}
+
+/**
+ * The text without spaces, brackets and slashes, hex-folded, each kept code unit mapped to the
+ * span it came from. Decoded, a percent escape counts as what it encodes; raw, as written, since
+ * dropping a bracket can join a value's own "%" and digits into what looks like an escape.
+ */
+const skeleton = (text: string, decode: boolean): Skeleton => {
+  // A decoded escape is never longer than its source, so the text's length bounds every array.
+  const codes = new Uint16Array(text.length);
+  const from = new Int32Array(text.length);
+  const to = new Int32Array(text.length);
+  let length = 0;
+  const keep = (code: number, start: number, end: number) => {
+    if (dropped(code)) return;
+    codes[length] = code >= 0x41 && code <= 0x46 ? code + 0x20 : code;
+    from[length] = start;
+    to[length] = end;
+    length++;
+  };
+  for (let at = 0; at < text.length;) {
+    const decoded = decode && text.charCodeAt(at) === 0x25 ? decodedAt(text, at) : undefined;
+    if (decoded === undefined) {
+      keep(text.charCodeAt(at), at, at + 1);
+      at++;
+      continue;
+    }
+    for (let unit = 0; unit < decoded.text.length; unit++)
+      keep(decoded.text.charCodeAt(unit), at, at + decoded.length);
+    at += decoded.length;
+  }
+  let kept = "";
+  for (let at = 0; at < length; at += 8_192)
+    kept += String.fromCharCode(...codes.subarray(at, Math.min(length, at + 8_192)));
+  return { kept, from, to };
 };
 
 export interface SkeletonForms {
@@ -161,30 +194,40 @@ export interface SkeletonForms {
   readonly decoded: ReadonlyArray<SecretForm>;
 }
 
-/** Each value's skeletons, raw and decoded, compiled once. */
+/** Each value's skeletons, raw and decoded, compiled once; too short a skeleton is left out. */
 export const compileSkeletonForms = (values: Iterable<string>): SkeletonForms => {
   const list = [...values];
   const of = (decode: boolean) =>
-    [...new Set(list.map((value) => skeleton(value, decode).kept))]
-      .filter((kept) => kept !== "")
-      .map(compile);
+    [
+      ...new Set(
+        list.flatMap((value) => {
+          const { kept } = skeleton(value, decode);
+          return kept.length >= MIN_SKELETON && kept.length * 2 >= value.length ? [kept] : [];
+        }),
+      ),
+    ].map(compile);
   return { raw: of(false), decoded: of(true) };
 };
 
 /**
- * Spans of the text that spell a value once spaces and brackets are dropped, however GOAT's
- * renderer trimmed, collapsed or encoded them; a cut text also loses a tail that starts one.
+ * Spans of the text that spell a value once spaces, brackets and slashes are dropped, however
+ * GOAT's renderer trimmed, collapsed or encoded them; a cut text also loses a tail that starts one.
  */
 export const skeletonSpans = (text: string, forms: SkeletonForms, cut = false) => {
-  const spans = (decode: boolean, compiled: ReadonlyArray<SecretForm>) => {
-    if (compiled.length === 0) return [];
-    const { kept, from, to } = skeleton(text, decode);
-    return compiled.flatMap((form) =>
+  if (forms.raw.length + forms.decoded.length === 0) return [];
+  const raw = skeleton(text, false);
+  // Without a "%" the decoded skeleton is the raw one.
+  const decoded = forms.decoded.length > 0 && text.includes("%") ? skeleton(text, true) : raw;
+  const spans = ({ kept, from, to }: Skeleton, compiled: ReadonlyArray<SecretForm>) =>
+    compiled.flatMap((form) =>
       spansOf(kept, form, cut).map(([start, end]): [number, number] => [
         from[start] ?? 0,
         end >= kept.length ? text.length : (to[end - 1] ?? text.length),
       ]),
     );
-  };
-  return [...spans(false, forms.raw), ...spans(true, forms.decoded)];
+  return [...spans(raw, forms.raw), ...spans(decoded, forms.decoded)];
 };
+
+/** The longest compiled form, for callers that cut text to a limit and need room past it. */
+export const longestForm = (...lists: ReadonlyArray<ReadonlyArray<SecretForm>>) =>
+  Math.max(0, ...lists.flat().map((form) => form.text.length));

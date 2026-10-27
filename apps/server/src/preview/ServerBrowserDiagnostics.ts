@@ -149,9 +149,9 @@ export class ServerBrowserDiagnostics {
   private disposed = false;
   private readonly page: Page;
   /** Masks filled secrets before a limit cuts one into a start that no longer matches it. */
-  readonly mask: (text: string) => string;
+  readonly mask: (text: string, limit?: number) => string;
 
-  constructor(page: Page, mask: (text: string) => string = (text) => text) {
+  constructor(page: Page, mask: (text: string, limit?: number) => string = (text) => text) {
     this.page = page;
     this.mask = mask;
     page.on("console", this.onConsole);
@@ -176,17 +176,17 @@ export class ServerBrowserDiagnostics {
   private readonly onConsole = (message: ConsoleMessage) => {
     this.push("console", this.consoleEntries, {
       level: message.type().slice(0, 32),
-      text: redactText(this.mask(consoleText(message)), TEXT_LIMIT),
+      text: redactText(this.mask(consoleText(message), INPUT_LIMIT), TEXT_LIMIT),
       timestamp: new Date().toISOString(),
     });
   };
 
   private readonly onError = (error: Error) => {
     this.push("errors", this.errors, {
-      message: redactText(this.mask(error.message), TEXT_LIMIT),
+      message: redactText(this.mask(error.message, INPUT_LIMIT), TEXT_LIMIT),
       ...(error.stack === undefined
         ? {}
-        : { stack: redactText(this.mask(error.stack), STACK_LIMIT) }),
+        : { stack: redactText(this.mask(error.stack, INPUT_LIMIT), STACK_LIMIT) }),
       timestamp: new Date().toISOString(),
     });
   };
@@ -211,12 +211,17 @@ export class ServerBrowserDiagnostics {
     const entry: PreviewAutomationNetworkEntry = {
       requestId: tracked.id,
       phase,
-      url: redactUrl(this.mask(url)),
-      method: this.mask(request.method()).slice(0, 32),
+      url: redactUrl(this.mask(url, INPUT_LIMIT)),
+      method: this.mask(request.method(), 32).slice(0, 32),
       status: status ?? previous?.status ?? null,
       failed: phase === "failed",
       ...(phase === "failed"
-        ? { errorText: redactText(this.mask(request.failure()?.errorText ?? ""), TEXT_LIMIT) }
+        ? {
+            errorText: redactText(
+              this.mask(request.failure()?.errorText ?? "", INPUT_LIMIT),
+              TEXT_LIMIT,
+            ),
+          }
         : {}),
       ...(tracked.startedAt === undefined
         ? {}
