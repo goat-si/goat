@@ -25,6 +25,72 @@ const layer = ProjectionMaintenance.layer.pipe(
   Layer.provide(NodeServices.layer),
 );
 
+for (const receiptCount of [200, 800]) {
+  it.effect(
+    `skips modern receipt sweep when no imported legacy receipt is eligible (${receiptCount} receipts)`,
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+        yield* sql`WITH RECURSIVE n(i) AS (
+          SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${receiptCount}
+        ) INSERT INTO orchestration_command_receipts
+          (command_id, aggregate_kind, aggregate_id, accepted_at,
+           result_sequence, status, command_type)
+          SELECT 'modern-' || i, 'thread', 'thread-' || i,
+            '2026-10-01', i, 'accepted', 'thread.settle' FROM n`;
+        const queries: string[] = [];
+        const record: Statement.Transformer = (statement) => {
+          queries.push(statement.compile()[0]);
+          return Effect.succeed(statement);
+        };
+        const compact = maintenance
+          .compactEventStore()
+          .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+        const retained = yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
+
+        assert.equal((yield* compact).deletedReceiptCount, 0);
+        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
+        assert.deepEqual(
+          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+          retained,
+        );
+
+        yield* sql`INSERT INTO orchestration_v2_legacy_imports
+          (thread_id, source_updated_at, shell_imported_at, transcript_imported_at)
+          VALUES ('thread-1', '2026-01-01', '2026-01-01', '2026-01-01'),
+            ('pending', '2026-01-01', '2026-01-01', NULL)`;
+        yield* sql`INSERT INTO orchestration_command_receipts
+          (command_id, aggregate_kind, aggregate_id, accepted_at,
+           result_sequence, status, command_type)
+          VALUES ('pending-command', 'thread', 'pending', '2026-01-01', 0, 'accepted', 'legacy'),
+            ('project-command', 'project', 'thread-1', '2026-01-01', 0, 'accepted', 'legacy')`;
+        const ineligible = yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`;
+        queries.length = 0;
+        assert.equal((yield* compact).deletedReceiptCount, 0);
+        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
+        assert.deepEqual(
+          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+          ineligible,
+        );
+
+        yield* sql`UPDATE orchestration_v2_legacy_imports
+          SET transcript_imported_at = '2026-01-01' WHERE thread_id = 'pending'`;
+        queries.length = 0;
+        assert.equal((yield* compact).deletedReceiptCount, 1);
+        assert.isAbove(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)).length, 0);
+        assert.deepEqual(
+          yield* sql`SELECT command_id FROM orchestration_command_receipts ORDER BY command_id`,
+          ineligible.filter((row) => row.command_id !== 'pending-command'),
+        );
+
+        queries.length = 0;
+        assert.equal((yield* compact).deletedReceiptCount, 0);
+        assert.deepEqual(queries.filter((query) => /receipt\.rowid AS row_id/u.test(query)), []);
+      }).pipe(Effect.provide(layer)),
+  );
+}
+
 // Every command item has a full projection row, an in-progress event and a final event, each
 // with output well above the trim size, plus one long assistant message that must survive.
 const seed = Effect.gen(function* () {
