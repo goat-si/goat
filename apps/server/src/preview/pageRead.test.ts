@@ -96,27 +96,12 @@ it("never returns data URL payloads or text under hidden ancestors", () =>
     ).toBe("");
   }));
 
-it("masks a render cut as cut and reads nothing after it", () =>
-  fixture(async (page) => {
-    const deep = "<span>".repeat(600) + "beta" + "</span>".repeat(600);
-    await page.setContent(`<main><p>alpha</p>${deep}<p>after-the-cut</p></main>`);
-    const calls: Array<{ readonly text: string; readonly cut: boolean | undefined }> = [];
-    const cdp = await page.context().newCDPSession(page);
-    const result = await pageRead(
-      page,
-      cdp,
-      new SessionControl(null),
-      { settleMs: 100 },
-      (text, cut) => {
-        calls.push({ text, cut });
-        return text;
-      },
-    );
-    expect(result.truncatedRender).toBe(true);
-    // The walk stops at its first cut, so the cut text ends there and is masked as cut.
-    expect(result.text).toContain("alpha");
-    expect(result.text).not.toContain("after-the-cut");
-    expect(calls.some(({ text, cut }) => cut === true && text.includes("alpha"))).toBe(true);
+it("refuses a page it cannot render whole instead of returning cut text", () =>
+  fixture(async (page, read) => {
+    const deep = "<span>".repeat(600) + "fictional-deep-token" + "</span>".repeat(600);
+    await page.setContent(`<main><pre>alpha${deep}</pre><p>after</p></main>`);
+    await expect(read()).rejects.toMatchObject({ detail: { reason: "render_cut" } });
+    expect((await read({ scope: { selector: "p" } })).text).toBe("after");
   }));
 
 it("keeps text unread when an ancestor hides it while the read runs", () =>

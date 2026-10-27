@@ -66,10 +66,8 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, scoped }) =>
         return url.href;
       } catch { return ''; }
     };
-    const renderDeadline = performance.now() + Math.min(250, timeoutMs);
+    const renderDeadline = performance.now() + Math.min(2000, timeoutMs);
     const render = (node, depth = 0, pre = false) => {
-      // A cut ends the walk, so cut text can only be missing its tail.
-      if (truncatedRender) return '';
       if (++nodes > 200000 || depth > 512 || performance.now() > renderDeadline) { truncatedRender = true; return ''; }
       if (node.nodeType === 3) return pre ? node.nodeValue : node.nodeValue.replace(/\\s+/g, ' ');
       if (node.nodeType !== 1) return '';
@@ -162,8 +160,8 @@ export const pageRead = (
   cdp: CDPSession,
   control: Pick<SessionControl, "observe">,
   input: PreviewAutomationReadInput,
-  /** The tab's filled-secret mask, applied to the whole text before it is paged; `cut` marks a cut tail. */
-  filled: (text: string, cut?: boolean) => string = (text) => text,
+  /** The tab's filled-secret mask, applied to the whole text before it is paged. */
+  filled: (text: string) => string = (text) => text,
 ): Promise<PreviewAutomationRead> =>
   control.observe(async () => {
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
@@ -193,6 +191,8 @@ export const pageRead = (
             `return (${READ_SCRIPT})(scope, ${JSON.stringify(args)})`,
           ) as (scope: unknown) => Promise<Rendered>;
           rendered = await scope.evaluate(render);
+          // Cut text can end inside a secret or a markup wrapper that no mask can see whole.
+          if (rendered.truncatedRender) throw readFailure("render_cut");
           // Frame elements embedding the scope live in other documents; check them after the read.
           if (input.scope && (await scopeHidden(scope))) rendered = { ...rendered, text: "" };
           if (tracker.state().network !== "busy" || Date.now() >= deadline) break;
@@ -215,7 +215,7 @@ export const pageRead = (
           cookies,
         );
         const mask = (text: string) => filled(secrets(text));
-        const fullText = filled(secrets(normalizeText(rendered.text)), rendered.truncatedRender);
+        const fullText = mask(normalizeText(rendered.text));
         const format = input.format ?? "markdown";
         const revision = NodeCrypto.createHash("sha256")
           .update(JSON.stringify([documentId, initialUrl, input.scope ?? null, format, fullText]))
@@ -248,7 +248,6 @@ export const pageRead = (
             },
             collapsedCount: rendered.collapsedCount,
             omittedFrames: rendered.omittedFrames,
-            truncatedRender: rendered.truncatedRender,
             scopeFound: true,
             ...(!settled
               ? {

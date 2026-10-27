@@ -41,7 +41,6 @@ export const PreviewAutomationRead = Schema.Struct({
   collapsedCount: nonnegative,
   scopeFound: Schema.Boolean,
   omittedFrames: nonnegative,
-  truncatedRender: Schema.Boolean,
   next: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
 });
 export type PreviewAutomationRead = typeof PreviewAutomationRead.Type;
@@ -53,6 +52,7 @@ export const PreviewAutomationReadFailure = Schema.Literals([
   "revision_required",
   "pageChanged",
   "output_limit",
+  "render_cut",
 ]);
 export class PreviewAutomationReadError extends Schema.TaggedError<PreviewAutomationReadError>()(
   "PreviewAutomationReadError",
@@ -71,6 +71,7 @@ const READ_REFUSAL_NEXT: Record<typeof PreviewAutomationReadFailure.Type, string
     "To continue, pass the revision returned with the previous page together with its nextOffset.",
   pageChanged: "The page changed during the read; read again.",
   output_limit: "Raise maxBytes or the reply limit, or narrow the scope.",
+  render_cut: "The page is too large to read whole; read one part with scope (a ref or selector).",
 };
 
 export const previewReadRefusalMessage = (reason: typeof PreviewAutomationReadFailure.Type) =>

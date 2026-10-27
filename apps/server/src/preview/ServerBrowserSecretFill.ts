@@ -463,18 +463,15 @@ export const make = Effect.gen(function* () {
   /** Masks the thread's filled values in one text, for collectors that cut what they keep. */
   /**
    * Masks the thread's filled values in one text. With `limit`, a text the caller will cut there is
-   * cut first a little past it and masked as cut, so a huge page text is never scanned whole; `cut`
-   * says a text already ends where its source was cut.
+   * cut first a little past it and masked as cut, so a huge page text is never scanned whole.
    */
-  const maskText =
-    (threadId: string) =>
-    (text: string, limit?: number, cut = false) => {
-      const values = filledValues.get(ThreadId.make(threadId));
-      if (values === undefined || values.size === 0) return text;
-      const masker = maskWith(values);
-      if (limit === undefined || text.length <= limit + masker.slack) return masker(text, cut);
-      return masker(text.slice(0, limit + masker.slack), true);
-    };
+  const maskText = (threadId: string) => (text: string, limit?: number) => {
+    const values = filledValues.get(ThreadId.make(threadId));
+    if (values === undefined || values.size === 0) return text;
+    const masker = maskWith(values);
+    if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
+    return masker(text.slice(0, limit + masker.slack), true);
+  };
 
   return { fill, guard, mask, maskText };
 });

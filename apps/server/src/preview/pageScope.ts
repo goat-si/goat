@@ -10,7 +10,8 @@ export const readFailure = (
     | "stale_ref"
     | "revision_required"
     | "pageChanged"
-    | "output_limit",
+    | "output_limit"
+    | "render_cut",
 ) =>
   new ServerBrowserOperationError("PreviewAutomationReadError", previewReadRefusalMessage(reason), {
     reason,

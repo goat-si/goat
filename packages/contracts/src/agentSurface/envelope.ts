@@ -262,6 +262,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   revision_required: before("invalid_request"),
   pageChanged: before("conflict"),
   output_limit: before("resource_exhausted"),
+  render_cut: before("resource_exhausted"),
   PreviewAutomationInvalidSelectorError: before("invalid_request"),
   PreviewAutomationTargetNotEditableError: before("invalid_request"),
   PreviewAutomationResultTooLargeError: c("resource_exhausted"),

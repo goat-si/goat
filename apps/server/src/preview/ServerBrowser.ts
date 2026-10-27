@@ -1940,7 +1940,7 @@ const make = Effect.gen(function* () {
           tab.cdp,
           tab.control,
           input as import("@goat/contracts").PreviewAutomationReadInput,
-          (text, cut) => secretFill.maskText(tab.threadId)(text, undefined, cut),
+          (text) => tab.diagnostics.mask(text),
         ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
         return withScreencastsPaused(
