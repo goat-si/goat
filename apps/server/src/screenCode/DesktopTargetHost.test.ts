@@ -10,6 +10,7 @@ import type {
   ScreenTargetRef,
   ThreadId,
 } from "@goat/contracts";
+import { ComputerUseRefusalDetail, computerUseRefusalReason } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
@@ -156,7 +157,7 @@ class DriverError {
     this.structuredContent = structuredContent;
   }
 }
-// The lease proxy's typed refusal fields (ComputerUseAutomationRefusal.ts, #1820) on a driver reply.
+// The typed refusal fields the lease proxy adds to a driver reply it refused.
 const typedRefusal = {
   effect: "refused",
   refused: "appNotAllowed",
@@ -806,4 +807,50 @@ it.effect("a refused status without an effect is a refusal with nothing started"
         app: "org.example.Editor",
       });
   }),
+);
+
+it.effect(
+  "every refusal detail the contract knows reaches the error, and unknown or oversized fields do not",
+  () =>
+    Effect.gen(function* () {
+      const refuse = (structuredContent: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          const { host } = fixture({ click: new DriverError(structuredContent) });
+          const bound = yield* host.bindApp(
+            call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+            context,
+          );
+          return yield* host
+            .invoke(call("click", { x: 1, y: 2 }, bound.value as ScreenTargetRef), context)
+            .pipe(Effect.flip);
+        });
+      for (const detail of ComputerUseRefusalDetail.literals) {
+        const refused = computerUseRefusalReason(detail);
+        const error = yield* refuse({
+          effect: "refused",
+          refused,
+          detail,
+          app: "org.example.Editor",
+        });
+        expect(error).toMatchObject({
+          code: "permission_denied",
+          effectStarted: false,
+          refused,
+          detail,
+        });
+      }
+      const unknown = yield* refuse({
+        effect: "refused",
+        refused: "notAReason",
+        detail: "not_a_detail",
+        app: "x".repeat(201),
+      });
+      expect(unknown).toMatchObject({ code: "permission_denied", effectStarted: false });
+      expect(unknown).not.toHaveProperty("refused");
+      expect(unknown).not.toHaveProperty("detail");
+      expect(unknown).not.toHaveProperty("app");
+      // An explicit effect outranks a refused status: the input may have landed.
+      const landed = yield* refuse({ ...typedRefusal, effect: "unverifiable", status: "refused" });
+      expect(landed).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+    }),
 );
