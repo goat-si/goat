@@ -410,4 +410,74 @@ describe("makeSecureFocusProbe", () => {
     expect(most).toBeGreaterThan(1);
     expect(most).toBeLessThanOrEqual(8);
   });
+
+  it("trusts which app owns a bus name only on the connection it learned it on, and reads across two connections as unknown", async () => {
+    // Connection 1: :1.9 is pid 10. The bus restarts; on connection 2, :1.9 is pid 99.
+    let connection = 1;
+    let switchAfter = Number.POSITIVE_INFINITY;
+    let calls = 0;
+    const atspi: AtspiCall = async (call) => {
+      if (++calls > switchAfter) connection = 2;
+      const name = method(call);
+      const reply =
+        name === "org.freedesktop.DBus.GetConnectionUnixProcessID"
+          ? u32(connection === 1 ? 10 : 99)
+          : name === "org.a11y.atspi.Accessible.GetChildren"
+            ? call.destination === REGISTRY
+              ? refs([":1.9", ROOT])
+              : refs([":1.9", "/w"])
+            : name === "org.a11y.atspi.Collection.GetMatches"
+              ? refs()
+              : undefined;
+      if (reply === undefined) throw new Error("unexpected " + name);
+      return { ...reply, connection };
+    };
+    expect(await probe(atspi)(10)).toEqual({ known: true, secure: false, windows: 1 });
+    connection = 2;
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+    // One probe whose reads start on connection 1 and end on connection 2.
+    connection = 1;
+    calls = 0;
+    switchAfter = 3;
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+  });
+
+  it("stops reading once a read fails, so nothing goes out past the reads already in flight", async () => {
+    let calls = 0;
+    let failedAt = 0;
+    const leaves = Array.from({ length: 3000 }, (_, i) => [":1.9", "/n" + i] as const);
+    const atspi: AtspiCall = async (call) => {
+      calls++;
+      await Promise.resolve();
+      const name = method(call);
+      if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID") return u32(10);
+      if (name === "org.a11y.atspi.Accessible.GetChildren") {
+        if (call.path === ROOT)
+          return call.destination === REGISTRY ? refs([":1.9", ROOT]) : refs([":1.9", "/w"]);
+        return call.path === "/w" ? refs(...leaves) : refs();
+      }
+      if (name === "org.a11y.atspi.Collection.GetMatches") throw noCollection(call.path);
+      if (name === "org.a11y.atspi.Accessible.GetInterfaces")
+        return names("org.a11y.atspi.Accessible");
+      if (name === "org.a11y.atspi.Accessible.GetState") {
+        if (call.path !== "/n5") return states(PLAIN);
+        failedAt = calls;
+        return { signature: "s", body: ["not a state set"] };
+      }
+      if (name === "org.a11y.atspi.Accessible.GetRole") return u32(29);
+      throw new Error("unexpected " + name);
+    };
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+    expect(failedAt).toBeGreaterThan(0);
+    expect(calls - failedAt).toBeLessThanOrEqual(8);
+  });
+
+  it("ends a probe that outlasts its deadline as unknown", async () => {
+    const stuck: AtspiCall = (call) =>
+      method(call) === "org.a11y.atspi.Accessible.GetChildren" && call.destination !== REGISTRY
+        ? new Promise<BusReply>(() => {})
+        : bus(null)(call);
+    expect(await makeSecureFocusProbe(ADDRESS, stuck, { deadlineMs: 1 })(10)).toEqual(UNKNOWN);
+  });
 });

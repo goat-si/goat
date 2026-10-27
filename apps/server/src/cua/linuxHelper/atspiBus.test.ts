@@ -5,7 +5,15 @@ import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { BusError, decodeMessage, encodeCall, makeAtspiBus } from "./atspiBus.ts";
+import {
+  BusError,
+  type DbusValue,
+  decodeMessage,
+  encodeCall,
+  encodeMessage,
+  makeAtspiBus,
+  type Message,
+} from "./atspiBus.ts";
 
 /** Messages as dbus-next 0.10.2 marshals them. */
 const DBUS_NEXT = {
@@ -92,70 +100,205 @@ describe("accessibility bus calls", () => {
   });
 
   it("answers calls over one connection, names error replies, and connects again after the bus drops it", async () => {
-    const socketPath = NodePath.join(NodeOS.tmpdir(), "goat-atspi-bus-" + process.pid + ".sock");
-    const clients: NodeNet.Socket[] = [];
-    const server = NodeNet.createServer((client) => {
-      clients.push(client);
-      let buffered = Buffer.alloc(0);
-      let begun = false;
-      client.on("data", (chunk: Buffer) => {
-        buffered = Buffer.concat([buffered, chunk]);
-        if (!begun) {
-          if (buffered.includes("AUTH EXTERNAL") && !buffered.includes("BEGIN")) {
-            client.write("OK 0123456789abcdef\r\n");
-            return;
-          }
-          const begin = buffered.indexOf("BEGIN\r\n");
-          if (begin < 0) return;
-          buffered = buffered.subarray(begin + 7);
-          begun = true;
-        }
-        for (let next = decodeMessage(buffered); next; next = decodeMessage(buffered)) {
-          buffered = buffered.subarray(next.length);
-          const { serial, member } = next.message;
-          client.write(
-            answering(
-              member === "GetState" ? DBUS_NEXT.unknownMethod : DBUS_NEXT.references,
-              serial,
-            ),
-          );
-        }
-      });
+    await using bus = await fakeBus((call, client) =>
+      client.write(
+        call.member === "GetState"
+          ? encodeMessage(next(), {
+              type: ERROR,
+              replySerial: call.serial,
+              sender: call.destination ?? "",
+              errorName: "org.freedesktop.DBus.Error.UnknownMethod",
+              signature: "s",
+              body: ["No such interface"],
+            })
+          : answer(call, call.destination ?? "", "a(so)", [[[":1.9", "/a"]]]),
+      ),
+    );
+    const call = makeAtspiBus({ address: async () => bus.address, uid: 1000 });
+    const children = { destination: ":1.9", path: "/w", iface: ACCESSIBLE, member: "GetChildren" };
+    expect(await call(children)).toMatchObject({ signature: "a(so)", body: [[[":1.9", "/a"]]] });
+    const refused = await call({ ...children, member: "GetState" }).catch(
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(BusError);
+    expect(refused).toMatchObject({ errorName: "org.freedesktop.DBus.Error.UnknownMethod" });
+    expect(bus.clients).toHaveLength(1);
+    const dropped = bus.clients[0];
+    await new Promise<void>((resolve) => {
+      dropped?.once("close", () => resolve());
+      dropped?.destroy();
     });
-    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
-    try {
-      const call = makeAtspiBus({ address: async () => "unix:path=" + socketPath, uid: 1000 });
-      const children = {
-        destination: ":1.9",
-        path: "/w",
-        iface: "org.a11y.atspi.Accessible",
-        member: "GetChildren",
-      };
-      expect(await call(children)).toEqual({
-        signature: "a(so)",
-        body: [
-          [
-            [":1.9", "/a"],
-            [":1.9", "/b/c"],
-          ],
-        ],
-      });
-      const refused = await call({ ...children, member: "GetState" }).catch(
-        (error: unknown) => error,
+    expect((await call(children)).signature).toBe("a(so)");
+    expect(bus.clients).toHaveLength(2);
+  });
+
+  it("takes each reply only from the peer it called, matched by serial and sender, whatever order replies come in", async () => {
+    const calls: Message[] = [];
+    await using bus = await fakeBus((call, client) => {
+      calls.push(call);
+      const [a, b, c] = calls;
+      if (a === undefined || b === undefined || c === undefined) return;
+      client.write(
+        Buffer.concat([
+          // Another app answers A's call first, saying nothing is focused.
+          answer(a, ":9.9", "au", [[PLAIN, 0]]),
+          // An answer to no call.
+          encodeMessage(next(), {
+            type: RETURN,
+            replySerial: 4242,
+            sender: ":1.9",
+            signature: "au",
+            body: [[PLAIN, 0]],
+          }),
+          answer(b, ":1.10", "u", [40]),
+          // The bus daemon refuses C: its own errors count.
+          encodeMessage(next(), {
+            type: ERROR,
+            replySerial: c.serial,
+            sender: DAEMON,
+            errorName: "org.freedesktop.DBus.Error.ServiceUnknown",
+            signature: "s",
+            body: ["gone"],
+          }),
+          answer(a, ":1.9", "au", [[FOCUSED, 0]]),
+        ]),
       );
-      expect(refused).toBeInstanceOf(BusError);
-      expect(refused).toMatchObject({ errorName: "org.freedesktop.DBus.Error.UnknownMethod" });
-      expect(clients).toHaveLength(1);
-      const dropped = clients[0];
-      await new Promise<void>((resolve) => {
-        dropped?.once("close", () => resolve());
-        dropped?.destroy();
-      });
-      expect((await call(children)).signature).toBe("a(so)");
-      expect(clients).toHaveLength(2);
-    } finally {
-      for (const client of clients) client.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    });
+    const call = makeAtspiBus({ address: async () => bus.address, uid: 1000 });
+    const [a, b, c] = await Promise.allSettled([
+      call({ destination: ":1.9", path: "/a", iface: ACCESSIBLE, member: "GetState" }),
+      call({ destination: ":1.10", path: "/b", iface: ACCESSIBLE, member: "GetRole" }),
+      call({ destination: ":1.11", path: "/c", iface: ACCESSIBLE, member: "GetRole" }),
+    ]);
+    expect(a).toMatchObject({
+      status: "fulfilled",
+      value: { signature: "au", body: [[FOCUSED, 0]] },
+    });
+    expect(b).toMatchObject({ status: "fulfilled", value: { signature: "u", body: [40] } });
+    expect(c).toMatchObject({
+      status: "rejected",
+      reason: { errorName: "org.freedesktop.DBus.Error.ServiceUnknown" },
+    });
+  });
+
+  it("sends a call for a well-known name to the app that owns it, and takes the reply only from that app", async () => {
+    const seen: Array<string | undefined> = [];
+    await using bus = await fakeBus((call, client) => {
+      seen.push(call.destination);
+      if (call.member === "GetNameOwner") client.write(answer(call, DAEMON, "s", [":1.0"]));
+      else {
+        client.write(answer(call, "org.a11y.atspi.Registry", "a(so)", [[[":1.3", "/x"]]]));
+        client.write(answer(call, ":1.0", "a(so)", [[[":1.7", "/root"]]]));
+      }
+    });
+    const call = makeAtspiBus({ address: async () => bus.address, uid: 1000 });
+    expect(
+      await call({
+        destination: "org.a11y.atspi.Registry",
+        path: "/root",
+        iface: ACCESSIBLE,
+        member: "GetChildren",
+      }),
+    ).toMatchObject({ body: [[[":1.7", "/root"]]] });
+    expect(seen).toEqual([DAEMON, ":1.0"]);
+  });
+
+  it("reads a body whose signature it cannot walk as no body, an empty struct among them, never looping on it", () => {
+    for (const signature of [
+      "a()",
+      "a{}",
+      "()",
+      "{su}",
+      "a{(s)u}",
+      "a{suu}",
+      "(".repeat(33) + "y" + ")".repeat(33),
+      "a".repeat(33) + "y",
+    ])
+      expect(decodeMessage(rawReply(signature, Buffer.alloc(40)))?.message.body).toBeInstanceOf(
+        Error,
+      );
   });
 });
+
+/** A reply, headed by hand, so its signature is whatever the test says. Arrays in the body say 32 bytes. */
+function rawReply(signature: string, body: Buffer): Buffer {
+  const field = Buffer.concat([
+    Buffer.from([8, 1, 0x67, 0, signature.length]),
+    Buffer.from(signature, "ascii"),
+    Buffer.from([0]),
+  ]);
+  const head = Buffer.alloc(16);
+  head.write("6c020001", "hex");
+  head.writeUInt32LE(body.length, 4);
+  head.writeUInt32LE(1, 8);
+  head.writeUInt32LE(field.length, 12);
+  const unpadded = Buffer.concat([head, field]);
+  const padded = Buffer.concat([unpadded, Buffer.alloc((8 - (unpadded.length % 8)) % 8)]);
+  const filled = Buffer.from(body);
+  filled.writeUInt32LE(32, 0);
+  return Buffer.concat([padded, filled]);
+}
+
+const RETURN = 2;
+const ERROR = 3;
+const DAEMON = "org.freedesktop.DBus";
+const ACCESSIBLE = "org.a11y.atspi.Accessible";
+const PLAIN = 1124073472;
+const FOCUSED = 1124077568;
+let serials = 1000;
+const next = () => serials++;
+
+/** A reply to a call, as the peer from says. */
+const answer = (call: Message, from: string, signature: string, body: ReadonlyArray<DbusValue>) =>
+  encodeMessage(next(), {
+    type: RETURN,
+    replySerial: call.serial,
+    sender: from,
+    destination: ":1.50",
+    signature,
+    body,
+  });
+
+let sockets = 0;
+
+/** A bus that lets this process in, answers Hello as the bus daemon, and hands every other call on. */
+async function fakeBus(onCall: (call: Message, client: NodeNet.Socket) => void) {
+  const socketPath = NodePath.join(
+    NodeOS.tmpdir(),
+    "goat-atspi-bus-" + process.pid + "-" + sockets++ + ".sock",
+  );
+  const clients: NodeNet.Socket[] = [];
+  const server = NodeNet.createServer((client) => {
+    clients.push(client);
+    let buffered = Buffer.alloc(0);
+    let begun = false;
+    client.on("data", (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      if (!begun) {
+        if (buffered.includes("AUTH EXTERNAL") && !buffered.includes("BEGIN")) {
+          client.write("OK 0123456789abcdef\r\n");
+          return;
+        }
+        const begin = buffered.indexOf("BEGIN\r\n");
+        if (begin < 0) return;
+        buffered = buffered.subarray(begin + 7);
+        begun = true;
+      }
+      for (let found = decodeMessage(buffered); found; found = decodeMessage(buffered)) {
+        buffered = buffered.subarray(found.length);
+        if (found.message.member === "Hello")
+          client.write(answer(found.message, DAEMON, "s", [":1.50"]));
+        else onCall(found.message, client);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  return {
+    address: "unix:path=" + socketPath,
+    clients,
+    [Symbol.asyncDispose]: async () => {
+      for (const client of clients) client.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}

@@ -25,6 +25,8 @@ export interface BusCall {
 export interface BusReply {
   readonly signature: string;
   readonly body: ReadonlyArray<DbusValue>;
+  /** The connection that carried it, numbered from 1: bus names mean nothing across two. */
+  readonly connection?: number;
 }
 
 /** One method call and its reply, or a rejection: a BusError for an error reply. */
@@ -50,17 +52,32 @@ const SETUP_TIMEOUT_MS = 2_000;
 const IDLE_CLOSE_MS = 10_000;
 
 /** The end of the complete type starting at `at`. */
-function typeEnd(signature: string, at: number): number {
+// As the D-Bus specification limits them; an empty struct is not a type at all.
+const MAX_SIGNATURE_LENGTH = 255;
+const MAX_NESTING = 32;
+const BASIC_TYPES = "ybiusog";
+
+function typeEnd(signature: string, at: number, depth = 0, inArray = false): number {
+  if (depth > MAX_NESTING) throw new Error("A D-Bus signature nests too deep.");
   const code = signature[at];
-  if (code === "a") return typeEnd(signature, at + 1);
-  if (code === "(" || code === "{") {
-    const close = code === "(" ? ")" : "}";
+  if (code === "a") return typeEnd(signature, at + 1, depth + 1, true);
+  if (code === "(") {
+    if (signature[at + 1] === ")") throw new Error("A D-Bus struct is empty.");
     let next = at + 1;
-    while (signature[next] !== close) {
+    while (signature[next] !== ")") {
       if (next >= signature.length) throw new Error("A D-Bus signature ended early.");
-      next = typeEnd(signature, next);
+      next = typeEnd(signature, next, depth + 1);
     }
     return next + 1;
+  }
+  // A dict entry: only as an array's element, a basic key, then one value.
+  if (code === "{") {
+    const key = signature[at + 1];
+    if (!inArray || key === undefined || !BASIC_TYPES.includes(key))
+      throw new Error("A D-Bus dict entry is malformed.");
+    const end = typeEnd(signature, at + 2, depth + 1);
+    if (signature[end] !== "}") throw new Error("A D-Bus dict entry is malformed.");
+    return end + 1;
   }
   if (code !== undefined && "ybiusogv".includes(code)) return at + 1;
   throw new Error("A D-Bus type this does not read.");
@@ -68,6 +85,7 @@ function typeEnd(signature: string, at: number): number {
 
 /** The complete types of a signature in order: "a(so)u" is ["a(so)", "u"]. */
 function completeTypes(signature: string): ReadonlyArray<string> {
+  if (signature.length > MAX_SIGNATURE_LENGTH) throw new Error("A D-Bus signature is too long.");
   const types: string[] = [];
   for (let at = 0; at < signature.length;) {
     const end = typeEnd(signature, at);
@@ -143,26 +161,48 @@ class Writer {
 }
 
 /** A method call, little-endian, as the bus reads it. */
-export function encodeCall(serial: number, call: BusCall): Buffer {
+export const encodeCall = (serial: number, call: BusCall): Buffer =>
+  encodeMessage(serial, { type: METHOD_CALL, ...call });
+
+/** A call, or a reply or error answering one, by the codes of its header fields. */
+export interface OutgoingMessage {
+  readonly type: number;
+  readonly path?: string;
+  readonly iface?: string;
+  readonly member?: string;
+  readonly errorName?: string;
+  readonly replySerial?: number;
+  readonly destination?: string;
+  readonly sender?: string;
+  readonly signature?: string;
+  readonly body?: ReadonlyArray<DbusValue>;
+}
+
+/** A message, little-endian, as the bus reads it. */
+export function encodeMessage(serial: number, message: OutgoingMessage): Buffer {
   const body = new Writer();
-  const types = completeTypes(call.signature ?? "");
-  const values = call.body ?? [];
-  if (values.length !== types.length) throw new Error("A D-Bus call has the wrong arguments.");
+  const types = completeTypes(message.signature ?? "");
+  const values = message.body ?? [];
+  if (values.length !== types.length) throw new Error("A D-Bus message has the wrong arguments.");
   types.forEach((type, index) => body.put(type, values[index] ?? 0));
   const header = new Writer();
-  header.bytes.push(0x6c, METHOD_CALL, 0, 1);
+  header.bytes.push(0x6c, message.type, 0, 1);
   header.u32(body.bytes.length);
   header.u32(serial);
   header.u32(0);
-  const fields: Array<readonly [number, string, string]> = [
-    [1, "o", call.path],
-    [2, "s", call.iface],
-    [3, "s", call.member],
-    [6, "s", call.destination],
+  const fields: Array<readonly [number, string, DbusValue | undefined]> = [
+    [1, "o", message.path],
+    [2, "s", message.iface],
+    [3, "s", message.member],
+    [4, "s", message.errorName],
+    [5, "u", message.replySerial],
+    [6, "s", message.destination],
+    [7, "s", message.sender],
+    [8, "g", message.signature || undefined],
   ];
-  if (call.signature) fields.push([8, "g", call.signature]);
   const start = header.bytes.length;
   for (const [code, type, value] of fields) {
+    if (value === undefined) continue;
     header.pad(8);
     header.bytes.push(code);
     header.put("g", type);
@@ -178,6 +218,8 @@ class Reader {
   readonly little: boolean;
   at: number;
   readonly end: number;
+  /** Variants open around the value being read; each brings its own signature. */
+  variants = 0;
   constructor(data: Buffer, little: boolean, at: number, end: number) {
     this.data = data;
     this.little = little;
@@ -224,10 +266,16 @@ class Reader {
       return this.text(this.data[this.at++] ?? 0, "ascii");
     }
     if (code === "v") {
+      if (this.variants >= MAX_NESTING) throw new Error("D-Bus variants nest too deep.");
       const inner = completeTypes(String(this.take("g")));
       if (inner.length !== 1 || inner[0] === undefined)
         throw new Error("A D-Bus variant holds more than one type.");
-      return this.take(inner[0]);
+      this.variants++;
+      try {
+        return this.take(inner[0]);
+      } finally {
+        this.variants--;
+      }
     }
     if (code === "a") {
       const length = this.u32();
@@ -236,7 +284,11 @@ class Reader {
       this.need(length);
       const stop = this.at + length;
       const items: DbusValue[] = [];
-      while (this.at < stop) items.push(this.take(element));
+      while (this.at < stop) {
+        const before = this.at;
+        items.push(this.take(element));
+        if (this.at === before) throw new Error("A D-Bus array element took no bytes.");
+      }
       if (this.at !== stop) throw new Error("A D-Bus array ran past its length.");
       return items;
     }
@@ -252,6 +304,8 @@ export interface Message {
   readonly type: number;
   readonly serial: number;
   readonly member?: string;
+  readonly destination?: string;
+  readonly sender?: string;
   readonly replySerial?: number;
   readonly errorName?: string;
   readonly signature: string;
@@ -281,6 +335,8 @@ export function decodeMessage(
   const replySerial = fields.get(5);
   const errorName = fields.get(4);
   const member = fields.get(3);
+  const destination = fields.get(6);
+  const sender = fields.get(7);
   const signature = fields.get(8);
   const types = typeof signature === "string" ? signature : "";
   let body: ReadonlyArray<DbusValue> | Error;
@@ -296,6 +352,8 @@ export function decodeMessage(
       type: data[1] ?? 0,
       serial: u32(8),
       ...(typeof member === "string" ? { member } : {}),
+      ...(typeof destination === "string" ? { destination } : {}),
+      ...(typeof sender === "string" ? { sender } : {}),
       ...(typeof replySerial === "number" ? { replySerial } : {}),
       ...(typeof errorName === "string" ? { errorName } : {}),
       signature: types,
@@ -311,7 +369,9 @@ interface Connection {
   readonly pending: () => number;
 }
 
-function connect(path: string, uid: number): Promise<Connection> {
+const DAEMON = "org.freedesktop.DBus";
+
+function connect(path: string, uid: number, id: number): Promise<Connection> {
   return new Promise((resolve, reject) => {
     const socket = NodeNet.createConnection({ path });
     let buffered = Buffer.alloc(0);
@@ -319,7 +379,12 @@ function connect(path: string, uid: number): Promise<Connection> {
     let serial = 0;
     const replies = new Map<
       number,
-      { resolve: (reply: BusReply) => void; reject: (error: Error) => void }
+      {
+        /** Who must answer: the unique name called, or the bus daemon. */
+        readonly from: string;
+        readonly resolve: (reply: BusReply) => void;
+        readonly reject: (error: Error) => void;
+      }
     >();
     const setup = setTimeout(
       () => fail(new Error("The accessibility bus did not let this in.")),
@@ -335,11 +400,13 @@ function connect(path: string, uid: number): Promise<Connection> {
     const send = (call: BusCall) =>
       new Promise<BusReply>((done, refuse) => {
         if (socket.destroyed) return refuse(new Error("The accessibility bus connection ended."));
-        const id = ++serial;
+        if (!call.destination.startsWith(":") && call.destination !== DAEMON)
+          return refuse(new Error("A call goes to a unique name, so its answer can be checked."));
+        const callSerial = ++serial;
         // A call in flight keeps the process up; an idle connection never does.
         const settle = () => {
           clearTimeout(timer);
-          replies.delete(id);
+          replies.delete(callSerial);
           if (replies.size === 0) socket.unref();
         };
         const timer = setTimeout(() => {
@@ -347,7 +414,8 @@ function connect(path: string, uid: number): Promise<Connection> {
           refuse(new Error("The accessibility bus did not answer " + call.member + "."));
         }, CALL_TIMEOUT_MS);
         timer.unref();
-        replies.set(id, {
+        replies.set(callSerial, {
+          from: call.destination,
           resolve: (reply) => {
             settle();
             done(reply);
@@ -358,7 +426,7 @@ function connect(path: string, uid: number): Promise<Connection> {
           },
         });
         socket.ref();
-        socket.write(encodeCall(id, call));
+        socket.write(encodeCall(callSerial, call));
       });
     const connection = { socket, send, pending: () => replies.size };
     socket.on("connect", () => {
@@ -380,9 +448,9 @@ function connect(path: string, uid: number): Promise<Connection> {
           authenticated = true;
           socket.write("BEGIN\r\n");
           send({
-            destination: "org.freedesktop.DBus",
+            destination: DAEMON,
             path: "/org/freedesktop/DBus",
-            iface: "org.freedesktop.DBus",
+            iface: DAEMON,
             member: "Hello",
           }).then(
             () => {
@@ -398,7 +466,13 @@ function connect(path: string, uid: number): Promise<Connection> {
           if (message.type !== METHOD_RETURN && message.type !== ERROR) continue;
           const waiter =
             message.replySerial === undefined ? undefined : replies.get(message.replySerial);
-          if (waiter === undefined || message.replySerial === undefined) continue;
+          if (waiter === undefined) continue;
+          // Only the peer called answers; the bus daemon may refuse the call on its behalf.
+          if (
+            message.sender !== waiter.from &&
+            !(message.type === ERROR && message.sender === DAEMON)
+          )
+            continue;
           if (message.body instanceof Error) waiter.reject(message.body);
           else if (message.type === ERROR)
             waiter.reject(
@@ -407,7 +481,7 @@ function connect(path: string, uid: number): Promise<Connection> {
                 typeof message.body[0] === "string" ? message.body[0] : "",
               ),
             );
-          else waiter.resolve({ signature: message.signature, body: message.body });
+          else waiter.resolve({ signature: message.signature, body: message.body, connection: id });
         }
       } catch (error) {
         fail(error instanceof Error ? error : new Error(String(error)));
@@ -428,12 +502,13 @@ export function makeAtspiBus(options: {
 }): AtspiCall {
   let current: Promise<Connection> | undefined;
   let idle: ReturnType<typeof setTimeout> | undefined;
+  let opened = 0;
   const connection = () => {
     if (current !== undefined) return current;
     const attempt = (async () => {
       const path = busSocketPath(await options.address());
       if (path === undefined) throw new Error("The accessibility bus has no unix socket.");
-      return connect(path, options.uid);
+      return connect(path, options.uid, ++opened);
     })();
     current = attempt;
     const forget = () => {
@@ -447,22 +522,39 @@ export function makeAtspiBus(options: {
     if (idle !== undefined) clearTimeout(idle);
     for (let retried = false; ; retried = true) {
       const attempt = connection();
-      const opened = await attempt;
+      const open = await attempt;
       try {
-        return await opened.send(call);
+        return await open.send({ ...call, destination: await uniqueName(open, call.destination) });
       } catch (error) {
-        if (retried || !opened.socket.destroyed) throw error;
+        if (retried || !open.socket.destroyed) throw error;
         if (current === attempt) current = undefined;
       } finally {
-        if (opened.pending() === 0) {
+        if (open.pending() === 0) {
           if (idle !== undefined) clearTimeout(idle);
           idle = setTimeout(() => {
             if (current === attempt) current = undefined;
-            opened.socket.end();
+            open.socket.end();
           }, IDLE_CLOSE_MS);
           idle.unref();
         }
       }
     }
   };
+}
+
+/** The unique name of whoever owns name on this connection, asked of the bus daemon. */
+async function uniqueName(open: Connection, name: string): Promise<string> {
+  if (name.startsWith(":") || name === DAEMON) return name;
+  const reply = await open.send({
+    destination: DAEMON,
+    path: "/org/freedesktop/DBus",
+    iface: DAEMON,
+    member: "GetNameOwner",
+    signature: "s",
+    body: [name],
+  });
+  const [owner] = reply.body;
+  if (reply.signature !== "s" || typeof owner !== "string" || !owner.startsWith(":"))
+    throw new Error("The bus daemon gave no owner for " + name + ".");
+  return owner;
 }
