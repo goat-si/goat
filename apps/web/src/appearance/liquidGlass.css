@@ -1,0 +1,134 @@
+/* One tint per structural pane; only marked full-size fills become transparent. */
+@media not ((prefers-reduced-transparency: reduce) or (prefers-contrast: more) or (forced-colors: active)) {
+  html[data-appearance-preset="liquid-glass"]:not([data-glass-solid], [data-desktop-glass-opaque]) {
+    --lg-pane: color-mix(in srgb, var(--background) calc(var(--glass-opacity) * 0.8), transparent);
+    --lg-rail: color-mix(in srgb, var(--sidebar) calc(var(--glass-opacity) * 0.7), transparent);
+    --lg-terminal: color-mix(
+      in srgb,
+      var(--terminal-background) calc(var(--glass-opacity) * 0.8),
+      transparent
+    );
+    --lg-edge: inset 0 0 0 1px color-mix(in srgb, var(--contrast-foreground) 7%, transparent);
+    background: var(--lg-backdrop, var(--background)) center / cover no-repeat fixed !important;
+
+    body {
+      background: transparent !important;
+    }
+
+    [data-glass-pane="rail"] {
+      background-color: var(--lg-rail);
+    }
+    [data-glass-pane="pane"] {
+      background-color: var(--lg-pane);
+      box-shadow: var(--lg-edge);
+    }
+    [data-glass-pane="terminal"] {
+      background-color: var(--lg-terminal);
+    }
+
+    /* Framed layout: the destination rail and the titlebar strip are the window frame and take the
+       pane tint, like the main area; the nested sidebar is a rounded panel (its ::before) in the
+       sidebar tint, outlined by the content frame. */
+    [data-destination-rail][data-glass-pane] {
+      background-color: var(--lg-pane);
+    }
+    [data-glass-pane="rail"].before\:bg-sidebar {
+      background: linear-gradient(
+        var(--lg-pane) 0 calc(var(--workspace-topbar-height) - 1px),
+        transparent 0
+      );
+    }
+    [data-glass-pane="rail"].before\:bg-sidebar::before {
+      background-color: var(--lg-rail);
+    }
+
+    /* The content frame's corner cover fills the wedge outside its curve. With the opaque page
+       colour it read as a dark notch; on glass the wedge belongs to the frame, so it takes the
+       frame's tint and the curve joins the rail and titlebar strip without a seam. */
+    .workspace-content-frame::before {
+      background: radial-gradient(
+        circle at 100% 100%,
+        transparent var(--radius-xl),
+        var(--lg-pane) calc(var(--radius-xl) + 1px)
+      );
+    }
+    [data-slot="sidebar-inset"][data-glass-pane="pane"] {
+      box-shadow: none;
+    }
+
+    [data-glass-layer] {
+      background-color: transparent;
+    }
+    [data-glass-layer].surface-grain,
+    [data-glass-pane].surface-grain {
+      background-image: none;
+    }
+
+    [data-glass-pane="pane"] {
+      --code-background: color-mix(in srgb, var(--background) 25%, transparent);
+    }
+    .diff-render-surface {
+      --code-background: color-mix(in srgb, var(--background) 25%, transparent);
+    }
+    [data-chat-header][data-glass-layer] {
+      background-color: transparent;
+    }
+  }
+
+  html[data-appearance-preset="liquid-glass"]:not(
+      [data-glass-solid],
+      [data-desktop-glass-opaque]
+    ):is(
+      [data-desktop-window-material="macos-glass"],
+      [data-desktop-window-material="windows-mica"]
+    ) {
+    background: transparent !important;
+
+    :is(
+      [data-app-sidebar] [data-slot="sidebar-inner"],
+      [data-destination-rail],
+      [data-chat-header],
+      [data-workspace-page-header]
+    ) {
+      background-color: transparent;
+    }
+
+    [data-app-sidebar] [data-slot="sidebar-inner"]::before {
+      background-color: transparent;
+    }
+
+    :is(
+      [data-native-material-band],
+      :has(> [data-chat-column] > [data-chat-header]),
+      :has(> [data-workspace-page-header])
+    ) {
+      background: linear-gradient(transparent 0 var(--workspace-topbar-height), var(--lg-pane) 0);
+    }
+  }
+
+  html[data-desktop-client][data-appearance-preset="liquid-glass"]:not(
+      [data-glass-solid],
+      [data-desktop-glass-opaque]
+    ):is(
+      [data-desktop-window-material="macos-glass"],
+      [data-desktop-window-material="windows-mica"]
+    ) {
+    .dialog-glass {
+      background: color-mix(
+        in srgb,
+        var(--background) var(--glass-opacity),
+        transparent
+      ) !important;
+    }
+    .dialog-backdrop {
+      background: color-mix(in srgb, var(--background) 60%, transparent) !important;
+    }
+    .dropdown-glass {
+      background: color-mix(in srgb, var(--popover) var(--glass-opacity), transparent) !important;
+    }
+    :is(.dialog-glass, .dialog-backdrop, .dropdown-glass) {
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    }
+  }
+}

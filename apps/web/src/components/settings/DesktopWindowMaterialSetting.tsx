@@ -1,5 +1,6 @@
 import type { DesktopWindowMaterialState } from "@goat/contracts";
 import { useDesktopWindowMaterial } from "../../desktop/useDesktopWindowMaterial";
+import { useClientSettings } from "../../hooks/useSettings";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -38,18 +39,33 @@ function materialStatus(state: DesktopWindowMaterialState | null): string {
 export function DesktopWindowMaterialSetting() {
   const { available, state } = useDesktopWindowMaterial();
   const enabled = useScopedSettings((settings) => settings.desktopSystemMaterialEnabled);
+  const appearancePreset = useClientSettings((settings) => settings.appearancePreset);
   const updateSettings = useUpdateScopedSettings();
   if (!available) return null;
+  const presetForcesMaterial = appearancePreset === "liquid-glass";
+  const statusTakesPriority =
+    !state ||
+    !state.capability.supported ||
+    state.reason === "unsupported" ||
+    state.reason === "restart" ||
+    state.reason === "accessibility" ||
+    state.reason === "opaque" ||
+    state.reason === "native-failed" ||
+    state.reason === "fullscreen";
 
   return (
     <SettingsRow
       {...searchableSetting("desktop-system-material")}
-      description={materialStatus(state)}
+      description={
+        presetForcesMaterial && !statusTakesPriority
+          ? "On while the Liquid Glass style is selected."
+          : materialStatus(state)
+      }
       control={
         <Switch
           aria-label="System glass"
-          checked={enabled}
-          disabled={!state?.capability.supported}
+          checked={enabled || presetForcesMaterial}
+          disabled={presetForcesMaterial || !state?.capability.supported}
           onCheckedChange={(checked) =>
             updateSettings({ desktopSystemMaterialEnabled: Boolean(checked) })
           }

@@ -273,7 +273,10 @@ function IndexWaitingState() {
 
   return (
     <SidebarInset>
-      <div className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
+      <div
+        data-glass-layer
+        className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background"
+      >
         <WorkspacePageHeader electron={isElectron} className="border-b border-border" />
         <Empty>
           <EmptyHeader>

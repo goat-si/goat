@@ -396,6 +396,7 @@ function Sidebar({
             )}
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
+            data-glass-pane="rail"
           >
             {children}
           </div>
@@ -628,6 +629,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
         className,
       )}
       data-slot="sidebar-inset"
+      data-glass-pane="pane"
       data-native-material-band
       {...props}
     />

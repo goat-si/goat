@@ -159,3 +159,31 @@ it("labels active macOS glass as Liquid Glass", async () => {
   await using screen = await render(<Setting />);
   await expect.element(screen.getByText("Using Liquid Glass.")).toBeVisible();
 });
+
+it("shows System glass as forced on while the Liquid Glass style is selected", async () => {
+  using fixture = materialBridge();
+  await fixture.bridge.setClientSettings({
+    ...fixture.saved(),
+    appearancePreset: "liquid-glass",
+  });
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<Setting />);
+  await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeChecked();
+  await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeDisabled();
+  await expect
+    .element(screen.getByText("On while the Liquid Glass style is selected."))
+    .toBeVisible();
+});
+
+it("keeps an inactive material reason visible while Liquid Glass forces the switch on", async () => {
+  using fixture = materialBridge(materialState({ applied: "none", reason: "restart" }));
+  await fixture.bridge.setClientSettings({
+    ...fixture.saved(),
+    appearancePreset: "liquid-glass",
+  });
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<Setting />);
+  await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeChecked();
+  await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeDisabled();
+  await expect.element(screen.getByText("Restart GOAT to use Liquid Glass.")).toBeVisible();
+});

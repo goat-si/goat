@@ -555,6 +555,7 @@ export const DestinationRail = memo(function DestinationRail() {
       aria-label="App"
       className="sticky top-0 z-20 hidden h-svh w-(--destination-rail-width) shrink-0 flex-col items-center bg-background md:flex"
       data-destination-rail=""
+      data-glass-pane="rail"
     >
       {/* The titlebar strip above the rail belongs to the window frame. */}
       <div

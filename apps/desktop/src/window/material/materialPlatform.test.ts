@@ -96,6 +96,17 @@ const rejected = [
 ] as const;
 
 describe("assembled material platform and window service", () => {
+  it.effect("macOS window creation follows Liquid Glass with the system switch off", () =>
+    Effect.gen(function* () {
+      const f = yield* select({ enabled: false });
+      assert.deepEqual(yield* f.material.windowOptions, {});
+      yield* f.commit({ appearancePreset: "liquid-glass" });
+      assert.deepEqual(yield* f.material.windowOptions, { transparent: true });
+      yield* f.commit({ appearancePreset: "default" });
+      assert.deepEqual(yield* f.material.windowOptions, {});
+    }),
+  );
+
   it.effect("Windows keeps Mica regardless of macOS candidate restrictions", () =>
     Effect.gen(function* () {
       const f = yield* select({
