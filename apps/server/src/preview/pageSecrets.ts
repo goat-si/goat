@@ -20,6 +20,11 @@ type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
 
 type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
 
+type Cookie = { readonly name: string; readonly value: string };
+/** Cookie values a context held, newest last; far more than a page sets in a session. */
+const MAX_REMEMBERED = 10_000;
+const remembered = new WeakMap<object, Map<string, Cookie>>();
+
 /** The page's URL and every frame's, cross-origin iframes included. */
 export const frameUrls = (page: CookiePage) => [
   page.url(),
@@ -31,6 +36,8 @@ export const frameUrls = (page: CookiePage) => [
  * browser context long enough to be a credential. A cookie for a path the page only fetched, one
  * a service worker sent, or one sent before GOAT watched the tab can come back in what the page
  * shows; a short one from elsewhere, such as consent=true, leaves page text alone.
+ * Values a context held before are kept too: a log written with a cookie that was replaced since
+ * still holds the old value.
  */
 export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
   const urls = [...new Set([...earlier, ...frameUrls(page)])].filter((url) =>
@@ -42,7 +49,16 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
     urls.length === 0 ? Promise.resolve([]) : context.cookies(urls),
     context.cookies(),
   ]);
-  return [...sent, ...held.filter((cookie) => cookie.value.length >= MIN_SECRET_LENGTH)];
+  const cookies = [...sent, ...held.filter((cookie) => cookie.value.length >= MIN_SECRET_LENGTH)];
+  const seen = remembered.get(context) ?? new Map<string, Cookie>();
+  remembered.set(context, seen);
+  for (const { name, value } of cookies) {
+    const key = `${name}=${value}`;
+    seen.delete(key);
+    seen.set(key, { name, value });
+    if (seen.size > MAX_REMEMBERED) seen.delete(seen.keys().next().value ?? key);
+  }
+  return [...seen.values()];
 };
 
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>

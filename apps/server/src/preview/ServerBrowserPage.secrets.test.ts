@@ -195,4 +195,13 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(failed).toContain("Echo:");
     expect(failed).not.toContain(session);
   });
+  it("keeps masking a logged cookie value after the cookie changes", async () => {
+    const { page } = await open();
+    const diagnostics = new ServerBrowserDiagnostics(page);
+    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
+    await page.evaluate("console.log(document.cookie)");
+    expect(JSON.stringify(await diagnostics.readMasked({}))).not.toContain(script);
+    await context.addCookies([{ name: "js", value: `rotated_${script}x`, url: origin }]);
+    expect(JSON.stringify(await diagnostics.readMasked({}))).not.toContain(script);
+  });
 });

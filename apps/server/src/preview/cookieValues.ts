@@ -126,7 +126,12 @@ export const redactCookieValues = (
 ) => {
   const valued = cookies.filter((cookie) => cookie.value !== "");
   if (valued.length === 0) return text;
-  const formsOf = ({ value }: { readonly value: string }) => [value, encodeURIComponent(value)];
+  // As sent, as a URL encodes it, and as JSON escapes it inside a string.
+  const formsOf = ({ value }: { readonly value: string }) => [
+    value,
+    encodeURIComponent(value),
+    JSON.stringify(value).slice(1, -1),
+  ];
   // A long value goes wherever it appears, which covers name=value too.
   const byPrefix = indexByPrefix(
     valued.filter(({ value }) => value.length >= MIN_SECRET_LENGTH).flatMap(formsOf),

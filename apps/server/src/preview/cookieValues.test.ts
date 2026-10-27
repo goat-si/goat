@@ -35,4 +35,10 @@ describe("redactCookieValues", () => {
     expect(redactCookieValues("x sid=SessionSec", cookies)).toBe(`x sid=${REDACTED}`);
     expect(redactCookieValues("Session is over", cookies)).toBe("Session is over");
   });
+  it("redacts a value as JSON escapes it", () => {
+    const cookies = [{ name: "sid", value: 'Secret"Value777' }];
+    expect(redactCookieValues(JSON.stringify({ echo: 'sid=Secret"Value777' }), cookies)).toBe(
+      `{"echo":"sid=${REDACTED}"}`,
+    );
+  });
 });
