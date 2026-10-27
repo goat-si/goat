@@ -1,3 +1,4 @@
+import { redactComputerUseTypedOutput } from "@goat/shared/toolActivity";
 import {
   MessageId,
   ContextHandoffId,
@@ -93,6 +94,225 @@ describe("orchestration V2 wire projection", () => {
       pid: 1,
       text: { redactedCharacters: 14 },
     });
+  });
+
+  it("never sends a client text typed inside a run_steps batch or a run_script source", () => {
+    const steps = [
+      { tool: "type_text", args: { pid: 1, text: "hunter2" } },
+      { set: { role: "textfield", name: "Password", value: "hunter2" } },
+      { click: { role: "button", name: "Sign in" }, expect: [{ value: "hunter2" }] },
+      { type: { text: "hunter2" }, wait_for: { value_contains: "hunter2", name: "Password" } },
+    ];
+    const batch = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: { pid: 1, steps },
+    } as OrchestrationV2TurnItem;
+    const script = {
+      ...base,
+      toolName: "mcp__cua-driver__run_script",
+      input: { script: 'await type_text({ text: "hunter2" }); return "done";', timeout_ms: 500 },
+    } as OrchestrationV2TurnItem;
+    const child = {
+      ...batch,
+      toolName: "cua-driver.run_steps",
+      input: { server: "cua-driver", tool: "run_steps", arguments: { steps } },
+    } as OrchestrationV2TurnItem;
+    for (const item of [batch, script, child]) {
+      const event = projectDomainEventForWire({
+        id: EventId.make("typed"),
+        type: "turn-item.updated",
+        threadId: item.threadId,
+        occurredAt: item.updatedAt,
+        payload: item,
+      } as OrchestrationV2DomainEvent);
+      const row = projectTranscriptRowForClient({ position: 0, item });
+      for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), event, row])
+        expect(JSON.stringify(sent)).not.toContain("hunter2");
+    }
+    // What the steps do stays readable: only the typed values become their lengths.
+    const sent = projectTurnItemForWire(batch);
+    expect(sent.type === "dynamic_tool" ? sent.input : undefined).toEqual({
+      pid: 1,
+      steps: [
+        { tool: "type_text", args: { pid: 1, text: { redactedCharacters: 7 } } },
+        { set: { role: "textfield", name: "Password", value: { redactedCharacters: 7 } } },
+        {
+          click: { role: "button", name: "Sign in" },
+          expect: [{ value: { redactedCharacters: 7 } }],
+        },
+        {
+          type: { text: { redactedCharacters: 7 } },
+          wait_for: { value_contains: { redactedCharacters: 7 }, name: "Password" },
+        },
+      ],
+    });
+  });
+
+  it("keeps a batch's typed values out of its result, and catches every step form the driver runs", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { noop: null, type: { text: "hunter2" } },
+          { click: { name: "Sign in" }, expect: { name: "Password", value: "hunter2" } },
+          { press_key: { key: "a" } },
+        ],
+      },
+      output: {
+        structuredContent: {
+          steps: [{ index: 1, tool: "click", message: 'expected value "hunter2" but saw ""' }],
+        },
+      },
+    } as OrchestrationV2TurnItem;
+    const row = projectTranscriptRowForClient({ position: 0, item });
+    for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), row])
+      expect(JSON.stringify(sent)).not.toContain("hunter2");
+    const detail = projectTurnItemForDetail(item);
+    expect(JSON.stringify(detail.type === "dynamic_tool" ? detail.output : null)).toContain(
+      'expected value \\"[typed text]\\" but saw',
+    );
+  });
+
+  it("masks short and JSON-escaped typed values in a batch's result, and keeps its image blocks intact", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { set_value: { name: "PIN", value: "123" }, expect: [{ value: "123" }] },
+          { type_text: { text: 'a"b\\c\nd' } },
+          { type_text: { text: "image" } },
+        ],
+      },
+      output: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ message: 'value "123" expected', typed: 'a"b\\c\nd' }),
+          },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+      },
+    } as OrchestrationV2TurnItem;
+    const row = projectTranscriptRowForClient({ position: 0, item });
+    const output =
+      row.item.type === "dynamic_tool"
+        ? (row.item.output as { content: Array<Record<string, string>> })
+        : undefined;
+    const text = JSON.parse(output!.content[0]!.text!) as Record<string, string>;
+    expect(text).toEqual({ message: 'value "[typed text]" expected', typed: "[typed text]" });
+    expect(output!.content[1]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: "iVBORw0KGgo=",
+    });
+    // A short value is masked as a whole token, never inside a longer one.
+    expect(
+      redactComputerUseTypedOutput(
+        "cua-driver.run_steps",
+        { steps: [{ set_value: { value: "123" } }] },
+        "code 1234 and 123",
+      ),
+    ).toBe("code 1234 and [typed text]");
+  });
+
+  it("masks typed values through nested JSON text without breaking its structure, and survives huge values", () => {
+    const secret = 'a"b\\c';
+    const input = {
+      steps: [
+        { type_text: { text: secret } },
+        { type_text: { text: "image" } },
+        { type_text: { text: "error" } },
+        { type_text: { text: '"' } },
+      ],
+    };
+    const inner = JSON.stringify({
+      typed: secret,
+      type: "image",
+      mimeType: "image/png",
+      error: "image failed",
+    });
+    const output = {
+      content: [
+        { type: "text", text: JSON.stringify({ result: inner }) },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+      ],
+    };
+    const masked = redactComputerUseTypedOutput(
+      "cua-driver.run_steps",
+      input,
+      output,
+    ) as typeof output;
+    const outer = JSON.parse(String(masked.content[0]!.text)) as { result: string };
+    expect(JSON.parse(outer.result)).toEqual({
+      typed: "[typed text]",
+      type: "image",
+      mimeType: "image/png",
+      error: "[typed text] failed",
+    });
+    expect(masked.content[1]).toEqual(output.content[1]);
+    // A value far past any pattern size is still masked, and a short ok stays.
+    const huge = "x".repeat(100_000);
+    expect(
+      redactComputerUseTypedOutput("cua-driver.run_script", { script: huge }, [
+        "ok",
+        `echo ${huge}`,
+      ]),
+    ).toEqual(["ok", "echo [typed text]"]);
+  });
+
+  it("masks short values in any script or punctuation as whole tokens in a batch's result", () => {
+    const input = {
+      steps: [
+        { set_value: { value: "秘密" }, expect: { value: "秘密" } },
+        { type_text: { text: "!!" } },
+        { type_text: { text: "?" } },
+      ],
+    };
+    expect(
+      redactComputerUseTypedOutput("cua-driver.run_steps", input, [
+        'expected value "秘密" but saw ""',
+        "typed !! then Hello!!",
+        "?",
+        "Is it done?",
+      ]),
+    ).toEqual([
+      'expected value "[typed text]" but saw ""',
+      "typed [typed text] then Hello!!",
+      "[typed text]",
+      "Is it done?",
+    ]);
+  });
+
+  it("masks a typed value that is itself JSON, alone or inside a JSON result", () => {
+    const value = '{"token":"hunter2"}';
+    const input = { steps: [{ set_value: { value } }] };
+    const masked = redactComputerUseTypedOutput("cua-driver.run_steps", input, {
+      expected: value,
+      text: JSON.stringify({ expected: value }),
+    }) as { expected: string; text: string };
+    expect(masked.expected).toBe("[typed text]");
+    expect(JSON.parse(masked.text)).toEqual({ expected: "[typed text]" });
+  });
+
+  it("masks a text check that repeats what the batch typed, and leaves other text checks readable", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { type_text: { text: "hunter2" }, expect: { text: "hunter2" } },
+          { click: { name: "Sign in" }, wait_for: { text: "Welcome hunter2" } },
+          { click: { name: "OK" }, expect: [{ text: "Thanks" }] },
+        ],
+      },
+    } as OrchestrationV2TurnItem;
+    const sent = projectTurnItemForWire(item);
+    const input = JSON.stringify(sent.type === "dynamic_tool" ? sent.input : null);
+    expect(input).not.toContain("hunter2");
+    expect(input).toContain('"text":"Thanks"');
   });
 
   it("keeps copied handoff transcripts out of activity items and live events", () => {
