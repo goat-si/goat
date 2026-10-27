@@ -377,6 +377,16 @@ That agent may answer itself or ask you; its answer shows which thread answered
 and why. You can still answer in the asking thread, and the first answer counts.
 Approvals always wait for you.
 
+On web and desktop, threads an agent launched (with thread launch, create threads, or an SSH
+launch) fold under the thread that launched them, as one line such as **8 threads · 5 running**.
+Choose it to list them as ordinary rows; the sidebar remembers that per thread, and opening a
+launched thread expands its group. While the group is folded, a launched thread that is working
+keeps its launcher in **Priority**, and one waiting for an approval or an answer shows on the
+launcher row. The group counts once in Priority and on the activity bell. A launched thread you
+pinned, one whose launcher is archived, deleted, or on a machine this app is not connected to,
+and one still working under a snoozed launcher keep their own rows. Search lists launched threads
+like any other. In **Projects**, a thread folds only under a launcher in the same project.
+
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
