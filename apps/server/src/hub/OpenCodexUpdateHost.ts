@@ -10,7 +10,7 @@ import * as Schema from "effect/Schema";
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import { countHostThreads, interruptibleTurns, runningSubagents } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { quoteGoatExecutable } from "../opencodex/childPrepare.ts";
+import { GOAT_INSTALLS_OPENCODEX, quoteGoatExecutable } from "../opencodex/childPrepare.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -57,6 +57,7 @@ const installScript = (version: string, goatExecutable: string) => {
   return [
     `goat_cli=${quoteGoatExecutable(goatExecutable)}`,
     "[ -x \"$goat_cli\" ] || { printf '\\n__goat_ocx_exit=1\\n'; exit 0; }",
+    `${GOAT_INSTALLS_OPENCODEX} || { printf '\\n__goat_ocx_exit=1\\n'; exit 0; }`,
     `goat_ocx=$("$goat_cli" opencodex install --managed-version '${version}' --print-path </dev/null) || { printf '\\n__goat_ocx_exit=1\\n'; exit 0; }`,
     '"$goat_ocx" restart </dev/null >/dev/null 2>&1',
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",

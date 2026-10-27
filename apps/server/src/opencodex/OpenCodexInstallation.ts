@@ -157,16 +157,17 @@ const make = Effect.gen(function* () {
   const gate = yield* Semaphore.make(1);
   const lockToken = `${process.pid}\n${NodeCrypto.randomUUID()}\n`;
 
-  /** Under the resolved home, so a symlinked home still yields one canonical install root. */
-  const places = Effect.gen(function* () {
-    const home = yield* fs.realPath(rawHome);
-    const bin = path.join(home, ".local", "bin");
-    return {
-      prefix: path.join(home, ".local", "share", "goat", "opencodex"),
-      bin,
-      launcher: path.join(bin, "ocx"),
-    };
+  /** Resolved, so a symlinked home or ~/.local still yields one canonical install root. */
+  const resolvedDirectory = Effect.fn("OpenCodexInstallation.resolvedDirectory")(function* (
+    create: boolean,
+    ...parts: Array<string>
+  ) {
+    const directory = path.join(yield* fs.realPath(rawHome), ...parts);
+    if (create) yield* fs.makeDirectory(directory, { recursive: true });
+    return yield* fs.realPath(directory);
   });
+  const prefixOf = (create: boolean) =>
+    resolvedDirectory(create, ".local", "share", "goat", "opencodex");
   /** A path with its directories resolved and its last component kept, to compare entries. */
   const entry = (file: string) =>
     fs
@@ -204,7 +205,7 @@ const make = Effect.gen(function* () {
     function* (binary: string, version: string) {
       const asset = resolveOpenCodexRelease(platform, arch, version, catalog);
       if (asset === undefined) return false;
-      const { prefix } = yield* places;
+      const prefix = yield* prefixOf(false);
       const root = path.join(prefix, `${version}-${asset.target}`);
       if ((yield* fs.realPath(root)) !== root) return false;
       if ((yield* fs.realPath(binary)) !== path.join(root, asset.layout.executable)) return false;
@@ -365,7 +366,6 @@ const make = Effect.gen(function* () {
     launcher: string,
     before: OpenCodexExecutable | undefined,
   ) {
-    yield* fs.makeDirectory(bin, { recursive: true });
     const activation = yield* fs.makeTempDirectoryScoped({ directory: bin, prefix: ".ocx-" });
     const next = path.join(activation, "ocx");
     yield* fs.symlink(executable, next);
@@ -409,8 +409,9 @@ const make = Effect.gen(function* () {
       return yield* gate.withPermits(1)(
         Effect.scoped(
           Effect.gen(function* () {
-            const { prefix, bin, launcher } = yield* places;
-            yield* fs.makeDirectory(prefix, { recursive: true });
+            const prefix = yield* prefixOf(true);
+            const bin = yield* resolvedDirectory(true, ".local", "bin");
+            const launcher = path.join(bin, "ocx");
             yield* lock(prefix);
             // Selected again under the lock: this identity is what activation may replace.
             const before = yield* selected();

@@ -24,7 +24,8 @@ const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)
  * `npm` on PATH are decoys that record a call if anything reaches for them.
  */
 const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
-  readonly goat?: boolean;
+  /** `old`: a GOAT from before `goat opencodex install`, which reads it as a folder. */
+  readonly goat?: boolean | "old";
   readonly serviceWorks?: boolean;
   /** An ocx already installed, as a Desktop install, before preparing. */
   readonly adopted?: boolean;
@@ -56,12 +57,15 @@ const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
   }
   const runtime = path.join(home, "runtime with ' quote $(touch pwned)", "selected", "goat");
   if (options.goat !== false) {
+    const current = options.goat !== "old";
     yield* fs.makeDirectory(path.dirname(runtime), { recursive: true });
     yield* fs.writeFileString(
       runtime,
       [
         "#!/bin/sh",
         `printf 'goat %s\\n' "$*" >> '${log}'`,
+        `[ "$3" = --help ] && { echo 'USAGE'; echo '  goat ${current ? "opencodex install" : "<subcommand>"} [flags]'; exit 0; }`,
+        ...(current ? [] : ["exit 1"]),
         '[ "$1 $2" = "opencodex install" ] || exit 1',
         'mkdir -p "$HOME/.local/bin"',
         `cp '${home}/ocx-template' "$HOME/.local/bin/ocx"; chmod 755 "$HOME/.local/bin/ocx"`,
@@ -79,7 +83,19 @@ const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
     );
   // The script waits up to 20 seconds for the runtime; a test host has no reason to.
   yield* fs.writeFileString(path.join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  const tools = ["sh", "sed", "sort", "head", "mkdir", "cp", "chmod", "touch", "cat", "nohup"];
+  const tools = [
+    "sh",
+    "sed",
+    "sort",
+    "head",
+    "mkdir",
+    "cp",
+    "chmod",
+    "touch",
+    "cat",
+    "nohup",
+    "grep",
+  ];
   for (const tool of tools) {
     const found = ["/bin", "/usr/bin"].map((dir) => path.join(dir, tool));
     for (const candidate of found)
@@ -114,6 +130,7 @@ it.live(
       expect(yield* host.run()).toEqual({ code: 0, stdout: "2.91.0" });
       const first = yield* host.calls;
       expect(first.filter((call) => call.startsWith("goat"))).toEqual([
+        "goat opencodex install --help",
         "goat opencodex install --print-path",
       ]);
       expect(first.filter((call) => call.startsWith("decoy"))).toEqual([]);
@@ -144,6 +161,10 @@ it.live(
       const removed = yield* prepareHost({ goat: false });
       expect((yield* removed.run())?.code).toBe(PREPARE_EXIT.goatRuntimeMissing);
       expect(yield* removed.calls).toEqual([]);
+      // An older GOAT without the command never gets to run anything else.
+      const old = yield* prepareHost({ goat: "old" });
+      expect((yield* old.run())?.code).toBe(PREPARE_EXIT.goatRuntimeMissing);
+      expect(yield* old.calls).toEqual(["goat opencodex install --help"]);
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
 

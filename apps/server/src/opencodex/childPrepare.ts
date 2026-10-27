@@ -49,6 +49,10 @@ export const quoteGoatExecutable = (value: string): string => {
   return `'${value.replaceAll("'", "'\\''")}'`;
 };
 
+/** An older GOAT reads `opencodex` as a folder to serve, so its help must name the command. */
+export const GOAT_INSTALLS_OPENCODEX =
+  '"$goat_cli" opencodex install --help </dev/null 2>/dev/null | grep -q "goat opencodex install"';
+
 /**
  * Idempotent: a supported install that answers healthy is left alone. Only the supplied
  * provisioned GOAT installs OpenCodex (into ~/.local/bin); without it nothing changes. `ocx
@@ -77,6 +81,7 @@ export const prepareScript = (
     "goat_have=$(goat_version)",
     'if ! goat_supported "$goat_have"; then',
     `  [ -x "$goat_cli" ] || { ${exit(PREPARE_EXIT.goatRuntimeMissing)}; }`,
+    `  ${GOAT_INSTALLS_OPENCODEX} || { ${exit(PREPARE_EXIT.goatRuntimeMissing)}; }`,
     `  "$goat_cli" opencodex install --print-path </dev/null >/dev/null || { ${exit(PREPARE_EXIT.installFailed)}; }`,
     // Re-resolve in the same order: an older ocx earlier in that order would still win.
     ...resolveOcx(layout).map((line) => `  ${line}`),
