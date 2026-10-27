@@ -189,15 +189,14 @@ function withoutRevealed(
 }
 
 /**
- * Brings one session's card into view, for example when an agent opens a browser tab, and can
- * show it at the large size in its thread. A person's request also shows hidden cards, even in a
+ * Brings one session's card into view, for example when an agent opens a browser tab; the card
+ * keeps the size the person last chose. A person's request also shows hidden cards, even in a
  * narrow pane; an agent's forced one shows them only in its own thread; an automatic one leaves
  * the window's choice alone.
  */
 export function openPreviewSessionStack(input?: {
   readonly environmentId?: EnvironmentId;
   readonly focus?: PreviewSessionStackFocus;
-  readonly expand?: boolean;
   readonly automatic?: boolean;
   readonly scope?: "window" | "thread";
 }): void {
@@ -213,13 +212,5 @@ export function openPreviewSessionStack(input?: {
     ...(input?.focus && asked ? { hiddenLive: withoutRevealed(state.hiddenLive, input) } : {}),
     focus: input?.focus ?? null,
     focusRequest: state.focusRequest + 1,
-    ...(input?.expand && input.focus
-      ? {
-          expanded: new Map(state.expanded).set(threadKey, {
-            ...input.focus,
-            ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }),
-          }),
-        }
-      : {}),
   }));
 }

@@ -560,6 +560,49 @@ it("enlarges in place, keeps the picture 16:10 as the pane resizes, and shrinks 
   expect(card.element().getBoundingClientRect().width).toBe(240);
 });
 
+it("keeps Enlarge and Shrink as one toggle in the picture's bottom-right corner, for browser and desktop cards", async () => {
+  for (const target of [browserTab(), desktopApp()]) {
+    setup([target]);
+    await page.viewport(1400, 900);
+    using _pane = paneOf(1400);
+    await using screen = await render(<Cards />);
+    const card = screen.getByRole("article");
+    const picture = () => card.element().querySelector<HTMLElement>(".aspect-\\[16\\/10\\]")!;
+    const inset = (button: Element) => {
+      const outer = picture().getBoundingClientRect();
+      const inner = button.getBoundingClientRect();
+      return { right: outer.right - inner.right, bottom: outer.bottom - inner.bottom };
+    };
+    const overlaps = (a: Element, b: Element) => {
+      const x = a.getBoundingClientRect();
+      const y = b.getBoundingClientRect();
+      return x.left < y.right && y.left < x.right && x.top < y.bottom && y.top < x.bottom;
+    };
+    const others = () =>
+      ["Stop", "Take over"].map((name) => card.getByRole("button", { name }).element());
+
+    const enlarge = card.getByRole("button", { name: "Enlarge" }).element();
+    const atCard = inset(enlarge);
+    expect(atCard.right).toBeLessThan(16);
+    expect(atCard.bottom).toBeLessThan(16);
+    expect(others().some((other) => overlaps(enlarge, other))).toBe(false);
+    await act(() => (enlarge as HTMLElement).focus());
+    await userEvent.keyboard("{Enter}");
+    await expect.element(card).toHaveAttribute("data-size", "large");
+
+    // The same control, in the same corner, keeps keyboard focus and now shrinks.
+    const shrink = card.getByRole("button", { name: "Shrink to a card" });
+    await expect.element(shrink).toHaveFocus();
+    const atLarge = inset(shrink.element());
+    expect(atLarge.right).toBeCloseTo(atCard.right, 0);
+    expect(atLarge.bottom).toBeCloseTo(atCard.bottom, 0);
+    expect(others().some((other) => overlaps(shrink.element(), other))).toBe(false);
+    await userEvent.keyboard("{Enter}");
+    await expect.element(card).toHaveAttribute("data-size", "card");
+    await expect.element(card.getByRole("button", { name: "Enlarge" })).toHaveFocus();
+  }
+});
+
 it("takes over a browser tab from its card: enlarges, then asks the stream for control", async () => {
   setup([browserTab()]);
   await page.viewport(1400, 900);

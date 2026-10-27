@@ -65,7 +65,7 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
 
 /**
  * Faded and inert until the card is hovered or holds focus. CSS knows both exactly, even when the
- * focused control is swapped out (Enlarge, Shrink) and no blur event fires.
+ * focused toggle switches between Enlarge and Shrink and no blur event fires.
  */
 const HIDDEN_UNTIL_HOVER =
   "pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/card:pointer-events-auto group-focus-within/card:opacity-100";
@@ -76,10 +76,9 @@ const HIDDEN_UNTIL_HOVER =
 const HIDDEN_OVER_WEBVIEW =
   "opacity-0 group-hover/card:opacity-100 group-focus-within/card:opacity-100 focus-visible:opacity-100";
 
-type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+type Corner = "top-right" | "bottom-left" | "bottom-right";
 
 const CORNER: Record<Corner, string> = {
-  "top-left": "top-2 left-2",
   "top-right": "top-2 right-2",
   "bottom-left": "bottom-2 left-2",
   "bottom-right": "right-2 bottom-2",
@@ -382,25 +381,15 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           onClick={runTakeover}
         />
       )}
-      {large ? (
-        <CornerButton
-          label="Shrink to a card"
-          icon={MinimizeIcon}
-          corner="top-left"
-          shown={shown}
-          overWebview={overWebview}
-          onClick={collapse}
-        />
-      ) : (
-        <CornerButton
-          label="Enlarge"
-          icon={MaximizeIcon}
-          corner="bottom-right"
-          shown={shown}
-          overWebview={overWebview}
-          onClick={enlarge}
-        />
-      )}
+      {/* One toggle in one corner at both sizes, so the hand and keyboard focus stay put. */}
+      <CornerButton
+        label={large ? "Shrink to a card" : "Enlarge"}
+        icon={large ? MinimizeIcon : MaximizeIcon}
+        corner="bottom-right"
+        shown={shown}
+        overWebview={overWebview}
+        onClick={large ? collapse : enlarge}
+      />
     </>
   );
   const picture = large ? (
