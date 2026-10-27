@@ -485,24 +485,31 @@ export const layer = Layer.effect(ServerSelfUpdate, make()).pipe(
   Layer.provide(MaintenanceAudit.layer),
 );
 
+export const runUpdateProgressProducer = (
+  queue: Queue.Enqueue<ServerSelfUpdateProgressEvent, ServerSelfUpdateError | Cause.Done>,
+  selfUpdate: ServerSelfUpdate["Service"],
+  input: ServerSelfUpdateInput,
+  actor?: MaintenanceAudit.MaintenanceActor,
+) => {
+  const offer = (event: ServerSelfUpdateProgressEvent) =>
+    Queue.offer(queue, event).pipe(Effect.ignore);
+  return selfUpdate
+    .update(input, (stage) => offer({ type: "progress", stage }), undefined, actor)
+    .pipe(
+      Effect.flatMap((result) => offer({ type: "complete", result })),
+      Effect.catchTags({
+        ServerSelfUpdateError: (error) => Queue.fail(queue, error).pipe(Effect.ignore),
+      }),
+      Effect.andThen(Queue.end(queue).pipe(Effect.ignore)),
+    );
+};
+
 // The update outlives client sockets; progress offers to a closed queue are ignored.
 export const updateProgressStream = (
   selfUpdate: ServerSelfUpdate["Service"],
   input: ServerSelfUpdateInput,
   actor?: MaintenanceAudit.MaintenanceActor,
 ) =>
-  Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) => {
-    const offer = (event: ServerSelfUpdateProgressEvent) =>
-      Queue.offer(queue, event).pipe(Effect.ignore);
-
-    return selfUpdate
-      .update(input, (stage) => offer({ type: "progress", stage }), undefined, actor)
-      .pipe(
-        Effect.flatMap((result) => offer({ type: "complete", result })),
-        Effect.catchTags({
-          ServerSelfUpdateError: (error) => Queue.fail(queue, error).pipe(Effect.ignore),
-        }),
-        Effect.andThen(Queue.end(queue).pipe(Effect.ignore)),
-        Effect.forkDetach,
-      );
-  });
+  Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) =>
+    runUpdateProgressProducer(queue, selfUpdate, input, actor).pipe(Effect.forkDetach),
+  );
