@@ -111,10 +111,9 @@ export function makeSweepCursor(input: {
         });
         const outcome = yield* input.withInactiveFile(file, remove).pipe(
           Effect.uninterruptible,
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.failCause(cause)
-              : Effect.succeed("unknown" as const),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            () => Effect.succeed("unknown" as const),
           ),
         );
         if (outcome === "deleted") deleted++;
@@ -122,18 +121,20 @@ export function makeSweepCursor(input: {
       }
     });
     yield* scan.pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
-        keptUnknown++;
-        if (closing) return Effect.void;
-        return close.pipe(
-          Effect.catch(() =>
-            Effect.sync(() => {
-              keptUnknown++;
-            }),
-          ),
-        );
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        () => {
+          keptUnknown++;
+          if (closing) return Effect.void;
+          return close.pipe(
+            Effect.catch(() =>
+              Effect.sync(() => {
+                keptUnknown++;
+              }),
+            ),
+          );
+        },
+      ),
     );
     return { visited, deleted, keptUnknown, complete };
   });

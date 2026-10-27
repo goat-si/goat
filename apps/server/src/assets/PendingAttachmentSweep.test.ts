@@ -92,7 +92,7 @@ it.effect("scope shutdown waits for an admitted directory receipt and closes the
     let closes = 0;
     const owner = yield* Effect.gen(function* () {
       yield* PendingAttachmentSweep.PendingAttachmentSweep;
-      yield* Effect.never;
+      return yield* Effect.never;
     }).pipe(
       Effect.provide(
         testLayer({
