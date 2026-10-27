@@ -330,7 +330,8 @@ export const createDesktopTargetHost = (deps: {
               elements,
             }),
             mode: diff === undefined ? "full" : "diff",
-            ...(diff === undefined ? {} : { baseObservationId, prediffed: true }),
+            ...(diff === undefined ? {} : { prediffed: true }),
+            ...(diff === undefined || baseObservationId === undefined ? {} : { baseObservationId }),
             ...(resetReason === undefined ? {} : { resetReason }),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
@@ -345,7 +346,8 @@ export const createDesktopTargetHost = (deps: {
       if (!capture) {
         const observation = yield* render;
         bound.observationId = observation.observationId;
-        bound.snapshotId = string(state.snapshot_id);
+        const snapshotId = string(state.snapshot_id);
+        if (snapshotId !== undefined) bound.snapshotId = snapshotId;
         return { value: observation, category: "unverifiable" };
       }
       let observationId = kept;

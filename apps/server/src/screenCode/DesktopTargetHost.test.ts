@@ -391,6 +391,11 @@ type Observed = {
   indexedText: string;
   elements: Array<{ name: string; ref: ScreenElementRef }>;
 };
+const refAt = (observed: Observed, index: number) => {
+  const ref = observed.elements[index]?.ref;
+  if (!ref) throw new Error(`The observation must have element `);
+  return ref;
+};
 
 it.effect(
   "a desktop read asks goat.2 for elements beside the tree and a diff read sends the base snapshot as since",
@@ -402,7 +407,7 @@ it.effect(
         context,
       );
       const ref = bound.value as ScreenTargetRef;
-      const observe = (args: Record<string, unknown>) =>
+      const observe = (args: Record<string, string>) =>
         host
           .observe(call("get_accessibility_tree", args, ref), context)
           .pipe(Effect.map((result) => result.value as Observed));
@@ -427,7 +432,7 @@ it.effect(
       // The driver retired the base snapshot's tokens, so the base read's refs refuse before input.
       const before = sent.length;
       const retired = yield* host
-        .invoke(call("click", { elementRef: full.elements[1]?.ref }, ref), context)
+        .invoke(call("click", { elementRef: refAt(full, 1) }, ref), context)
         .pipe(Effect.result);
       expect(retired._tag === "Failure" && retired.failure.code).toBe("stale_reference");
       expect(sent).toHaveLength(before);
@@ -499,7 +504,7 @@ it.effect(
         expect(replaced.imageMetadata?.observationId).not.toBe(next.observationId);
         const before = sent.length;
         const stale = yield* host
-          .invoke(call("click", { elementRef: next.elements[1]?.ref }, ref), context)
+          .invoke(call("click", { elementRef: refAt(next, 1) }, ref), context)
           .pipe(Effect.result);
         expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
         expect(sent).toHaveLength(before);
@@ -537,7 +542,7 @@ it.effect("a desktop read that fails to render still retires the refs the driver
       expect(failed._tag === "Failure" && failed.failure.code).toBe("tree_limit");
       const before = sent.length;
       const stale = yield* host
-        .invoke(call("click", { elementRef: tree.elements[1]?.ref }, ref), context)
+        .invoke(call("click", { elementRef: refAt(tree, 1) }, ref), context)
         .pipe(Effect.result);
       expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
       expect(sent).toHaveLength(before);
