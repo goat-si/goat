@@ -58,6 +58,19 @@ describe("ComputerUseLeaseProxy", () => {
     }),
   );
 
+  it.effect("forwards an error response without an id, which MCP allows, to the driver", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.applied;
+      const unread = { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } };
+      yield* h.send(JSON.stringify(unread));
+      assert.deepEqual(yield* Effect.raceFirst(h.nextToProvider, h.nextToDriver), unread);
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
   it.effect(
     "rejecting an in-flight request id preserves the original call and its eventual reply",
     () =>

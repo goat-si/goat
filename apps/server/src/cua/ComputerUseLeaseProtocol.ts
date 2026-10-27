@@ -130,12 +130,13 @@ const validEnvelope = (value: Record<string, unknown>) => {
       !("error" in value) &&
       (!("params" in value) || isRecord(value.params) || Array.isArray(value.params))
     );
-  if (!("id" in value) || "params" in value || "result" in value === "error" in value) return false;
+  if ("params" in value || "result" in value === "error" in value) return false;
+  // MCP lets an error response omit an id it could not read; a result always names its request.
+  if ("result" in value) return "id" in value;
   return (
-    !("error" in value) ||
-    (isRecord(value.error) &&
-      Number.isInteger(value.error.code) &&
-      typeof value.error.message === "string")
+    isRecord(value.error) &&
+    Number.isInteger(value.error.code) &&
+    typeof value.error.message === "string"
   );
 };
 

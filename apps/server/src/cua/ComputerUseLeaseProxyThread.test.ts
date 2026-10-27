@@ -80,6 +80,20 @@ describe("thread lease proxy", () => {
       }),
   );
 
+  it.effect("forwards an error response without an id, which MCP allows, to the driver", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      const driver = yield* h.started;
+      yield* h.applied;
+      const unread = { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } };
+      yield* h.send(JSON.stringify(unread));
+      yield* h.send(call(700, "get_guide"));
+      assert.deepEqual(JSON.parse(yield* Queue.take(driver.sent)), unread);
+      assert.equal(JSON.parse(yield* Queue.take(driver.sent)).id, 700);
+    }),
+  );
+
   it.effect("rejecting an in-flight thread request preserves its owner and eventual reply", () =>
     Effect.gen(function* () {
       const h = yield* threadHarness();
