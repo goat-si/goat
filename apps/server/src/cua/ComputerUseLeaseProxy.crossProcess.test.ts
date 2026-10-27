@@ -105,6 +105,8 @@ describe("lease proxy cross-process primitive gate", () => {
               return true;
             }),
           setTarget: () => Effect.succeed(true),
+          streamOpened: () => Effect.void,
+          releaseApps: () => Effect.void,
         } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
         const channel = yield* PrimitiveChannel.make.pipe(
           Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
