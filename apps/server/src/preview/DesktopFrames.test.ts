@@ -432,7 +432,7 @@ describe("DesktopFrames", () => {
   );
 
   it.effect(
-    "pairs a frame only with a cursor no newer than its capture, and drops a late older capture",
+    "pairs a frame only with a cursor that changed before its capture, and says how old it is",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture();
@@ -467,6 +467,7 @@ describe("DesktopFrames", () => {
         assert.deepInclude(yield* next, {
           type: "frame",
           capturedAt: 950,
+          ageMs: 50,
           cursor: { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" },
           cursorState: { identity: report(1, 0.25).identity, phase: "moving" },
         });
@@ -475,25 +476,23 @@ describe("DesktopFrames", () => {
         yield* f.record(pointAt(2, 0.75, 1_400));
         yield* captured("TkVX", 1_300);
         const before = yield* next;
-        assert.deepInclude(before, { type: "frame", capturedAt: 1_300, data: "TkVX" });
+        assert.deepInclude(before, { type: "frame", capturedAt: 1_300, ageMs: 200 });
         assert.notProperty(before, "cursor");
         assert.notProperty(before, "cursorState");
-        // A capture older than the one shown arrives late and is dropped; the next one shows.
+        // The same millisecond cannot say which came first.
         yield* TestClock.adjust("500 millis");
-        yield* captured("T0xE", 1_200);
-        yield* captured("TkVX", 1_900);
-        const after = yield* next;
-        assert.deepInclude(after, { type: "frame", capturedAt: 1_900 });
-        assert.deepInclude(after.type === "frame" ? after.cursor : undefined, {
-          point: { fx: 0.75, fy: 0.5 },
-        });
-        // A helper that stamps nothing: the frame counts as captured when it arrived.
+        yield* captured("T0xE", 1_400);
+        assert.notProperty(yield* next, "cursor");
         yield* TestClock.adjust("500 millis");
-        yield* f.record(control);
+        yield* captured("TkVX", 2_400);
+        assert.deepInclude((yield* next) as object, { cursor: pointAt(2, 0.75, 1_400).cursor });
+        // A helper that stamps nothing: its arrival says nothing about the pixels, so no cursor.
+        yield* TestClock.adjust("500 millis");
         yield* captured("R09ORQ==");
-        const bare = yield* next;
-        assert.deepInclude(bare, { type: "frame", capturedAt: 2_500 });
-        assert.notProperty(bare, "cursor");
+        const unstamped = yield* next;
+        assert.deepInclude(unstamped, { type: "frame", capturedAt: 3_000 });
+        assert.notProperty(unstamped, "cursor");
+        assert.notProperty(unstamped, "ageMs");
       }).pipe(Effect.scoped),
   );
 

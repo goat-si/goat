@@ -154,9 +154,9 @@ const sameApps = (a: ReadonlyArray<string> | undefined, b: ReadonlyArray<string>
 
 /**
  * What a viewer receives for a frame the desktop sent, or undefined when it is dropped. A frame
- * carries the cursor the gate holds only when that cursor is no newer than the capture, so a
+ * carries the cursor the gate holds only when that cursor changed before the capture began, so a
  * viewer never draws over pixels a cursor they do not show yet. A frame from a source that does
- * not stamp its capture counts as captured when it arrived.
+ * not stamp its capture carries no cursor: its arrival says nothing about when it was taken.
  */
 export function admitFrame(
   message: DesktopCuaFrame,
@@ -182,8 +182,9 @@ export function admitFrame(
   const bytes = Math.floor((message.data.length * 3) / 4);
   if (bytes > PREVIEW_SESSION_FRAME_LIMITS.maxBytes || message.width > target.maxWidth)
     return { type: "unavailable", reason: "captureFailed" };
-  const capturedAt = Math.min(message.capturedAt ?? now, now);
-  const paired = gate.cursorAt === undefined || gate.cursorAt <= capturedAt;
+  const stamped = message.capturedAt === undefined ? undefined : Math.min(message.capturedAt, now);
+  const capturedAt = stamped ?? now;
+  const paired = stamped !== undefined && (gate.cursorAt === undefined || gate.cursorAt < stamped);
   return {
     type: "frame",
     seq: 0,
@@ -192,6 +193,7 @@ export function admitFrame(
     mime: message.mime,
     data: message.data,
     capturedAt,
+    ...(stamped === undefined ? {} : { ageMs: now - stamped }),
     ...(!paired || gate.cursor === undefined ? {} : { cursor: gate.cursor }),
     ...(!paired || gate.cursorState === undefined ? {} : { cursorState: gate.cursorState }),
   };
@@ -224,8 +226,6 @@ const make = Effect.gen(function* () {
   const linux = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
   const viewers = new Map<string, Set<Viewer>>();
   const frameSeq = new Map<string, number>();
-  /** When the newest frame shown for a session was captured, so a late older one is dropped. */
-  const capturedAt = new Map<string, number>();
   const nextFrameAt = new Map<string, number>();
   /**
    * The last request handed to the desktop. One that failed to send has an unknown fate: the
@@ -365,15 +365,10 @@ const make = Effect.gen(function* () {
         const event = admitFrame(message, current, gate, now);
         if (event === undefined) return;
         if (event.type === "frame") {
-          // A capture older than one already shown arrived late; showing it would step back.
-          const shown = capturedAt.get(message.key);
-          if (shown !== undefined && event.capturedAt !== undefined && event.capturedAt < shown)
-            return;
           const target = current.targets.find((candidate) => candidate.key === message.key);
           const nextAt = pace(now, nextFrameAt.get(message.key), target?.intervalMs ?? 0);
           if (nextAt === undefined) return;
           nextFrameAt.set(message.key, nextAt);
-          if (event.capturedAt !== undefined) capturedAt.set(message.key, event.capturedAt);
         }
         const seq = (frameSeq.get(message.key) ?? 0) + 1;
         frameSeq.set(message.key, seq);
@@ -433,7 +428,6 @@ const make = Effect.gen(function* () {
                   if (set?.size === 0) {
                     viewers.delete(input.sessionId);
                     frameSeq.delete(input.sessionId);
-                    capturedAt.delete(input.sessionId);
                     nextFrameAt.delete(input.sessionId);
                   }
                   return reconcile;

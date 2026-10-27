@@ -791,6 +791,9 @@ it("draws the cursor a frame was captured with, and says when the picture stops 
   await expect.element(notice).toBeVisible();
   await sendFrame(captured(3));
   await expect.element(notice).not.toBeInTheDocument();
+  // Frames that keep arriving but were already old when sent are not a live picture either.
+  await sendFrame({ ...captured(4), ageMs: 5_000 } as PreviewSessionFrameEvent);
+  await expect.element(notice).toBeVisible();
 });
 
 it("says why a desktop thread has no picture instead of a bare No preview", async () => {

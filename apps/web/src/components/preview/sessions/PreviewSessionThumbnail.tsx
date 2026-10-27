@@ -175,7 +175,8 @@ function frameCursor(target: DesktopTarget, frame: DesktopFrame) {
 
 /**
  * True once the frame on show has been there well past the next one's due time while the window
- * is still watched: the helper or the connection stalled, and the picture is no longer live.
+ * is still watched, or it was already that old when the server sent it: the helper or the
+ * connection stalled, and the picture is no longer live.
  */
 function useFrameStale(frame: DesktopFrame | null) {
   const [stale, setStale] = useState<DesktopFrame | null>(null);
@@ -185,7 +186,7 @@ function useFrameStale(frame: DesktopFrame | null) {
     const timer = window.setTimeout(() => setStale(frame), FRAME_STALE_MS);
     return () => window.clearTimeout(timer);
   }, [frame]);
-  return frame !== null && stale === frame;
+  return frame !== null && (stale === frame || (frame.ageMs ?? 0) > FRAME_STALE_MS);
 }
 
 /**
