@@ -58,7 +58,7 @@ it.effect.each(cases)(
           }),
         closeTerminal: (input) =>
           Effect.sync(() => {
-            if (input.deleteHistory) history.delete(input.terminalId);
+            if (input.deleteHistory && input.terminalId) history.delete(input.terminalId);
           }),
       });
       yield* Effect.gen(function* () {

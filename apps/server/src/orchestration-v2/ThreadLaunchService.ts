@@ -1,4 +1,5 @@
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import { awaitSetupCompletion } from "./SetupCompletion.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
@@ -808,7 +809,7 @@ const make = Effect.gen(function* () {
               })
               .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
 
-      let awaitAsyncSetup = Effect.void;
+      let awaitAsyncSetup = Effect.succeed(true);
       if (setup.status === "started") {
         setupTerminalId = setup.terminalId;
         yield* note(`Running setup script "${setup.scriptName}": ${setup.scriptCommand}`);
@@ -821,31 +822,19 @@ const make = Effect.gen(function* () {
           },
         }));
         if (setup.completion) {
-          const awaitCompletion = Effect.gen(function* () {
-            const completion = yield* setup.completion!;
-            yield* note(`Setup script exited with ${completion.exitCode ?? "no exit code"}.`);
-            yield* setupTracker.stage(threadId, "setup-script", {
-              status: completion.exitCode === 0 ? "done" : "failed",
-              detail: `exited with ${completion.exitCode ?? "no exit code"}`,
-            });
-            if (completion.exitCode !== 0 && !setup.async)
-              return yield* mapError(
-                input,
-                "run-setup-script",
-                threadId,
-              )(`Setup script exited with ${completion.exitCode ?? "no exit code"}.`);
-          });
+          const awaitCompletion = awaitSetupCompletion({
+            threadId,
+            completion: setup.completion,
+            note,
+          }).pipe(Effect.provideService(WorktreeSetupTracker.WorktreeSetupTracker, setupTracker));
           if (setup.async) {
-            awaitAsyncSetup = awaitCompletion.pipe(
-              Effect.catchCause((cause) =>
-                setupTracker.stage(threadId, "setup-script", {
-                  status: "failed",
-                  detail: failureDetail(Cause.squash(cause)),
-                }),
-              ),
-            );
-          } else {
-            yield* awaitCompletion;
+            awaitAsyncSetup = awaitCompletion;
+          } else if (!(yield* awaitCompletion)) {
+            return yield* mapError(
+              input,
+              "run-setup-script",
+              threadId,
+            )("Setup script failed; see its terminal output.");
           }
         } else {
           yield* setupTracker.stageStatus(threadId, "setup-script", "done");
@@ -853,7 +842,6 @@ const make = Effect.gen(function* () {
       } else {
         yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
       }
-      yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
       if (runId !== null) {
         yield* threads
@@ -874,8 +862,13 @@ const make = Effect.gen(function* () {
           );
       }
       yield* setupTracker.stageStatus(threadId, "agent", "done");
-      yield* awaitAsyncSetup;
-      yield* setupTracker.finish(threadId, "done");
+      const setupSucceeded = yield* awaitAsyncSetup;
+      yield* setupTracker.markUncancellable(threadId);
+      yield* setupTracker.finish(
+        threadId,
+        setupSucceeded ? "done" : "failed",
+        setupSucceeded ? null : "Setup script failed; see its terminal output.",
+      );
     }).pipe(
       Effect.onError((cause) =>
         Effect.gen(function* () {
@@ -887,7 +880,7 @@ const make = Effect.gen(function* () {
           );
           if (cancelled && setupTerminalId)
             yield* terminals
-              .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
+              .close({ threadId, terminalId: setupTerminalId, deleteHistory: !runReleased })
               .pipe(Effect.ignore);
           if (
             tracked &&
@@ -961,31 +954,34 @@ const make = Effect.gen(function* () {
           threadId,
           cause,
         })
-      : threads
-          .dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make(`${input.commandId}:fail`),
-            threadId,
-            runId,
-            failure: withPreparationLog(
-              makeProviderFailure({
-                cause,
-                message: failureDetail(cause),
-                ...preparationFailureClass(cause),
-              }),
-              log,
-            ),
-          })
-          .pipe(
-            Effect.catchCause((persistCause) =>
-              Effect.logWarning("Failed to persist thread workspace preparation failure", {
-                commandId: input.commandId,
-                threadId,
-                cause,
-                persistCause,
-              }),
-            ),
-          );
+      : threads.getThreadRecords(threadId, ["runs"]).pipe(
+          Effect.flatMap(({ runs }) =>
+            runs.find((run) => run.id === runId)?.status === "preparing"
+              ? threads.dispatch({
+                  type: "prepared-run.fail",
+                  commandId: CommandId.make(`${input.commandId}:fail`),
+                  threadId,
+                  runId,
+                  failure: withPreparationLog(
+                    makeProviderFailure({
+                      cause,
+                      message: failureDetail(cause),
+                      ...preparationFailureClass(cause),
+                    }),
+                    log,
+                  ),
+                })
+              : Effect.void,
+          ),
+          Effect.catchCause((persistCause) =>
+            Effect.logWarning("Failed to persist thread workspace preparation failure", {
+              commandId: input.commandId,
+              threadId,
+              cause,
+              persistCause,
+            }),
+          ),
+        );
 
   const reservePreparation = (commandId: CommandId) =>
     Ref.modify(scheduledLaunches, (scheduled) => {
