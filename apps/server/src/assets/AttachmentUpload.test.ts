@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { ChatAttachmentId } from "@goat/contracts";
+import { ATTACHMENT_UPLOAD_URL_TTL_MS, ChatAttachmentId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -14,6 +14,8 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { makeSweepCursor } from "./PendingAttachmentSweepCursor.ts";
 import { vi } from "vitest";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -22,6 +24,8 @@ vi.mock("node:fs", async (importOriginal) => ({
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode, signPayload } from "../auth/utils.ts";
+import * as AttachmentFileLeases from "./AttachmentFileLeases.ts";
+import * as PendingAttachmentSweep from "./PendingAttachmentSweep.ts";
 import * as ServerConfig from "../config.ts";
 import {
   claimPendingAttachments,
@@ -35,7 +39,8 @@ import {
   validateAttachmentUploadToken,
 } from "./AttachmentUpload.ts";
 
-const layerTest = ServerSecretStore.layer.pipe(
+const layerTest = Layer.merge(ServerSecretStore.layer, PendingAttachmentSweep.layer).pipe(
+  Layer.provideMerge(AttachmentFileLeases.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-attachment-upload-" })),
   Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
 );
@@ -170,6 +175,18 @@ describe("AttachmentUpload", () => {
       expect(yield* validateAttachmentUploadToken(`${payload}x.${signature}`)).toBeNull();
       expect(yield* validateAttachmentUploadToken(`${token}.extra`)).toBeNull();
       expect(yield* validateAttachmentUploadToken("garbage")).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("rejects an upload token at its unchanged expiry boundary", () =>
+    Effect.gen(function* () {
+      const issued = yield* issueAttachmentUploadUrl(uploadInput);
+      yield* TestClock.adjust(ATTACHMENT_UPLOAD_URL_TTL_MS);
+      expect(
+        yield* validateAttachmentUploadToken(
+          issued.relativeUrl.slice(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`.length),
+        ),
+      ).toBeNull();
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -340,6 +357,128 @@ describe("AttachmentUpload", () => {
       yield* Fiber.interrupt(upload);
       expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([]);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "keeps a live old partial, allows an independent upload, and delays its claim until publication",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const leases = yield* AttachmentFileLeases.AttachmentFileLeases;
+        const first = yield* issueAttachmentUploadUrl(uploadInput);
+        const second = yield* issueAttachmentUploadUrl(uploadInput);
+        const claims = yield* validateAttachmentUploadToken(
+          first.relativeUrl.slice(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`.length),
+        );
+        const otherClaims = yield* validateAttachmentUploadToken(
+          second.relativeUrl.slice(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`.length),
+        );
+        if (!claims || !otherClaims) throw new Error("Expected upload claims");
+        const waiting = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const body = Stream.make(new Uint8Array([1, 2, 3])).pipe(
+          Stream.concat(
+            Stream.fromEffect(
+              Deferred.succeed(waiting, undefined).pipe(
+                Effect.andThen(Deferred.await(finish)),
+                Effect.as(new Uint8Array([4, 5, 6])),
+              ),
+            ),
+          ),
+        );
+        const upload = yield* storeAttachmentUpload(claims, body).pipe(Effect.forkScoped);
+        yield* Deferred.await(waiting);
+        const partial = NodeFS.readdirSync(config.attachmentsDir).find((entry) =>
+          entry.endsWith(".part"),
+        );
+        if (!partial) throw new Error("Expected live partial");
+        const now = 1_800_000_000_000;
+        const oldSeconds = (now - 7_200_000) / 1000;
+        NodeFS.utimesSync(NodePath.join(config.attachmentsDir, partial), oldSeconds, oldSeconds);
+        const cursor = makeSweepCursor({
+          attachmentsDir: config.attachmentsDir,
+          withInactiveFile: leases.withInactiveFile,
+        });
+        try {
+          expect(yield* cursor.step(now)).toMatchObject({ deleted: 0, complete: true });
+          expect(NodeFS.existsSync(NodePath.join(config.attachmentsDir, partial))).toBe(true);
+          expect(yield* storeAttachmentUpload(otherClaims, new Uint8Array(6))).toEqual({
+            ok: true,
+          });
+          const claimed = yield* Deferred.make<void>();
+          const claim = yield* claimPendingAttachments({
+            threadId: "claimed-thread",
+            attachments: [
+              { type: "image", id: ChatAttachmentId.make(first.attachmentId), ...uploadInput },
+            ],
+          }).pipe(
+            Effect.tap(() => Deferred.succeed(claimed, undefined)),
+            Effect.forkScoped,
+          );
+          yield* TestClock.adjust(0);
+          const claimedBeforePublication = yield* Deferred.isDone(claimed);
+          yield* Deferred.succeed(finish, undefined);
+          expect(yield* Fiber.join(upload)).toEqual({ ok: true });
+          const result = yield* Fiber.join(claim);
+          expect(claimedBeforePublication).toBe(false);
+          expect(result.claimedPaths).toHaveLength(1);
+        } finally {
+          yield* Deferred.succeed(finish, undefined);
+          yield* cursor.close;
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "keeps the final upload and extraction partial leased until sidecar publication settles",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const leases = yield* AttachmentFileLeases.AttachmentFileLeases;
+        const issued = yield* issueAttachmentUploadUrl({
+          type: "file",
+          name: "test.ipynb",
+          mimeType: "application/json",
+          sizeBytes: 6,
+        });
+        const claims = yield* validateAttachmentUploadToken(
+          issued.relativeUrl.slice(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`.length),
+        );
+        if (!claims) throw new Error("Expected upload claims");
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const now = 1_800_000_000_000;
+        const oldSeconds = (now - 172_800_000) / 1000;
+        const upload = yield* storeAttachmentUpload(claims, new Uint8Array(6)).pipe(
+          Effect.provideService(DocumentText.DocumentText, {
+            ensure: (file) =>
+              Effect.gen(function* () {
+                NodeFS.writeFileSync(`${file}.txt.part`, "text");
+                for (const path of [file, `${file}.txt.part`])
+                  NodeFS.utimesSync(path, oldSeconds, oldSeconds);
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                NodeFS.renameSync(`${file}.txt.part`, `${file}.txt`);
+                return `${file}.txt`;
+              }).pipe(Effect.uninterruptible),
+          }),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(entered);
+        const cursor = makeSweepCursor({
+          attachmentsDir: config.attachmentsDir,
+          withInactiveFile: leases.withInactiveFile,
+        });
+        try {
+          expect(yield* cursor.step(now)).toMatchObject({ deleted: 0, complete: true });
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(upload)).toEqual({ ok: true });
+          expect(yield* cursor.step(now)).toMatchObject({ deleted: 2, complete: true });
+        } finally {
+          yield* Deferred.succeed(release, undefined);
+          yield* cursor.close;
+        }
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("deletes pending uploads without deleting thread-owned copies", () =>

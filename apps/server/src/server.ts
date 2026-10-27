@@ -165,6 +165,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
+import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
@@ -435,9 +436,7 @@ const layerHttpServer = Layer.unwrap(
     );
   }),
 );
-
 const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
-
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
@@ -1322,6 +1321,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
+      Layer.provideMerge(PendingAttachmentSweep.layer),
     );
   }),
 ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));

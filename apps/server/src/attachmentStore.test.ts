@@ -3,7 +3,11 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import { makeSweepCursor } from "./assets/PendingAttachmentSweepCursor.ts";
+import { attachmentIdForFile } from "./assets/AttachmentFileLeases.ts";
+
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   chatAttachmentStableKey,
@@ -13,7 +17,6 @@ import {
   parseAttachmentUuid,
   planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
-  sweepStalePendingAttachments,
   threadHtmlRenderAttachmentIds,
 } from "./attachmentStore.ts";
 
@@ -123,34 +126,59 @@ describe("attachmentStore", () => {
     }
   });
 
-  it("removes expired pending and partial files without touching thread attachments", () => {
-    const attachmentsDir = NodeFS.mkdtempSync(
-      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-sweep-"),
-    );
-    try {
-      const now = 1_800_000_000_000;
-      const oldTimeSeconds = (now - 2 * 24 * 60 * 60 * 1000) / 1000;
-      const uuid = "00000000-0000-4000-8000-000000000002";
-      const pendingPath = NodePath.join(attachmentsDir, `pending-${uuid}.png`);
-      const pendingFilePath = NodePath.join(attachmentsDir, `pending-${uuid}-pdf.pdf`);
-      const sidecarPath = `${pendingFilePath}.txt`;
-      const threadPath = NodePath.join(attachmentsDir, `thread-1-${uuid}.png`);
-      const partialPath = NodePath.join(attachmentsDir, `${uuid}.part`);
-      for (const filePath of [pendingPath, pendingFilePath, sidecarPath, threadPath, partialPath]) {
-        NodeFS.writeFileSync(filePath, Buffer.from("pixels"));
-        NodeFS.utimesSync(filePath, oldTimeSeconds, oldTimeSeconds);
-      }
+  it.effect(
+    "removes expired recognized uploads while keeping unknown partials and thread attachments",
+    () =>
+      Effect.gen(function* () {
+        const attachmentsDir = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3code-attachment-sweep-"),
+        );
+        try {
+          const now = 1_800_000_000_000;
+          const oldTimeSeconds = (now - 2 * 24 * 60 * 60 * 1000) / 1000;
+          const uuid = "00000000-0000-4000-8000-000000000002";
+          const pendingPath = NodePath.join(attachmentsDir, `pending-${uuid}.png`);
+          const pendingFilePath = NodePath.join(attachmentsDir, `pending-${uuid}-pdf.pdf`);
+          const sidecarPath = `${pendingFilePath}.txt`;
+          const threadPath = NodePath.join(attachmentsDir, `thread-1-${uuid}.png`);
+          const partialPath = NodePath.join(attachmentsDir, `${uuid}.part`);
+          const recognizedPartial = `${pendingPath}.00000000-0000-4000-8000-000000000003.part`;
+          for (const filePath of [
+            recognizedPartial,
+            pendingPath,
+            pendingFilePath,
+            sidecarPath,
+            threadPath,
+            partialPath,
+          ]) {
+            NodeFS.writeFileSync(filePath, Buffer.from("pixels"));
+            NodeFS.utimesSync(filePath, oldTimeSeconds, oldTimeSeconds);
+          }
 
-      expect(sweepStalePendingAttachments({ attachmentsDir, nowMs: now })).toEqual({ deleted: 4 });
-      expect(NodeFS.existsSync(pendingPath)).toBe(false);
-      expect(NodeFS.existsSync(pendingFilePath)).toBe(false);
-      expect(NodeFS.existsSync(sidecarPath)).toBe(false);
-      expect(NodeFS.existsSync(partialPath)).toBe(false);
-      expect(NodeFS.existsSync(threadPath)).toBe(true);
-    } finally {
-      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
-    }
-  });
+          const cursor = makeSweepCursor({
+            attachmentsDir,
+            withInactiveFile: (file, remove) =>
+              attachmentIdForFile(file) === undefined ? Effect.succeed("unknown" as const) : remove,
+          });
+          try {
+            expect(yield* cursor.step(now)).toMatchObject({
+              deleted: 4,
+              complete: true,
+            });
+          } finally {
+            yield* cursor.close;
+          }
+          expect(NodeFS.existsSync(pendingPath)).toBe(false);
+          expect(NodeFS.existsSync(pendingFilePath)).toBe(false);
+          expect(NodeFS.existsSync(sidecarPath)).toBe(false);
+          expect(NodeFS.existsSync(partialPath)).toBe(true);
+          expect(NodeFS.existsSync(recognizedPartial)).toBe(false);
+          expect(NodeFS.existsSync(threadPath)).toBe(true);
+        } finally {
+          NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+        }
+      }),
+  );
 });
 
 describe("threadHtmlRenderAttachmentIds", () => {
