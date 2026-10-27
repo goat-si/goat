@@ -1,6 +1,6 @@
 import type { ReplayCase } from "./replay.ts";
 
-export const REPLAY_VERSION = 2;
+export const REPLAY_VERSION = 3;
 const pr = "https://github.com/example/replay-fixture/pull/124";
 const threadId = "11111111-1111-4111-8111-111111111111";
 
@@ -90,7 +90,14 @@ export const replayCases: ReadonlyArray<ReplayCase> = [
     expect: {
       calls: [{ tool: "pull_request.link", args: { url: pr } }],
       notCalls: ["pull_request.watch"],
-      shellMustNot: ["\\bsleep\\b", "gh pr checks[^\\n]*--watch", "gh run watch"],
+      shellMustNot: [
+        "\\bsleep\\b",
+        "gh pr checks[^\\n]*--watch",
+        "gh run watch",
+        "\\buntil\\b[^\\n]*\\bgh (pr|run|api)\\b",
+        "\\bfor \\w+ in [^\\n]*;\\s*do[^\\n]*\\bgh pr checks\\b",
+        "pr-wait",
+      ],
       textMust: ["https://github\\.com/example/replay-fixture/pull/124", "abcdef1234567890"],
     },
   },

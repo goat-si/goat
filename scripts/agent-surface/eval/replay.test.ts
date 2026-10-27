@@ -169,6 +169,30 @@ it.each([
     ]);
 });
 
+it.each([
+  ["until gh pr checks 124; do :; done", "\\buntil\\b[^\\n]*\\bgh (pr|run|api)\\b"],
+  ["until gh run view 123; do :; done", "\\buntil\\b[^\\n]*\\bgh (pr|run|api)\\b"],
+  [
+    "until gh api repos/example/replay-fixture/actions/runs; do :; done",
+    "\\buntil\\b[^\\n]*\\bgh (pr|run|api)\\b",
+  ],
+  [
+    "for attempt in 1 2 3; do gh pr checks 124; done",
+    "\\bfor \\w+ in [^\\n]*;\\s*do[^\\n]*\\bgh pr checks\\b",
+  ],
+  ["node scripts/pr-wait.mjs 124", "pr-wait"],
+])("rejects child CI polling via %s while allowing a one-shot check read", (command, pattern) => {
+  const child = replayCases.find((entry) => entry.id === "child-links-without-watching");
+  if (!child) throw new Error("Missing child-PR regression case");
+  const continuation = (command: string) =>
+    run(
+      [dispatch("pull_request.link", { url: pr }), call("Bash", { command })],
+      `PR ${pr}, head abcdef1234567890, checks pending, reviews not requested`,
+    );
+  expect(failed(child.expect, continuation("gh pr checks 124"))).toEqual([]);
+  expect(failed(child.expect, continuation(command))).toEqual([`shellMustNot /${pattern}/`]);
+});
+
 it("rejects asking an isolated child to create an unmanaged worktree or clone", () => {
   const managed = replayCases.find((entry) => entry.id === "delegate-uses-managed-worktree");
   if (!managed) throw new Error("Missing managed-worktree regression case");
