@@ -25,6 +25,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Settings from "../serverSettings.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
+import { providerHomeRouteKey, supportsProviderHome } from "./ProviderHomeAdapters.ts";
 
 export type SettingsRevision = { readonly epoch: string; readonly sequence: number };
 export type ApprovedInstancePrecondition = {
@@ -114,8 +115,15 @@ export class CodexRouteState extends Context.Service<
   {
     readonly admission: Semaphore.Semaphore;
     readonly revision: () => SettingsRevision;
+    /** Process-local token a created runtime captures; a commit that changes the instance bumps it. */
+    readonly generation: (id: ProviderInstanceId) => string;
+    readonly assertGeneration: (
+      id: ProviderInstanceId,
+      expected: string,
+    ) => Effect.Effect<void, ServerSettingsError>;
     readonly reserveUse: (
       id: ProviderInstanceId,
+      expectedGeneration?: string,
     ) => Effect.Effect<void, ServerSettingsError, Scope.Scope>;
     readonly validate: (
       current: ServerSettings,
@@ -138,6 +146,16 @@ const makeState = Effect.gen(function* () {
   const epoch = NodeCrypto.randomUUID();
   let sequence = 0;
   const leases = new Map<string, number>();
+  const generations = new Map<string, number>();
+  const generation = (id: ProviderInstanceId) => `${epoch}:${generations.get(id) ?? 0}`;
+  const assertGeneration = (id: ProviderInstanceId, expected: string) =>
+    Effect.suspend(() =>
+      generation(id) === expected
+        ? Effect.void
+        : Effect.fail(
+            RouteSettingsError.explained("This provider runtime was replaced. Refresh and retry."),
+          ),
+    );
   const pending = new Map<
     number,
     {
@@ -164,10 +182,13 @@ const makeState = Effect.gen(function* () {
   return CodexRouteState.of({
     admission,
     revision,
-    reserveUse: (id) =>
+    generation,
+    assertGeneration: (id, expected) => admission.withPermits(1)(assertGeneration(id, expected)),
+    reserveUse: (id, expectedGeneration) =>
       admission.withPermits(1)(
         Effect.acquireRelease(
           Effect.gen(function* () {
+            if (expectedGeneration !== undefined) yield* assertGeneration(id, expectedGeneration);
             if ([...pending.values()].some((entry) => entry.ids.includes(id)))
               return yield* RouteSettingsError.explained(
                 "Provider settings are awaiting application. Refresh and retry.",
@@ -197,7 +218,7 @@ const makeState = Effect.gen(function* () {
             approval.expectedRevision.sequence !== sequence ||
             instanceFingerprint(current.providerInstances[approval.instanceId]) !==
               approval.expectedFingerprint ||
-            current.providerInstances[approval.instanceId]?.driver !== "codex")
+            !supportsProviderHome(current.providerInstances[approval.instanceId]?.driver))
         )
           return yield* RouteSettingsError.explained("This approval is stale. Ask again.");
         for (const rawId of new Set([
@@ -214,8 +235,10 @@ const makeState = Effect.gen(function* () {
               "Provider settings are awaiting application. Refresh and retry.",
             );
           if (
-            codexRouteKey(current.providerInstances[id]) !==
-              codexRouteKey(next.providerInstances[id]) &&
+            (codexRouteKey(current.providerInstances[id]) ??
+              providerHomeRouteKey(current.providerInstances[id])) !==
+              (codexRouteKey(next.providerInstances[id]) ??
+                providerHomeRouteKey(next.providerInstances[id])) &&
             (leases.get(id) ?? 0) > 0
           )
             return yield* new ProviderInstanceBusyError({
@@ -241,6 +264,7 @@ const makeState = Effect.gen(function* () {
               instanceFingerprint(current.providerInstances[id]) !==
               instanceFingerprint(next.providerInstances[id]),
           );
+        for (const id of ids) generations.set(id, (generations.get(id) ?? 0) + 1);
         if (ids.length > 0)
           pending.set(sequence, { ids, ack: yield* Deferred.make<void, ServerSettingsError>() });
         return revision();
@@ -312,8 +336,10 @@ const make = Effect.gen(function* () {
       (settings.withStoredSettingsSnapshot ?? settings.withSettingsSnapshot)((snapshot) =>
         Effect.gen(function* () {
           const instance = snapshot.providerInstances[id];
-          if (!instance || instance.driver !== "codex")
-            return yield* RouteSettingsError.explained("Choose an existing Codex instance.");
+          if (!instance || !supportsProviderHome(instance.driver))
+            return yield* RouteSettingsError.explained(
+              "Choose an existing Codex, Claude Code, OpenCode, or Pi instance.",
+            );
           return {
             instance,
             fingerprint: instanceFingerprint(instance),

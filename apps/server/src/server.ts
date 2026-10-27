@@ -892,7 +892,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   (application) =>
     provideMemorySnapshot(
       application,
-      ProviderInstanceRegistryHydration.layer.pipe(
+      ProviderInstanceRegistryHydration.layerWithProviderHome.pipe(
         Layer.provide(
           layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
         ),

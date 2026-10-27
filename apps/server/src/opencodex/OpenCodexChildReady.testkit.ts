@@ -208,6 +208,8 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(CodexRoute.CodexRouteState)({
       admission: Semaphore.makeUnsafe(1),
       revision: () => state.revision,
+      generation: () => "fixture:0",
+      assertGeneration: () => Effect.void,
       reserveUse: () =>
         state.routeBusy
           ? Effect.fail(new ServerSettingsError({ settingsPath: "<test>", operation: "normalize" }))

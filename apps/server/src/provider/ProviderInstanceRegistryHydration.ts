@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
+import { layerProviderHomeInventory } from "./ProviderHomeRuntime.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
@@ -218,3 +219,6 @@ export const layer: Layer.Layer<
   never,
   ProviderInstanceRegistryHydrationEnv
 >;
+
+/** The server's registry, with the OpenCodex inventory that routed Home drivers read. */
+export const layerWithProviderHome = layer.pipe(Layer.provide(layerProviderHomeInventory));
