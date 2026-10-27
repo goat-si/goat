@@ -7,6 +7,14 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
+  it("keeps palette reference queries aligned with renamed repository fixtures", () => {
+    const source = '"pingdotgg/t3code#22889" "t3code#22889" "t3code#2288"';
+    expect(apply("packages/shared/src/paletteSearch.test.ts", source)).toBe(
+      '"goat-si/goat#22889" "goat#22889" "goat#2288"',
+    );
+    expect(apply("src/legacy.ts", '"t3code#22889"')).toBe('"t3code#22889"');
+  });
+
   it("renames maintainer samples in tests", () => {
     expect(
       apply(

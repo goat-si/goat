@@ -64,6 +64,13 @@ const sampleRepo = (id: string, find: RegExp, replace: string): TextRule => ({
 
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "samples:palette-reference-query",
+    category: "samples",
+    find: /(?<![\w/])t3code(?=#\d)/g,
+    replace: "goat",
+    scope: (path) => path === "packages/shared/src/paletteSearch.test.ts",
+  },
+  {
     // Upstream's hosted app is no longer an accepted Codex sign-in return; these tests return to the desktop.
     id: "samples:auth-return-origin",
     category: "samples",
