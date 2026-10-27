@@ -385,23 +385,32 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Safety
 
-- **Approvals.** Outside full access, a person approves apps per thread, or always, through a
-  handoff that needs `settings:write` in an authenticated client session. A run in full-access
+- **Approvals.** Outside full access, an agent asks with `computer_use.request` for the apps it
+  names, or for the whole screen, and for a span of 5 to 120 minutes, 30 by default
+  (`ComputerUseRequestInput` in `packages/contracts/src/cua.ts`). The request is an approval
+  handoff on the `computer_use.grant` path, answered by a person with `settings:write` in an
+  authenticated client session. A run in full-access
   runtime mode skips these approvals whoever or whatever started it
   ([ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), D16); everything else
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
-  It lists the apps open when the driver starts. An app opened later joins only when an approval,
-  or a full access `computer_use.request`, names it; the desktop then rewrites the manifest with
-  the same exclusions. That is how an agent reaches a GOAT dev build it launched (its own
-  per-worktree bundle id) while the host GOAT it runs in stays out.
-  The approval card names the app and machine, warns when the app is high risk, explains on first
-  use that screenshots of its windows reach the model, and offers "Allow this conversation",
-  "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
-  executable path) at approval time, and the action runs on that frozen target, so a request
-  cannot be approved for one app and executed against another. "Always" approvals are listed in
-  Settings, where a person removes them; outside full access, a removed app asks again.
+  It lists the apps open when the driver starts. When an approval, or a full access
+  `computer_use.request`, names an app it lacks, the desktop lists the open apps again and
+  rewrites it with the same exclusions, so every app opened since then joins, not only the one
+  named (`apps/desktop/src/cua/DesktopCuaManifest.ts`); a thread's app scope below is checked
+  separately. That is how an agent reaches a GOAT dev build it launched (its own per-worktree
+  bundle id) while the host GOAT it runs in stays out.
+  The card offers Approve and Decline (`apps/server/src/cua/ComputerUseRequests.ts`).
+  Approving admits that thread's turns to those apps, by the ids `list_apps` reports, until the
+  request's expiry, which counts from when the agent asked; it never approves each action. Under
+  an app list, the proxy ties each call on a window or app to its target pid and refuses one
+  outside the list; discovery calls stay unscoped, and a macOS launch must name an approved bundle
+  id (`apps/server/src/cua/ComputerUseScope.ts`). Foreground approval is shorter: pause, Stop,
+  takeover, control replacement or the end of the turn revokes it, and the next foreground input
+  needs a new approval. Every approval is time-bounded: there is no standing "always" approval
+  and no list of approved apps in Settings. A person ends one early with "End computer use" on
+  its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.
@@ -455,8 +464,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   driver under the helper that reports the helper's bundle identity and service pid, reads a
   non-empty accessibility tree and captures a non-blank window. The desktop verify
   (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
-  permission guide should drag the helper bundle into System Settings;
-  `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
+  permission guide drags the app that holds the grants into System Settings: the helper bundle
+  when one runs, GOAT.app otherwise (`apps/desktop/src/ipc/methods/cua.ts`,
+  `apps/desktop/src/permissions/MacPermissionHelper.ts`). The desktop expects its channel's
+  helper id (`computerUseHelperBundleIdForChannel` in `packages/shared/src/cuaDriverRelease.ts`),
+  never one derived from a dev checkout's own app id, so every dev checkout runs the one
+  `si.goat.desktop.dev.computer-use` helper and macOS keeps one set of its grants (#1275).
 - **Guided macOS grant** (lead decision D14, Jun's highest priority). Onboarding walks two steps,
   Accessibility, then Screen & System Audio Recording. Each step opens the exact System Settings
   pane and places a small always-on-top guide panel next to it that shows the helper's real app

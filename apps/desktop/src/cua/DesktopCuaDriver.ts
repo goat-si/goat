@@ -10,7 +10,6 @@ import {
 import { cuaRequestableApps, isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
-  computerUseHelperBundleId,
   cuaDriverHostOptions,
   cuaDriverListingEnvironment,
   cuaDriverRelease,
@@ -277,7 +276,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
     if (environment.platform === "darwin" || environment.platform === "win32") {
-      const bundleId = computerUseHelperBundleId(environment.appUserModelId);
+      const bundleId = environment.computerUseHelperBundleId;
       const found = yield* Effect.tryPromise(() =>
         native.helperBundlePath({
           isPackaged: environment.isPackaged,

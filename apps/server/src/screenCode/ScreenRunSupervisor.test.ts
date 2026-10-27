@@ -193,6 +193,98 @@ it.live("hung post-cell availability returns within its bound", () =>
   }),
 );
 
+it.live("a failed availability read after the result keeps the live child and its values", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.die(new Error("availability read failed")),
+      dispatch: () => Effect.succeed({ value: true, category: "confirmed" }),
+    });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    yield* Effect.gen(function* () {
+      const first = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("one", limits) },
+        "screen.values.kept = 7; return 1;",
+        false,
+      );
+      expect(first.status).toBe("completed");
+      expect(first.value).toBe(1);
+      expect(first.availability).toEqual([
+        { kind: "app", available: false, reason: "no_lease" },
+        { kind: "tab", available: false, reason: "no_host" },
+      ]);
+      expect(supervisor.activeCount()).toBe(1);
+      const second = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("two", limits) },
+        "return screen.values.kept;",
+        false,
+      );
+      expect(second.value).toBe(7);
+    }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
+  }),
+);
+
+it.live("a deadline stops a queued call before it dispatches and journals it undispatched", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 1000 });
+    const held = yield* Deferred.make<void>();
+    const window = {
+      id: "window-1",
+      kind: "app" as const,
+      environmentId: "env",
+      runId: "r",
+      turnId: "t",
+      generation: 1,
+    };
+    let clicks = 0;
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (call) =>
+        call.method === "bind_app"
+          ? Effect.succeed({ value: window, category: "unverifiable" as const })
+          : Effect.sync(() => clicks++).pipe(
+              Effect.flatMap(() => Deferred.await(held)),
+              Effect.as({ value: true, category: "confirmed" as const }),
+            ),
+    });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    yield* Effect.gen(function* () {
+      // A booted child, so its wall limit and the supervisor's start together.
+      yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("warmup", limits) },
+        "return true;",
+        false,
+      );
+      // The second click waits behind the first on the window's gate when the deadline hits.
+      const result = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("queued", limits) },
+        "const app = await screen.app({bundle_id: 'x', window_id: 1}); app.click({x: 1, y: 1}); return await app.click({x: 2, y: 2});",
+        false,
+      );
+      expect(result.status).toBe("deadline");
+      expect(supervisor.activeCount()).toBe(1);
+      expect(clicks).toBe(1);
+      expect(
+        result.journal.map((entry) => [entry.receipt.method, entry.receipt.dispatched]),
+      ).toEqual([
+        ["bind_app", true],
+        ["click", true],
+        ["click", false],
+      ]);
+      expect(result.journal.slice(1).map((entry) => entry.receipt.category)).toEqual([
+        "unknown_outcome",
+        "unknown_outcome",
+      ]);
+      yield* Deferred.succeed(held, undefined);
+    }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
+    expect(clicks).toBe(1);
+  }),
+);
+
 it.live(
   "a Stop while availability is read after the result keeps the result and its receipts",
   () =>

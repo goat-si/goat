@@ -17,8 +17,9 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   COMPUTER_USE_HELPER_NAME,
-  computerUseHelperBundleId,
+  computerUseHelperBundleIdForChannel,
   cuaDriverRelease,
+  type DesktopChannel,
 } from "@goat/shared/cuaDriverRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -36,16 +37,9 @@ import {
   type ReleaseCommandRunner,
 } from "./lib/release-verify.ts";
 
-export type HelperChannel = "stable" | "nightly" | "dev";
+export type HelperChannel = DesktopChannel;
 
-const CHANNEL_APP_IDS: Record<HelperChannel, string> = {
-  stable: "si.goat.desktop",
-  nightly: "si.goat.desktop.nightly",
-  dev: "si.goat.desktop.dev",
-};
-
-export const helperBundleIdForChannel = (channel: HelperChannel) =>
-  computerUseHelperBundleId(CHANNEL_APP_IDS[channel]);
+export const helperBundleIdForChannel = computerUseHelperBundleIdForChannel;
 
 const KEYCHAIN_REMEDY =
   "Run the build from Terminal while signed in to this Mac (an SSH or agent session usually cannot use the login keychain), and choose Always Allow when macOS asks to let codesign use the key.";
