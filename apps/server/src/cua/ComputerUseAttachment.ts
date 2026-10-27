@@ -30,7 +30,7 @@ import { installComputerUseSkill } from "./ComputerUseGuide.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import { everyAppKind } from "./ComputerUseFullAccess.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
+import { type ComputerUseOrigin, usesScreenLikePerson } from "./ComputerUseOrigin.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 
 export type ComputerUseRefusal =
@@ -111,11 +111,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   cua: Option.Option<CuaDriver.CuaDriver["Service"]>,
   input: ComputerUseAttachmentInput,
 ) {
-  // A remote launcher cannot be read here; in full access its threads use the screen like a
-  // person's (owner decision, Jun, 2026-10-28). Steering and other modes still see it unattended.
-  const unattended =
-    input.origin._tag === "unattended" &&
-    !(input.origin.reason === "launched_remotely" && input.runtimeMode === "full-access");
+  const unattended = !usesScreenLikePerson(input.origin, input.runtimeMode);
   if (input.driver === undefined || !COMPUTER_USE_PROVIDER_DRIVERS.has(input.driver))
     return none("unsupported-provider", unattended);
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", unattended);

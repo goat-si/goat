@@ -146,11 +146,25 @@ describe("computerUseOrigin", () => {
             },
           },
           remoteChild: {
+            createdAt: at(2),
             launchedBy: { kind: "launch", threadId: ThreadId.make("remote"), environmentId: null },
           },
         },
-        runs: { mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)] },
-        messages: { m1: typed(1), m2: { createdAt: at(10), scheduledTaskId: "task-1" } },
+        runs: {
+          mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)],
+          remoteChild: [run("launch", "m3", 2)],
+        },
+        messages: {
+          m1: typed(1),
+          m2: { createdAt: at(10), scheduledTaskId: "task-1" },
+          // thread.launch sends the child's first message as the launching thread.
+          m3: {
+            createdAt: at(2),
+            senderThreadId: ThreadId.make("remote"),
+            createdBy: "agent",
+            creationSource: "mcp",
+          },
+        },
       };
       const launched = { _tag: "unattended", reason: "launched_by_unattended" } as const;
       assert.deepEqual(yield* classify(world, "botChild"), launched);

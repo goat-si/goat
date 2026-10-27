@@ -4,9 +4,9 @@
  * Unattended turns come from GOAT Bot, channel tasks, scheduled and webhook tasks, messages
  * another unattended thread sent, and threads such a turn launched or delegated to. They get the
  * driver only through an approved lease or full access (ComputerUseLeases). Threads launched from
- * another environment, and threads they launch, are `launched_remotely`: in full access they
- * use the screen like a person's threads (ComputerUseAttachment). Every read that fails or runs
- * out of lineage counts as unattended.
+ * another environment, and turns they launch or send here, are `launched_remotely`: in full
+ * access they use the screen like a person's (usesScreenLikePerson). Every read that fails or
+ * runs out of lineage counts as unattended.
  *
  * @module ComputerUseOrigin
  */
@@ -109,6 +109,25 @@ const unattended = (reason: UnattendedReason): ComputerUseOrigin => ({
   _tag: "unattended",
   reason,
 });
+/** A remote launch stays one through every send and launch it makes on this host. */
+const unattendedVia = (from: ComputerUseOrigin, reason: UnattendedReason) =>
+  unattended(
+    from._tag === "unattended" && from.reason === "launched_remotely"
+      ? "launched_remotely"
+      : reason,
+  );
+
+/**
+ * Whether this turn uses the screen like a person's thread. A remote launcher cannot be read
+ * here; in full access its threads do too (owner decision, Jun, 2026-10-28). Steering and other
+ * modes still see them as unattended.
+ */
+export const usesScreenLikePerson = (
+  origin: ComputerUseOrigin,
+  runtimeMode: string | undefined,
+): boolean =>
+  origin._tag === "interactive" ||
+  (origin.reason === "launched_remotely" && runtimeMode === "full-access");
 // Lineage longer than this is not a person's thread tree; stop and treat it as unattended.
 const MAX_DEPTH = 8;
 
@@ -154,7 +173,7 @@ const classify: (
         (runs) => runAt(runs, message.createdAt),
         depth + 1,
       );
-      if (sender._tag === "unattended") return unattended("sent_by_unattended");
+      if (sender._tag === "unattended") return unattendedVia(sender, "sent_by_unattended");
     }
   }
 
@@ -174,10 +193,7 @@ const classify: (
       (runs) => runAt(runs, thread.createdAt),
       depth + 1,
     );
-    if (parent._tag === "unattended")
-      return unattended(
-        parent.reason === "launched_remotely" ? "launched_remotely" : "launched_by_unattended",
-      );
+    if (parent._tag === "unattended") return unattendedVia(parent, "launched_by_unattended");
   }
   return INTERACTIVE;
 });

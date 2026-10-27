@@ -163,7 +163,7 @@ it.effect(
             undefined,
             Option.none(),
             undefined,
-            true,
+            "schedule",
           );
           assert.equal(result.kind, "needs_human", JSON.stringify(signals));
         }

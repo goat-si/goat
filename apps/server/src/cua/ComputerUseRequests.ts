@@ -30,7 +30,11 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import type { ComputerUseAnswer } from "../handoffs/computerUseContinuations.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { computerUseOrigin, projectionOriginReads } from "./ComputerUseOrigin.ts";
+import {
+  computerUseOrigin,
+  projectionOriginReads,
+  usesScreenLikePerson,
+} from "./ComputerUseOrigin.ts";
 
 const DEFAULT_MINUTES = 30;
 
@@ -248,7 +252,11 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   });
   // A repeated request returns the pending handoff with its original expiry.
   const approvedUntil = DateTime.formatIso(handoff.expiresAt ?? expiresAt);
-  if (input.wait !== undefined && origin._tag === "interactive" && Option.isSome(current)) {
+  if (
+    input.wait !== undefined &&
+    usesScreenLikePerson(origin, view.projection.thread.runtimeMode) &&
+    Option.isSome(current)
+  ) {
     const controlId = current.value.controlId;
     // Under the Handoffs lock: whether this turn can still use the answer it is given.
     const settle = Effect.fn("ComputerUse.settleAnswer")(
