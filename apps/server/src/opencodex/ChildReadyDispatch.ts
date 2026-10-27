@@ -1,5 +1,4 @@
 import {
-  type ChildReadyAddress,
   ChildReadyFailure,
   ChildReadyFailureCode,
   type ChildReadyPrepareInput,
@@ -376,63 +375,20 @@ export const make = (dispatch: Pick<Dispatch.SshRemoteDispatch["Service"], "call
     return setup;
   });
 
-  /** A non-billed read of the Child's device state and setup, under ordinary read authority. */
+  /**
+   * A non-billed read of the Child's device state and setup on its own status purpose: a
+   * read-scoped bearer that lives the short status phase plus grace and allows nothing else.
+   */
   const status = Effect.fn("ChildReadyDispatch.status")(function* (
     alias: string,
-    address: ChildReadyAddress,
-    admission: {
-      readonly runtimeMode: RuntimeMode;
-      readonly authorize: Effect.Effect<void, OrchestratorMcpFailure>;
-    },
+    admission: ChildSetupAdmission,
   ) {
     const step = "link_established" as const;
-    yield* admission.authorize.pipe(atStep(step));
-    const result = yield* dispatch
-      .callHostTool(
-        {
-          host: alias,
-          environmentId: address.destinationEnvironmentId,
-          tool: "goat_hub_child_status",
-          arguments: { ...address },
-          writes: false,
-          requireReady: true,
-          timeoutMs: PHASE_CALL_MS.status,
-        },
-        admission.authorize.pipe(atStep(step), Effect.as(admission.runtimeMode)),
-      )
-      .pipe(Effect.result);
-    yield* admission.authorize.pipe(atStep(step));
-    if (result._tag === "Failure")
-      return yield* new ChildReadyDispatchFailure({
-        failure: toChildReadyFailure(result.failure, step),
-      });
-    const decoded = yield* decodeChildReadyResult(result.success).pipe(
-      Effect.mapError(
-        () =>
-          new ChildReadyDispatchFailure({
-            failure: {
-              code: "remote_outdated",
-              step,
-              message: "Update GOAT on this Child, then continue setup.",
-              retryable: false,
-            },
-          }),
-      ),
-    );
-    if (decoded.kind === "error")
-      return yield* new ChildReadyDispatchFailure({ failure: decoded.failure });
-    if (decoded.kind !== "device")
+    const purpose = yield* beginPhase(admission, "status", step);
+    const device = yield* callChild(alias, admission, purpose, "status", step);
+    if (device.kind !== "device")
       return yield* refuse("remote_outdated", step, "Typed device status is required.");
-    if (
-      decoded.destinationEnvironmentId !== address.destinationEnvironmentId ||
-      decoded.homeEnvironmentId !== address.homeEnvironmentId
-    )
-      return yield* refuse(
-        "destination_changed",
-        step,
-        "Child status answered for another destination.",
-      );
-    return decoded;
+    return device;
   });
   return { prepare, complete, status };
 };

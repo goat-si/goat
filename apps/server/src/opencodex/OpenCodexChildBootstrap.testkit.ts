@@ -1,5 +1,6 @@
 import {
   AuthSessionId,
+  CHILD_READY_PROOF_TTL_MS,
   type ChildReadyFailure,
   type ChildSetupBinding,
   type ServerSettings,
@@ -9,6 +10,8 @@ import {
   type AuthClientSession,
   type AuthEnvironmentScope,
   type HubDeviceOperationResult,
+  type OpenCodexChildSetup,
+  ProviderInstanceId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -97,6 +100,14 @@ export interface Machine {
   completed: string[];
   /** Home link records beyond the fleet fixture's. */
   extraLinks: ReadonlyArray<{ readonly id: string; readonly alias: string }>;
+  /** Whether the Child's Ready carries a proof, which Home status then confirms with it. */
+  readyProof: boolean;
+  /** The Child's own setup as its status reads it; set when it completes. */
+  childSetup: OpenCodexChildSetup | undefined;
+  /** A status read of the Child fails with this while set. */
+  statusFailure: ChildReadyFailure | undefined;
+  /** Status reads the Home made of the Child. */
+  statusReads: number;
   /** Replaces the Child protocol double with a production dispatch over a transport double. */
   readyDispatch: ReadyDispatch.ChildReadyDispatch["Service"] | undefined;
   /** Runs while the Home ensures GOAT's runtime on the machine. */
@@ -110,18 +121,48 @@ const PREPARE_FAILURE: Record<number, ChildReadyFailure["code"]> = {
   [PREPARE_EXIT.ocxUnusable]: "ocx_unusable",
   [PREPARE_EXIT.runtimeUnhealthy]: "startup_failed",
 };
-const readySetup = (admission: ReadyDispatch.ChildSetupAdmission) => ({
-  version: 1 as const,
-  operationId: admission.binding.operationId,
-  destinationEnvironmentId: admission.binding.destinationEnvironmentId,
-  homeEnvironmentId: admission.binding.homeEnvironmentId,
-  instanceId: "goat_ocx_0123456789abcdef01234567" as never,
-  revision: { epoch: "e", sequence: 1 },
-  steps: [],
-  readiness: "ready" as const,
-  attribution: "home_zero_local_accounts" as const,
-  nextAction: "none" as const,
-});
+const readySetup = (
+  admission: ReadyDispatch.ChildSetupAdmission,
+  proof: boolean,
+): OpenCodexChildSetup => {
+  const { operationId, destinationEnvironmentId, homeEnvironmentId } = admission.binding;
+  const instanceId = ProviderInstanceId.make("goat_ocx_0123456789abcdef01234567");
+  return {
+    version: 1,
+    operationId,
+    destinationEnvironmentId,
+    homeEnvironmentId,
+    instanceId,
+    revision: { epoch: "e", sequence: 1 },
+    steps: [],
+    readiness: "ready",
+    attribution: "home_zero_local_accounts",
+    nextAction: "none",
+    ...(proof
+      ? {
+          proof: {
+            version: 1,
+            operationId,
+            destinationEnvironmentId,
+            homeEnvironmentId,
+            instanceId,
+            configFingerprint: "config",
+            executablePath: "/fixture/codex",
+            executableVersion: "0.156.0",
+            linkId: "r2-link",
+            listenerInstanceId: "listener",
+            settingsDigest: "settings",
+            catalogDigest: "catalog",
+            model: "fixture-model",
+            completedAt: 0,
+            expiresAt: CHILD_READY_PROOF_TTL_MS,
+            attribution: "home_zero_local_accounts",
+            localAccountsDigest: "zero-local",
+          },
+        }
+      : {}),
+  };
+};
 /** The Child's side as typed answers: prepare as the old exit codes said, complete as told. */
 const childProtocol = (
   machine: Machine,
@@ -158,13 +199,35 @@ const childProtocol = (
   complete: (alias, _home, admission, linkId) =>
     Effect.suspend(() => {
       machine.completed.push(`${alias} ${linkId}`);
-      return machine.completeFailure === undefined
-        ? Effect.succeed(readySetup(admission))
-        : Effect.fail(
-            new ReadyDispatch.ChildReadyDispatchFailure({ failure: machine.completeFailure }),
-          );
+      if (machine.completeFailure !== undefined)
+        return Effect.fail(
+          new ReadyDispatch.ChildReadyDispatchFailure({ failure: machine.completeFailure }),
+        );
+      machine.childSetup = readySetup(admission, machine.readyProof);
+      return Effect.succeed(machine.childSetup);
     }),
-  status: () => Effect.die("unused"),
+  status: (_alias, admission) =>
+    Effect.suspend(() => {
+      machine.statusReads++;
+      if (machine.statusFailure !== undefined)
+        return Effect.fail(
+          new ReadyDispatch.ChildReadyDispatchFailure({ failure: machine.statusFailure }),
+        );
+      return Effect.succeed({
+        kind: "device" as const,
+        destinationEnvironmentId: admission.binding.destinationEnvironmentId,
+        homeEnvironmentId: admission.binding.homeEnvironmentId,
+        healthy: true,
+        revision: { epoch: "e", sequence: 1 },
+        device: {
+          platform: "linux",
+          arch: "x64",
+          ocx: { path: "/fixture/ocx", version: "2.91.0", ownership: "managed" as const },
+          connection: { role: "client" as const, linkId: "r2-link" },
+        },
+        ...(machine.childSetup === undefined ? {} : { setup: machine.childSetup }),
+      });
+    }),
 });
 
 const clientSession = (
@@ -408,6 +471,10 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     onRevoke: () => Effect.void,
     completed: [],
     extraLinks: [],
+    readyProof: false,
+    childSetup: undefined,
+    statusFailure: undefined,
+    statusReads: 0,
     readyDispatch: undefined,
     ...overrides,
   };

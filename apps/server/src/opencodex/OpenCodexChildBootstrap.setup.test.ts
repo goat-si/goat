@@ -16,8 +16,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import { presentSetupAction } from "./childBootstrapStatus.ts";
+import { READY_CHECK_TTL_MS } from "./childReadyVerification.ts";
 import * as ReadyDispatch from "./ChildReadyDispatch.ts";
 import { build, setup } from "./OpenCodexChildBootstrap.testkit.ts";
 
@@ -286,6 +288,63 @@ it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
       const status = yield* Fiber.join(pending);
       expect(status?.setup?.readiness).not.toBe("ready");
       expect(["setup_approval_revoked", "setup_approval_stale"]).toContain(status?.failure?.code);
+    }),
+  );
+  it.effect("shows Ready only while a fresh Child status confirms the recorded proof", () =>
+    Effect.gen(function* () {
+      const statusRevoked = yield* Deferred.make<string>();
+      let setupDone = false;
+      const home = yield* setup({
+        readyProof: true,
+        onRevoke: (binding) =>
+          setupDone
+            ? Deferred.succeed(statusRevoked, binding.operationId).pipe(Effect.asVoid)
+            : Effect.void,
+      });
+      yield* home.bootstrap.ensure("boat-builder");
+      setupDone = true;
+      expect(yield* home.bootstrap.status("boat-builder")).toMatchObject({
+        setup: { readiness: "ready", proof: { linkId: "r2-link" } },
+      });
+      // The status read's own short session is revoked after it, not the setup operation's.
+      expect(yield* Deferred.await(statusRevoked)).not.toBe(home.machine.childSetup?.operationId);
+      // A confirmation stands briefly: a second read asks the Child nothing.
+      yield* home.bootstrap.status("boat-builder");
+      expect(home.machine.statusReads).toBe(1);
+      // The Child's own validation now fails, as when its Codex release was replaced.
+      const childSetup = home.machine.childSetup;
+      if (childSetup === undefined) return yield* Effect.die("Expected the Child's setup");
+      const { proof: _proof, ...withoutProof } = childSetup;
+      home.machine.childSetup = {
+        ...withoutProof,
+        readiness: "invalid",
+        failure: failure("route_unverified", true),
+      };
+      yield* TestClock.adjust(READY_CHECK_TTL_MS);
+      const after = yield* home.bootstrap.status("boat-builder");
+      expect(home.machine.statusReads).toBe(2);
+      expect(after?.setup?.readiness).toBe("linked");
+      expect(after?.setup?.proof).toBeUndefined();
+      expect(after?.setup?.failure?.code).toBe("route_unverified");
+      expect(after).toMatchObject({ state: "child", nextAction: "retry", actionable: true });
+    }),
+  );
+
+  it.effect("shows an unreachable Child as linked and unverified, never Ready", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ readyProof: true });
+      yield* home.bootstrap.ensure("boat-builder");
+      home.machine.statusFailure = {
+        code: "unreachable",
+        step: "link_established",
+        message: "The Child did not answer the setup request.",
+        retryable: true,
+      };
+      const status = yield* home.bootstrap.status("boat-builder");
+      expect(status?.setup?.readiness).toBe("linked");
+      expect(status?.setup?.attribution).toBe("unproven");
+      expect(status?.setup?.proof).toBeUndefined();
+      expect(status?.setup?.failure?.code).toBe("unreachable");
     }),
   );
 });

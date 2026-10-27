@@ -1,7 +1,9 @@
 import { expect, it } from "@effect/vitest";
 import {
+  CHILD_SETUP_PHASE_MS,
   type ChildReadyResult,
   type ChildSetupBinding,
+  childSetupPurposeAllowsAction,
   EnvironmentId,
   OpenCodexChildSetup,
   OrchestratorMcpFailure,
@@ -374,16 +376,10 @@ it.effect.each(boundaryCases)(
     }),
 );
 
-it.effect("reports link_established when a post-link status read loses its transport", () =>
+it.effect("reads status on a short status-only purpose and reports a lost transport", () =>
   Effect.gen(function* () {
     const f = yield* fixture({ transportFailureAt: "status" });
-    const result = yield* f.dispatch
-      .status(
-        "r2-alias",
-        { destinationEnvironmentId: f.child, homeEnvironmentId: f.home },
-        f.admission,
-      )
-      .pipe(Effect.result);
+    const result = yield* f.dispatch.status("r2-alias", f.admission).pipe(Effect.result);
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure")
       expect(failureOf(result.failure)).toMatchObject({
@@ -391,6 +387,10 @@ it.effect("reports link_established when a post-link status read loses its trans
         step: "link_established",
       });
     expect(f.calls).toHaveLength(1);
-    expect(f.calls[0]?.childSetupPurpose).toBeUndefined();
+    const purpose = f.calls[0]?.childSetupPurpose;
+    expect(purpose?.phase).toBe("status");
+    expect(purpose && purpose.phaseDeadline - purpose.issuedAt).toBe(CHILD_SETUP_PHASE_MS.status);
+    expect(purpose && childSetupPurposeAllowsAction(purpose, "configure")).toBe(false);
+    expect(f.calls[0]?.writes).toBe(false);
   }),
 );

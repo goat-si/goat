@@ -10,6 +10,7 @@ import {
   OpenCodexChildBootstrapStatus,
   type EnvironmentAuthorizationError,
   type HubDeviceMcpResult,
+  type OpenCodexChildSetup,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
@@ -49,6 +50,7 @@ import {
   withCurrentProof,
   withSetupFailure,
 } from "./childBootstrapStatus.ts";
+import { makeReadyVerifier } from "./childReadyVerification.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
 import { CHILD_MINIMUM_VERSION } from "./childPrepare.ts";
 import { makeSshChildConsent } from "./sshChildConsent.ts";
@@ -783,13 +785,51 @@ const make = Effect.gen(function* () {
     Effect.ignore({ log: true }),
   );
 
-  /** The last outcome, with its next action; an expired proof reads invalid. No request. */
+  /** The machine's standing consent, read without starting or stopping anything. */
+  const standingGate = Effect.fn("OpenCodexChildBootstrap.standingGate")(function* (alias: string) {
+    if (hasCloudMachineAliasPrefix(alias))
+      return (yield* cloudAllowed) && (yield* cloud.owns(alias)) ? cloudGate(alias) : undefined;
+    if (!(yield* hubEnabled)) return undefined;
+    const generation = yield* ssh.aliasGeneration(alias);
+    const consent = yield* consents.check(alias);
+    return consent.state === "granted"
+      ? sshGate(alias, generation, consent.grant.grantId)
+      : undefined;
+  });
+  /** One status-phase read of the Child under that consent; its session is revoked after. */
+  const readChild = Effect.fn("OpenCodexChildBootstrap.readChild")(function* (
+    alias: string,
+    setup: OpenCodexChildSetup,
+  ) {
+    const gate = yield* standingGate(alias);
+    if (gate === undefined)
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "setup_approval_revoked",
+        message: "This machine has no standing Child setup permission.",
+      });
+    const admission = yield* dispatchAdmission(alias, gate, setup.destinationEnvironmentId);
+    return yield* childReady
+      .status(alias, admission)
+      .pipe(
+        Effect.ensuring(
+          releaseAdmission(admission).pipe(Effect.forkIn(serviceScope), Effect.asVoid),
+        ),
+      );
+  });
+  const confirmReady = makeReadyVerifier(readChild, serviceScope);
+
+  /**
+   * The last outcome, with its next action. An expired proof reads invalid with no request; a
+   * recorded Ready stands only while a fresh, non-billed Child status read confirms it.
+   */
   const status: OpenCodexChildBootstrap["Service"]["status"] = Effect.fn(
     "OpenCodexChildBootstrap.status",
   )(function* (alias) {
     const current = (yield* Ref.get(records))[alias];
     if (current === undefined) return undefined;
-    return presentSetupAction(withCurrentProof(current, yield* Clock.currentTimeMillis));
+    const recorded = withCurrentProof(current, yield* Clock.currentTimeMillis);
+    return presentSetupAction(yield* confirmReady(alias, recorded));
   });
 
   const setupDevice: OpenCodexChildBootstrap["Service"]["setupDevice"] = Effect.fn(

@@ -14,6 +14,7 @@ export const ChildSetupPhase = Schema.Literals([
   "startOpenCodex",
   "installCodex",
   "catalogConfigureProbe",
+  "status",
 ]);
 export type ChildSetupPhase = typeof ChildSetupPhase.Type;
 export const ChildSetupPurpose = Schema.Struct({
@@ -35,6 +36,7 @@ export const CHILD_SETUP_PHASE_MS = {
   startOpenCodex: 170_000,
   installCodex: 15 * 60_000,
   catalogConfigureProbe: 210_000,
+  status: 20_000,
 } as const satisfies Record<ChildSetupPhase, number>;
 /** Bounds credential cleanup and late replies; it never extends a phase's work deadline. */
 export const CHILD_SETUP_EXPIRY_GRACE_MS = 5 * 60_000;
@@ -69,7 +71,10 @@ export const childSetupPurposeIsLive = (purpose: ChildSetupPurpose, now: number)
   now < purpose.expiresAt &&
   purpose.phaseDeadline === purpose.issuedAt + CHILD_SETUP_PHASE_MS[purpose.phase] &&
   purpose.expiresAt === purpose.phaseDeadline + CHILD_SETUP_EXPIRY_GRACE_MS;
-/** `status` is a read every phase may make; each phase otherwise owns its own actions. */
+/**
+ * `status` is a read every phase may make, and all a status phase may make; each other phase
+ * owns its own actions.
+ */
 export const childSetupPurposeAllowsAction = (
   purpose: ChildSetupPurpose,
   action: ChildReadyPrepareInput["action"] | "status",
