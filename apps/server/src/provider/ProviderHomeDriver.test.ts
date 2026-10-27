@@ -111,6 +111,7 @@ const layerOpenCodex = (models: () => ReadonlyArray<string>) =>
 const create = (
   driver: ReturnType<typeof fakeDriver>["driver"],
   config: Readonly<Record<string, unknown>>,
+  revision?: Routes.SettingsRevision,
 ) =>
   driver
     .create({
@@ -120,7 +121,10 @@ const create = (
       enabled: true,
       config: decodePi(config),
     })
-    .pipe(Effect.provideService(HostProcess.Environment, {}));
+    .pipe(
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.provideService(Routes.HydratingRevision, revision),
+    );
 const open = (instance: ProviderInstance, model: string) =>
   Effect.scoped(
     instance.orchestrationAdapter.openSession({
@@ -151,4 +155,25 @@ it.effect(
       assert.equal((yield* open(live, "native/model"))._tag, "Failure");
       assert.deepEqual(opened, ["native/model", "native/model"]);
     }).pipe(Effect.provide(layerOpenCodex(() => [])), Effect.scoped),
+);
+
+it.effect("refuses a runtime hydrated from a superseded snapshot and binds the newer one", () =>
+  Effect.gen(function* () {
+    const state = yield* Routes.CodexRouteState;
+    const { driver, launches } = fakeDriver();
+    const entry = (launchArgs: string) => ({
+      driver: ProviderDriverKind.make("pi"),
+      config: { launchArgs },
+    });
+    const retained = yield* create(driver, {}, state.revision());
+    // Two commits land before the watcher hydrates the first of them.
+    const first = yield* state.committed(settingsWith(undefined), settingsWith(entry("--a")));
+    const second = yield* state.committed(settingsWith(entry("--a")), settingsWith(entry("--b")));
+    const delayed = yield* create(driver, { launchArgs: "--a" }, first).pipe(Effect.result);
+    assert.equal(delayed._tag, "Failure");
+    assert.equal(launches.length, 1);
+    const current = yield* create(driver, { launchArgs: "--b" }, second);
+    assert.equal((yield* open(retained, "native/model"))._tag, "Failure");
+    assert.equal((yield* open(current, "native/model"))._tag, "Success");
+  }).pipe(Effect.provide(layerOpenCodex(() => [])), Effect.scoped),
 );

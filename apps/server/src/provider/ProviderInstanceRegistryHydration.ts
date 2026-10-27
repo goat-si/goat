@@ -111,7 +111,10 @@ const settingsWatcher = (
             : Effect.succeed(next.settings)
           ).pipe(
             Effect.flatMap((current) =>
-              mutator.reconcile(deriveProviderInstanceConfigMap(current)),
+              // Runtimes built from this snapshot are bound to its revision.
+              mutator
+                .reconcile(deriveProviderInstanceConfigMap(current))
+                .pipe(Effect.provideService(CodexRoute.HydratingRevision, next.revision)),
             ),
             Effect.tap(() =>
               Option.isSome(routeState) && next.revision

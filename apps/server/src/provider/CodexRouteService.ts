@@ -28,6 +28,11 @@ import * as Environment from "../environment/ServerEnvironment.ts";
 import { providerHomeRouteKey, supportsProviderHome } from "./ProviderHomeAdapters.ts";
 
 export type SettingsRevision = { readonly epoch: string; readonly sequence: number };
+/** The settings revision whose snapshot the registry is hydrating; unset outside hydration. */
+export const HydratingRevision = Context.Reference<SettingsRevision | undefined>(
+  "goat/provider/CodexRouteService/HydratingRevision",
+  { defaultValue: () => undefined },
+);
 export type ApprovedInstancePrecondition = {
   readonly handoffId: TurnItemId;
   readonly environmentId: EnvironmentId;
@@ -118,10 +123,12 @@ export class CodexRouteState extends Context.Service<
     /**
      * Binds the runtime the registry built from an effective entry, named by that entry's
      * fingerprint. A runtime stays admitted until the registry binds a different entry for its id.
+     * A snapshot older than the instance's latest committed change is refused, not published.
      */
     readonly bindRuntime: (
       id: ProviderInstanceId,
       identity: string,
+      revision: SettingsRevision | undefined,
     ) => Effect.Effect<string, ServerSettingsError>;
     readonly assertGeneration: (
       id: ProviderInstanceId,
@@ -153,6 +160,7 @@ const makeState = Effect.gen(function* () {
   let sequence = 0;
   const leases = new Map<string, number>();
   const bound = new Map<string, string>();
+  const changedAt = new Map<string, number>();
   const assertGeneration = (id: ProviderInstanceId, expected: string) =>
     Effect.suspend(() =>
       bound.get(id) === expected
@@ -187,8 +195,23 @@ const makeState = Effect.gen(function* () {
   return CodexRouteState.of({
     admission,
     revision,
-    bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity) {
-      yield* admission.withPermits(1)(Effect.sync(() => bound.set(id, identity)));
+    bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity, hydrating) {
+      yield* admission.withPermits(1)(
+        Effect.suspend(() => {
+          if (
+            hydrating !== undefined &&
+            hydrating.epoch === epoch &&
+            (changedAt.get(id) ?? 0) > hydrating.sequence
+          )
+            return Effect.fail(
+              RouteSettingsError.explained(
+                "Provider settings changed again before this runtime started. Applying the newer settings.",
+              ),
+            );
+          bound.set(id, identity);
+          return Effect.void;
+        }),
+      );
       return identity;
     }),
     assertGeneration: Effect.fn("CodexRouteState.assertGeneration")(function* (id, expected) {
@@ -274,6 +297,7 @@ const makeState = Effect.gen(function* () {
               instanceFingerprint(current.providerInstances[id]) !==
               instanceFingerprint(next.providerInstances[id]),
           );
+        for (const id of ids) changedAt.set(id, sequence);
         if (ids.length > 0)
           pending.set(sequence, { ids, ack: yield* Deferred.make<void, ServerSettingsError>() });
         return revision();

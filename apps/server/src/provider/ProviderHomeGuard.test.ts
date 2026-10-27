@@ -119,7 +119,7 @@ it.effect("refuses a default or foreign model before a Home session opens or a t
       instance,
       home,
       state,
-      yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
+      yield* state.bindRuntime(instance.instanceId, "fixture-entry", undefined),
     );
     const turn = (model: string) => selected<ProviderAdapter.ProviderAdapterV2TurnInput>(model);
     for (const model of ["default", "other/model"]) {
@@ -161,7 +161,7 @@ it.effect.each([
       instance,
       row.runtime,
       state,
-      yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
+      yield* state.bindRuntime(instance.instanceId, "fixture-entry", undefined),
     );
     const current = settingsWith({ "pi-home": { driver: "pi", modelRoute: "default" } });
     const next = settingsWith({ "pi-home": { driver: "pi", modelRoute: "opencodex" } });
@@ -187,7 +187,7 @@ it.effect("refuses foreign models for every text operation and routed OpenCode m
         instance,
         home,
         state,
-        yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
+        yield* state.bindRuntime(instance.instanceId, "fixture-entry", undefined),
       );
       const operations = guarded.textGeneration as unknown as Record<string, TextOperation>;
       for (const operation of TEXT_OPERATIONS) {
@@ -218,7 +218,7 @@ it.effect(
         identity: string,
       ) {
         const { instance, seen } = fakeInstance(id, "pi");
-        const generation = yield* state.bindRuntime(instance.instanceId, identity);
+        const generation = yield* state.bindRuntime(instance.instanceId, identity, undefined);
         return { seen, instance: guardProviderHomeInstance(instance, home, state, generation) };
       });
       const retained = yield* guard("pi-a", "entry-a1");
@@ -242,13 +242,13 @@ it.effect("reports the Home endpoint and models only from a routed runtime", () 
       routedSource,
       home,
       state,
-      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry"),
+      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry", undefined),
     );
     const plain = guardProviderHomeInstance(
       routedSource,
       undefined,
       state,
-      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry"),
+      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry", undefined),
     );
     for (const snapshot of [
       yield* routed.snapshot.getSnapshot,

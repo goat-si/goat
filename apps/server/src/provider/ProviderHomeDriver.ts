@@ -40,6 +40,7 @@ export const withProviderHomeRoute = <C, R, U>(
           enabled: input.enabled,
           config: input.config,
         }),
+        yield* Routes.HydratingRevision,
       )
       .pipe(Effect.mapError((cause) => unavailable(cause.message, cause)));
     const route = yield* decodeRoute(input.config).pipe(
