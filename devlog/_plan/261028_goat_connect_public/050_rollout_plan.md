@@ -5,7 +5,7 @@
 ## 0단계: 방향 결정(코드 전에)
 
 1. **Connect를 셋으로 나눕니다.** 계정 + 모바일 푸시, 고정 공개 URL(웹훅·게스트 링크), 어디서나 도달. 푸시는 이미 터널 없이 동작하는 "publish-only" 링크 모드가 있습니다(apps/server/src/cloud/CloudLink.ts:895, infra/relay/src/environments/EnvironmentLinker.ts:290-311). 이것을 먼저 켤 수 있습니다.
-2. **관리형 터널 단위를 "사용자당 1개, 허브로"로 바꿉니다.** 기본 제한 3(infra/relay/src/environments/ManagedTunnelLimits.ts:14)을 1로 낮추고, 휴대폰은 허브 프록시로 다른 머신에 붙습니다(docs/user/remote-access.md:574-599). 그러면 1,000명까지 터널 비용이 $0입니다. 지금 Connect 세션은 표준 권한만 받아 허브 프록시가 403을 돌려주므로(apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:183-184), 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급하는 경로가 필요합니다. 허브 경유는 채팅 작업까지만 되며, 노드의 터미널·설정·게스트 링크·웹훅은 노드 자신의 경로를 쓰거나 베타에서 유예한다고 정합니다.
+2. **관리형 터널 단위를 "사용자당 1개, 허브로"로 바꿉니다.** 기본 제한 3(infra/relay/src/environments/ManagedTunnelLimits.ts:14)을 1로 낮추고, 휴대폰은 허브 프록시로 다른 머신에 붙습니다(docs/user/remote-access.md:574-599). 그러면 1,000명까지 터널 비용이 $0입니다. 지금 Connect 세션은 표준 권한만 받아 허브 프록시가 403을 돌려주므로(apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:185-186), 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급하는 경로가 필요합니다. 허브 경유는 채팅 작업까지만 되며, 노드의 터미널·설정·게스트 링크·웹훅은 노드 자신의 경로를 쓰거나 베타에서 유예한다고 정합니다.
 3. **공개 단계의 도달 수단은 Durable Object WebSocket relay + 종단 간 암호화와 로컬 기기 승인을 유력 후보로 준비합니다**(020 판단 3). 베타 실측으로 노드별 유료 터널·BYO 터널과 다시 비교합니다.
 4. **운영 Cloudflare 계정과 개발 계정을 나눕니다.** preview stage도 같은 계정의 터널 1,000개를 나눠 씁니다(infra/relay/src/previewTunnelSweep.ts:105).
 
@@ -42,7 +42,7 @@
 
 | 작업                                                                                                                                                                              | 심각도 | 근거                                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 허브 프록시 권한: 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급. 수용 조건은 Connect 로그인만 한 휴대폰, 기존 세션 갱신, 철회, 연결된 노드 등록. 터널 제한 1로 변경 | 차단   | apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:183-184, apps/server/src/hubProxy/http.test.ts:296-309 |
+| 허브 프록시 권한: 허브 소유자가 Connect 기기에 `hub:proxy`를 승인·회수·재발급. 수용 조건은 Connect 로그인만 한 휴대폰, 기존 세션 갱신, 철회, 연결된 노드 등록. 터널 제한 1로 변경 | 차단   | apps/server/src/cloud/CloudLink.ts:1629-1634, apps/server/src/hubProxy/http.ts:185-186, apps/server/src/hubProxy/http.test.ts:296-309 |
 | 터널 제한을 원자적으로(사용자 단위 잠금, 진행 중 할당 포함)                                                                                                                       | 차단   | 040 표                                                                                                                                |
 | 사용자당 환경·기기 개수 상한                                                                                                                                                      | 차단   | 040 표                                                                                                                                |
 | 링크·DPoP 교환·mint·기기 등록·푸시 발행에 계정 단위 레이트 리밋(엄격 상한은 DO)                                                                                                   | 차단   | 040 표                                                                                                                                |
