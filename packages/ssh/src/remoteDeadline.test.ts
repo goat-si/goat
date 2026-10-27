@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import { describe, expect, it } from "vite-plus/test";
 
 import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
@@ -21,7 +22,7 @@ const runShell = (script: string, args: ReadonlyArray<string>, env: NodeJS.Proce
     child.stdin.end(script);
   });
 
-describe.skipIf(process.platform === "win32")("remote deadline wrapper", () => {
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("remote deadline wrapper", () => {
   it("wraps only scripts that sh reads from stdin", () => {
     expect(isRemoteShellScript(["sh", "-l", "-s", "--", "runtime"])).toBe(true);
     expect(isRemoteShellScript(["sh", "-s"])).toBe(true);

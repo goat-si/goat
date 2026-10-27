@@ -13,7 +13,10 @@ import { runSshHelperCliWithArgs } from "./sshHelperCli.ts";
 it.effect("answers the SSH probe's questions exactly as the full CLI", () =>
   Effect.gen(function* () {
     const console = yield* Console.Console;
-    const answer = (run: typeof runSshHelperCliWithArgs, args: ReadonlyArray<string>) =>
+    const answer = <E, R>(
+      run: (args: ReadonlyArray<string>) => Effect.Effect<void, E, R>,
+      args: ReadonlyArray<string>,
+    ) =>
       Effect.gen(function* () {
         const output: Array<string> = [];
         const log = (...values: ReadonlyArray<unknown>) => void output.push(values.join(" "));
@@ -27,7 +30,7 @@ it.effect("answers the SSH probe's questions exactly as the full CLI", () =>
     for (const args of [["--version"], ["__ssh-helper", "protocol", "--shell"]]) {
       const fast = yield* answer(runSshHelperCliWithArgs, args);
       expect(fast.length).toBeGreaterThan(0);
-      expect(fast).toEqual(yield* answer(runCliWithArgs, args));
+      expect(fast).toEqual(yield* answer((all) => runCliWithArgs(all), args));
     }
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
 );
