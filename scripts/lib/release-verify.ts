@@ -171,9 +171,12 @@ const thirdParty =
   /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|\/[Rr]esources\/cua-driver\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
 // GOAT's own workspace packages stay GOAT code even when they land in node_modules.
 const goatPackage = /(?:^|\/)node_modules\/@goat\//;
-// Bundlers copy dependency WebAssembly (the office previews' Rust crates, built on their
-// vendors' hosted CI) into client/assets, so a compiled module is judged like a dependency.
+// Bundlers copy dependency WebAssembly (the office previews' Rust crates) into client/assets.
+// Rust embeds crate source paths, and a module built on a GitHub-hosted runner names that
+// runner's shared home, which identifies no machine. Only those paths are set aside.
 const compiledModule = /\.wasm$/i;
+const hostedCrateSource =
+  /(?:\/home\/runner|\/Users\/runner|C:\\+Users\\+runneradmin)[\\/]+\.(?:cargo[\\/]+registry[\\/]+src|rustup[\\/]+toolchains)[\\/]/g;
 const buildPath =
   /\/Users\/[A-Za-z0-9._-]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
 
@@ -208,9 +211,7 @@ export function exposureProblems(
 ): string[] {
   const normalized = name.replace(/\\/g, "/");
   const problems: string[] = [];
-  const ours =
-    (!thirdParty.test(normalized) && !compiledModule.test(normalized)) ||
-    goatPackage.test(normalized);
+  const ours = !thirdParty.test(normalized) || goatPackage.test(normalized);
   if (ours && /\.map$/i.test(normalized)) problems.push(`${name}: source map`);
   if (ours && /\.(?:ts|tsx|mts|cts)$/i.test(normalized)) problems.push(`${name}: original source`);
   if (/(?:^|\/)\.git(?:\/|$)/.test(normalized)) problems.push(`${name}: git metadata`);
@@ -220,7 +221,10 @@ export function exposureProblems(
     problems.push(`${name}: embedded sourcesContent`);
   problems.push(...sourceRepositoryUrlProblems(name, content));
   // V8/Node's diagnostic code embeds this documented Windows example literally.
-  const pathContent = content.replace(/C:\\(?:\\)?a\\(?:\\)?b\\(?:\\)?c(?=["'`\s)]|$)/g, "");
+  const withoutExample = content.replace(/C:\\(?:\\)?a\\(?:\\)?b\\(?:\\)?c(?=["'`\s)]|$)/g, "");
+  const pathContent = compiledModule.test(normalized)
+    ? withoutExample.replace(hostedCrateSource, "")
+    : withoutExample;
   const machineRoots = ours ? roots : roots.filter((root) => !sharedHostedHomes.has(root));
   const machinePath = machineRoots.some(
     (root) =>
