@@ -103,6 +103,7 @@ it.effect(
             HttpApiBuilder.layer(api).pipe(
               Layer.provide(handlers),
               Layer.provide(auth),
+              Layer.provide(RelayHttpApi.layerCors),
               Layer.provide(HttpServer.layerServices),
             ),
             { disableLogger: true },
@@ -113,13 +114,21 @@ it.effect(
       const response = yield* Effect.promise(() =>
         app.handler(
           new Request("https://relay.example.test/v1/mobile/agent-activity", {
-            headers: { authorization: "DPoP fixture-token" },
+            headers: {
+              authorization: "DPoP fixture-token",
+              dpop: "fixture-proof",
+              origin: "https://app.example.test",
+            },
           }),
         ),
       );
       expect(response.status).toBe(429);
       expect(response.headers.get("retry-after")).toBe("42");
       expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("access-control-expose-headers")).toBe(
+        "traceparent,www-authenticate,retry-after",
+      );
       const body = yield* Effect.promise(() => response.json());
       expect((yield* Schema.decodeUnknownEffect(RelayProtectedError)(body))._tag).toBe(
         "RelayRateLimitExceededError",
@@ -199,7 +208,7 @@ it.live(
               `https://relay.example.test/v1/mobile/${cleanup ? "devices/phone" : "agent-activity"}`,
               {
                 method: cleanup ? "DELETE" : "GET",
-                headers: { authorization: "DPoP fixture-token" },
+                headers: { authorization: "DPoP fixture-token", dpop: "fixture-proof" },
               },
             ),
           ),
@@ -290,7 +299,6 @@ it.live(
         });
       }).pipe(Effect.provide(services));
       const routes = RelayHttpApi.layerServerApi.pipe(
-        HttpRouter.provideRequest(services),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(AgentActivityPublisher.AgentActivityPublisher, {}),
@@ -305,6 +313,7 @@ it.live(
             HttpApiBuilder.layer(HttpApi.make("RelayApi").add(RelayApi.groups.server)).pipe(
               Layer.provide(routes),
               Layer.provide(RelayHttpApi.layerEnvironmentAuth.pipe(Layer.provide(services))),
+              HttpRouter.provideRequest(services),
               Layer.provide(HttpServer.layerServices),
             ),
             { disableLogger: true },
@@ -398,6 +407,15 @@ it.live(
       const outage = yield* request("tunnel", recovery);
       expect(outage.status).toBe(503);
       expect(yield* Effect.promise(() => outage.json())).toMatchObject({
+        code: "authorization_unavailable",
+      });
+      pg.query(
+        "ALTER TABLE fixture_unavailable_access RENAME TO relay_account_access; ALTER TABLE relay_environment_credentials RENAME TO fixture_unavailable_credentials",
+      );
+      const credentialOutage = yield* request("tunnel", recovery);
+      expect(credentialOutage.status).toBe(503);
+      expect(credentialOutage.headers.get("cache-control")).toBe("no-store");
+      expect(yield* Effect.promise(() => credentialOutage.json())).toMatchObject({
         code: "authorization_unavailable",
       });
       expect(tunnelCalls).toEqual([]);

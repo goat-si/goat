@@ -183,7 +183,7 @@ export class ManagedEndpointProvider extends Context.Service<
       readonly origin: RelayManagedEndpointOrigin;
       /**
        * Return a ready tunnel that already serves this origin with only a
-       * liveness check and a fresh token, skipping ingress and DNS repair.
+       * liveness check and a fresh token, skipping ingress and repairing DNS only if needed.
        */
       readonly reuseReadyTunnel?: boolean;
     }) => Effect.Effect<ManagedEndpointProvisioningResult, ManagedEndpointProviderError>;

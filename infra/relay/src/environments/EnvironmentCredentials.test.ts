@@ -66,6 +66,8 @@ describe("EnvironmentCredentials", () => {
         readonly environmentId: string;
         readonly environmentPublicKey: string;
         readonly credentialHash: string;
+        readonly userId: string;
+        readonly accountEpoch: number;
         readonly revokedAt: null;
         readonly createdAt: string;
         readonly updatedAt: string;
@@ -116,6 +118,8 @@ describe("EnvironmentCredentials", () => {
           credentialId,
           environmentId: "env_test",
           environmentPublicKey: "environment-public-key",
+          userId: "fixture-owner",
+          accountEpoch: 1,
           revokedAt: null,
         });
         expect(insertedValues[0]?.credentialHash).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -131,9 +135,16 @@ describe("EnvironmentCredentials", () => {
         expect(query.sql).toContain(
           '"relay_environment_credentials"."environment_public_key" = $2',
         );
-        expect(query.sql).toContain('"relay_environment_credentials"."credential_id" <> $3');
+        expect(query.sql).toContain('"relay_environment_credentials"."user_id" = $3');
+        expect(query.sql).toContain('"relay_environment_credentials"."user_id" is null');
+        expect(query.sql).toContain('"relay_environment_credentials"."credential_id" <> $4');
         expect(query.sql).toContain('"relay_environment_credentials"."revoked_at" is null');
-        expect(query.params).toEqual(["env_test", "environment-public-key", credentialId]);
+        expect(query.params).toEqual([
+          "env_test",
+          "environment-public-key",
+          "fixture-owner",
+          credentialId,
+        ]);
       }).pipe(
         Effect.provide(
           EnvironmentCredentials.layer.pipe(
@@ -188,16 +199,8 @@ describe("EnvironmentCredentials", () => {
       expect(query.sql).toContain('"relay_environment_credentials"."environment_id" = $1');
       expect(query.sql).toContain('"relay_environment_credentials"."environment_public_key" = $2');
       expect(query.sql).toContain('"relay_environment_credentials"."revoked_at" is null');
-      expect(query.sql).toContain("not exists");
-      expect(query.sql).toContain('"relay_environment_links"."environment_id" = $3');
-      expect(query.sql).toContain('"relay_environment_links"."environment_public_key" = $4');
-      expect(query.sql).toContain('"relay_environment_links"."revoked_at" is null');
-      expect(query.params).toEqual([
-        "env_test",
-        "environment-public-key",
-        "env_test",
-        "environment-public-key",
-      ]);
+      expect(query.sql).toContain('"relay_environment_credentials"."user_id" = $3');
+      expect(query.params).toEqual(["env_test", "environment-public-key", "fixture-owner"]);
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(

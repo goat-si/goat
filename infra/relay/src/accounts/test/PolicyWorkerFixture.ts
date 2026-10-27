@@ -194,3 +194,5 @@ export const layer = PolicyWorker.make(
     Effect.provide(Layer.mergeAll(rateLayer, inboxLayer, Cloudflare.Workers.RateLimitBinding)),
   ),
 );
+
+export default layer;

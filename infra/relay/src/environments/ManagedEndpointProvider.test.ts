@@ -333,7 +333,9 @@ describe("ManagedEndpointProvider", () => {
 
       expect(recovered).toEqual(provisioned);
       expect(tunnelCalls.map((call) => call.operation)).toEqual(["get", "getToken"]);
-      expect(dnsCalls).toEqual([]);
+      expect(dnsCalls).toEqual([
+        { operation: "listRecords", input: new URL(provisioned.endpoint.httpBaseUrl).hostname },
+      ]);
       expect(allocationCalls.map((call) => call.operation)).toEqual(["reserve"]);
     }).pipe(Effect.provide(layer));
   });

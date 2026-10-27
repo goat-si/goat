@@ -18,6 +18,7 @@ describe("EnvironmentLinks", () => {
   it.effect("carries the webhook-hold opt-in over only from links with the same key", () => {
     const inserted: Array<Record<string, unknown>> = [];
     const fakeDb = {
+      $client: () => Effect.succeed([]),
       insert: () => ({
         values: (values: Record<string, unknown>) => {
           inserted.push(values);
@@ -44,7 +45,9 @@ describe("EnvironmentLinks", () => {
       });
       const query = new PgDialect().sqlToQuery(inserted[0]?.holdWebhooksWhileOffline as never);
       expect(query.sql).toContain("environment_public_key");
-      expect(query.params).toEqual(["env-1", "public-key-1"]);
+      expect(query.sql).toContain("other.user_id=");
+      expect(query.sql).toContain("other.revoked_at IS NULL");
+      expect(query.params).toEqual(["user-1", "env-1", "public-key-1"]);
     }).pipe(
       Effect.provide(
         EnvironmentLinks.layer.pipe(

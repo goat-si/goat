@@ -25,7 +25,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Tracer from "effect/Tracer";
 import * as Etag from "effect/http/Etag";
@@ -441,7 +440,7 @@ describe("relay DPoP failure mapping", () => {
 });
 
 describe("relay environment authentication", () => {
-  it.effect("preserves credential lookup persistence failures as internal errors", () => {
+  it.effect("reports credential lookup persistence failures as authorization unavailable", () => {
     const failure = new EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError({
       stage: "lookup-credential",
       cause: "database unavailable",
@@ -462,10 +461,12 @@ describe("relay environment authentication", () => {
         }),
       );
 
-      expect(Predicate.isTagged(error, "RelayInternalError")).toBe(true);
-      if (Predicate.isTagged(error, "RelayInternalError")) {
-        expect(error.reason).toBe("persistence_failed");
-      }
+      expect(error).toMatchObject({
+        _tag: "RelayAuthorizationUnavailableError",
+        code: "authorization_unavailable",
+      });
+      expect(error).not.toHaveProperty("cause");
+      expect(error).not.toHaveProperty("token");
     }).pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
@@ -1400,6 +1401,7 @@ describe("relay routing fallback", () => {
       }
       expect(published).toEqual(
         threadIds.map((threadId) => ({
+          userId: "user-1",
           environmentId,
           environmentPublicKey,
           threadId,
@@ -1435,7 +1437,7 @@ describe("relay CORS", () => {
         expect(response.status).toBe(500);
         expect(response.headers["access-control-allow-origin"]).toBe("*");
         expect(response.headers["access-control-expose-headers"]).toBe(
-          "traceparent,www-authenticate",
+          "traceparent,www-authenticate,retry-after",
         );
       }
     }).pipe(Effect.scoped),
