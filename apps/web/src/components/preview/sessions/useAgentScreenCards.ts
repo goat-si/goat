@@ -248,7 +248,7 @@ function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
  * the thread that started them, so another thread's session, one that names no thread, and any
  * session on a view with no thread never get a card there. Stop all stays host-wide.
  */
-export const isThreadSession = (session: PreviewSession, threadRef: ScopedThreadRef | null) =>
+const isThreadSession = (session: PreviewSession, threadRef: ScopedThreadRef | null) =>
   threadRef !== null &&
   session.environmentId === threadRef.environmentId &&
   session.threadId === threadRef.threadId;

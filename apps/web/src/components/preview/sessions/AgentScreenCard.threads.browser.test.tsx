@@ -8,7 +8,7 @@ import {
   type PreviewSessionFrameEvent,
   ThreadId,
 } from "@goat/contracts";
-import type { ReactElement, Ref } from "react";
+import type { Ref } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
       ) => void),
   surfaceCalls: [] as Array<string>,
   routeThread: null as string | null,
+  routeListeners: new Set<() => void>(),
   sessionListeners: new Set<() => void>(),
 }));
 
@@ -90,15 +91,24 @@ vi.mock("../../../browser/serverPictureInPicture", () => ({
   closeServerPictureInPicture: () => undefined,
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
-vi.mock("../../../hooks/useThreadRouteTarget", () => ({
-  useThreadRouteTarget: () =>
-    state.routeThread === null
-      ? null
-      : {
-          kind: "server",
-          threadRef: { environmentId: state.environmentId, threadId: state.routeThread },
+// A subscription, like the router: switching threads re-renders every reader of the route.
+vi.mock("../../../hooks/useThreadRouteTarget", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useThreadRouteTarget: () => {
+      const thread = useSyncExternalStore(
+        (listener) => {
+          state.routeListeners.add(listener);
+          return () => state.routeListeners.delete(listener);
         },
-}));
+        () => state.routeThread,
+      );
+      return thread === null
+        ? null
+        : { kind: "server", threadRef: { environmentId: state.environmentId, threadId: thread } };
+    },
+  };
+});
 // The stream needs a server; this stub stands in at the card's level (the real surface is
 // exercised in AgentScreenCard.surface.browser.test.tsx).
 vi.mock("../../../browser/ServerBrowserSurface", async () => {
@@ -121,6 +131,7 @@ vi.mock("../../../browser/ServerBrowserSurface", async () => {
   };
 });
 
+import { useThreadRouteTarget } from "../../../hooks/useThreadRouteTarget";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
@@ -220,16 +231,13 @@ function paneOf(width: number) {
 }
 
 function Cards() {
+  const target = useThreadRouteTarget();
   return (
     <>
       <AgentScreenCardsToggle />
       <PreviewSessionStack
         environmentId={environmentId}
-        threadRef={
-          state.routeThread === null
-            ? null
-            : { environmentId, threadId: ThreadId.make(state.routeThread) }
-        }
+        threadRef={target?.kind === "server" ? target.threadRef : null}
       />
     </>
   );
@@ -257,13 +265,13 @@ const pageTab = (thread: ThreadId, name: string) =>
   });
 const appTitles = () =>
   Array.from(document.querySelectorAll("article"), (card) => card.getAttribute("aria-label"));
-const showThread = async (
-  screen: { rerender: (ui: ReactElement) => Promise<unknown> },
-  thread: string | null,
-) => {
-  state.routeThread = thread;
-  await screen.rerender(<Cards />);
-};
+const showThread = (thread: string | null) =>
+  act(() => {
+    state.routeThread = thread;
+    for (const listener of state.routeListeners) listener();
+  });
+/** Cards in any order; the stack ranks them by status and age. */
+const cardTitles = () => appTitles().toSorted();
 
 // Jun's report (2026-10-27): once one thread used computer use, its card showed in every thread.
 it("pins each card to its own thread: browser, desktop and blocked sessions show only there", async () => {
@@ -288,17 +296,17 @@ it("pins each card to its own thread: browser, desktop and blocked sessions show
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-a: Agent controlling" }))
     .toBeVisible();
-  expect(appTitles()).toEqual(["Page a: Agent controlling", "Thread thread-a: Agent controlling"]);
+  expect(cardTitles()).toEqual(["Page a: Agent controlling", "Thread thread-a: Agent controlling"]);
   // Another thread's desktop is never captured for this view.
   expect(state.frameRequests.filter((id) => id !== null)).not.toContain("desktop-b");
 
-  await showThread(screen, "thread-b");
+  await showThread("thread-b");
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-b: Agent controlling" }))
     .toBeVisible();
-  expect(appTitles()).toEqual(["Page b: Agent controlling", "Thread thread-b: Agent controlling"]);
+  expect(cardTitles()).toEqual(["Page b: Agent controlling", "Thread thread-b: Agent controlling"]);
 
-  await showThread(screen, "thread-c");
+  await showThread("thread-c");
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-c: Permission needed" }))
     .toBeVisible();
@@ -322,7 +330,7 @@ it("gives two threads driving the same app one card each, in their own thread on
     .element(screen.getByRole("article", { name: "Thread thread-b: Agent controlling" }))
     .toBeVisible();
   expect(appTitles()).toEqual(["Thread thread-b: Agent controlling"]);
-  await showThread(screen, "thread-a");
+  await showThread("thread-a");
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-a: Agent controlling" }))
     .toBeVisible();
@@ -342,7 +350,7 @@ it("keeps Stop all in a thread with no card of its own, without another thread's
     .element(screen.getByRole("button", { name: "Agents on screen" }))
     .not.toBeInTheDocument();
   // A view with no thread, such as a new draft, shows no cards either but keeps Stop all.
-  await showThread(screen, null);
+  await showThread(null);
   await expect
     .element(screen.getByRole("button", { name: "Stop all agents on screen" }))
     .toBeVisible();
@@ -350,7 +358,8 @@ it("keeps Stop all in a thread with no card of its own, without another thread's
 });
 
 it("never shows a session that names no thread", async () => {
-  setup([desktopApp({ id: "desktop-orphan", threadId: undefined })], "thread-a");
+  const { threadId: _thread, ...orphan } = desktopApp({ id: "desktop-orphan" });
+  setup([orphan], "thread-a");
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
   await using screen = await render(<Cards />);
@@ -358,7 +367,7 @@ it("never shows a session that names no thread", async () => {
     .element(screen.getByRole("button", { name: "Stop all agents on screen" }))
     .toBeVisible();
   expect(appTitles()).toEqual([]);
-  await showThread(screen, null);
+  await showThread(null);
   expect(appTitles()).toEqual([]);
 });
 
@@ -371,13 +380,13 @@ it("keeps a card closed in one thread from changing another thread's list button
   await userEvent.hover(card);
   await userEvent.click(card.getByRole("button", { name: "Close" }));
   await expect.element(card).not.toBeInTheDocument();
-  await showThread(screen, "thread-b");
+  await showThread("thread-b");
   const list = screen.getByRole("button", { name: "Agents on screen" });
   await expect.element(list).toHaveAttribute("aria-pressed", "true");
   // Showing the cards in thread B leaves the card closed in thread A put away.
   await userEvent.click(list);
   await userEvent.click(list);
-  await showThread(screen, "thread-a");
+  await showThread("thread-a");
   await expect.element(screen.getByRole("article", { name: /Page a/ })).not.toBeInTheDocument();
   await expect
     .element(screen.getByRole("button", { name: "Agents on screen" }))
