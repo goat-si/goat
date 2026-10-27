@@ -2598,8 +2598,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   let closed = false;
   const retries = makePreparationRetries({
     scope: managerScope,
-    wanted: (key, generation) =>
-      !closed && !forgotten.has(key) && !tunnels.has(key) && generations.get(key) === generation,
+    wanted: (key, gen) => !forgotten.has(key) && !tunnels.has(key) && generations.get(key) === gen,
     attempt: (target: DesktopSshEnvironmentTarget) => ensureEnvironment(target, { keyOnly: true }),
   });
   const pendingResult = (

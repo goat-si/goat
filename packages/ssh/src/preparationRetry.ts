@@ -15,7 +15,7 @@ const FIRST_RETRY_MS = 2_000;
 const MAX_RETRY_MS = 60_000;
 
 /** Set while a retry loop runs its own attempt, so that attempt's failure does not restart it. */
-export const SshAutomaticRetry = Context.Reference<boolean>(
+const SshAutomaticRetry = Context.Reference<boolean>(
   "@goat/ssh/preparationRetry/SshAutomaticRetry",
   { defaultValue: () => false },
 );
@@ -62,8 +62,8 @@ export function makePreparationRetries<E, R>(options: {
       loops.delete(key);
       return loop?.fiber === undefined ? Effect.void : Fiber.interrupt(loop.fiber);
     });
-  const run = (key: string, loop: RetryLoop, target: DesktopSshEnvironmentTarget) =>
-    Effect.gen(function* () {
+  const run = Effect.fn("ssh/preparationRetry.run")(
+    function* (key: string, loop: RetryLoop, target: DesktopSshEnvironmentTarget) {
       for (let count = 0; ; count++) {
         const delayMs = preparationRetryDelayMs(count, yield* Random.next);
         yield* Effect.logInfo("ssh.preparation.retry.scheduled", {
@@ -80,13 +80,15 @@ export function makePreparationRetries<E, R>(options: {
         const error = Cause.findErrorOption(exit.cause);
         if (Option.isNone(error) || !isTransientPreparationFailure(error.value)) return;
       }
-    }).pipe(
+    },
+    (effect, key, loop) =>
       Effect.ensuring(
+        effect,
         Effect.sync(() => {
           if (loops.get(key) === loop) loops.delete(key);
         }),
       ),
-    );
+  );
   /**
    * After a caller's attempt failed: a transient failure (re)starts the loop from the shortest
    * delay, so a manual Retry resets the backoff; any other failure stops it.
