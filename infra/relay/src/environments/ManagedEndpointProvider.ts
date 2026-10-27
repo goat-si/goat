@@ -29,6 +29,7 @@ import {
 } from "../deploymentConfig.ts";
 import * as CloudflareApiPause from "./CloudflareApiPause.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
+import * as ManagedEndpointCleanup from "./ManagedEndpointCleanup.ts";
 import * as ManagedTunnelLimits from "./ManagedTunnelLimits.ts";
 
 export class ManagedEndpointProvisioningNotConfigured extends Schema.TaggedError<ManagedEndpointProvisioningNotConfigured>()(
@@ -865,6 +866,7 @@ export const make = Effect.gen(function* () {
           userId: input.userId,
           environmentId: input.environmentId,
           generation: allocation.generation,
+          incarnationId: allocation.incarnationId,
         })
         .pipe(
           Effect.mapError(
@@ -883,38 +885,16 @@ export const make = Effect.gen(function* () {
       }
       const tunnelId = allocation.tunnelId;
       const deprovision = Effect.gen(function* () {
-        const dnsRecordId = allocation.dnsRecordId;
-        if (dnsRecordId !== null) {
-          yield* ignoreNotFound(dns.deleteRecord(dnsRecordId)).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ManagedEndpointDeprovisioningFailed({
-                  ...input,
-                  stage: "delete-dns-record",
-                  dnsRecordId,
-                  cause,
-                }),
-            ),
-          );
-        }
-        if (tunnelId !== null) {
-          yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ManagedEndpointDeprovisioningFailed({
-                  ...input,
-                  stage: "delete-tunnel",
-                  tunnelId,
-                  cause,
-                }),
-            ),
-          );
-        }
+        yield* ManagedEndpointCleanup.removeResources(allocation).pipe(
+          Effect.provideService(ManagedEndpointTunnelClient, tunnels),
+          Effect.provideService(ManagedEndpointDnsClient, dns),
+        );
         return yield* allocations
           .removeClaimed({
             userId: input.userId,
             environmentId: input.environmentId,
             generation: claimedGeneration,
+            incarnationId: allocation.incarnationId,
           })
           .pipe(
             Effect.mapError(
@@ -931,15 +911,13 @@ export const make = Effect.gen(function* () {
             ),
           );
       });
-      if (tunnelId === null) {
-        return yield* deprovision;
-      }
       const removed = yield* allocations
         .withClaimedTunnel(
           {
             userId: input.userId,
             environmentId: input.environmentId,
             tunnelId,
+            incarnationId: allocation.incarnationId,
             generation: claimedGeneration,
           },
           deprovision,
@@ -951,7 +929,7 @@ export const make = Effect.gen(function* () {
                 new ManagedEndpointDeprovisioningFailed({
                   ...input,
                   stage: "claim-deprovision",
-                  tunnelId,
+                  ...(tunnelId === null ? {} : { tunnelId }),
                   cause,
                 }),
               ),

@@ -14,6 +14,7 @@ import {
   primaryKey,
   text,
   uniqueIndex,
+  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -93,6 +94,7 @@ export const relayManagedEndpointAllocations = pgTable(
   {
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    incarnationId: uuid("incarnation_id").notNull().defaultRandom(),
     hostname: text("hostname").notNull(),
     tunnelId: varchar("tunnel_id", { length: 191 }),
     tunnelName: text("tunnel_name").notNull(),
@@ -235,6 +237,7 @@ export const relayConnectLinkReservations = pgTable(
     challengeId: varchar("challenge_id", { length: 255 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
     proof: text("proof").notNull(),
+    attemptId: varchar("attempt_id", { length: 64 }),
     status: varchar("status", { length: 32 }).notNull(),
     outcome: text("outcome"),
   },

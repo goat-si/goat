@@ -100,6 +100,7 @@ describe("managed endpoint provisioning errors", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
             withdraw: () => Effect.void,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
@@ -224,6 +225,7 @@ describe("device listing compatibility", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
             withdraw: () => Effect.void,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
@@ -316,6 +318,7 @@ describe("Cloudflare rate-limit retry hint", () => {
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
           Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
             withdraw: () => Effect.void,
           }),
           Layer.mock(HookInbox.HookInbox, {}),
@@ -473,7 +476,10 @@ function layerRelayUnlinkTest(input?: {
   readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
 }) {
   return Layer.mergeAll(
-    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, { withdraw: () => Effect.void }),
+    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+      exclusive: (_userId, use) => use(Effect.void),
+      withdraw: () => Effect.void,
+    }),
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),
@@ -978,6 +984,7 @@ describe("relay managed tunnel recovery", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "replacement-generation",
       generation: 3,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1052,6 +1059,7 @@ describe("relay environment unlink", () => {
                 origin: null,
                 updatedAt: "2026-07-28T00:00:00.000Z",
                 generation: 1,
+                incarnationId: "allocation-test",
               }),
             clearInbox: (input) =>
               clearFails
@@ -1086,6 +1094,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "generation-before-unlink",
       generation: 1,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1233,6 +1242,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "original-generation",
       generation: 1,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 

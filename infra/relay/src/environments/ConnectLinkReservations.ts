@@ -8,7 +8,7 @@ import {
   isConnectAssuranceFresh,
   type ConnectSessionAssurance,
 } from "@goat/contracts/connectAssurance";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +37,7 @@ interface Reservation {
   readonly userId: string;
   readonly challengeId: string;
   readonly proof: string;
+  readonly attemptId: string;
   readonly environmentId: string;
   readonly assurance: ConnectSessionAssurance;
   readonly managedTunnelsEnabled: boolean;
@@ -55,6 +56,14 @@ type ReservationError =
 export class ConnectLinkReservations extends Context.Service<
   ConnectLinkReservations,
   {
+    readonly exclusive: <A, E, R>(
+      userId: string,
+      use: (assertOwner: Effect.Effect<void, RelayInternalError>) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | RelayInternalError, R>;
+    readonly recover: <E, R>(
+      userId: string,
+      cleanup: (environmentId: string) => Effect.Effect<void, E, R>,
+    ) => Effect.Effect<void, E | RelayInternalError, R>;
     readonly reserve: <E, R>(
       input: Reservation,
       consume: Effect.Effect<void, E, R>,
@@ -166,7 +175,7 @@ const make = Effect.gen(function* () {
               return yield* strengthRequired("unsupported_authentication_flow");
           }
           const busy = yield* db.$client`SELECT 1 FROM relay_connect_link_reservations
-        WHERE user_id = ${input.userId} AND environment_id = ${input.environmentId} AND status = 'running'`.pipe(
+        WHERE user_id = ${input.userId} AND environment_id = ${input.environmentId} AND status IN ('running', 'withdrawn')`.pipe(
             Effect.mapError(unavailable),
           );
           if (busy.length > 0) return yield* strengthRequired("unsupported_authentication_flow");
@@ -176,7 +185,7 @@ const make = Effect.gen(function* () {
             SELECT environment_id FROM relay_environment_links WHERE user_id = ${input.userId}
               AND revoked_at IS NULL AND managed_tunnels_enabled = true
             UNION SELECT environment_id FROM relay_connect_link_reservations WHERE user_id = ${input.userId}
-              AND status = 'running'
+              AND status IN ('running', 'withdrawn')
           ) AS occupied WHERE environment_id <> ${input.environmentId}) AS total,
           COALESCE((SELECT max_tunnels FROM relay_managed_tunnel_limits WHERE user_id = ${input.userId}), 3) AS maximum`.pipe(
               Effect.mapError(unavailable),
@@ -187,7 +196,7 @@ const make = Effect.gen(function* () {
           if (row) {
             yield* db
               .update(relayConnectLinkReservations)
-              .set({ status: "running" })
+              .set({ status: "running", attemptId: input.attemptId })
               .where(binding(input))
               .pipe(Effect.mapError(unavailable));
             return null;
@@ -200,6 +209,7 @@ const make = Effect.gen(function* () {
               challengeId: input.challengeId,
               environmentId: input.environmentId,
               proof: input.proof,
+              attemptId: input.attemptId,
               status: "running",
             })
             .pipe(Effect.mapError(unavailable));
@@ -221,7 +231,11 @@ const make = Effect.gen(function* () {
             .from(relayConnectLinkReservations)
             .where(binding(input))
             .pipe(Effect.mapError(unavailable));
-          if (rows[0]?.status !== "running" || rows[0].proof !== input.proof)
+          if (
+            rows[0]?.status !== "running" ||
+            rows[0].proof !== input.proof ||
+            rows[0].attemptId !== input.attemptId
+          )
             return yield* strengthRequired("unsupported_authentication_flow");
           const result = yield* commit;
           const outcome = yield* seal(input, result);
@@ -235,7 +249,63 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
   });
+  // A separate transaction pins the execution lock without rolling back durable provisioning milestones.
+  const exclusive: ConnectLinkReservations["Service"]["exclusive"] = Effect.fn(
+    "ConnectLinkReservations.exclusive",
+  )(function* (userId, use) {
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const connection = yield* db.$client.reserve.pipe(Effect.mapError(unavailable));
+        return yield* Effect.acquireUseRelease(
+          connection.executeRaw("BEGIN", []).pipe(Effect.mapError(unavailable)),
+          () =>
+            Effect.gen(function* () {
+              const rows = yield* connection
+                .executeValues(
+                  "SELECT pg_try_advisory_xact_lock(hashtextextended(current_schema() || ':' || $1, 0)), txid_current()::text",
+                  [`connect-link-execution:${userId}`],
+                )
+                .pipe(Effect.mapError(unavailable));
+              if (rows[0]?.[0] !== true) return yield* unavailable();
+              const transactionId = rows[0][1];
+              const assertOwner = connection.executeValues("SELECT txid_current()::text", []).pipe(
+                Effect.mapError(unavailable),
+                Effect.flatMap((current) =>
+                  current[0]?.[0] === transactionId ? Effect.void : Effect.fail(unavailable()),
+                ),
+              );
+              return yield* use(assertOwner);
+            }),
+          () => connection.executeRaw("ROLLBACK", []).pipe(Effect.orDie),
+        );
+      }),
+    );
+  });
+  const recover: ConnectLinkReservations["Service"]["recover"] = Effect.fn(
+    "ConnectLinkReservations.recover",
+  )(function* (userId, cleanup) {
+    const rows = yield* db.$client<{
+      challenge_id: string;
+      environment_id: string;
+      attempt_id: string | null;
+    }>`
+        SELECT challenge_id, environment_id, attempt_id FROM relay_connect_link_reservations
+        WHERE user_id = ${userId} AND status IN ('running', 'withdrawn')`.pipe(
+      Effect.mapError(unavailable),
+    );
+    for (const row of rows) {
+      yield* cleanup(row.environment_id);
+      yield* db.$client`UPDATE relay_connect_link_reservations
+          SET status = CASE WHEN status = 'withdrawn' THEN 'cancelled' ELSE 'failed' END
+          WHERE user_id = ${userId} AND challenge_id = ${row.challenge_id}
+            AND attempt_id IS NOT DISTINCT FROM ${row.attempt_id} AND status IN ('running', 'withdrawn')`.pipe(
+        Effect.mapError(unavailable),
+      );
+    }
+  });
   return ConnectLinkReservations.of({
+    exclusive,
+    recover,
     reserve,
     complete,
     withdraw: Effect.fn("ConnectLinkReservations.withdraw")((input) =>
@@ -245,7 +315,10 @@ const make = Effect.gen(function* () {
             yield* lock(input.userId);
             yield* db
               .update(relayConnectLinkReservations)
-              .set({ status: "withdrawn", outcome: null })
+              .set({
+                status: sql`CASE WHEN status IN ('running', 'withdrawn') THEN 'withdrawn' ELSE 'cancelled' END`,
+                outcome: null,
+              })
               .where(
                 and(
                   eq(relayConnectLinkReservations.userId, input.userId),
@@ -261,7 +334,13 @@ const make = Effect.gen(function* () {
       db
         .update(relayConnectLinkReservations)
         .set({ status: "failed" })
-        .where(and(binding(input), eq(relayConnectLinkReservations.status, "running")))
+        .where(
+          and(
+            binding(input),
+            eq(relayConnectLinkReservations.attemptId, input.attemptId),
+            eq(relayConnectLinkReservations.status, "running"),
+          ),
+        )
         .pipe(Effect.asVoid, Effect.mapError(unavailable)),
     ),
   });

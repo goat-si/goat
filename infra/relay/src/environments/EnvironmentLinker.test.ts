@@ -40,6 +40,8 @@ function layerTest(input?: {
     Layer.provide(NodeCryptoLayer.layer),
     Layer.provide(
       Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+        exclusive: (_userId, use) => use(Effect.void),
+        recover: () => Effect.void,
         reserve: (_input, consume) => consume.pipe(Effect.as(null)),
         complete: (_input, commit) => commit,
         failed: () => Effect.void,

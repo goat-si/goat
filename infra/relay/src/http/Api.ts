@@ -541,56 +541,61 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
-    yield* reservations.withdraw(input);
-    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-    });
-    const link = yield* links.getForUser({
-      userId: input.userId,
-      environmentId: input.environmentId,
-    });
-    const unlinked =
-      link === null
-        ? false
-        : yield* revokeEnvironmentLinkRecord({
-            userId: input.userId,
-            environmentId: link.environmentId,
-            environmentPublicKey: link.environmentPublicKey,
-          });
-    // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
-    const deprovisioned = yield* managedEndpointProvider.deprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-      target: deprovisionTarget,
-    });
-    const endpointKey =
-      deprovisionTarget && input.managedEndpointNamespace
-        ? HeldHooks.endpointKeyForTunnelName(
-            input.managedEndpointNamespace,
-            deprovisionTarget.tunnelName,
-          )
-        : null;
-    if (endpointKey !== null) {
-      const inbox = yield* HookInbox.HookInbox;
-      yield* inbox.clear({ endpointKey }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Could not clear held webhook requests", {
-            environmentId: input.environmentId,
-            errorTag: error._tag,
-          }),
-        ),
-      );
-    }
-    if (!deprovisioned) {
-      const key = { userId: input.userId, environmentId: input.environmentId };
-      const retryTarget = yield* managedEndpointProvider.prepareDeprovision(key);
-      if (retryTarget !== null && (yield* links.getForUser(key)) === null) {
-        yield* managedEndpointProvider.deprovision({ ...key, target: retryTarget });
-      }
-    }
-    return unlinked;
+    return yield* reservations.exclusive(input.userId, (assertOwner) =>
+      Effect.gen(function* () {
+        yield* assertOwner;
+        yield* reservations.withdraw(input);
+        const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
+          userId: input.userId,
+          environmentId: input.environmentId,
+        });
+        const link = yield* links.getForUser({
+          userId: input.userId,
+          environmentId: input.environmentId,
+        });
+        const unlinked =
+          link === null
+            ? false
+            : yield* revokeEnvironmentLinkRecord({
+                userId: input.userId,
+                environmentId: link.environmentId,
+                environmentPublicKey: link.environmentPublicKey,
+              });
+        // Deprovision after revocation commits; retry even if already revoked to finish failed Cloudflare cleanup.
+        const deprovisioned = yield* managedEndpointProvider.deprovision({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          target: deprovisionTarget,
+        });
+        const endpointKey =
+          deprovisionTarget && input.managedEndpointNamespace
+            ? HeldHooks.endpointKeyForTunnelName(
+                input.managedEndpointNamespace,
+                deprovisionTarget.tunnelName,
+              )
+            : null;
+        if (endpointKey !== null) {
+          const inbox = yield* HookInbox.HookInbox;
+          yield* inbox.clear({ endpointKey }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not clear held webhook requests", {
+                environmentId: input.environmentId,
+                errorTag: error._tag,
+              }),
+            ),
+          );
+        }
+        if (!deprovisioned) {
+          const key = { userId: input.userId, environmentId: input.environmentId };
+          const retryTarget = yield* managedEndpointProvider.prepareDeprovision(key);
+          if (retryTarget !== null && (yield* links.getForUser(key)) === null) {
+            yield* managedEndpointProvider.deprovision({ ...key, target: retryTarget });
+          }
+        }
+        return unlinked;
+      }),
+    );
   },
 );
 
