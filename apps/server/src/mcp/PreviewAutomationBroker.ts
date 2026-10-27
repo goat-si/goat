@@ -234,6 +234,7 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
 };
 
 const MAX_REASON_CHARS = 500;
+const isReadFailure = Schema.is(PreviewAutomationReadFailure);
 
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
@@ -251,8 +252,7 @@ const classifyResponseError = (
         typeof error.detail === "object" && error.detail !== null && "reason" in error.detail
           ? error.detail.reason
           : undefined;
-      if (Schema.is(PreviewAutomationReadFailure)(reason))
-        return new PreviewAutomationReadError({ reason });
+      if (isReadFailure(reason)) return new PreviewAutomationReadError({ reason });
       return new PreviewAutomationMalformedResponseError(context);
     }
     case "PreviewAutomationRecordingDesktopUpdateRequiredError":
