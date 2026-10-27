@@ -97,22 +97,24 @@ const startsAName = (field: ReadonlySet<string>, word: string) => {
 };
 
 /**
- * 5 when the word is the whole resource ("host" for host.status, not host_link.list), 4 when it
- * is a word of a name or a resource's initials, 3 when it starts one, 2 for the summary, 1 for
- * the description or guide.
+ * Exact names outrank exact summary words; both outrank an inferred word ending or prefix.
  */
 const tier = (fields: Fields, word: string) =>
   fields.resource === word
     ? 5
-    : hasWord(fields.names, word)
+    : fields.names.has(word)
       ? 4
-      : startsAName(fields.names, word)
-        ? 3
-        : hasWord(fields.summary, word)
-          ? 2
-          : hasWord(fields.text, word)
-            ? 1
-            : 0;
+      : fields.summary.has(word)
+        ? 3.5
+        : hasWord(fields.names, word)
+          ? 3.25
+          : startsAName(fields.names, word)
+            ? 3
+            : hasWord(fields.summary, word)
+              ? 2
+              : hasWord(fields.text, word)
+                ? 1
+                : 0;
 
 /**
  * Exact names resolve first, so a tool named outright is never lost behind text matches. Then

@@ -72,6 +72,18 @@ const searchAs = (caller: "thread" | "client", args: object) =>
   );
 
 describe("goat_describe search", () => {
+  it("finds GOAT page reading among the first three results", () => {
+    const top = searchEntries(entries, "read web page").matches.slice(0, 3);
+    expect(top.some(({ entry }) => entry.resource === "preview")).toBe(true);
+  });
+
+  it("ranks GOAT browser operations above browsing remote hosts", () => {
+    const paths = searchEntries(entries, "browser").matches.map(({ entry }) => entry.path);
+    const preview = paths.findIndex((path) => path.startsWith("preview."));
+    expect(preview).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf("ssh.browse")).toBeGreaterThan(preview);
+  });
+
   it("finds a path by words only its guide holds", () => {
     const send = agentSurfaceRegistry["thread.send"];
     const withGuide = { ...send, guide: "Zebra crossings need a pedestrian signal." };
