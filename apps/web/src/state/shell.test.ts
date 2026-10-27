@@ -9,12 +9,26 @@ import { EMPTY_SHELL_STATE, type EnvironmentShellState } from "@goat/client-runt
 import { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createAllEnvironmentProjectSnapshotsReadyAtom,
   createPendingEnvironmentShellIdsAtom,
+  requiresPrimaryEnvironment,
 } from "./shell";
+
+describe("requiresPrimaryEnvironment", () => {
+  it("does not wait for a primary environment on a desktop whose local server is off", () => {
+    vi.stubGlobal("window", { desktopBridge: { getLocalEnvironmentEnabled: () => false } });
+    try {
+      expect(requiresPrimaryEnvironment()).toBe(false);
+      vi.stubGlobal("window", { desktopBridge: { getLocalEnvironmentEnabled: () => true } });
+      expect(requiresPrimaryEnvironment()).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 const LOCAL = EnvironmentId.make("local");
 const REMOTE = EnvironmentId.make("remote");

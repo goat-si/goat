@@ -217,6 +217,19 @@ Below the list, **Connections** shows your saved machines with the same controls
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
 another with **Add device**.
 
+### From the menu bar or taskbar
+
+The desktop app puts a GOAT icon in the macOS menu bar, the Windows notification area, or the
+Linux panel. Its menu lists the threads that need you, the threads running, and your pinned
+threads across connected machines, the same way Fleet counts them; choose one to open it.
+**New Thread** starts one the way the new-thread shortcut does, **Open GOAT** brings the window
+back, and **Quit GOAT** quits the app.
+
+On Windows and Linux, closing the window keeps GOAT running behind the icon; quit from its menu.
+On Linux this needs a panel that shows the icon: GNOME shows it only while the AppIndicator
+extension is on (Ubuntu ships it), and without one closing the window quits as before. On Windows
+the icon may start in the hidden-icons area until you drag it to the taskbar.
+
 ### Choose what the rail shows
 
 On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
