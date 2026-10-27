@@ -111,3 +111,9 @@ export function attachmentVideoPreviewSource(
     },
   };
 }
+
+export function videoPreviewKey(source: VideoPreviewSource): string {
+  return source.type === "local"
+    ? JSON.stringify(["local-video", source.attachment.id, source.attachment.fileUri])
+    : mediaVideoThumbnailKey(source);
+}

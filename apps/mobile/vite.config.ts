@@ -4,6 +4,11 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/lib/clock.test.ts",
+  "src/lib/useNotificationPermissionStatus.test.tsx",
+  "src/components/VideoPreviewModal.ios.test.tsx",
+  "src/widgets/useSubscriptionUsage.test.tsx",
+  "src/features/threads/use-visible-second-clock.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
@@ -115,7 +120,8 @@ export default defineConfig({
                   name: "metro",
                   bundler: "metro",
                   platform: "ios",
-                  isDev: false,
+                  // Permission tests vary Platform.OS; production inlining would erase that branch.
+                  isDev: normalizePath(id).endsWith("/lib/useNotificationPermissionStatus.ts"),
                   isServer: false,
                   isNodeModule: false,
                   supportsStaticESM: true,

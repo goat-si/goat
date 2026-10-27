@@ -1,3 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { MISSING_FILE_ACCESS_MESSAGE } from "@goat/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import { Image } from "expo-image";
@@ -32,6 +36,56 @@ import {
 
 /** Use known feed width immediately; later image measurement would move already-positioned rows. */
 export const MarkdownImageAvailableWidthContext = createContext(0);
+
+type ImageSize = { readonly width: number; readonly height: number };
+
+class SvgLoadError extends Data.TaggedError("SvgLoadError")<{ readonly cause: unknown }> {}
+
+async function readSvgXml(uri: string, signal: AbortSignal): Promise<string> {
+  if (uri.startsWith("data:image/svg+xml")) {
+    const comma = uri.indexOf(",");
+    if (comma < 0) throw new Error("SVG data URI has no content");
+    const content = decodeURIComponent(uri.slice(comma + 1));
+    return uri.slice(0, comma).includes(";base64")
+      ? new TextDecoder().decode(
+          Uint8Array.from(atob(content), (character) => character.charCodeAt(0)),
+        )
+      : content;
+  }
+  // expo/fetch, not the runtime HttpClient: it is the one that reads file:// URIs.
+  const response = await fetch(uri, { signal });
+  if (!response.ok && !(response.status === 0 && uri.startsWith("file://")))
+    throw new Error(`SVG request failed: ${response.status}`);
+  return response.text();
+}
+
+type SvgDocument = { readonly ast: JsxAST; readonly size: ImageSize | null };
+
+// Feed rows unmount as they scroll away. Only parsed documents outlive their
+// readers (for the row that scrolls back); a failed load is dropped with its last
+// reader so the next mount fetches again.
+const parsedSvgDocumentAtom = Atom.family((_uri: string) =>
+  Atom.make<SvgDocument | null>(null).pipe(
+    Atom.setIdleTTL(60_000),
+    Atom.withLabel("mobile:thread-markdown-svg-parsed"),
+  ),
+);
+
+const svgDocumentAtom = Atom.family((uri: string) =>
+  Atom.make((get) => {
+    const parsed = parsedSvgDocumentAtom(uri);
+    const cached = get(parsed);
+    if (cached !== null) return Effect.succeed(cached);
+    return Effect.tryPromise({
+      try: async (signal): Promise<SvgDocument> => {
+        const ast = parse(await readSvgXml(uri, signal));
+        if (!ast) throw new Error("SVG has no root element");
+        return { ast, size: resolveSvgImageSize(ast.props) };
+      },
+      catch: (cause) => new SvgLoadError({ cause }),
+    }).pipe(Effect.tap((document) => Effect.sync(() => get.set(parsed, document))));
+  }).pipe(Atom.withLabel("mobile:thread-markdown-svg")),
+);
 
 export function ThreadMarkdownImageView(props: {
   readonly uri: string | null;
@@ -238,40 +292,14 @@ function ThreadMarkdownSvg(props: {
   readonly onLoad: (size: { width: number; height: number } | null) => void;
   readonly onError: () => void;
 }) {
-  const [ast, setAst] = useState<JsxAST | null>(null);
+  const document = useAtomValue(svgDocumentAtom(props.uri));
   const onLoad = useEffectEvent(props.onLoad);
   const onError = useEffectEvent(props.onError);
   useEffect(() => {
-    const controller = new AbortController();
-    const load = async () => {
-      if (props.uri.startsWith("data:image/svg+xml")) {
-        const comma = props.uri.indexOf(",");
-        if (comma < 0) throw new Error("SVG data URI has no content");
-        const content = decodeURIComponent(props.uri.slice(comma + 1));
-        return props.uri.slice(0, comma).includes(";base64")
-          ? new TextDecoder().decode(
-              Uint8Array.from(atob(content), (character) => character.charCodeAt(0)),
-            )
-          : content;
-      }
-      const response = await fetch(props.uri, { signal: controller.signal });
-      if (!response.ok && !(response.status === 0 && props.uri.startsWith("file://")))
-        throw new Error(`SVG request failed: ${response.status}`);
-      return response.text();
-    };
-    void load()
-      .then((xml) => {
-        const parsed = parse(xml);
-        if (!parsed) throw new Error("SVG has no root element");
-        if (controller.signal.aborted) return;
-        setAst(parsed);
-        onLoad(resolveSvgImageSize(parsed.props));
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) onError();
-      });
-    return () => controller.abort();
-  }, [props.uri]);
+    if (AsyncResult.isSuccess(document)) onLoad(document.value.size);
+    else if (AsyncResult.isFailure(document)) onError();
+  }, [document]);
+  const ast = AsyncResult.isSuccess(document) ? document.value.ast : null;
   return <SvgAst ast={ast} override={{ width: "100%", height: "100%", accessible: false }} />;
 }
 

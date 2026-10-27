@@ -1,5 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import * as Effect from "effect/Effect";
+import {
+  settleAsyncResult,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
@@ -15,7 +20,7 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
-import { findEnvironmentUpdate } from "./environment-maintenance";
+import { checkEnvironmentUpdate } from "./environmentUpdateCheck";
 
 export function OutdatedServerUpdateSection({
   environmentId,
@@ -43,16 +48,18 @@ export function OutdatedServerUpdateSection({
     controller.current = request;
     setChecking(true);
     setError(null);
-    const timeout = setTimeout(() => request.abort(), 20_000);
     const result = await settlePromise(async () => {
       const description = await describe(environmentId);
       if (AsyncResult.isFailure(description)) throw squashAtomCommandFailure(description);
       const fromVersion = description.value.serverVersion;
-      const targetVersion = await findEnvironmentUpdate(fromVersion, request.signal);
-      if (!request.signal.aborted) setRelease({ fromVersion, targetVersion });
+      const lookup = await settleAsyncResult(() =>
+        Effect.runPromiseExit(checkEnvironmentUpdate(fromVersion), { signal: request.signal }),
+      );
+      if (AsyncResult.isFailure(lookup)) throw squashAtomCommandFailure(lookup);
+      if (!request.signal.aborted) setRelease({ fromVersion, targetVersion: lookup.value });
     });
-    clearTimeout(timeout);
     controller.current = null;
+    if (request.signal.aborted) return;
     setChecking(false);
     if (AsyncResult.isFailure(result)) {
       const failure = squashAtomCommandFailure(result);
