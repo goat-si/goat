@@ -80,7 +80,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          run-install: false
+          run-install: true
       - name: Require live staging browser and normal CLI evidence
         env:
           CONNECT_EXPECTED_ARTIFACT: ${{ needs.staging.outputs.artifact }}
@@ -144,7 +144,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          run-install: false
+          run-install: true
       - name: Require final production root/deep-link and normal CLI evidence
         env:
           CONNECT_EXPECTED_ARTIFACT: ${{ needs.production.outputs.artifact }}
