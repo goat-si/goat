@@ -106,3 +106,20 @@ export const maskTree = (tree: string, dotted: RegExp) =>
       );
     })
     .join("\n");
+
+/** A snapshot's console, network and action records with the page's text in them masked. */
+export const maskSnapshotRecords = (
+  mask: (text: string) => string,
+  input: {
+    readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
+    readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
+    readonly actionTimeline: ReadonlyArray<PreviewAutomationActionEvent>;
+  },
+) => {
+  const records = maskRecords(mask);
+  return {
+    consoleEntries: input.consoleEntries.map(records.console),
+    networkEntries: input.networkEntries.map(records.network),
+    actionTimeline: input.actionTimeline.map(records.action),
+  };
+};
