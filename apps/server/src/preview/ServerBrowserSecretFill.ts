@@ -17,7 +17,12 @@ import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
-import { compileSecretForms, secretSpans } from "./secretForms.ts";
+import {
+  compileSecretForms,
+  compileSkeletonForms,
+  secretSpans,
+  skeletonSpans,
+} from "./secretForms.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -212,8 +217,9 @@ const settledPrivate = (control: SessionControl) =>
 /** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
 const maskWith = (values: ReadonlySet<string>) => {
   const forms = compileSecretForms(values);
+  const skeletons = compileSkeletonForms(values);
   return (text: string, cut = false) => {
-    const spans = secretSpans(text, forms, cut);
+    const spans = [...secretSpans(text, forms, cut), ...skeletonSpans(text, skeletons)];
     if (spans.length === 0) return text;
     let masked = "";
     let shown = 0;

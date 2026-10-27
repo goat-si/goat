@@ -294,6 +294,27 @@ it.live("masks the start of a filled value that a cut fetch answer ends on", () 
   );
 });
 
+it.live("masks a filled value a fetch rendered without its brackets, end spaces or raw URL", () => {
+  const { tab } = makeTab();
+  return withFill(
+    async (fill) => {
+      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record);
+      // A link label loses its brackets, a pre block its end spaces, an href is URL-encoded.
+      const text = ["link alphabetagamma", "alt alpha  beta", "href /p/alpha%28beta%29%20gamma"];
+      const outcome = fill.mask(request("fetch", {}))({
+        ok: true,
+        result: { text: text.join("\n") },
+      });
+      expect(outcome).toEqual({
+        ok: true,
+        result: { text: ["link [secret]", "alt [secret]", "href /p/[secret]"].join("\n") },
+      });
+    },
+    undefined,
+    ["alpha[beta]gamma", "alpha  beta ", "alpha(beta) gamma"],
+  );
+});
+
 it.live("masks a very long filled value without failing the answer", () => {
   const { tab } = makeTab();
   const long = "a".repeat(40_000);

@@ -78,7 +78,8 @@ const spansOf = (text: string, { text: form, fallback }: SecretForm, cut: boolea
     if (k < form.length) continue;
     const start = i + 1 - k;
     const last = spans.at(-1);
-    if (last !== undefined && start <= last[1]) last[1] = i + 1;
+    // Only overlaps merge: occurrences that merely touch can stand apart in the original text.
+    if (last !== undefined && start < last[1]) last[1] = i + 1;
     else spans.push([start, i + 1]);
     k = fallback[k - 1] ?? 0;
   }
@@ -98,4 +99,55 @@ export const secretSpans = (text: string, forms: ReadonlyArray<SecretForm>, cut 
   if (forms.length === 0) return [];
   const searched = foldHex(text);
   return forms.flatMap((form) => spansOf(searched, form, cut));
+};
+
+const LETTER = /[\p{L}\p{N}]/u;
+/** Values with fewer letters and digits than this would match too much of ordinary text. */
+const MIN_SKELETON = 4;
+
+/**
+ * The letters and digits of a text, percent escapes decoded, each with the span it came from.
+ * Renderers drop brackets, collapse or trim spaces and encode URLs; none of that touches these.
+ */
+const skeleton = (text: string) => {
+  let letters = "";
+  const from: Array<number> = [];
+  const to: Array<number> = [];
+  for (const { 0: token, index } of text.matchAll(/(?:%[0-9a-f]{2})+|[\s\S]/giu)) {
+    let decoded = token;
+    if (token.length > 1 && token.startsWith("%")) {
+      try {
+        decoded = decodeURIComponent(token);
+      } catch {
+        decoded = "";
+      }
+    }
+    for (const char of decoded) {
+      if (!LETTER.test(char)) continue;
+      letters += char;
+      for (let unit = 0; unit < char.length; unit++) {
+        from.push(index);
+        to.push(index + token.length);
+      }
+    }
+  }
+  return { letters, from, to };
+};
+
+/** The letters and digits of each value long enough to compare that way. */
+export const compileSkeletonForms = (values: Iterable<string>) =>
+  [...new Set([...values].map((value) => skeleton(value).letters))]
+    .filter((letters) => letters.length >= MIN_SKELETON)
+    .map(compile);
+
+/** Spans of the text whose letters and digits spell a value, however GOAT reformatted the rest. */
+export const skeletonSpans = (text: string, forms: ReadonlyArray<SecretForm>) => {
+  if (forms.length === 0) return [];
+  const { letters, from, to } = skeleton(text);
+  return forms.flatMap((form) =>
+    spansOf(letters, form, false).map(([start, end]): [number, number] => [
+      from[start] ?? 0,
+      to[end - 1] ?? text.length,
+    ]),
+  );
 };
