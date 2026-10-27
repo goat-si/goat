@@ -397,11 +397,11 @@ describe("LinkedHosts deadlines", () => {
         requests.length = 0;
         const fiber = yield* links
           .link({ ...LINK_INPUT, access: "full-access" })
-          .pipe(Effect.exit, Effect.forkScoped);
+          .pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* Fiber.interrupt(fiber);
         expect(yield* Deferred.isDone(cancelled)).toBe(true);
-        const exit = yield* Fiber.join(fiber);
+        const exit = yield* Fiber.await(fiber);
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         expect(requests).toEqual(STAGES.map((stage) => stage.path));
