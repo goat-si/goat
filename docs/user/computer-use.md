@@ -140,6 +140,10 @@ work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
 
+The GOAT menu bar or taskbar menu offers the same stops, per app or all at
+once; its **Stop All Computer Use** also stops agents in browser tabs, like
+Stop all here.
+
 When an agent needs you for a step it cannot do, such as a sign-in, a second
 factor or a CAPTCHA, it asks: its tile reads **Waiting for you** with what it
 needs, and the request also appears in its thread on every device. The agent

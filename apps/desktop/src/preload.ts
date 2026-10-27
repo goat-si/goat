@@ -130,6 +130,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
           threadId: Schema.String,
         }),
         Schema.Struct({ kind: Schema.Literal("new-thread") }),
+        Schema.Struct({
+          kind: Schema.Literal("stop-computer-use"),
+          appId: Schema.NullOr(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(1024))),
+        }),
+        Schema.Struct({ kind: Schema.Literal("stop-all-computer-use") }),
       ]),
     );
     const handler = (_event: Electron.IpcRendererEvent, raw: unknown) => {
