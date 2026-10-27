@@ -225,6 +225,10 @@ export const make = Effect.gen(function* () {
       Effect.map((state) => state._tag === "active" && state.idle !== true),
       Effect.orElseSucceed(() => false),
     );
+  // A thread proxy lives as long as its provider conversation and registers once, so a turn
+  // ending, an expiry or a successor control keeps its registration; Stop and revocation close it.
+  const keepsRegistration = (state: { readonly _tag: string; readonly reason?: string }) =>
+    state._tag === "ended" ? state.reason === "expired" || state.reason === "replaced" : true;
   const revokeEndedControls = Effect.fn("ComputerUsePrimitiveChannel.revokeEndedControls")(
     function* () {
       for (const [threadId, attachment] of attachments) {
@@ -244,6 +248,11 @@ export const make = Effect.gen(function* () {
                 .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })))
             : { _tag: "ended" as const };
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
+        const record = registered?.controls.get(current.controlId);
+        if (registered?.kind === "thread" && keepsRegistration(state)) {
+          if (record !== undefined) clear(registered, record);
+          continue;
+        }
         yield* close(attachment) ?? Effect.void;
         if (attachments.get(threadId) === attachment) attachments.delete(threadId);
       }
@@ -269,13 +278,25 @@ export const make = Effect.gen(function* () {
     }),
     issue: Effect.fn("ComputerUsePrimitiveChannel.issue")(function* (input) {
       const previous = attachments.get(input.threadId);
-      if (previous !== undefined) yield* close(previous) ?? Effect.void;
+      const kept =
+        previous?.registration?.kind === "thread" &&
+        tokenMatches(previous.token, input.proxyChannelToken)
+          ? previous.registration
+          : undefined;
+      if (kept !== undefined)
+        for (const record of kept.controls.values())
+          for (const [id, pending] of record.pending) {
+            record.pending.delete(id);
+            cancelDelivered(kept, pending);
+            settle(pending);
+          }
+      else if (previous !== undefined) yield* close(previous) ?? Effect.void;
       attachments.set(input.threadId, {
         generation: input.attachmentGeneration,
         token: input.proxyChannelToken,
         expiresAt: input.expiresAt,
         ...(input.controlId === undefined ? {} : { controlId: input.controlId }),
-        registration: undefined,
+        registration: kept,
       });
     }),
     revoke: Effect.fn("ComputerUsePrimitiveChannel.revoke")(function* (input) {
