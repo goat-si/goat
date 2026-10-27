@@ -198,6 +198,8 @@ import {
   flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
+  mergeComposerDraftContent,
+  undoComposerDraftMerge,
   migrateLegacyNewTaskDraft,
   modelOptionMemoryAtom,
   releaseUnusedComposerAttachmentFiles,
@@ -2326,6 +2328,33 @@ describe("mobile composer drafts", () => {
 
     try {
       await expect(flushComposerDrafts()).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+    } finally {
+      composerDraftFileMocks.setWriteError(null);
+    }
+  });
+
+  it("cancels a failed share merge without discarding later typing or attachments", async () => {
+    const draftKey = "environment-1:thread-share-cancel";
+    setComposerDraftText(draftKey, "before");
+    const publication = Promise.withResolvers<{ before: ComposerDraft; merged: ComposerDraft }>();
+    composerDraftFileMocks.setWriteError(new Error("storage unavailable"));
+    try {
+      const saving = mergeComposerDraftContent(
+        draftKey,
+        {
+          text: "shared text",
+          attachments: [],
+          sourceShareId: "share-cancel",
+        },
+        { onMerge: (before, merged) => publication.resolve({ before, merged }) },
+      );
+      const failure = expect(saving).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+      const { before, merged } = await publication.promise;
+      setComposerDraftText(draftKey, `${merged.text}\nuser follow-up`);
+      await failure;
+      composerDraftFileMocks.setWriteError(null);
+      await undoComposerDraftMerge(draftKey, before, merged);
+      expect(getComposerDraftSnapshot(draftKey).text).toBe("before\nuser follow-up");
     } finally {
       composerDraftFileMocks.setWriteError(null);
     }

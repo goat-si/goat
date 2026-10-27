@@ -1650,6 +1650,7 @@ export function mergeComposerDraftContentState(
 export async function mergeComposerDraftContent(
   draftKey: string,
   content: ComposerDraftContent,
+  options?: { readonly onMerge: (before: ComposerDraft, merged: ComposerDraft) => void },
 ): Promise<{ readonly skippedAttachmentCount: number }> {
   ensureComposerDraftsLoaded();
   if (loadPromise !== null) {
@@ -1671,6 +1672,7 @@ export async function mergeComposerDraftContent(
     (attachment) =>
       !currentAttachmentIds.has(attachment.id) && !nextAttachmentIds.has(attachment.id),
   ).length;
+  options?.onMerge(normalizeDraft(current[draftKey]), normalizeDraft(next[draftKey]));
   // Publish content and receipt before awaiting disk; concurrent typing then preserves the receipt in later serialized writes.
   if (next !== current) {
     appAtomRegistry.set(composerDraftsAtom, next);

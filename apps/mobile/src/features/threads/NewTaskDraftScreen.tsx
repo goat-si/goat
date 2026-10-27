@@ -57,7 +57,7 @@ import {
   clearComposerDraftContent,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
-  restoreComposerDraftSnapshot,
+  undoComposerDraftMerge,
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
@@ -277,7 +277,9 @@ export function NewTaskDraftScreen(props: {
   const [shareImportAttempt, setShareImportAttempt] = useState(0);
   const startedShareImportKeyRef = useRef<string | null>(null);
   const cancellingShareImportKeyRef = useRef<string | null>(null);
-  const shareImportDraftBackupRef = useRef(new Map<string, ComposerDraft>());
+  const shareImportDraftMergeRef = useRef(
+    new Map<string, { before: ComposerDraft; merged: ComposerDraft }>(),
+  );
   const activeShareImportTokenRef = useRef<symbol | null>(null);
   const shareImportMountedRef = useRef(true);
   // The share import resumes after awaits; this reads the screen's current
@@ -594,13 +596,9 @@ export function NewTaskDraftScreen(props: {
       alertedUnavailableIncomingShareIdRef.current = null;
     }
     startedShareImportKeyRef.current = importKey;
-    const draftBackup =
-      shareImportDraftBackupRef.current.get(importKey) ?? getComposerDraftSnapshot(draftKey);
-    shareImportDraftBackupRef.current.set(importKey, draftBackup);
     const importToken = Symbol(importKey);
     let didReserveShare = false;
     let didConsumeShare = false;
-    let needsDraftRestore = false;
     activeShareImportTokenRef.current = importToken;
     // oxlint-disable-next-line react/set-state-in-effect -- Publishes the share import started by this effect before its async work runs.
     setImportingShareKey(importKey);
@@ -626,12 +624,21 @@ export function NewTaskDraftScreen(props: {
       if (selectedAttachments.status === "pending") {
         throw new Error("Server attachment support is still loading.");
       }
-      needsDraftRestore = true;
-      const { skippedAttachmentCount } = await mergeComposerDraftContent(draftKey, {
-        text: incomingShare.text,
-        attachments: selectedAttachments.attachments,
-        sourceShareId: shareId,
-      });
+      const { skippedAttachmentCount } = await mergeComposerDraftContent(
+        draftKey,
+        {
+          text: incomingShare.text,
+          attachments: selectedAttachments.attachments,
+          sourceShareId: shareId,
+        },
+        {
+          onMerge: (before, merged) => {
+            if (!shareImportDraftMergeRef.current.has(importKey)) {
+              shareImportDraftMergeRef.current.set(importKey, { before, merged });
+            }
+          },
+        },
+      );
       if (
         !shareImportMountedRef.current ||
         activeShareImportTokenRef.current !== importToken ||
@@ -662,7 +669,7 @@ export function NewTaskDraftScreen(props: {
       if (warnings.length > 0) {
         Dialog.alert("Some shared content was skipped", warnings.join("\n"));
       }
-      shareImportDraftBackupRef.current.delete(importKey);
+      shareImportDraftMergeRef.current.delete(importKey);
     })()
       .catch((error) => {
         if (!shareImportMountedRef.current || activeShareImportTokenRef.current !== importToken) {
@@ -684,11 +691,11 @@ export function NewTaskDraftScreen(props: {
                   cancellingShareImportKeyRef.current = importKey;
                   setIsCancellingShareImport(true);
                   try {
-                    if (needsDraftRestore) {
+                    const merge = shareImportDraftMergeRef.current.get(importKey);
+                    if (merge) {
                       // Sweep restored attachments only after inbox consumption; unconsumed inbox entries still own them.
-                      const mergedAttachments = getComposerDraftSnapshot(draftKey).attachments;
-                      await restoreComposerDraftSnapshot(draftKey, draftBackup);
-                      needsDraftRestore = false;
+                      const mergedAttachments = merge.merged.attachments;
+                      await undoComposerDraftMerge(draftKey, merge.before, merge.merged);
                       if (didConsumeShare) {
                         scheduleUnusedComposerAttachmentCleanup(mergedAttachments);
                       }
@@ -699,7 +706,7 @@ export function NewTaskDraftScreen(props: {
                         projectId: String(destinationProject.id),
                       });
                     }
-                    shareImportDraftBackupRef.current.delete(importKey);
+                    shareImportDraftMergeRef.current.delete(importKey);
                     if (shareImportMountedRef.current) {
                       setIsCancellingShareImport(false);
                       setCancelledIncomingShareId(shareId);
