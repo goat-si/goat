@@ -10,6 +10,7 @@
 import * as Effect from "effect/Effect";
 
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import type { OverlayEvent } from "./ComputerUseOverlay.ts";
 import { movesPointer, targetOf } from "./computerUseTarget.ts";
 
 export interface HelperCursor {
@@ -29,7 +30,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   set_agent_cursor_theme: FIXED_STYLE,
 };
 
-export const AGENT_CURSOR_TOOLS: ReadonlySet<string> = new Set(Object.keys(DESCRIPTIONS));
+const AGENT_CURSOR_TOOLS: ReadonlySet<string> = new Set(Object.keys(DESCRIPTIONS));
 
 /** Every answer, including the proxy's and the driver's refusals, matches the listed schema. */
 export const CURSOR_OUTPUT_SCHEMA = {
@@ -96,7 +97,7 @@ const reply = (id: JsonRpcId, text: string, structuredContent: object, isError =
   });
 
 /** Answers one cursor tool call from the helper's cursor, toggling it first when asked. */
-export const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(function* (
+const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(function* (
   id: JsonRpcId,
   name: string,
   args: unknown,
@@ -134,7 +135,7 @@ const finite = (value: unknown): value is number =>
  * overlay under the helper and refuses it (facility_unavailable), so the proxy moves GOAT's cursor
  * instead. A desktop move, which moves the person's pointer, still goes to the driver.
  */
-export function isWindowCursorMove(name: unknown, args: unknown): boolean {
+function isWindowCursorMove(name: unknown, args: unknown): boolean {
   const input = record(args);
   return (
     name === "move_cursor" &&
@@ -147,7 +148,7 @@ export function isWindowCursorMove(name: unknown, args: unknown): boolean {
 }
 
 /** The answer to a window move_cursor the helper's cursor carried out. */
-export function windowCursorMoveAnswer(
+function windowCursorMoveAnswer(
   id: JsonRpcId,
   args: unknown,
   view: { readonly enabled: boolean; readonly visible: boolean },
@@ -173,3 +174,22 @@ export function windowCursorMoveAnswer(
     },
   );
 }
+
+/** Whether the proxy answers this call from the helper's cursor instead of the driver. */
+export const answeredByHelperCursor = (name: unknown, args: unknown): boolean =>
+  (typeof name === "string" && AGENT_CURSOR_TOOLS.has(name)) || isWindowCursorMove(name, args);
+
+/** Answers a cursor tool or a window move_cursor from the helper's cursor. */
+export const answerHelperCursorCall = Effect.fn("ComputerUseCursorTools.answerCall")(function* (
+  id: JsonRpcId,
+  name: string,
+  args: unknown,
+  cursor: HelperCursor,
+  draw: (event: OverlayEvent) => Effect.Effect<unknown>,
+) {
+  if (!isWindowCursorMove(name, args)) return yield* answerCursorTool(id, name, args, cursor);
+  const key = JSON.stringify(id);
+  yield* draw({ type: "call", id: key, name, args });
+  yield* draw({ type: "reply", id: key });
+  return windowCursorMoveAnswer(id, args, cursor.view());
+});

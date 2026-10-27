@@ -124,6 +124,8 @@ export const harness = Effect.fn(function* (
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
     /** The helper draws the agent cursor, so the proxy answers the cursor tools. */
     readonly answersCursorTools?: boolean;
+    /** Re-read a window as a tree diff after unverified input. */
+    readonly verifyInputByTreeDiff?: boolean;
     /** The app macOS asks for Automation consent on this host's behalf. */
     readonly automationHolder?: "helper" | "app";
   } = {},
@@ -183,6 +185,7 @@ export const harness = Effect.fn(function* (
       ),
     controlId: options.controlId ?? CONTROL,
     ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
+    ...(options.verifyInputByTreeDiff ? { verifyInputByTreeDiff: true } : {}),
     ...(options.automationHolder === undefined
       ? {}
       : { automationHolder: options.automationHolder }),

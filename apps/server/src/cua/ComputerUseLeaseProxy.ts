@@ -42,13 +42,9 @@ import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
-import {
-  AGENT_CURSOR_TOOLS,
-  answerCursorTool,
-  isWindowCursorMove,
-  windowCursorMoveAnswer,
-} from "./ComputerUseCursorTools.ts";
+import { answeredByHelperCursor, answerHelperCursorCall } from "./ComputerUseCursorTools.ts";
 import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
+import { makeInputVerifier } from "./ComputerUseInputVerify.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
@@ -84,6 +80,7 @@ import {
 import {
   PRIMITIVE_ID,
   forwardPrimitiveRequests,
+  type OutstandingCall,
   type ReplySink,
   type LeaseProxyOptions,
 } from "./ComputerUseLeaseProxyOptions.ts";
@@ -114,26 +111,20 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
   const tokenFirst = makeTokenFirst();
-  const outstanding = new Map<
-    string,
-    {
-      readonly id: JsonRpcId;
-      readonly method: string;
-      readonly tool?: string;
-      readonly args?: unknown;
-      readonly unfiltered?: boolean;
-      readonly windowId?: number;
-      readonly reservationId?: string;
-      readonly connectionId: string;
-      readonly cancelled?: boolean;
-      readonly sink: ReplySink;
-    }
-  >();
+  const outstanding = new Map<string, OutstandingCall>();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
   let proven: Running | undefined;
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
+  const verifier = makeInputVerifier({
+    enabled: options.verifyInputByTreeDiff === true,
+    ownAnswers,
+    ended,
+    nextId: () => `${OWN_ID}verify:${ownRequests++}`,
+    scope,
+    live: (child) => lifecycle.current === child && active(),
+  });
   const handshakeAnswers = makeLeaseProxyHandshake({
     startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
@@ -354,6 +345,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                   "settled",
                 );
               if (verdict === "proof") proven = current;
+              verifier.answered(request.tool, request.args, message.result?.isError === true);
             } else {
               handshakeAnswers.remember(request.method, message);
               outstanding.delete(key);
@@ -392,6 +384,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           }).pipe(Effect.scoped, Effect.forkIn(current.scope));
         if (lifecycle.current !== current) return;
         overlay.reset();
+        verifier.clear();
         // A fresh child hears the provider's handshake again; its answers are dropped.
         for (const line of handshake) {
           if (lifecycle.current !== current || !active()) return;
@@ -810,30 +803,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
-    if (isRequest && options.answersCursorTools && AGENT_CURSOR_TOOLS.has(String(name))) {
+    const args = message?.params?.arguments;
+    if (isRequest && options.answersCursorTools && answeredByHelperCursor(name, args)) {
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
-      const line = yield* answerCursorTool(id, String(name), message?.params?.arguments, overlay);
+      const line = yield* answerHelperCursorCall(id, String(name), args, overlay, drawOverlay);
       return yield* sink.answer(line, "settled", { tool: String(name) });
-    }
-    if (
-      isRequest &&
-      options.answersCursorTools &&
-      isWindowCursorMove(name, message?.params?.arguments)
-    ) {
-      if (!stillCurrent()) return yield* sink.answer(notSent(id));
-      const key = JSON.stringify(id);
-      yield* drawOverlay({
-        type: "call",
-        id: key,
-        name: "move_cursor",
-        args: message?.params?.arguments,
-      });
-      yield* drawOverlay({ type: "reply", id: key });
-      return yield* sink.answer(
-        windowCursorMoveAnswer(id, message?.params?.arguments, overlay.view()),
-        "settled",
-        { tool: "move_cursor" },
-      );
     }
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
@@ -976,7 +950,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             (key) => key === "session",
           ),
           connectionId: current.connectionId,
-          sink,
+          sink: verifier.wrap(sink, message?.params?.name, message?.params?.arguments, current),
           ...(reservationId === undefined ? {} : { reservationId }),
         });
     });
