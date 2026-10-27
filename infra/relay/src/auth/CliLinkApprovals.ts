@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "./ConnectAccounts.ts";
 import {
   CliLinkApprovalRequest,
   ConnectSessionAssurance,
@@ -65,6 +66,7 @@ const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
   const crypto = yield* Crypto.Crypto;
   const replay = yield* DpopProofs.DpopProofReplay;
+  const accounts = yield* ConnectAccounts.ConnectAccounts;
   const unavailable = () =>
     new RelayInternalError({
       code: "internal_error",
@@ -111,12 +113,16 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Claims)), Effect.option);
     if (decoded._tag === "None") return yield* strengthRequired("unsupported_authentication_flow");
     const claims = decoded.value;
+    if (!(yield* accounts.check(claims.sub, claims.assurance.authGeneration)))
+      return yield* strengthRequired("session_not_active");
     const challenge = Base64Url.encode(
       yield* crypto
         .digest("SHA-256", new TextEncoder().encode(input.verifier))
         .pipe(Effect.mapError(unavailable)),
     );
     if (
+      claims.exp <= now ||
+      claims.iat > now ||
       input.verifier.length < 43 ||
       input.verifier.length > 128 ||
       claims.sub !== input.userId ||

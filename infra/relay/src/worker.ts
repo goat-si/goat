@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "./auth/ConnectAccounts.ts";
 import { isGoatConnectPushEnabled } from "@goat/shared/goatConnect";
 import * as ClientKeys from "./auth/ClientKeys.ts";
 import * as CliLinkApprovals from "./auth/CliLinkApprovals.ts";
@@ -337,7 +338,7 @@ export const layer = Api.make(
         ),
       ),
       Layer.provideMerge(
-        RelayDb.RelayTransactions.layer.pipe(
+        Layer.mergeAll(ConnectAccounts.layer, RelayDb.RelayTransactions.layer).pipe(
           Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
         ),
       ),

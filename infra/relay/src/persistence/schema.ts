@@ -214,9 +214,16 @@ export const relayClientKeys = pgTable(
     clientId: varchar("client_id", { length: 64 }).notNull(),
     thumbprint: varchar("thumbprint", { length: 191 }).notNull(),
     admittedAt: integer("admitted_at").notNull(),
+    admissionId: varchar("admission_id", { length: 64 }),
     policyVersion: integer("policy_version").notNull(),
     authGeneration: integer("auth_generation").notNull(),
     revokedAt: integer("revoked_at"),
   },
   (table) => [primaryKey({ columns: [table.userId, table.clientId, table.thumbprint] })],
 );
+
+export const relayConnectAccounts = pgTable("relay_connect_accounts", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  generation: integer("generation").notNull(),
+  status: varchar("status", { length: 32 }).notNull().$type<"active" | "suspended" | "deleted">(),
+});

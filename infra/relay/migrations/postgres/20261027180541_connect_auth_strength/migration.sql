@@ -10,3 +10,9 @@ CREATE TABLE "relay_client_keys" (
 );
 --> statement-breakpoint
 ALTER TABLE "relay_environment_links" ADD COLUMN "connect_auth_policy_version" integer;
+ALTER TABLE "relay_client_keys" ADD COLUMN "admission_id" varchar(64);
+CREATE TABLE "relay_connect_accounts" (
+	"user_id" varchar(255) PRIMARY KEY,
+	"generation" integer NOT NULL,
+	"status" varchar(32) NOT NULL
+);

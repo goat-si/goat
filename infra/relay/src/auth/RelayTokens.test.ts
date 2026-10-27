@@ -106,6 +106,7 @@ describe("RelayTokens", () => {
       const token = yield* relayTokens.issueDpopAccessToken({
         assurance,
         clientKeyAuthorizedAt: 100,
+        clientKeyAdmissionId: "admission-1",
         userId: "user_123",
         proofKeyThumbprint: "proof-key-thumbprint",
         jti: "access-token-1",
@@ -135,6 +136,7 @@ describe("RelayTokens", () => {
       const token = yield* relayTokens.issueDpopAccessToken({
         assurance,
         clientKeyAuthorizedAt: 100,
+        clientKeyAdmissionId: "admission-1",
         userId: "user_123",
         proofKeyThumbprint: "web-proof-key-thumbprint",
         jti: "web-access-token-1",
@@ -163,6 +165,7 @@ describe("RelayTokens", () => {
         payload: {
           assurance,
           clientKeyAuthorizedAt: 100,
+          clientKeyAdmissionId: "admission-1",
           iss: "https://relay.example.test",
           aud: "https://relay.example.test",
           sub: "user_123",
@@ -188,6 +191,7 @@ describe("RelayTokens", () => {
         payload: {
           assurance,
           clientKeyAuthorizedAt: 100,
+          clientKeyAdmissionId: "admission-1",
           iss: "https://relay.example.test",
           aud: "https://relay.example.test",
           sub: "user_123",

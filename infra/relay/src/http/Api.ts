@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
 import { createLinkChallenge } from "../auth/ConnectLinkChallenges.ts";
@@ -319,6 +320,7 @@ export const layerClientAuth = Layer.effect(
   RelayClientAuth,
   Effect.gen(function* () {
     const config = yield* RelayConfiguration.RelayConfiguration;
+    const accounts = yield* ConnectAccounts.ConnectAccounts;
     return {
       clientBearer: Effect.fn("relay.auth.client.bearer")(function* (httpEffect, { credential }) {
         const token = readHttpAuthorizationCredential(credential);
@@ -331,7 +333,11 @@ export const layerClientAuth = Layer.effect(
           ["/v1/client/environment-link-challenges", "/v1/client/environment-links"].includes(
             request.url,
           );
-        const verified = yield* verifyRelayClientBearerToken(config, token, withdrawal || cliLink);
+        const verified = yield* verifyRelayClientBearerToken(
+          config,
+          token,
+          withdrawal || cliLink,
+        ).pipe(Effect.provideService(ConnectAccounts.ConnectAccounts, accounts));
         if (!verified.sub) {
           yield* Effect.annotateCurrentSpan({
             "relay.auth.clerk_verification_failure": "missing_subject",
@@ -417,6 +423,7 @@ export const layerDpopClientAuth = Layer.effect(
             thumbprint: verified.cnf.jkt,
             authGeneration: verified.assurance.authGeneration,
             admittedAt: verified.clientKeyAuthorizedAt,
+            admissionId: verified.clientKeyAdmissionId,
           }))
         )
           return yield* relayAuthInvalidError("not_authorized");
@@ -1079,10 +1086,11 @@ export const layerTokenApi = HttpApiBuilder.group(
         );
         const now = yield* DateTime.now;
         const keys = yield* ClientKeys.ClientKeys;
-        const clientKeyAuthorizedAt = yield* keys.admit({
+        const keyAdmission = yield* keys.admit({
           assurance,
           clientId: args.payload.client_id,
           thumbprint: proofKeyThumbprint,
+          ...(args.payload.readmitClientKey ? { readmit: true } : {}),
           now: Math.floor(now.epochMilliseconds / 1000),
         });
         const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL);
@@ -1094,7 +1102,8 @@ export const layerTokenApi = HttpApiBuilder.group(
             .issueDpopAccessToken({
               userId: assurance.userId,
               assurance,
-              clientKeyAuthorizedAt,
+              clientKeyAuthorizedAt: keyAdmission.authorizedAt,
+              clientKeyAdmissionId: keyAdmission.admissionId,
               proofKeyThumbprint,
               jti,
               issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),

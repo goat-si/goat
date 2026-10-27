@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkProofInvalidReason,
@@ -64,6 +65,7 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
 
 export type EnvironmentLinkError =
   | EnvironmentLinkProofExpired
+  | import("@goat/contracts/relay").RelayInternalError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
@@ -142,6 +144,7 @@ const make = Effect.gen(function* () {
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
   const proofReplay = yield* DpopProofs.DpopProofReplay;
   const relayTokens = yield* RelayTokens.RelayTokens;
+  const accounts = yield* ConnectAccounts.ConnectAccounts;
   const config = yield* RelayConfiguration.RelayConfiguration;
 
   return EnvironmentLinker.of({
@@ -254,6 +257,13 @@ const make = Effect.gen(function* () {
           stage: "verify_challenge",
         });
       }
+      if (!(yield* accounts.check(input.userId, challenge.assurance.authGeneration)))
+        return yield* new EnvironmentLinkProofInvalid({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+          reason: "challenge_invalid",
+          stage: "verify_challenge",
+        });
       const expiresAt = DateTime.make(verified.exp * 1_000);
       if (expiresAt._tag === "None") {
         return yield* new EnvironmentLinkProofInvalid({

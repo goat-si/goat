@@ -250,6 +250,7 @@ function verifyEnvironmentResponse(input: {
     Effect.map(
       (proof) =>
         proof !== null &&
+        proof.connectAuthPolicyVersion === 1 &&
         proof.environmentId === input.environmentId &&
         proof.requestNonce === input.requestNonce &&
         proof.clientProofKeyThumbprint === input.clientProofKeyThumbprint &&

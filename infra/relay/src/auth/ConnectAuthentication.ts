@@ -1,8 +1,10 @@
+import * as ConnectAccounts from "./ConnectAccounts.ts";
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import {
   ConnectSessionAssurance,
   isConnectAssuranceFresh,
   RelayAuthenticationStrengthError,
+  RelayAuthenticationUnavailableError,
 } from "@goat/contracts/connectAssurance";
 import { RelayAuthInvalidError, RelayInternalError } from "@goat/contracts/relay";
 import { clerkFrontendApiUrlFromPublishableKey } from "@goat/shared/relayAuth";
@@ -44,6 +46,7 @@ export const strengthRequired = (reason: RelayAuthenticationStrengthError["reaso
 export function normalizeSessionAssurance(
   claims: unknown,
   now: number,
+  authGeneration: number,
 ): ConnectSessionAssurance | null {
   const decoded = decodeSessionClaims(claims);
   if (decoded._tag === "None") return null;
@@ -78,7 +81,7 @@ export function normalizeSessionAssurance(
     firstVerifiedAtFloor: first,
     secondVerifiedAtFloor: second,
     checkedAt: now,
-    authGeneration: 1,
+    authGeneration,
   };
 }
 
@@ -90,7 +93,10 @@ export class ConnectAuthentication extends Context.Service<
       fresh?: boolean,
     ) => Effect.Effect<
       ConnectSessionAssurance,
-      RelayAuthenticationStrengthError | RelayAuthInvalidError | RelayInternalError
+      | RelayAuthenticationStrengthError
+      | RelayAuthInvalidError
+      | RelayAuthenticationUnavailableError
+      | RelayInternalError
     >;
     readonly oauth: (token: string) => Effect.Effect<
       {
@@ -103,13 +109,14 @@ export class ConnectAuthentication extends Context.Service<
           readonly assurance: null;
         };
       },
-      RelayAuthInvalidError | RelayInternalError
+      RelayAuthInvalidError | RelayAuthenticationUnavailableError
     >;
   }
 >()("goat-relay/auth/ConnectAuthentication") {}
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const accounts = yield* ConnectAccounts.ConnectAccounts;
   const invalid = () =>
     new RelayAuthInvalidError({
       code: "auth_invalid",
@@ -117,9 +124,9 @@ const make = Effect.gen(function* () {
       traceId: "connect-auth",
     });
   const unavailable = () =>
-    new RelayInternalError({
-      code: "internal_error",
-      reason: "upstream_unavailable",
+    new RelayAuthenticationUnavailableError({
+      code: "authentication_provider_unavailable",
+      retryable: true,
       traceId: "connect-auth",
     });
   const client = () =>
@@ -135,6 +142,8 @@ const make = Effect.gen(function* () {
       try: () => clerkFrontendApiUrlFromPublishableKey(config.clerkPublishableKey),
       catch: unavailable,
     });
+    if (config.clerkJwtAudience !== config.relayIssuer.replace(/\/+$/u, ""))
+      return yield* unavailable();
     const parties = config.clerkAuthorizedParties ?? [];
     if (parties.length === 0) return yield* unavailable();
     const claims = yield* Effect.tryPromise({
@@ -144,8 +153,17 @@ const make = Effect.gen(function* () {
           audience: config.clerkJwtAudience,
           authorizedParties: [...parties],
         }),
-      catch: invalid,
-    });
+      catch: (cause) =>
+        typeof cause === "object" &&
+        cause !== null &&
+        "reason" in cause &&
+        cause.reason === "jwk-remote-failed-to-load"
+          ? unavailable()
+          : invalid(),
+    }).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.catchTags({ TimeoutError: () => Effect.fail(unavailable()) }),
+    );
     if (
       claims.iss !== issuer ||
       !parties.includes(String(claims.azp)) ||
@@ -155,12 +173,16 @@ const make = Effect.gen(function* () {
     )
       return yield* invalid();
     const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
-    const assurance = normalizeSessionAssurance(claims, now);
+    const generation = yield* accounts.authorize(claims.sub);
+    const assurance = normalizeSessionAssurance(claims, now, generation);
     if (!assurance) return yield* strengthRequired("mfa_required");
     const active = yield* Effect.tryPromise({
       try: () => client().sessions.getSession(assurance.sessionId),
       catch: unavailable,
-    });
+    }).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.catchTags({ TimeoutError: () => Effect.fail(unavailable()) }),
+    );
     if (active.status !== "active" || active.userId !== assurance.userId)
       return yield* strengthRequired("session_not_active");
     if (fresh && !isConnectAssuranceFresh(assurance, now))

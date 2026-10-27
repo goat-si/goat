@@ -1,12 +1,16 @@
+import * as HttpApiSecurity from "effect/http-api/HttpApiSecurity";
+import * as OpenApi from "effect/http-api/OpenApi";
+import * as Context from "effect/Context";
+import type { RelayDpopAccessTokenScope } from "./relay.ts";
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-export const CONNECT_AUTH_POLICY_VERSION = 1;
-export const CONNECT_REAUTH_MAX_AGE_SECONDS = 600;
+const CONNECT_AUTH_POLICY_VERSION = 1;
+const CONNECT_REAUTH_MAX_AGE_SECONDS = 600;
 const EpochSeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 export const ConnectSessionAssurance = Schema.Struct({
-  policyVersion: Schema.Literal(1),
+  policyVersion: Schema.Literal(CONNECT_AUTH_POLICY_VERSION),
   source: Schema.Literal("clerk-session"),
   userId: TrimmedNonEmptyString,
   sessionId: TrimmedNonEmptyString,
@@ -77,6 +81,20 @@ export class RelayAuthenticationStrengthError extends Schema.TaggedError<RelayAu
   }
 }
 
+export class RelayAuthenticationUnavailableError extends Schema.TaggedError<RelayAuthenticationUnavailableError>()(
+  "RelayAuthenticationUnavailableError",
+  {
+    code: Schema.Literal("authentication_provider_unavailable"),
+    retryable: Schema.Literal(true),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 503 },
+) {
+  override get message() {
+    return "The authentication provider is temporarily unavailable. Try again.";
+  }
+}
+
 export class RelayConnectUpgradeRequiredError extends Schema.TaggedError<RelayConnectUpgradeRequiredError>()(
   "RelayConnectUpgradeRequiredError",
   {
@@ -127,3 +145,34 @@ export const ConnectLinkChallengeRequest = Schema.Struct({
   }),
 }).annotate({ description: "Requested capabilities for a new environment-link challenge." });
 export type ConnectLinkChallengeRequest = typeof ConnectLinkChallengeRequest.Type;
+
+export const ConnectAuthenticationErrors = [
+  RelayAuthenticationStrengthError,
+  RelayAuthenticationUnavailableError,
+  RelayConnectUpgradeRequiredError,
+] as const;
+
+export class RelayClientPrincipal extends Context.Service<
+  RelayClientPrincipal,
+  {
+    readonly userId: string;
+    readonly token: string;
+    readonly authentication?: typeof ConnectAuthenticationContext.Type;
+    readonly proofKeyThumbprint?: string;
+    readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
+  }
+>()("@goat/contracts/connectAssurance/RelayClientPrincipal") {}
+
+export const RelayEnvironmentLinkChallengeResponse = Schema.Struct({
+  challenge: TrimmedNonEmptyString,
+  expiresAt: TrimmedNonEmptyString,
+});
+export type RelayEnvironmentLinkChallengeResponse =
+  typeof RelayEnvironmentLinkChallengeResponse.Type;
+
+export const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
+  HttpApiSecurity.annotate(
+    OpenApi.Description,
+    "Clerk session or OAuth bearer token for the signed-in GOAT Connect user.",
+  ),
+);

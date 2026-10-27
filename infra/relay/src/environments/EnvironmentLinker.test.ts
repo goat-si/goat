@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
 import * as NodeCrypto from "node:crypto";
 import type {
@@ -135,6 +136,12 @@ function layerTest(input?: {
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
+    Layer.provide(
+      Layer.succeed(ConnectAccounts.ConnectAccounts, {
+        authorize: () => Effect.succeed(1),
+        check: () => Effect.succeed(true),
+      }),
+    ),
     Layer.provideMerge(RelayTokens.layer),
     Layer.provide(
       Layer.mergeAll(

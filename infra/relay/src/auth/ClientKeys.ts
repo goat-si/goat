@@ -1,3 +1,4 @@
+import * as ConnectAccounts from "./ConnectAccounts.ts";
 import {
   isConnectAssuranceFresh,
   RelayAuthenticationStrengthError,
@@ -5,6 +6,7 @@ import {
 } from "@goat/contracts/connectAssurance";
 import { RelayInternalError } from "@goat/contracts/relay";
 import { and, count, eq, isNull } from "drizzle-orm";
+import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -43,19 +45,26 @@ export class ClientKeys extends Context.Service<
       readonly clientId: string;
       readonly thumbprint: string;
       readonly now: number;
-    }) => Effect.Effect<number, ReturnType<typeof strengthRequired> | RelayInternalError>;
+      readonly readmit?: boolean;
+    }) => Effect.Effect<
+      { readonly authorizedAt: number; readonly admissionId: string },
+      ReturnType<typeof strengthRequired> | RelayInternalError
+    >;
     readonly check: (input: {
       readonly userId: string;
       readonly clientId: string;
       readonly thumbprint: string;
       readonly authGeneration: number;
       readonly admittedAt: number;
+      readonly admissionId: string;
     }) => Effect.Effect<boolean, RelayInternalError>;
   }
 >()("goat-relay/auth/ClientKeys") {}
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const crypto = yield* Crypto.Crypto;
+  const accounts = yield* ConnectAccounts.ConnectAccounts;
   const check = Effect.fn("ClientKeys.check")(function* (
     input: Parameters<ClientKeys["Service"]["check"]>[0],
   ) {
@@ -65,12 +74,14 @@ const make = Effect.gen(function* () {
       .where(binding(input))
       .pipe(Effect.mapError(unavailable));
     const row = rows[0];
+    if (!(yield* accounts.check(input.userId, input.authGeneration))) return false;
     return (
       row !== undefined &&
       row.revokedAt === null &&
       row.policyVersion === 1 &&
       row.authGeneration === input.authGeneration &&
-      row.admittedAt === input.admittedAt
+      row.admittedAt === input.admittedAt &&
+      row.admissionId === input.admissionId
     );
   });
   const admit = Effect.fn("ClientKeys.admit")(function* (
@@ -83,6 +94,8 @@ const make = Effect.gen(function* () {
           yield* db.$client`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`.pipe(
             Effect.mapError(unavailable),
           );
+          if (!(yield* accounts.check(userId, input.assurance.authGeneration)))
+            return yield* strengthRequired("session_not_active");
           const key = { userId, clientId: input.clientId, thumbprint: input.thumbprint };
           const rows = yield* db
             .select()
@@ -94,9 +107,16 @@ const make = Effect.gen(function* () {
             existing &&
             existing.revokedAt === null &&
             existing.policyVersion === 1 &&
-            existing.authGeneration === input.assurance.authGeneration
+            existing.authGeneration === input.assurance.authGeneration &&
+            existing.admissionId !== null
           )
-            return existing.admittedAt;
+            return { authorizedAt: existing.admittedAt, admissionId: existing.admissionId };
+          if (
+            existing?.revokedAt !== undefined &&
+            existing.revokedAt !== null &&
+            input.readmit !== true
+          )
+            return yield* strengthRequired("reauthentication_required");
           if (!isConnectAssuranceFresh(input.assurance, input.now))
             return yield* strengthRequired("reauthentication_required");
           const totals = yield* db
@@ -106,11 +126,13 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(unavailable));
           if ((totals[0]?.total ?? MAX_CLIENT_KEYS) >= MAX_CLIENT_KEYS)
             return yield* strengthRequired("unsupported_authentication_flow");
+          const admissionId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
           yield* db
             .insert(relayClientKeys)
             .values({
               ...key,
               admittedAt: input.now,
+              admissionId,
               policyVersion: 1,
               authGeneration: input.assurance.authGeneration,
             })
@@ -122,13 +144,14 @@ const make = Effect.gen(function* () {
               ],
               set: {
                 admittedAt: input.now,
+                admissionId,
                 policyVersion: 1,
                 authGeneration: input.assurance.authGeneration,
                 revokedAt: null,
               },
             })
             .pipe(Effect.mapError(unavailable));
-          return input.now;
+          return { authorizedAt: input.now, admissionId };
         }),
       )
       .pipe(

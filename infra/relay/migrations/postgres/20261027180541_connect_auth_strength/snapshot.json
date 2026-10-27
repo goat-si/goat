@@ -18,6 +18,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "relay_connect_accounts",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "relay_delivery_attempts",
       "entityType": "tables",
       "schema": "public"
@@ -201,6 +207,19 @@
       "table": "relay_client_keys"
     },
     {
+      "type": "varchar(64)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "admission_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_client_keys"
+    },
+    {
       "type": "integer",
       "typeSchema": null,
       "notNull": true,
@@ -238,6 +257,45 @@
       "entityType": "columns",
       "schema": "public",
       "table": "relay_client_keys"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_accounts"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "generation",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_accounts"
+    },
+    {
+      "type": "varchar(32)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_connect_accounts"
     },
     {
       "type": "varchar(36)",
@@ -1714,6 +1772,14 @@
       "entityType": "pks",
       "schema": "public",
       "table": "relay_mobile_devices"
+    },
+    {
+      "columns": ["user_id"],
+      "nameExplicit": false,
+      "name": "relay_connect_accounts_pkey",
+      "schema": "public",
+      "table": "relay_connect_accounts",
+      "entityType": "pks"
     },
     {
       "columns": ["id"],

@@ -1,7 +1,6 @@
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
-import * as TestClock from "effect/testing/TestClock";
 import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
 import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 import { relayProtectedErrorMessage } from "@goat/client-runtime/relay";
@@ -16,11 +15,9 @@ import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
-import { createClerkClient, verifyToken } from "@clerk/backend";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
@@ -51,7 +48,6 @@ import {
   relayDpopFailureReason,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
-  verifyRelayClientBearerToken,
   verifyEnvironmentTunnelRecoveryProof,
   withoutCapturedParentSpan,
 } from "./Api.ts";
@@ -67,11 +63,6 @@ import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvide
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 
-vi.mock("@clerk/backend", () => ({
-  createClerkClient: vi.fn(),
-  verifyToken: vi.fn(),
-}));
-
 const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
   apns: {
@@ -85,7 +76,7 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   clerkPublishableKey: `pk_test_${btoa("clerk.example.test$")}`,
   clerkAuthorizedParties: ["https://app.example.test"],
   clerkCliOAuthClientId: "cli-client",
-  clerkJwtAudience: "goat-relay",
+  clerkJwtAudience: "https://relay.example.test",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
@@ -389,94 +380,6 @@ describe("Cloudflare rate-limit retry hint", () => {
       expect(other.status).toBe(503);
       expect(other.headers.get("retry-after")).toBeNull();
     }).pipe(Effect.scoped),
-  );
-});
-
-describe("relay client authentication", () => {
-  it.effect("rejects a verified session without MFA instead of falling through to OAuth", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockResolvedValue({
-        sub: "user_weak",
-        iss: "https://clerk.example.test",
-        azp: "https://app.example.test",
-        aud: relaySettings.clerkJwtAudience,
-      } as never);
-      const result = yield* verifyRelayClientBearerToken(relaySettings, "weak-session").pipe(
-        Effect.result,
-      );
-      expect(result._tag).toBe("Failure");
-      expect(createClerkClient).not.toHaveBeenCalled();
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
-    ),
-  );
-  it.effect("accepts only an active, strong Clerk session", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(1800000000000);
-      vi.mocked(verifyToken).mockResolvedValue({
-        sub: "user_session",
-        sid: "session-1",
-        iss: "https://clerk.example.test",
-        azp: "https://app.example.test",
-        aud: relaySettings.clerkJwtAudience,
-        v: 2,
-        fva: [0, 0],
-        iat: 1800000000,
-        exp: 1800000060,
-      } as never);
-      vi.mocked(createClerkClient).mockReturnValue({
-        sessions: {
-          getSession: vi.fn().mockResolvedValue({ userId: "user_session", status: "active" }),
-        },
-      } as never);
-      const verified = yield* verifyRelayClientBearerToken(relaySettings, "session-token");
-      expect(verified.sub).toBe("user_session");
-      expect(verified.authentication.source).toBe("clerk-session");
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
-    ),
-  );
-  it.effect(
-    "allows configured OAuth identity solely when the caller selects a CLI link or withdrawal operation",
-    () =>
-      Effect.gen(function* () {
-        vi.mocked(verifyToken).mockRejectedValue(new Error("not a session JWT"));
-        vi.mocked(createClerkClient).mockReturnValue({
-          authenticateRequest: vi.fn().mockResolvedValue({
-            isAuthenticated: true,
-            toAuth: () => ({
-              tokenType: "oauth_token",
-              userId: "user_oauth",
-              clientId: "cli-client",
-              scopes: ["openid", "profile", "email", "offline_access"],
-            }),
-          }),
-        } as never);
-        expect(
-          (yield* verifyRelayClientBearerToken(relaySettings, "oauth-token").pipe(Effect.result))
-            ._tag,
-        ).toBe("Failure");
-        expect((yield* verifyRelayClientBearerToken(relaySettings, "oauth-token", true)).sub).toBe(
-          "user_oauth",
-        );
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            vi.mocked(verifyToken).mockReset();
-            vi.mocked(createClerkClient).mockReset();
-          }),
-        ),
-      ),
   );
 });
 

@@ -53,6 +53,7 @@ export type LinkChallengeClaims = typeof LinkChallengeClaims.Type;
 const RelayDpopAccessTokenClaims = Schema.Struct({
   assurance: ConnectSessionAssurance,
   clientKeyAuthorizedAt: Schema.Int,
+  clientKeyAdmissionId: Schema.String,
   iss: Schema.String,
   aud: Schema.String,
   sub: Schema.String,
@@ -117,6 +118,7 @@ export class RelayTokens extends Context.Service<
       readonly clientId: RelayPublicClientId;
       readonly assurance: ConnectSessionAssurance;
       readonly clientKeyAuthorizedAt: number;
+      readonly clientKeyAdmissionId: string;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
     }) => Effect.Effect<string, RelayJwtError>;
     readonly verifyDpopAccessToken: (input: {
@@ -171,6 +173,8 @@ const make = Effect.gen(function* () {
       Effect.flatMap(decodeLinkChallengeClaims),
       Effect.map((claims) => {
         if (
+          claims.exp <= input.nowEpochSeconds ||
+          claims.iat > input.nowEpochSeconds ||
           claims.sub !== input.userId ||
           claims.assurance.userId !== input.userId ||
           !isConnectAssuranceFresh(claims.assurance, input.nowEpochSeconds) ||
@@ -201,6 +205,7 @@ const make = Effect.gen(function* () {
         exp: input.expiresAtEpochSeconds,
         assurance: input.assurance,
         clientKeyAuthorizedAt: input.clientKeyAuthorizedAt,
+        clientKeyAdmissionId: input.clientKeyAdmissionId,
         client_id: input.clientId,
         scope: encodeOAuthScope(input.scopes),
         cnf: { jkt: input.proofKeyThumbprint },
