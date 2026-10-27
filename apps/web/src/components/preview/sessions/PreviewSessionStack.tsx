@@ -1,4 +1,8 @@
 import { scopedThreadKey } from "@goat/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, PreviewSessionControl, ScopedThreadRef } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
@@ -132,6 +136,17 @@ export function PreviewSessionStack(props: {
   }) => {
     if (environmentId === null) return;
     const result = await control({ environmentId, input });
+    // A hand back the server could not record leaves the screen waiting; say so where it was asked.
+    if (input.control === "handBack" && result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Hand back did not go through",
+        description: error instanceof Error ? error.message : "Try Hand back again.",
+      });
+      return;
+    }
     // A failed call is reported by the command itself. A desktop Stop that could not end the
     // thread's approval leaves its apps held from other threads (#1519), and one that found its
     // session already replaced stopped nothing; Stop all covers both. The toast offers it,

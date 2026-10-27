@@ -69,6 +69,7 @@ export class SessionControl {
   private requested: string | null = null;
   /** Which request the hold belongs to, so a late end never settles a newer one. */
   private requestId = "";
+  private handBackUnsaved = false;
   private readonly handoffListeners = new Set<(end: HandoffEnd, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
@@ -110,6 +111,18 @@ export class SessionControl {
   /** What the agent asked a person to do here, while the tab waits for them. */
   get handoffReason() {
     return this.requested;
+  }
+
+  /** A person's hand back was not recorded, so the request still holds the tab. */
+  get handBackFailed() {
+    return this.handBackUnsaved;
+  }
+
+  /** Shows viewers that the hand back did not take; the next hand back or end clears it. */
+  handBackNotRecorded() {
+    if (this.requested === null || this.handBackUnsaved) return;
+    this.handBackUnsaved = true;
+    this.changed();
   }
 
   /** Calls back after any change of owner, privacy or stop, for status readers. */
@@ -158,6 +171,7 @@ export class SessionControl {
   private clearRequest(end: HandoffEnd | null) {
     if (this.requested === null) return false;
     this.requested = null;
+    this.handBackUnsaved = false;
     if (end !== null) for (const listener of this.handoffListeners) listener(end, this.requestId);
     return true;
   }
@@ -501,8 +515,10 @@ export class SessionControl {
       );
     }
     // The request stays held until its record takes the hand back, which then ends it here.
-    if (handedBack && this.requested !== null)
+    if (handedBack && this.requested !== null) {
+      this.handBackUnsaved = false;
       for (const listener of this.handoffListeners) listener("handedBack", this.requestId);
+    }
     this.changeOwner(null);
     await this.enqueue(async () => {
       await Promise.all(this.handoff);

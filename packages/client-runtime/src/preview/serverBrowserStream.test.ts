@@ -4,6 +4,7 @@ import {
   createPreviewFramePainter,
   createPreviewStreamClient,
   type PreviewStreamControl,
+  previewStreamControlLabel,
 } from "./serverBrowserStream.ts";
 
 class FakeSocket extends EventTarget {
@@ -109,6 +110,19 @@ describe("preview stream control", () => {
     socket.control({ ...agent, generation: 2 });
     expect(client.send({ type: "text", text: "late input" })).toBe(false);
     expect(client.send({ type: "dialog", accept: false })).toBe(false);
+    client.stop();
+  });
+
+  it("tells the viewer their hand back was not saved until they control the tab again", () => {
+    const { client, socket, onControl } = connect();
+    socket.control({ ...agent, handBackFailed: true });
+    const unsaved = onControl.mock.lastCall?.[0];
+    expect(previewStreamControlLabel(unsaved)).toBe(
+      "Hand back not saved. Take control and release it again.",
+    );
+    expect(previewStreamControlLabel({ ...unsaved, controller: "you" })).toBe("You have control");
+    socket.control(agent);
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe("Agent has control");
     client.stop();
   });
 });
