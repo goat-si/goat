@@ -1,4 +1,4 @@
-Contact: mailto:pos09000@gmail.com
+Contact: mailto:pos090001@gmail.com
 Expires: 2027-04-28T00:00:00Z
 Preferred-Languages: ko, en
 Canonical: https://trygoat.ai/.well-known/security.txt
