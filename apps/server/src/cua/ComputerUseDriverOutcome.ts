@@ -16,6 +16,9 @@ import { READ_ONLY_TOOLS } from "./ComputerUseLeaseMessages.ts";
 
 export { driverExitReason } from "./ComputerUseDriverExit.ts";
 
+/** Whether a driver reply says its native screen capture is stuck until the driver restarts. */
+export const captureStalled = (line: string): boolean => line.includes("capture_backend_stalled");
+
 const UNVERIFIED_INPUT_NOTE =
   "GOAT: this input was already sent when the driver reported the error, so it may have acted. Do not resend it unchanged; observe the window before retrying.";
 

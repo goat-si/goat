@@ -35,7 +35,7 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
-import { driverExitReason } from "./ComputerUseDriverOutcome.ts";
+import { captureStalled, driverExitReason } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -114,6 +114,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const outstanding = new Map<string, OutstandingCall>();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
   let proven: Running | undefined;
+  /** A child whose screen capture is stuck; the next call starts a fresh one first. */
+  let stalled: Running | undefined;
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
@@ -281,6 +283,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             // The marked line is the driver's reply from here on, screenshot rule included.
             if (request.method === "tools/call") {
               tool = request.tool;
+              if (captureStalled(line)) stalled = current;
               const marked = tokenFirst.reply(request, message, line);
               line = typeAutomationRefusal(marked, options.automationHolder, request.args, listed);
               delivered = line;
@@ -634,7 +637,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       )
         return undefined;
       const manifest = options.manifestStamp();
-      if (manifest === undefined || manifest === before.manifest) return undefined;
+      const stale = manifest !== undefined && manifest !== before.manifest;
+      if (!stale && stalled !== before) return undefined;
       const token = yield* interrupt({
         _tag: "other",
         detail: "helper_restarted",
