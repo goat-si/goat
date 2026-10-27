@@ -1,4 +1,4 @@
-import type { EnvironmentId, PreviewSession } from "@goat/contracts";
+import type { EnvironmentId, PreviewSession, ScopedThreadRef } from "@goat/contracts";
 import { create } from "zustand";
 
 /**
@@ -70,7 +70,7 @@ interface PreviewSessionStackState {
   /** Bumps on each request, so asking for the same session again scrolls to it again. */
   readonly focusRequest: number;
   /** Showing brings back the closed cards of the given thread; other threads keep theirs closed. */
-  readonly setShown: (shown: boolean, threadId?: string) => void;
+  readonly setShown: (shown: boolean, threadRef?: ScopedThreadRef | null) => void;
   readonly setNarrow: (narrow: boolean) => void;
   readonly dismiss: (session: PreviewSession) => void;
   readonly expand: (session: PreviewSession) => void;
@@ -86,7 +86,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
   expanded: null,
   focus: null,
   focusRequest: 0,
-  setShown: (shown, threadId) => {
+  setShown: (shown, threadRef) => {
     const { narrow } = get();
     // Hiding cards that only a narrow pane let through keeps the window's choice for wide panes.
     if (!shown && narrow) return set({ revealedWhileNarrow: false });
@@ -97,7 +97,11 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
       ...(shown
         ? {
             hiddenLive: new Map(
-              [...get().hiddenLive].filter(([, { session }]) => session.threadId !== threadId),
+              [...get().hiddenLive].filter(
+                ([, { session }]) =>
+                  session.environmentId !== threadRef?.environmentId ||
+                  session.threadId !== threadRef.threadId,
+              ),
             ),
           }
         : {}),

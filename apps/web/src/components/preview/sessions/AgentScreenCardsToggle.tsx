@@ -63,7 +63,7 @@ export function AgentScreenCardsToggle() {
             <Toggle
               className="shrink-0 [-webkit-app-region:no-drag]"
               pressed={shown}
-              onPressedChange={(next) => setShown(next, threadRef?.threadId)}
+              onPressedChange={(next) => setShown(next, threadRef)}
               aria-label="Agents on screen"
               variant="ghost"
               size="sm"

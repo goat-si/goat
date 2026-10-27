@@ -12,7 +12,7 @@ import type { ReactElement, Ref } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../../test/render";
+import { act, render } from "../../../../test/render";
 
 const state = vi.hoisted(() => ({
   environmentId: "env-cards",
