@@ -1,3 +1,7 @@
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
+import { fetch } from "expo/fetch";
+import { parse } from "react-native-svg";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -47,7 +51,7 @@ vi.mock("../../components/ui/NativePresentation", () => ({
 }));
 vi.mock("../../state/mediaActions", () => ({ useMediaActions: () => ({ actions: [] }) }));
 
-import { ThreadMarkdownImage } from "./ThreadMarkdownImage";
+import { ThreadMarkdownImage, ThreadMarkdownImageView } from "./ThreadMarkdownImage";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -115,4 +119,51 @@ it("clears the failed request after a renewed connection changes the signed URL"
   state.url = "https://host/api/assets/reconnected/image.png";
   act(renderImage);
   expect(container.querySelector("img")!.src).toContain("/reconnected/image.png");
+});
+
+it("retries failed SVG mounts and reuses successful fetches and parses", async () => {
+  const registry = AtomRegistry.make({
+    scheduleTask: (task) => {
+      queueMicrotask(task);
+      return () => {};
+    },
+  });
+  const fetchSvg = vi.mocked(fetch);
+  fetchSvg.mockReset();
+  const parseSvg = vi.mocked(parse);
+  parseSvg.mockReset();
+  parseSvg.mockReturnValue({ props: {} } as ReturnType<typeof parse>);
+  const view = (mounted: boolean) => (
+    <RegistryContext.Provider value={registry}>
+      {mounted ? (
+        <ThreadMarkdownImageView
+          uri="https://example.test/cached.svg"
+          sourceKey="attachment:svg"
+          unavailable={false}
+          alt={null}
+          format="svg"
+          onPressPreview={() => {}}
+        />
+      ) : null}
+    </RegistryContext.Provider>
+  );
+  try {
+    fetchSvg.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => root.render(view(true)));
+    await vi.waitFor(() => expect(container.textContent).toContain("Image unavailable"));
+    await act(async () => root.render(view(false)));
+    fetchSvg.mockResolvedValue({ ok: true, status: 200, text: async () => "<svg />" } as Response);
+    await act(async () => root.render(view(true)));
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Loading image"));
+    expect(fetchSvg).toHaveBeenCalledTimes(2);
+    expect(parseSvg).toHaveBeenCalledTimes(1);
+    await act(async () => root.render(view(false)));
+    await act(async () => root.render(view(true)));
+    expect(container.textContent).not.toContain("Image unavailable");
+    expect(fetchSvg).toHaveBeenCalledTimes(2);
+    expect(parseSvg).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.render(null));
+    registry.dispose();
+  }
 });

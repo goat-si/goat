@@ -4,6 +4,7 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/threads/use-visible-second-clock.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
