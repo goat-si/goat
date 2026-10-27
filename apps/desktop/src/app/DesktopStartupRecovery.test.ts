@@ -1,4 +1,4 @@
-import type { DesktopUpdateState } from "@goat/contracts";
+import { DesktopUpdateStateSchema, type DesktopUpdateState } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Electron from "electron";
@@ -31,7 +32,7 @@ const updateState = (patch: Partial<DesktopUpdateState>): DesktopUpdateState => 
   ...createInitialDesktopUpdateState(
     "0.1.3",
     { hostArch: "arm64", appArch: "arm64", runningUnderArm64Translation: false },
-    "stable",
+    "latest",
   ),
   enabled: true,
   ...patch,
@@ -220,7 +221,9 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const harness = yield* makeRecoveryHarness(
-        updateState({ status: "downloaded", downloadedVersion: "0.1.4" }),
+        Schema.decodeSync(DesktopUpdateStateSchema)(
+          updateState({ status: "downloaded", downloadedVersion: "0.1.4" }),
+        ),
       );
       yield* Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
