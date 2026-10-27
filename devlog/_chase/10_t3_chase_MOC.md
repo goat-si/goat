@@ -8,7 +8,7 @@
 | 014 | [T3 이름 잔여 정리](./10.014_t3_chase_rename_leftovers.md)   | 🟡 #1619·#1628 머지, #1637 |
 | 017 | [사이클 261028 수동 선별](./10.017_t3_chase_cycle_261028.md) | 🟡 분류 완료, PR 진행      |
 
-머지 순서: 사이클 PR goat-ci green → dev에 merge commit으로 랜딩 → 000 기준선 갱신, 카드 `_fin` 이동. 017부터는 커밋별 수동 선별이라 merge-base가 전진하지 않는다. reviewed-through는 이 MOC와 카드의 값이 기준이다.
+랜딩: 017부터는 일괄 머지 대신 커밋별로 판정해 주제 PR로 가져온다. 각 PR은 sol 독립 리뷰와 goat-ci-result를 통과한 뒤 squash로 들어가므로 merge-base는 전진하지 않는다. reviewed-through는 이 MOC와 사이클 카드의 값이 기준이다.
 
 ## \_fin
 
