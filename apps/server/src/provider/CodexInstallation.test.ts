@@ -788,3 +788,24 @@ it.effect("keeps an activated runtime when a later update fails verification", (
 );
 
 // Stands in for Windows' bsdtar: CRLF listings, and extraction writes the Windows layout.
+
+it.effect(
+  "installs and runs the pinned managed release for a managed-only start when Codex is on PATH",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ local: { version: "0.164.0" } });
+      // The default start keeps reusing a supported PATH Codex.
+      expect((yield* h.installation.start).source).toBe("local");
+      expect((yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      yield* h.installation.startManagedOnly;
+      const finished = yield* terminalState(h.installation);
+      expect(finished.phase).toBe("succeeded");
+      expect(finished.source).toBe("managed");
+      expect(h.downloads()).toBe(1);
+      const managed = yield* h.installation.resolve({ managedOnly: true });
+      expect(managed.source).toBe("managed");
+      expect(managed.executablePath).not.toBe(h.localBinaryPath);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
