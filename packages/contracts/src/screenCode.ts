@@ -206,6 +206,8 @@ export const ScreenObservation = Schema.Struct({
   complete: Schema.Boolean,
   truncated: Schema.Boolean,
   loading: Schema.Boolean,
+  title: Schema.optionalKey(text(1024)),
+  url: Schema.optionalKey(text(8192)),
   indexedText: utf8Text(128 * 1024),
   elements: Schema.Array(
     Schema.Struct({
