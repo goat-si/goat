@@ -31,6 +31,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import { supervise } from "../backgroundSupervision.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -759,7 +760,6 @@ export const make = Effect.gen(function* () {
   )(function* () {
     const settingsChanges = yield* settingsService.subscribeChanges;
     const mergedPullRequests = yield* pullRequests.subscribeMerges;
-    const events = orchestrator.streamDomainEvents;
     const initialSettings = yield* settingsService.getSettings.pipe(Effect.orDie);
     let lastSettlementSettings = autoSettlementSettingsKey(initialSettings);
     yield* forkParked(
@@ -780,10 +780,11 @@ export const make = Effect.gen(function* () {
     );
     yield* forkParked(Stream.runForEach(mergedPullRequests, (event) => runSweep(event)));
     yield* forkParked(
-      Stream.runForEach(events, processEvent).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Thread settlement event stream failed", { cause }),
-        ),
+      supervise("ThreadSettlementService.events", () =>
+        Effect.gen(function* () {
+          yield* fullSweeps.enqueue(undefined);
+          yield* Stream.runForEach(orchestrator.streamDomainEvents, processEvent);
+        }),
       ),
     );
   });
