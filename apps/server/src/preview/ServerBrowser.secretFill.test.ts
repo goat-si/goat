@@ -314,14 +314,12 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
         const second = secrets.save("https://login.test");
         yield* fill(tabId, { secretRef: first.ref, selector: "#pw" });
         yield* fill(tabId, { secretRef: second.ref, selector: "#pw2" });
-        const evaluate = call<unknown>(tabId, "evaluate", { expression: "1 + 1" });
+        const evaluate = call<number>(tabId, "evaluate", { expression: "1 + 1" });
 
         // Cleared by page script, so no field takes focus and makes the tab private.
         const clear = (id: string) =>
           Effect.promise(() =>
-            page.evaluate((selector) => {
-              document.querySelector<HTMLInputElement>(selector)!.value = "";
-            }, id),
+            page.evaluate(`document.querySelector(${JSON.stringify(id)}).value = ""`),
           );
         yield* clear("#pw2");
         expect(JSON.stringify(yield* Effect.flip(evaluate))).toContain("holds a password");

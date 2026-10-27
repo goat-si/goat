@@ -102,7 +102,9 @@ const withFill = <A>(
   );
 };
 
-const later = () => performance.now() + 15_000;
+/** Absolute deadlines that never and always passed, so no clock is read. */
+const later = () => Number.POSITIVE_INFINITY;
+const expired = 0;
 
 it.live("keeps the fence when the fill's reply is lost after the page may have typed it", () => {
   const { tab, field } = makeTab({ fillReply: true });
@@ -153,7 +155,7 @@ it.live("a Stop that lands while the ref is consumed leaves the field empty", ()
 it.live("an expired deadline or a starting recording refuses before the ref is used", () => {
   const { tab, field } = makeTab();
   return withFill(async (fill, state) => {
-    await expect(fill.fill(tab, fillRequest, performance.now() - 1, record)).rejects.toThrow();
+    await expect(fill.fill(tab, fillRequest, expired, record)).rejects.toThrow();
     tab.recordingStart = Promise.withResolvers<void>().promise;
     await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow("recording");
     expect(state.consumed).toBe(0);
