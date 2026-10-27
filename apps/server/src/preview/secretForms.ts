@@ -101,53 +101,74 @@ export const secretSpans = (text: string, forms: ReadonlyArray<SecretForm>, cut 
   return forms.flatMap((form) => spansOf(searched, form, cut));
 };
 
-const LETTER = /[\p{L}\p{N}]/u;
-/** Values with fewer letters and digits than this would match too much of ordinary text. */
-const MIN_SKELETON = 4;
+/** What a fetch's renderer drops or rewrites around a value: spaces and link brackets. */
+const DROPPED = /[\s[\]]/u;
 
 /**
- * The letters and digits of a text, percent escapes decoded, each with the span it came from.
- * Renderers drop brackets, collapse or trim spaces and encode URLs; none of that touches these.
+ * The text without spaces and brackets, each kept character mapped to the span it came from.
+ * Decoded, a percent-escape run counts as what it encodes; raw, as written, since dropping a
+ * bracket can join a value's own "%" and digits into what looks like an escape.
  */
-const skeleton = (text: string) => {
-  let letters = "";
+const skeleton = (text: string, decode: boolean) => {
+  let kept = "";
   const from: Array<number> = [];
   const to: Array<number> = [];
-  for (const { 0: token, index } of text.matchAll(/(?:%[0-9a-f]{2})+|[\s\S]/giu)) {
-    let decoded = token;
-    if (token.length > 1 && token.startsWith("%")) {
+  const keep = (char: string, start: number, end: number) => {
+    if (DROPPED.test(char)) return;
+    kept += char;
+    for (let unit = 0; unit < char.length; unit++) {
+      from.push(start);
+      to.push(end);
+    }
+  };
+  for (const { 0: token, index } of text.matchAll(
+    decode ? /(?:%[0-9a-f]{2})+|[\s\S]/giu : /[\s\S]/gu,
+  )) {
+    let decoded: string | undefined;
+    if (decode && token.length > 1 && token.startsWith("%")) {
       try {
         decoded = decodeURIComponent(token);
       } catch {
-        decoded = "";
+        decoded = undefined;
       }
     }
-    for (const char of decoded) {
-      if (!LETTER.test(char)) continue;
-      letters += char;
-      for (let unit = 0; unit < char.length; unit++) {
-        from.push(index);
-        to.push(index + token.length);
-      }
-    }
+    // A decoded run maps as a whole; anything else character by character, as written.
+    if (decoded !== undefined) for (const char of decoded) keep(char, index, index + token.length);
+    else
+      for (let at = 0; at < token.length; at++) keep(token[at] ?? "", index + at, index + at + 1);
   }
-  return { letters, from, to };
+  return { kept: decode ? kept : foldHex(kept), from, to };
 };
 
-/** The letters and digits of each value long enough to compare that way. */
-export const compileSkeletonForms = (values: Iterable<string>) =>
-  [...new Set([...values].map((value) => skeleton(value).letters))]
-    .filter((letters) => letters.length >= MIN_SKELETON)
-    .map(compile);
+export interface SkeletonForms {
+  readonly raw: ReadonlyArray<SecretForm>;
+  readonly decoded: ReadonlyArray<SecretForm>;
+}
 
-/** Spans of the text whose letters and digits spell a value, however GOAT reformatted the rest. */
-export const skeletonSpans = (text: string, forms: ReadonlyArray<SecretForm>) => {
-  if (forms.length === 0) return [];
-  const { letters, from, to } = skeleton(text);
-  return forms.flatMap((form) =>
-    spansOf(letters, form, false).map(([start, end]): [number, number] => [
-      from[start] ?? 0,
-      to[end - 1] ?? text.length,
-    ]),
-  );
+/** Each value's skeletons, raw and decoded, compiled once. */
+export const compileSkeletonForms = (values: Iterable<string>): SkeletonForms => {
+  const list = [...values];
+  const of = (decode: boolean) =>
+    [...new Set(list.map((value) => skeleton(value, decode).kept))]
+      .filter((kept) => kept !== "")
+      .map(compile);
+  return { raw: of(false), decoded: of(true) };
+};
+
+/**
+ * Spans of the text that spell a value once spaces and brackets are dropped, however GOAT's
+ * renderer trimmed, collapsed or encoded them; a cut text also loses a tail that starts one.
+ */
+export const skeletonSpans = (text: string, forms: SkeletonForms, cut = false) => {
+  const spans = (decode: boolean, compiled: ReadonlyArray<SecretForm>) => {
+    if (compiled.length === 0) return [];
+    const { kept, from, to } = skeleton(text, decode);
+    return compiled.flatMap((form) =>
+      spansOf(kept, form, cut).map(([start, end]): [number, number] => [
+        from[start] ?? 0,
+        end >= kept.length ? text.length : (to[end - 1] ?? text.length),
+      ]),
+    );
+  };
+  return [...spans(false, forms.raw), ...spans(true, forms.decoded)];
 };

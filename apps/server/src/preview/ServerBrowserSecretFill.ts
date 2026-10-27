@@ -219,7 +219,7 @@ const maskWith = (values: ReadonlySet<string>) => {
   const forms = compileSecretForms(values);
   const skeletons = compileSkeletonForms(values);
   return (text: string, cut = false) => {
-    const spans = [...secretSpans(text, forms, cut), ...skeletonSpans(text, skeletons)];
+    const spans = [...secretSpans(text, forms, cut), ...skeletonSpans(text, skeletons, cut)];
     if (spans.length === 0) return text;
     let masked = "";
     let shown = 0;
