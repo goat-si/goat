@@ -6,6 +6,7 @@ import { CursorSettings, CursorCloudSettings } from "./settings.ts";
 export const cursorClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("cursor"),
   label: "Cursor",
+  acpRegistryAgentIds: ["cursor"],
   settingsSchema: CursorSettings,
   environmentFields: [
     {
