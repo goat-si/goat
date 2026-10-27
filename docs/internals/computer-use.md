@@ -44,8 +44,14 @@ provider (Codex, Claude, ...)
   carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover. The
-  driver refuses its cursor tools there, so the proxy answers them from the helper's cursor: it
-  starts on, and turning it off hides only the on-screen cursor until the control ends.
+  driver refuses its cursor tools and a window-scoped `move_cursor` there, so the proxy answers
+  them from the helper's cursor: it starts on, and turning it off hides only the on-screen cursor
+  until the control ends. A desktop `move_cursor` moves the person's pointer and stays the
+  driver's, under the pointer policy.
+- Most macOS input answers `unverifiable`. When the agent has read that window's tree, the proxy
+  re-reads it as a `since: "latest"` diff with the same scope before answering, and a changed tree
+  upgrades the effect to `confirmed`. The re-read retires the agent's tokens, so the answer names
+  the new snapshot id.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build

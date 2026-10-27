@@ -24,6 +24,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
+import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
@@ -37,6 +38,20 @@ export interface ReplySink {
     status?: ComputerUsePrimitiveReply["status"],
     context?: { readonly tool?: string | undefined },
   ) => Effect.Effect<unknown>;
+}
+
+/** A request the proxy sent to the driver and has not answered yet. */
+export interface OutstandingCall {
+  readonly id: JsonRpcId;
+  readonly method: string;
+  readonly tool?: string;
+  readonly args?: unknown;
+  readonly unfiltered?: boolean;
+  readonly windowId?: number;
+  readonly reservationId?: string;
+  readonly connectionId: string;
+  readonly cancelled?: boolean;
+  readonly sink: ReplySink;
 }
 
 export const primitiveReplySink = (
@@ -250,6 +265,8 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */
   readonly answersCursorTools?: boolean;
+  /** Re-read a window as a tree diff after input the driver could not verify. */
+  readonly verifyInputByTreeDiff?: boolean;
   /** On macOS, the app macOS asks for Automation consent: the helper, or GOAT in development. */
   readonly automationHolder?: "helper" | "app";
   readonly onCursorReport?: (report: AgentCursorReport) => Effect.Effect<boolean>;

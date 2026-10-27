@@ -36,14 +36,16 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
-import { driverExitReason } from "./ComputerUseDriverOutcome.ts";
+import { captureStalled, driverExitReason } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
-import { AGENT_CURSOR_TOOLS, answerCursorTool } from "./ComputerUseCursorTools.ts";
+import { answeredByHelperCursor, answerHelperCursorCall } from "./ComputerUseCursorTools.ts";
+import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
+import { makeInputVerifier } from "./ComputerUseInputVerify.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
@@ -79,6 +81,7 @@ import {
 import {
   PRIMITIVE_ID,
   forwardPrimitiveRequests,
+  type OutstandingCall,
   type ReplySink,
   type LeaseProxyOptions,
 } from "./ComputerUseLeaseProxyOptions.ts";
@@ -109,26 +112,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
   const tokenFirst = makeTokenFirst();
-  const outstanding = new Map<
-    string,
-    {
-      readonly id: JsonRpcId;
-      readonly method: string;
-      readonly tool?: string;
-      readonly args?: unknown;
-      readonly unfiltered?: boolean;
-      readonly windowId?: number;
-      readonly reservationId?: string;
-      readonly connectionId: string;
-      readonly cancelled?: boolean;
-      readonly sink: ReplySink;
-    }
-  >();
+  const outstanding = new Map<string, OutstandingCall>();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
   let proven: Running | undefined;
+  let stalled: Running | undefined;
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
+  const verifier = makeInputVerifier({
+    enabled: options.verifyInputByTreeDiff === true,
+    ownAnswers,
+    ended: Deferred.await(ended),
+    nextId: () => `${OWN_ID}verify:${ownRequests++}`,
+    scope,
+    live: (child) => lifecycle.current === child && active(),
+  });
   const handshakeAnswers = makeLeaseProxyHandshake({
     startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
@@ -285,6 +283,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             // The marked line is the driver's reply from here on, screenshot rule included.
             if (request.method === "tools/call") {
               tool = request.tool;
+              if (captureStalled(line)) stalled = current;
               const marked = tokenFirst.reply(request, message, line);
               line = typeManifestRefusal(
                 typeAutomationRefusal(marked, options.automationHolder, request.args, listed),
@@ -638,7 +637,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       )
         return undefined;
       const manifest = options.manifestStamp();
-      if (manifest === undefined || manifest === before.manifest) return undefined;
+      const stale = manifest !== undefined && manifest !== before.manifest;
+      if (!stale && stalled !== before) return undefined;
       const token = yield* interrupt({
         _tag: "other",
         detail: "helper_restarted",
@@ -651,11 +651,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }),
   );
   const forward = Effect.fn("ComputerUseLeaseProxy.forward")(function* (
-    line: string,
+    incoming: string,
     sink: ReplySink,
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
+    // Key names are resolved first: a key no driver can press is refused before anything else.
+    const keyCall = resolveKeyCall(incoming);
+    if ("answer" in keyCall) return yield* sink.answer(keyCall.answer);
+    const line = keyCall.line;
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
     const message = decoded.message;
@@ -803,9 +807,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
-    if (isRequest && options.answersCursorTools && AGENT_CURSOR_TOOLS.has(String(name))) {
+    const args = message?.params?.arguments;
+    if (isRequest && options.answersCursorTools && answeredByHelperCursor(name, args)) {
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
-      const line = yield* answerCursorTool(id, String(name), message?.params?.arguments, overlay);
+      const line = yield* answerHelperCursorCall(id, String(name), args, overlay, drawOverlay);
       return yield* sink.answer(line, "settled", { tool: String(name) });
     }
     if (isRequest && message?.method === "tools/call") {
@@ -949,7 +954,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             (key) => key === "session",
           ),
           connectionId: current.connectionId,
-          sink,
+          sink: verifier.wrap(sink, message, current),
           ...(reservationId === undefined ? {} : { reservationId }),
         });
     });
