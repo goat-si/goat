@@ -16,7 +16,7 @@ export class ChildOpenCodexStartupError extends Schema.TaggedError<ChildOpenCode
   { reason: Schema.Literals(["service_failed", "health_timeout", "spawn_failed"]) },
 ) {}
 
-export interface StartInput {
+interface StartInput {
   readonly binaryPath: string;
   readonly platform: string;
   readonly opencodexHome: string;

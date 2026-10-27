@@ -286,11 +286,10 @@ it("preserves setup failure reasons through the existing MCP error contract", ()
     "setup_approval_revoked",
     "setup_approval_stale",
   ] as const) {
-    const failure = ReadyDispatch.toMcpFailure({
-      code,
-      step: "inference_verified",
+    const failure = new OrchestratorMcpFailure({
+      code: "orchestration_error",
+      reason: code,
       message: "Setup refused at the active step.",
-      retryable: false,
     });
     const decoded = decodeMcpFailure(encodeMcpFailure(failure));
     expect(decoded.reason).toBe(code);

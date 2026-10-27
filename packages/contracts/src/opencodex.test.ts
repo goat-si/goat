@@ -1,4 +1,4 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { EnvironmentId } from "./baseSchemas.ts";
@@ -117,50 +117,51 @@ it("drops unknown Child setup versions without discarding host telemetry", () =>
   expect(status).toEqual({ state: "child", checkedAt: 1, version: "2.92.0" });
 });
 
-it("rejects unknown Child prepare actions before dispatch", async () => {
-  const address = {
-    destinationEnvironmentId: EnvironmentId.make("child"),
-    homeEnvironmentId: EnvironmentId.make("home"),
-    operationId: "op-1",
-  };
-  for (const action of ["installEverything", "status"])
-    await expect(
-      Effect.runPromise(decodeChildReadyPrepareInput({ ...address, action })),
-    ).rejects.toThrow();
-  // An older Child's untyped answer is not a device result.
-  await expect(
-    Effect.runPromise(decodeChildReadyResult({ kind: "device", ...address, healthy: true })),
-  ).rejects.toThrow();
-});
+it.effect("rejects unknown Child prepare actions before dispatch", () =>
+  Effect.gen(function* () {
+    const address = {
+      destinationEnvironmentId: EnvironmentId.make("child"),
+      homeEnvironmentId: EnvironmentId.make("home"),
+      operationId: "op-1",
+    };
+    for (const action of ["installEverything", "status"])
+      expect(
+        (yield* Effect.result(decodeChildReadyPrepareInput({ ...address, action })))._tag,
+      ).toBe("Failure");
+    // An older Child's untyped answer is not a device result.
+    const untyped = decodeChildReadyResult({ kind: "device", ...address, healthy: true });
+    expect((yield* Effect.result(untyped))._tag).toBe("Failure");
+  }),
+);
 
-it("prepare rejects connection operations and accepts only its seven setup actions", async () => {
-  const address = {
-    destinationEnvironmentId: EnvironmentId.make("j2-child"),
-    homeEnvironmentId: EnvironmentId.make("j2-home"),
-    operationId: "j2-operation",
-  };
-  const connection = { kind: "disconnect", expectedLinkId: "j2-link" };
-  for (const input of [
-    { ...address, action: "opencodexConnection", opencodexConnection: connection },
-    { ...address, action: "installOpenCodex", opencodexConnection: connection },
-  ])
-    await expect(Effect.runPromise(decodeChildReadyPrepareInput(input))).rejects.toThrow();
-  expect(
-    await Effect.runPromise(
-      decodeChildReadyConnectionInput({ ...address, opencodexConnection: connection }),
-    ),
-  ).toEqual({ ...address, opencodexConnection: connection });
-  for (const action of [
-    "installOpenCodex",
-    "startOpenCodex",
-    "opencodexHealth",
-    "installCodex",
-    "syncCatalog",
-    "configure",
-    "probe",
-  ])
-    expect(await Effect.runPromise(decodeChildReadyPrepareInput({ ...address, action }))).toEqual({
-      ...address,
-      action,
-    });
-});
+it.effect("prepare rejects connection operations and accepts only its seven setup actions", () =>
+  Effect.gen(function* () {
+    const address = {
+      destinationEnvironmentId: EnvironmentId.make("j2-child"),
+      homeEnvironmentId: EnvironmentId.make("j2-home"),
+      operationId: "j2-operation",
+    };
+    const connection = { kind: "disconnect", expectedLinkId: "j2-link" };
+    for (const input of [
+      { ...address, action: "opencodexConnection", opencodexConnection: connection },
+      { ...address, action: "installOpenCodex", opencodexConnection: connection },
+    ])
+      expect((yield* Effect.result(decodeChildReadyPrepareInput(input)))._tag).toBe("Failure");
+    expect(
+      yield* decodeChildReadyConnectionInput({ ...address, opencodexConnection: connection }),
+    ).toEqual({ ...address, opencodexConnection: connection });
+    for (const action of [
+      "installOpenCodex",
+      "startOpenCodex",
+      "opencodexHealth",
+      "installCodex",
+      "syncCatalog",
+      "configure",
+      "probe",
+    ])
+      expect(yield* decodeChildReadyPrepareInput({ ...address, action })).toEqual({
+        ...address,
+        action,
+      });
+  }),
+);

@@ -93,14 +93,6 @@ export class ChildReadyDispatchFailure extends Schema.TaggedError<ChildReadyDisp
 const isDispatchFailure = Schema.is(ChildReadyDispatchFailure);
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 
-/** The same failure on the existing MCP error contract, for hub.device_setup's callers. */
-export const toMcpFailure = (failure: ChildReadyFailure) =>
-  new OrchestratorMcpFailure({
-    code: "orchestration_error",
-    reason: failure.code,
-    message: failure.message,
-  });
-
 const reasonOf = (error: unknown): unknown =>
   typeof error === "object" && error !== null && "reason" in error
     ? (error as { readonly reason: unknown }).reason

@@ -29,7 +29,7 @@ import { sessionKey } from "./sshEnvironmentRoute.ts";
 
 export const SESSION_TTL = "12h";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-export const SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000;
+const SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000;
 
 export interface DispatchSession {
   readonly token: string;
