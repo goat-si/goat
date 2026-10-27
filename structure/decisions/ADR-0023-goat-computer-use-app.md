@@ -156,7 +156,9 @@
     Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
     the settings contract so older clients and settings files still decode, and the server ignores
     it. What differs by origin stays: only a person's run takes the foreground without asking,
-    while unattended work asks for it and holds the screen one thread at a time. The
+    while unattended work asks for it and holds the screen one thread at a time. A full access
+    turn launched from another environment is the exception: it works beside other threads
+    (amended 2026-10-28). The
     password-manager exclusions, pause, Stop and stop all, each
     call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
     the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the

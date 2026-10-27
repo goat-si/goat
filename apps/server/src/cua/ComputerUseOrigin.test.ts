@@ -263,13 +263,31 @@ describe("gateUnattendedSteering", () => {
           environmentId: "other-host",
         },
       },
+      remoteRun: {
+        runtimeMode: "full-access",
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
+      remoteAsking: {
+        runtimeMode: "approval-required",
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
     },
     runs: {
       mine: [run("typed", "m1", 1)],
       peer: [run("p1", "pm", 0)],
       "channel-worker:9c": [run("w1", "wm", 0)],
+      remoteRun: [run("r1", "rm", 0)],
+      remoteAsking: [run("a1", "am", 0)],
     },
-    messages: { m1: typed(1), pm: typed(0), wm: typed(0) },
+    messages: { m1: typed(1), pm: typed(0), wm: typed(0), rm: typed(0), am: typed(0) },
   };
   const steer = (thread: string, runId: string) =>
     ({ type: "steer_active", targetRunId: RunId.make(runId) }) as const;
@@ -304,6 +322,29 @@ describe("gateUnattendedSteering", () => {
       assert.deepEqual(yield* gate("mine", "typed", { scheduledTaskId: "task-1" }), queued);
       // Full access opens the screen to a remote launch, not a person's running turn.
       assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "remote" }), queued);
+    }),
+  );
+
+  it.effect("queues a message with less of the screen behind a remote full access turn", () =>
+    Effect.gen(function* () {
+      const queued = {
+        mode: { type: "queue_after_active", behindRunId: RunId.make("r1") },
+        queued: true,
+      } as const;
+      // Neither may borrow the screen the remote turn got from full access.
+      assert.deepEqual(yield* gate("remoteRun", "r1", { senderThreadId: "bot" }), queued);
+      assert.deepEqual(yield* gate("remoteRun", "r1", { scheduledTaskId: "task-1" }), queued);
+      // Another remote launch has the same reach there, and a person's thread more.
+      for (const sender of ["remote", "peer"])
+        assert.deepEqual(yield* gate("remoteRun", "r1", { senderThreadId: sender }), {
+          mode: steer("remoteRun", "r1"),
+          queued: false,
+        });
+      // Outside full access the remote turn uses only what was approved, like the bot's.
+      assert.deepEqual(yield* gate("remoteAsking", "a1", { senderThreadId: "bot" }), {
+        mode: steer("remoteAsking", "a1"),
+        queued: false,
+      });
     }),
   );
 

@@ -463,6 +463,40 @@ describe("computerUseAttachment", () => {
       }),
   );
 
+  +it.effect.each([
+    {
+      label: "Plan",
+      overrides: { interactionMode: "plan" },
+      enabled: true,
+      proxy: true,
+      reason: "plan",
+    },
+    {
+      label: "a read-only sandbox",
+      overrides: { readOnly: true },
+      enabled: true,
+      proxy: true,
+      reason: "read-only",
+    },
+    { label: "computer use off", overrides: {}, enabled: false, proxy: true, reason: "disabled" },
+    { label: "no proxy", overrides: {}, enabled: true, proxy: false, reason: "unavailable" },
+  ] as const)(
+    "a full access remote launch refused for $label still keeps a cua-driver the user configured from running",
+    ({ overrides, enabled, proxy: withProxy, reason }) =>
+      Effect.gen(function* () {
+        const attached = yield* decide(fakeDriver({ enabled, running: true }), {
+          origin: { _tag: "unattended", reason: "launched_remotely" },
+          runtimeMode: "full-access",
+          runId: RunId.make("run:remote"),
+          leases: fakeLeases(withProxy ? {} : { proxy: undefined }).leases,
+          ...overrides,
+        });
+        assert.deepEqual(attached, { _tag: "none", reason, blockUserConfig: true });
+        // A driver outside GOAT's proxy would not hear Stop, stop all or a takeover.
+        assert.isTrue(ComputerUse.withComputerUse(session, attached, ROUTE).cuaDriverBlocked);
+      }),
+  );
+
   it.effect(
     "a full access thread launched from another environment uses every app on a host that does not detect secret fields",
     () =>

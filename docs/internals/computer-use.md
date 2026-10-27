@@ -418,7 +418,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   them rather than holding the screen alone, and wait in the same turn for a foreground approval
   (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
   cannot read the turn that launched it, so it stays unattended for steering a person's turn and
-  outside full access, and asks for foreground like any run no person started.
+  outside full access, and asks for foreground like any run no person started. A user's own
+  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
+  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
+  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement

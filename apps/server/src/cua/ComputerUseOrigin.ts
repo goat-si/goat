@@ -50,6 +50,8 @@ export type ComputerUseOrigin =
 
 export interface OriginThread {
   readonly createdAt: DateTime.Utc;
+  /** Read only to weigh steering against what full access gave the running turn. */
+  readonly runtimeMode?: string | undefined;
   readonly lineage: {
     readonly parentThreadId: ThreadId | null;
     readonly relationshipToParent: "fork" | "subagent" | null;
@@ -128,6 +130,10 @@ export const usesScreenLikePerson = (
 ): boolean =>
   origin._tag === "interactive" ||
   (origin.reason === "launched_remotely" && runtimeMode === "full-access");
+
+/** How much of the screen a turn of this origin gets without asking, for comparing two. */
+const reach = (origin: ComputerUseOrigin, runtimeMode: string | undefined) =>
+  origin._tag === "interactive" ? 2 : usesScreenLikePerson(origin, runtimeMode) ? 1 : 0;
 // Lineage longer than this is not a person's thread tree; stop and treat it as unattended.
 const MAX_DEPTH = 8;
 
@@ -339,12 +345,11 @@ type SteeringMode =
   | { readonly type: "restart_active"; readonly targetRunId: RunId };
 
 /**
- * A message from an unattended origin (a scheduled task, or a thread that classifies as
- * unattended) must not join a turn a person is running: that turn may hold the direct driver,
- * and steering keeps the turn's starting message, so the attachment decision would never see
- * the new instruction. It waits as that thread's next turn instead, which this message starts
- * and which gets computer use only through a lease. Steering into an unattended turn stays,
- * since that turn has no direct driver.
+ * A message must not join a running turn that got more of the screen than the message's own
+ * origin would: steering keeps the turn's starting message, so the attachment decision would
+ * never see the new instruction. A scheduled or unattended message into a person's turn, or into
+ * a remote launch's full access turn, waits as that thread's next turn instead, which this
+ * message starts and which is admitted on its own. Steering between equals stays.
  */
 export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteering")(function* (
   reads: OriginReads,
@@ -357,18 +362,24 @@ export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteer
 ) {
   if (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
     return { mode, queued: false } as const;
-  const provenance =
-    input.senderThreadId === undefined
+  const sender =
+    input.senderThreadId === undefined || input.scheduledTaskId !== undefined
       ? unattended("scheduled_task")
-      : input.scheduledTaskId !== undefined
-        ? unattended("scheduled_task")
-        : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
-  if (provenance._tag === "interactive") return { mode, queued: false } as const;
+      : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
+  // The origin the message's own turn would have in this thread.
+  const message =
+    sender._tag === "interactive" || input.scheduledTaskId !== undefined
+      ? sender
+      : unattendedVia(sender, "sent_by_unattended");
+  if (message._tag === "interactive") return { mode, queued: false } as const;
   const target = yield* computerUseOrigin(reads, {
     threadId: input.threadId,
     runId: mode.targetRunId,
   });
-  if (target._tag === "unattended") return { mode, queued: false } as const;
+  const thread = yield* reads.thread(input.threadId).pipe(Effect.orElseSucceed(() => undefined));
+  const runtimeMode = thread?.runtimeMode;
+  if (reach(message, runtimeMode) >= reach(target, runtimeMode))
+    return { mode, queued: false } as const;
   return {
     mode: { type: "queue_after_active", behindRunId: mode.targetRunId },
     queued: true,
