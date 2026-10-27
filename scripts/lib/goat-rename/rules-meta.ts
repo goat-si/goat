@@ -29,6 +29,12 @@ const rule = (
 const GOAT_IDEAS = "https://github.com/goat-si/goat/discussions/categories/ideas";
 
 export const META_TEXT_RULES: readonly TextRule[] = [
+  rule(
+    "built-web-boot-origin",
+    at("apps/web/scripts/verify-built-boot.ts"),
+    /http:\/\/t3-boot\.test/g,
+    "http://goat-boot.test",
+  ),
   // The dev container: product name, port labels and cache volumes. Its GOAT_HOME stays on the
   // workspace .t3, which holds an existing container's state; an explicit home skips the legacy fallback.
   rule("devcontainer-product", inDevcontainer, /\bT3 Code\b/g, "GOAT"),

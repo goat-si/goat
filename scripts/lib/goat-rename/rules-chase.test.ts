@@ -8,6 +8,11 @@ const rename = (path: string, source: string) =>
 describe("upstream chase identities", () => {
   it.each([
     [
+      "apps/web/scripts/verify-built-boot.ts",
+      'const origin = "http://t3-boot.test";',
+      'const origin = "http://goat-boot.test";',
+    ],
+    [
       "apps/mobile/app.config.ts",
       '"Allow T3 Code to save images."',
       '"Allow GOAT to save images."',

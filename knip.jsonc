@@ -102,6 +102,7 @@
       // generate-solar-icons after adding an icon.
       "entry": [
         "scripts/warm-dep-cache.ts",
+        "scripts/verify-built-boot.ts",
         "test/fixtures/**/*.mjs",
         "scripts/generate-solar-icons.ts",
         // scripts/bench-ssh-post-connect.mjs loads this module through Vite by path.

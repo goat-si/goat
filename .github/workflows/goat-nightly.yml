@@ -287,6 +287,13 @@ jobs:
       - name: Build JS bundle
         run: vp run build:desktop
 
+      - name: Boot built web client
+        env:
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
+        run: |
+          node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+          node apps/web/scripts/verify-built-boot.ts
+
       # The hand-off tool comes from this workflow's commit, so a run can build any
       # dev commit, including one older than the tool.
       - name: Fetch hand-off tool
