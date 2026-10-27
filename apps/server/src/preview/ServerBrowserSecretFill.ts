@@ -8,7 +8,7 @@ import {
   PreviewAutomationFillSecretInput,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
-  type ThreadId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -92,11 +92,10 @@ const FILL = `function (value, origin) {
   return true;
 }`;
 // Any value left in the field counts: an edit must not lift the fence on most of the password.
-// An empty field keeps its fence entry, so a page that puts the value back is fenced again.
-// Revealed, even unchanged, it shows as plain text, which snapshots quote in forms of their own.
+// An empty or detached field keeps its entry until its document goes, so a page that puts the
+// value or the node back is fenced again. Revealed, even unchanged, it shows as plain text.
 const STILL_FILLED = `function () {
-  if (!this.isConnected) return "gone";
-  if (this.value === "") return "empty";
+  if (!this.isConnected || this.value === "") return "empty";
   return this.type === "password" ? "hidden" : "shown";
 }`;
 
@@ -220,13 +219,22 @@ const uriEncoded = (value: string) => {
 
 /** How a page or a snapshot can write the value back: raw, JSON-escaped, URL- or form-encoded. */
 const encodedForms = (value: string) =>
+  // The snapshot drops zero-width characters and collapses whitespace in the text it shows.
   [
     value,
-    JSON.stringify(value).slice(1, -1),
-    playwrightQuoted(value),
-    ...uriEncoded(value),
-    new URLSearchParams({ v: value }).toString().slice(2),
-  ].flatMap((form) => [form, form.replaceAll("'", "''")]);
+    value
+      .replace(/[\u200b\u00ad]/g, "")
+      .trim()
+      .replace(/\s+/g, " "),
+  ]
+    .flatMap((each) => [
+      each,
+      JSON.stringify(each).slice(1, -1),
+      playwrightQuoted(each),
+      ...uriEncoded(each),
+      new URLSearchParams({ v: each }).toString().slice(2),
+    ])
+    .flatMap((form) => [form, form.replaceAll("'", "''")]);
 
 /**
  * Servers write percent escapes in either case. Folding every A-F, wherever it stands, keeps each
@@ -493,5 +501,11 @@ export const make = Effect.gen(function* () {
       ) as O;
     };
 
-  return { fill, guard, mask };
+  /** Masks the thread's filled values in one text, for collectors that cut what they keep. */
+  const maskText = (threadId: string) => (text: string) => {
+    const values = filledValues.get(ThreadId.make(threadId));
+    return values === undefined || values.size === 0 ? text : maskWith(values)(text);
+  };
+
+  return { fill, guard, mask, maskText };
 });

@@ -148,9 +148,12 @@ export class ServerBrowserDiagnostics {
   private sequence = 0;
   private disposed = false;
   private readonly page: Page;
+  /** Masks filled secrets before a limit cuts one into a start that no longer matches it. */
+  private readonly mask: (text: string) => string;
 
-  constructor(page: Page) {
+  constructor(page: Page, mask: (text: string) => string = (text) => text) {
     this.page = page;
+    this.mask = mask;
     page.on("console", this.onConsole);
     page.on("pageerror", this.onError);
     page.on("request", this.onRequest);
@@ -173,15 +176,17 @@ export class ServerBrowserDiagnostics {
   private readonly onConsole = (message: ConsoleMessage) => {
     this.push("console", this.consoleEntries, {
       level: message.type().slice(0, 32),
-      text: redactText(consoleText(message), TEXT_LIMIT),
+      text: redactText(this.mask(consoleText(message)), TEXT_LIMIT),
       timestamp: new Date().toISOString(),
     });
   };
 
   private readonly onError = (error: Error) => {
     this.push("errors", this.errors, {
-      message: redactText(error.message, TEXT_LIMIT),
-      ...(error.stack === undefined ? {} : { stack: redactText(error.stack, STACK_LIMIT) }),
+      message: redactText(this.mask(error.message), TEXT_LIMIT),
+      ...(error.stack === undefined
+        ? {}
+        : { stack: redactText(this.mask(error.stack), STACK_LIMIT) }),
       timestamp: new Date().toISOString(),
     });
   };
@@ -206,12 +211,12 @@ export class ServerBrowserDiagnostics {
     const entry: PreviewAutomationNetworkEntry = {
       requestId: tracked.id,
       phase,
-      url: redactUrl(url),
+      url: redactUrl(this.mask(url)),
       method: request.method().slice(0, 32),
       status: status ?? previous?.status ?? null,
       failed: phase === "failed",
       ...(phase === "failed"
-        ? { errorText: redactText(request.failure()?.errorText ?? "", TEXT_LIMIT) }
+        ? { errorText: redactText(this.mask(request.failure()?.errorText ?? ""), TEXT_LIMIT) }
         : {}),
       ...(tracked.startedAt === undefined
         ? {}

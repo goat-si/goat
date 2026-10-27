@@ -20,7 +20,7 @@ const PASSWORD = "pw_unit_secret_value";
 
 /** One password field behind a scripted CDP session; faults are injected per method. */
 const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: boolean } = {}) => {
-  const field = { value: "", type: "password" };
+  const field = { value: "", type: "password", isConnected: true };
   const page = { frames: () => [], mainFrame: () => page } as unknown as Page;
   const send = async (method: string, params?: Record<string, unknown>) => {
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
@@ -41,7 +41,7 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
       if (faults.stillFilled) throw new Error("Session closed");
       // Runs the page-side check against the scripted field.
       const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
-      return { result: { value: check.call({ isConnected: true, ...field }, args[0]?.value) } };
+      return { result: { value: check.call({ ...field }, args[0]?.value) } };
     }
     throw new Error(`unexpected ${method}`);
   };
@@ -237,9 +237,11 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   const hexStart = "aBcdefgh123";
   // Playwright's snapshot writes control characters as \xNN.
   const control = "long\u0001password";
+  // Playwright's snapshot drops zero-width characters and collapses whitespace.
+  const spaced = "word  with\u200bspaces";
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 6; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 7; i++) await fill.fill(tab, fillRequest, later(), record);
       const text = [
         `${first}6cdefghijklmnopqrstuvwxyz`,
         encodeURIComponent(second).toLowerCase(),
@@ -247,17 +249,18 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
         `${trailingPercent}b`,
         `%2${hexStart}`,
         String.raw`- textbox: "long\x01password"`,
+        "- text: word withspaces",
       ].join("\n");
       const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
       expect(outcome).toEqual({
         ok: true,
         result: {
-          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"',
+          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"\n- text: [secret]',
         },
       });
     },
     undefined,
-    [first, second, unpaired, trailingPercent, hexStart, control],
+    [first, second, unpaired, trailingPercent, hexStart, control, spaced],
   );
 });
 
@@ -306,6 +309,15 @@ it.live("keeps the fence while an edited filled field still holds part of the va
     field.value = PASSWORD;
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
+    );
+    // Detached and put back, revealed and edited, the same node is fenced again.
+    field.isConnected = false;
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.isConnected = true;
+    field.type = "text";
+    field.value = PASSWORD.slice(0, -1);
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
     );
   });
 });
