@@ -1,13 +1,7 @@
 /**
- * macOS Automation (Apple Events) refusals from the driver, typed for the agent. A few driver
- * routes (a background save through invoke_menu, a Finder rename through set_value) send the
- * target app Apple Events, which macOS allows per app. The driver refuses with automation_denied
- * when the person turned it off, and with automation_timeout when the app did not answer in
- * time, which is how an unanswered consent prompt shows. Those reach the agent as GOAT's
- * permissionsNotGranted and permissionsPending, naming the app's bundle id when the proxy has
- * listed it. automation_failed (the app is not running, no such document, another script error)
- * is not evidence about consent and stays as the driver said.
- *
+ * Driver Apple Events refusals as GOAT's: automation_denied (consent off) is permissionsNotGranted,
+ * automation_timeout (no answer in time, as with an unanswered prompt) is permissionsPending.
+ * automation_failed (app not running, no document, a script error) says nothing about consent.
  * @module ComputerUseAutomationRefusal
  */
 // Driver lines are forwarded as written; only a refused result's code fields are read.

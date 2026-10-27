@@ -442,6 +442,9 @@ describe("a macOS grant that reads off", () => {
   });
 });
 
+const decodeAgentBlock = Schema.decodeUnknownSync(CuaAgentBlock);
+const decodeDesktopReport = Schema.decodeUnknownSync(DesktopCuaDriverReport);
+
 describe("a macOS Automation block", () => {
   const automation = {
     reason: "permissionsNotGranted",
@@ -451,10 +454,13 @@ describe("a macOS Automation block", () => {
   } as const;
 
   it("still decodes the Accessibility and Screen Recording blocks older desktops send", () => {
-    const decode = Schema.decodeUnknownSync(CuaAgentBlock);
-    const older = { reason: "permissionsNotGranted", missing: ["screenRecording"], holder: "app" };
-    expect(decode(older)).toEqual(older);
-    expect(decode(automation)).toEqual(automation);
+    const older: unknown = {
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "app",
+    };
+    expect(decodeAgentBlock(older)).toEqual(older);
+    expect(decodeAgentBlock(automation as unknown)).toEqual(automation);
   });
 
   it("names the app and the Automation list, and no readiness report clears it", () => {
@@ -471,21 +477,22 @@ describe("a macOS Automation block", () => {
         tree: "ready",
         input: "background",
         blockers: [],
+        reasons: [],
       }),
     ).toEqual(automation);
   });
 
   it("leaves desktop reports from a newer peer readable when their block has a grant this one does not know", () => {
     // An older server decoding this build's automation block reads it the same way.
-    const report = Schema.decodeUnknownSync(DesktopCuaDriverReport)({
+    const fromNewerPeer: unknown = {
       version: 1,
       type: "cuaDriverReport",
       requestId: "r1",
       status: "unavailable",
       message: "Computer use cannot start.",
       block: { reason: "permissionsNotGranted", missing: ["inputMonitoring"], holder: "helper" },
-    });
-    expect(report).toEqual({
+    };
+    expect(decodeDesktopReport(fromNewerPeer)).toEqual({
       version: 1,
       type: "cuaDriverReport",
       requestId: "r1",
