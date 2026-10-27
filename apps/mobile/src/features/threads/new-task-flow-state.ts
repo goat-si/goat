@@ -63,10 +63,12 @@ export function readNewTaskFlowState(flowKey: string): NewTaskFlowState {
   return appAtomRegistry.get(flowStatesAtom)[flowKey] ?? INITIAL_NEW_TASK_FLOW_STATE;
 }
 
-let liveFlowKeys: ReadonlySet<string> | null = null;
+let liveFlowKeys: ReadonlySet<string> = new Set();
+const retiredFlowKeys = new Set<string>();
 
 export function updateNewTaskFlowState(flowKey: string, patch: Partial<NewTaskFlowState>): void {
-  if (liveFlowKeys !== null && flowKey !== INACTIVE_FLOW_KEY && !liveFlowKeys.has(flowKey)) return;
+  // Descendant mount effects can initialize a new flow before the navigation callback.
+  if (flowKey !== INACTIVE_FLOW_KEY && retiredFlowKeys.has(flowKey)) return;
   const flows = appAtomRegistry.get(flowStatesAtom);
   appAtomRegistry.set(flowStatesAtom, {
     ...flows,
@@ -169,6 +171,10 @@ export function liveNewTaskFlowKeys(state: NavigationRoutes): ReadonlySet<string
 export function pruneNewTaskFlowStates(state: NavigationRoutes): void {
   const flows = appAtomRegistry.get(flowStatesAtom);
   const live = liveNewTaskFlowKeys(state);
+  for (const flowKey of new Set([...liveFlowKeys, ...Object.keys(flows)])) {
+    if (!live.has(flowKey)) retiredFlowKeys.add(flowKey);
+  }
+  for (const flowKey of live) retiredFlowKeys.delete(flowKey);
   liveFlowKeys = live;
   const kept = Object.entries(flows).filter(([flowKey]) => live.has(flowKey));
   if (kept.length === Object.keys(flows).length) return;

@@ -18,6 +18,56 @@ function draftRoute(key: string, draftId: string) {
 }
 
 describe("new task flow state", () => {
+  it("keeps a new route's initial project and draft writes before the navigation callback", () => {
+    const home = { key: "home", name: "Home" };
+    const route = draftRoute("initial-write-route", "new-task:initial-write");
+    const flowKey = newTaskFlowKey(route)!;
+    const fallbackProject = {
+      environmentId: EnvironmentId.make("environment-first"),
+      projectId: ProjectId.make("project-first"),
+    };
+    const requestedProject = {
+      environmentId: EnvironmentId.make("environment-second"),
+      projectId: ProjectId.make("project-second"),
+    };
+    pruneNewTaskFlowStates({ routes: [home] });
+
+    updateNewTaskFlowState(flowKey, {
+      environmentId: fallbackProject.environmentId,
+      projectKey: `${fallbackProject.environmentId}:${fallbackProject.projectId}`,
+    });
+    updateNewTaskFlowState(flowKey, { draftKey: "new-task:initial-write" });
+    updateNewTaskFlowState(flowKey, {
+      environmentId: requestedProject.environmentId,
+      projectKey: `${requestedProject.environmentId}:${requestedProject.projectId}`,
+    });
+
+    const expected = {
+      ...INITIAL_NEW_TASK_FLOW_STATE,
+      environmentId: requestedProject.environmentId,
+      projectKey: "environment-second:project-second",
+      draftKey: "new-task:initial-write",
+    };
+    expect(readNewTaskFlowState(flowKey)).toEqual(expected);
+    pruneNewTaskFlowStates({ routes: [home, route] });
+    expect(readNewTaskFlowState(flowKey)).toEqual(expected);
+
+    pruneNewTaskFlowStates({ routes: [home] });
+    updateNewTaskFlowState(flowKey, { draftKey: "stale-completion" });
+    expect(readNewTaskFlowState(flowKey)).toBe(INITIAL_NEW_TASK_FLOW_STATE);
+  });
+
+  it("rejects delayed first writes after a route leaves without initializing its flow", () => {
+    const route = draftRoute("uninitialized-route", "new-task:uninitialized");
+    const flowKey = newTaskFlowKey(route)!;
+    pruneNewTaskFlowStates({ routes: [route] });
+    pruneNewTaskFlowStates({ routes: [] });
+
+    updateNewTaskFlowState(flowKey, { draftKey: "stale-completion" });
+
+    expect(readNewTaskFlowState(flowKey)).toBe(INITIAL_NEW_TASK_FLOW_STATE);
+  });
+
   it("keeps a covered draft route's flow while another draft route is pushed above it", () => {
     const routeA = draftRoute("route-a", "draft-a");
     const routeB = draftRoute("route-b", "draft-b");
