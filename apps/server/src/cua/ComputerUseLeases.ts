@@ -43,6 +43,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
+import * as CuaDriver from "./CuaDriver.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import {
@@ -659,6 +660,7 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
+  const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
   // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
   // them only with privateModeOn in ComputerUsePrivateMode.ts.
@@ -720,6 +722,10 @@ const make = Effect.gen(function* () {
         const appsChanged =
           apps.length !== deliveredApps.length ||
           apps.some((app, index) => app !== deliveredApps[index]);
+        // Only a driver this server runs itself offers a refresh; a desktop host refreshes its own.
+        const refresh = Option.isSome(driver) ? driver.value.refreshManifest : undefined;
+        if (appsChanged && refresh)
+          yield* refresh(apps).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
         const active = current.length > 0;
         let retry = false;
         // The server's own helper takes the wanted state as is, so it cannot fall behind.
