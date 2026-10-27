@@ -463,7 +463,7 @@ export function useThreadComposerState() {
     if (AsyncResult.isFailure(prepared)) {
       savingQueuedEditRef.current = false;
       setIsSavingQueuedEdit(false);
-      finishSave(false);
+      if (!finishSave(false)) return;
       const error = squashAtomCommandFailure(prepared);
       Dialog.alert(
         "Could not save the queued message",

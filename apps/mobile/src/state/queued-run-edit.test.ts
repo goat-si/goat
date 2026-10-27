@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { Atom } from "effect/reactivity";
 import {
   ChatAttachmentId,
@@ -18,6 +18,7 @@ import {
   removeQueuedRunEditAttachment,
   resolveQueuedEditPayload,
   setActiveComposerDraftText,
+  startQueuedRunEditSave,
   type QueuedRunEdit,
 } from "./queued-run-edit";
 import { threadComposerErrorsAtom } from "./thread-composer-error";
@@ -27,6 +28,35 @@ import {
   setComposerDraftText,
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
+
+vi.mock("expo-file-system", () => {
+  let document = '{"schemaVersion":1,"drafts":{}}';
+  return {
+    Directory: class {
+      create() {}
+      list() {
+        return [];
+      }
+    },
+    File: class {
+      exists = true;
+      parentDirectory = null;
+      name = "drafts.json";
+      create() {}
+      moveSync() {}
+      async text() {
+        return document;
+      }
+      write(value: string) {
+        document = value;
+      }
+    },
+    Paths: { document: "/documents" },
+  };
+});
+vi.mock("../features/sharing/incoming-share-storage", () => ({
+  loadIncomingShareDrafts: async () => [],
+}));
 
 const image = (id: string): ChatAttachment => ({
   type: "image",
@@ -127,7 +157,15 @@ describe("beginQueuedRunEdit", () => {
       { id: runId, status: "queued" },
     ]);
     beginQueuedRunEdit(threadKey, { ...edit([]), originalText: "" }, runs);
-    const attachment = { ...image("new-image"), previewUri: "data:image/png;base64,YWJj" };
+    const attachment = {
+      id: "new-image",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png" as const,
+      sizeBytes: 3,
+      previewUri: "data:image/png;base64,YWJj",
+      dataUrl: "data:image/png;base64,YWJj",
+    };
     appendComposerDraftAttachments(queuedEditDraftKey(threadKey, runId), [attachment]);
 
     appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
@@ -138,6 +176,23 @@ describe("beginQueuedRunEdit", () => {
     expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(
       "That message already started. Your edit is back in the composer.",
     );
+  });
+
+  it("lets a failed save retire an edit whose run started while saving", () => {
+    const threadKey = "env-save:thread-started";
+    const runId = RunId.make("run-1");
+    const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>([
+      { id: runId, status: "queued" },
+    ]);
+    setComposerDraftText(threadKey, "other work");
+    beginQueuedRunEdit(threadKey, edit([]), runs);
+    setComposerDraftText(queuedEditDraftKey(threadKey, runId), "changed");
+    const finishSave = startQueuedRunEditSave(threadKey);
+    appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
+    expect(getQueuedRunEdit(threadKey)).not.toBeNull();
+    expect(finishSave?.(false)).toBe(false);
+    expect(getQueuedRunEdit(threadKey)).toBeNull();
+    expect(getComposerDraftSnapshot(threadKey).text).toBe("other work");
   });
 
   it("reports a cleared edit as discarded when the run starts", () => {
