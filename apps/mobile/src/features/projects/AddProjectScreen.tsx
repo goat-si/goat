@@ -41,7 +41,6 @@ import { inferProjectTitleFromPath, isWindowsPlatform } from "@goat/client-runti
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
-  AuthFilesystemReadScope,
   CommandId,
   type EnvironmentId,
   type EnvironmentMachineKind,
@@ -56,7 +55,7 @@ import {
   type ParamListBase,
 } from "@react-navigation/native";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Arr from "effect/Array";
