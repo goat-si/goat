@@ -147,7 +147,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
-      run?: { readonly person?: boolean; readonly runId?: RunId },
+      run?: { readonly directed?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
      * Apps a full access run named in a request. The desktop adds them to the driver's manifest,
@@ -438,10 +438,17 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly runId?: RunId },
+    run?: { readonly directed?: boolean; readonly runId?: RunId },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "directed", run?.runId));
+      return Option.fromNullishOr(
+        yield* mint(
+          threadId,
+          Option.none(),
+          run?.directed === true ? "directed" : "interactive",
+          run?.runId,
+        ),
+      );
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))

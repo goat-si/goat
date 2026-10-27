@@ -457,7 +457,7 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  +it.effect.each([
+  it.effect.each([
     {
       label: "Plan",
       overrides: { interactionMode: "plan" },

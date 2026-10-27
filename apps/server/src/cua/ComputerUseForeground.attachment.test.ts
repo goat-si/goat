@@ -63,6 +63,8 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
   person?: RunId,
   /** Who started that run, when not a person typing in a GOAT client. */
   origin?: ComputerUseOrigin,
+  /** A person or the agents they direct caused that run (ComputerUseOrigin.directedRun). */
+  directed = true,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
@@ -95,7 +97,7 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
       person === undefined
         ? { _tag: "unattended", reason: "goat_bot" }
         : (origin ?? { _tag: "interactive" }),
-    ...(person === undefined ? {} : { runId: person }),
+    ...(person === undefined ? {} : { runId: person, directed }),
     leases: Option.some({
       ...leases,
       proxy: { command: "/fixture/node", entrypoint: "/fixture/proxy" },
@@ -540,7 +542,7 @@ describe("foreground through real computer-use attachment", () => {
       }).pipe(Effect.provide(layer)),
   );
 
-  +it.effect.each([
+  it.effect.each([
     {
       label: "launched from another environment",
       origin: { _tag: "unattended", reason: "launched_remotely" },
@@ -558,6 +560,23 @@ describe("foreground through real computer-use attachment", () => {
       );
       assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
     }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a full access run no one directed, such as a server wake, still asks for the foreground",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const { leases } = yield* attach(
+          true,
+          true,
+          undefined,
+          RunId.make("run:attached-foreground"),
+          { _tag: "interactive" },
+          false,
+        );
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build"));
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["pause", "private", "stop"] as const)(
@@ -634,7 +653,10 @@ describe("foreground through real computer-use attachment", () => {
           if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
           // Q starts on the same control and gets its own implied foreground.
           const reused = Option.getOrThrow(
-            yield* leases.everyAppControl(threadId, false, { runId: RunId.make("run:Q") }),
+            yield* leases.everyAppControl(threadId, false, {
+              directed: true,
+              runId: RunId.make("run:Q"),
+            }),
           );
           assert.equal(reused.controlId, attachment.control.controlId);
           assert.isTrue(yield* leases.foregroundAvailable(threadId, "anything"));

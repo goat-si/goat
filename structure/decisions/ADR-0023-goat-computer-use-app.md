@@ -22,10 +22,12 @@
   person's threads instead of holding the screen alone. They stay unattended for steering and
   outside full access. The Safety bullet and D16 below state the amended decision.
 - Amended 2026-10-28 again, D16 (owner decision, Jun, 2026-10-28: remote work must get computer
-  use): every full access run other than unattended work takes the foreground without asking,
-  including runs an agent started and threads launched from another environment. A message, a
-  promotion of a queued message, or an agent's answer to a question that reaches less of the
-  screen than the running turn waits as the next turn. D16 below states the amended decision.
+  use): every directed full access run takes the foreground without asking: one a person's
+  client started, one an agent started from a directed run, a launch or an answer from another
+  environment, and an approval's wake. Other server wakes and unattended work still ask. A
+  message, a promotion of a queued message, or an agent's answer to a question that reaches less
+  of the screen than the running turn waits as the next turn. D16 below states the amended
+  decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
@@ -162,8 +164,8 @@
     the settings contract so older clients and settings files still decode, and the server ignores
     it. What differs by origin stays: unattended work (GOAT Bot, channels, schedules, webhooks)
     asks for the foreground and holds the screen one thread at a time, while every other full
-    access run, including one an agent or another environment started, takes the foreground
-    without asking and works beside other threads (amended 2026-10-28). The
+    access run works beside other threads, and a directed one, including one an agent or another
+    environment started, takes the foreground without asking (amended 2026-10-28). The
     password-manager exclusions, pause, Stop and stop all, each
     call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
     the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the

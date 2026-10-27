@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { CommandId, RuntimeRequestId, ThreadId } from "./baseSchemas.ts";
+import { CommandId, RunId, RuntimeRequestId, ThreadId } from "./baseSchemas.ts";
 import {
   ProviderApprovalDecision,
   ProviderUserInputAnswers,
@@ -19,6 +19,6 @@ export const RuntimeRequestRespondCommand = Schema.Struct({
   answers: Schema.optional(ProviderUserInputAnswers),
   attachmentsByQuestionId: Schema.optional(UserInputAttachments),
   respondedBy: Schema.optional(UserInputRespondedBy),
-  /** Deliver a message answer as the thread's next turn instead of steering its running one. */
-  answerAsNextTurn: Schema.optional(Schema.Boolean),
+  /** The only running turn an agent's message answer may join; otherwise it is the next turn. */
+  answerSteersRunId: Schema.optional(RunId),
 });

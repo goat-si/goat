@@ -17,8 +17,17 @@ import * as Option from "effect/Option";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { gateUnattendedSteering, projectionOriginReads } from "./ComputerUseOrigin.ts";
+import {
+  type ComputerUseOrigin,
+  computerUseOrigin,
+  gateUnattendedSteering,
+  projectionOriginReads,
+  steeringAllowed,
+} from "./ComputerUseOrigin.ts";
 import type * as CuaDriver from "./CuaDriver.ts";
+
+const unattendedRemote: ComputerUseOrigin = { _tag: "unattended", reason: "launched_remotely" };
+const unattendedSent: ComputerUseOrigin = { _tag: "unattended", reason: "sent_by_unattended" };
 
 type DispatchMode = Extract<
   OrchestrationV2Command,
@@ -74,48 +83,65 @@ export const makeComputerUseSteering = (deps: {
       cause,
     });
 
-  /** Holds a promotion or an agent's answer to the same rule as a steer; others pass unchanged. */
+  const enabled = Option.isNone(deps.cuaDriver)
+    ? Effect.succeed(false)
+    : deps.cuaDriver.value.enabled;
+
+  /**
+   * Holds a promotion or an agent's answer to the same rule as a steer; others pass unchanged. A
+   * promotion weighs its queued turn's own origin, which follows the sender as it was when it
+   * wrote. An answer names the one running turn it may join, which the orchestrator checks again
+   * under its lock, so a turn that starts after this check never takes it.
+   */
   const admit = Effect.fn("ComputerUseSteering.admit")(function* (
     command: OrchestrationV2ServerCommand,
   ) {
     if (command.type === "queued-message.promote-to-steer") {
-      const records = yield* deps.orchestrator
-        .getThreadRecords(command.threadId, ["runs", "messages"])
-        .pipe(Effect.mapError((cause) => refuse(command, String(cause))));
-      const queued = records.runs.find((run) => run.id === command.queuedRunId);
-      const message = records.messages.find((item) => item.id === queued?.userMessageId);
-      const mode = yield* steeringMode(
-        {
+      if (!(yield* enabled)) return command;
+      const message = yield* computerUseOrigin(reads, {
+        threadId: command.threadId,
+        runId: command.queuedRunId,
+      });
+      if (
+        yield* steeringAllowed(reads, {
           threadId: command.threadId,
-          scheduledTaskId: message?.scheduledTaskId,
-          senderThreadId: message?.senderThreadId,
-          messageId: message?.id,
-        },
-        { type: "steer_active", targetRunId: command.targetRunId },
+          message,
+          targetRunId: command.targetRunId,
+        })
+      )
+        return command;
+      return yield* refuse(
+        command,
+        "This message comes from work with less of the screen than the running turn, so it stays queued and runs as its own turn.",
       );
-      if (mode.type !== "steer_active")
-        return yield* refuse(
-          command,
-          "This message comes from work with less of the screen than the running turn, so it stays queued and runs as its own turn.",
-        );
-      return command;
     }
-    if (
-      command.type !== "runtime-request.respond" ||
-      command.respondedBy?.type !== "agent" ||
-      command.respondedBy.environmentId !== null
-    )
+    if (command.type !== "runtime-request.respond" || command.respondedBy?.type !== "agent")
       return command;
+    const responder = command.respondedBy;
     const records = yield* deps.orchestrator
       .getThreadRecords(command.threadId, ["runs"])
       .pipe(Effect.mapError((cause) => refuse(command, String(cause))));
     const running = records.runs.find((run) => run.status === "running");
     if (running === undefined) return command;
-    const mode = yield* steeringMode(
-      { threadId: command.threadId, senderThreadId: command.respondedBy.threadId },
-      { type: "steer_active", targetRunId: running.id },
-    );
-    return mode.type === "steer_active" ? command : { ...command, answerAsNextTurn: true };
+    const approved = { ...command, answerSteersRunId: running.id };
+    if (!(yield* enabled)) return approved;
+    // Another computer's agent counts as remote work; a local one as its thread does.
+    const sender =
+      responder.environmentId === null
+        ? yield* computerUseOrigin(reads, { threadId: responder.threadId })
+        : unattendedRemote;
+    const message =
+      sender._tag === "interactive" ||
+      (sender._tag === "unattended" && sender.reason === "launched_remotely")
+        ? sender
+        : unattendedSent;
+    return (yield* steeringAllowed(reads, {
+      threadId: command.threadId,
+      message,
+      targetRunId: running.id,
+    }))
+      ? approved
+      : command;
   });
 
   return { steeringMode, admit };

@@ -8614,9 +8614,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const activeSession = yield* providerSessions
             .get(activeProviderThread.providerSessionId)
             .pipe(mapDispatchError(command));
-          // An answer from work with less of the screen waits as the next turn (ComputerUseSteering).
+          // An agent's answer joins only the turn ComputerUseSteering approved under this lock.
           if (
-            command.answerAsNextTurn !== true &&
+            (command.respondedBy?.type !== "agent" || command.answerSteersRunId === activeRun.id) &&
             Option.isSome(activeSession) &&
             activeSession.value.providerSession.capabilities.turns.supportsActiveSteering
           ) {

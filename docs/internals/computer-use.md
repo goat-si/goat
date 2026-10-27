@@ -435,14 +435,20 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   ceiling unchanged. In full access, a thread launched from another environment, and turns it
   launches or sends here (`launched_remotely`), use every app like a person's threads, beside
   them rather than holding the screen alone (`usesScreenLikePerson` in `ComputerUseOrigin.ts`;
-  owner decision, Jun, 2026-10-28). Like every full access run that is not unattended work, they
-  take the foreground without asking (`ComputerUseFullAccess.ts`). This host cannot read the
+  owner decision, Jun, 2026-10-28). Like every directed full access run, they take the foreground
+  without asking (`directedRun` in `ComputerUseOrigin.ts`): a person's client, an agent's message
+  traced to the directed run that sent it, a launch or an answer from another environment, or an
+  approval's wake. Other server wakes carry no provenance and ask, so a schedule's continuation
+  never gains the foreground. This host cannot read the
   turn that launched it, so it stays unattended outside full access. A user's own `cua-driver`
   stays blocked for it whatever admission decides, since that driver would not hear Stop. A
-  message, a promotion of a queued message, or a local agent's answer to a question from an
-  origin that reaches less of the screen than the running turn waits as the next turn instead of
-  joining it (`ComputerUseSteering.ts`): a person's turn outranks a remote full access turn, which
-  outranks unattended work.
+  message, a promotion of a queued message, or an agent's answer to a question from an origin
+  that reaches less of the screen than the running turn waits as the next turn instead of joining
+  it (`ComputerUseSteering.ts`): a person's turn outranks a remote full access turn, which
+  outranks unattended work, and a turn whose origin cannot be read counts as a person's. A
+  promotion weighs the queued turn's own origin; an answer names the one turn it may join, which
+  the orchestrator checks again under its lock. Another computer's agent's answer counts as remote
+  work, and its queued turn keeps that origin through its runtime request's responder.
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
