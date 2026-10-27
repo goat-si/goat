@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -16,6 +17,8 @@ import type { EffectTraceRecord } from "@goat/shared/observability";
 import * as ServerConfig from "../config.ts";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import * as Observability from "./Observability.ts";
+import * as Metrics from "./Metrics.ts";
+import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 
 // Synthetic canaries; neither is a real credential.
 const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktc3Bhbi1leGl0In0.Y2FuYXJ5LXNwYW4tZXhpdA";
@@ -232,7 +235,9 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
         Effect.gen(function* () {
           const base = yield* ServerConfig.ServerConfig;
           return ServerConfig.make({
-            ...base, traceMinLevel, otlpTracesUrl: "http://otlp.test/v1/traces",
+            ...base,
+            traceMinLevel,
+            otlpTracesUrl: "http://otlp.test/v1/traces",
           });
         }),
       ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
@@ -241,8 +246,14 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
         const parent = Tracer.externalSpan({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
         for (let index = 0; index < 1_000; index++) {
           const span = tracer.span({
-            name: "sqlite", parent: Option.some(parent), annotations: Context.empty(),
-            links: [], startTime: 0n, kind: "client", root: false, sampled: true,
+            name: "sqlite",
+            parent: Option.some(parent),
+            annotations: Context.empty(),
+            links: [],
+            startTime: 0n,
+            kind: "client",
+            root: false,
+            sampled: true,
           });
           span.attribute("db.lock_wait_ms", 0);
           span.attribute("fixture.id", index);
@@ -250,18 +261,88 @@ it.effect.each(["Info", "Debug", "Trace"] as const)(
         }
         yield* Effect.void.pipe(Effect.withSpan("policy-fixture"));
         return (yield* ServerConfig.ServerConfig).serverTracePath;
-      }).pipe(Effect.provide(Observability.layer.pipe(
-        Layer.provideMerge(layerConfig), Layer.provide(ResourceAttribution.layer),
-        Layer.provide(layerTraceCollector(bodies)),
-      )));
-      const records = (yield* fs.readFileString(tracePath)).trim().split("\n")
-        .filter(Boolean).map((line) => JSON.parse(line) as EffectTraceRecord)
+      }).pipe(
+        Effect.provide(
+          Observability.layer.pipe(
+            Layer.provideMerge(layerConfig),
+            Layer.provide(ResourceAttribution.layer),
+            Layer.provide(layerTraceCollector(bodies)),
+          ),
+        ),
+      );
+      const records = (yield* fs.readFileString(tracePath))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as EffectTraceRecord)
         .filter((record) => record.name === "sqlite");
-      const expectedIds = traceMinLevel === "Info" ? [] : Array.from({ length: 1_000 }, (_, i) => i);
-      assert.deepEqual(records.map((record) => record.attributes["fixture.id"]), expectedIds);
-      const bytes = records.reduce((total, record) => total + Buffer.byteLength(`${JSON.stringify(record)}\n`), 0);
+      const expectedIds =
+        traceMinLevel === "Info" ? [] : Array.from({ length: 1_000 }, (_, i) => i);
+      assert.deepEqual(
+        records.map((record) => record.attributes["fixture.id"]),
+        expectedIds,
+      );
+      const bytes = records.reduce(
+        (total, record) => total + Buffer.byteLength(`${JSON.stringify(record)}\n`),
+        0,
+      );
       if (traceMinLevel === "Info") assert.equal(bytes, 0);
       else assert.isAbove(bytes, 0);
       assert.equal(exportedSpans(bodies).filter((span) => span.name === "sqlite").length, 1_000);
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps browser SQL records and counts server sink loss with a fixed reason", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-trace-metric-" });
+    const metric = Metric.withAttributes(Metrics.serverTraceDroppedRecords, { reason: "oversize" });
+    const before = yield* Metric.value(metric);
+    const layerConfig = Layer.effect(
+      ServerConfig.ServerConfig,
+      Effect.gen(function* () {
+        const base = yield* ServerConfig.ServerConfig;
+        return ServerConfig.make({ ...base, traceMinLevel: "Info", traceMaxBytes: 1024 });
+      }),
+    ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
+    const record: EffectTraceRecord = {
+      type: "effect-span",
+      name: "sqlite",
+      traceId: "browser",
+      spanId: "browser-sql",
+      parentSpanId: "browser-parent",
+      sampled: true,
+      kind: "client",
+      startTimeUnixNano: "0",
+      endTimeUnixNano: "1000000",
+      durationMs: 1,
+      attributes: { "db.lock_wait_ms": 0, "fixture.browser": true },
+      events: [],
+      links: [],
+      exit: { _tag: "Success" },
+    };
+    const tracePath = yield* Effect.gen(function* () {
+      const collector = yield* BrowserTraceCollector.BrowserTraceCollector;
+      yield* collector.record([record, { ...record, name: "x".repeat(2048) }]);
+      return (yield* ServerConfig.ServerConfig).serverTracePath;
+    }).pipe(
+      Effect.provide(
+        Observability.layer.pipe(
+          Layer.provideMerge(layerConfig),
+          Layer.provide(ResourceAttribution.layer),
+        ),
+      ),
+    );
+    const after = yield* Metric.value(metric);
+    assert.equal(after.count - before.count, 1);
+    assert.isTrue(after.incremental);
+    const records = (yield* fs.readFileString(tracePath))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as EffectTraceRecord);
+    assert.deepEqual(
+      records.filter((entry) => entry.name === "sqlite"),
+      [record],
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

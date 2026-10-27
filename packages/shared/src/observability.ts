@@ -1,19 +1,16 @@
 import * as Cause from "effect/Cause";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
 import * as ExitRuntime from "effect/Exit";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
-import * as Result from "effect/Result";
-import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Tracer from "effect/Tracer";
 import { OtlpResource, OtlpTracer, OtlpSerialization } from "effect/observability";
 
-import { makeAsyncRotatingFileSink } from "./logging.ts";
+import { makeTraceSink } from "./traceSink.ts";
+export { makeTraceSink } from "./traceSink.ts";
 
 export const OtlpProtocol = Schema.Literals(["http/json", "http/protobuf"]);
 export type OtlpProtocol = typeof OtlpProtocol.Type;
@@ -58,8 +55,6 @@ export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
   headers: undefined,
   exportIntervalMs: 10_000,
 };
-
-const FLUSH_BUFFER_THRESHOLD = 256;
 
 export type TraceAttributes = Readonly<Record<string, unknown>>;
 
@@ -163,6 +158,24 @@ export interface TraceSinkOptions {
   readonly maxFiles: number;
   readonly batchWindowMs: number;
   readonly onFlush?: (stats: TraceSinkFlushStats) => Effect.Effect<void>;
+  readonly onDrop?: (
+    reason: "overflow" | "disk" | "oversize" | "serialization",
+    count: number,
+  ) => Effect.Effect<void>;
+  // Internal observers must be synchronous and nonthrowing.
+  readonly onSnapshot?: (snapshot: TraceSinkSnapshot) => void;
+}
+
+export interface TraceSinkSnapshot {
+  readonly produced: number;
+  readonly accepted: number;
+  readonly written: number;
+  readonly dropped: number;
+  readonly bufferedRecords: number;
+  readonly bufferedBytes: number;
+  readonly flushingRecords: number;
+  readonly flushingBytes: number;
+  readonly logicalWriteBytes: number;
 }
 
 export interface TraceSinkFlushStats {
@@ -179,6 +192,11 @@ export interface TraceSink {
 }
 
 export interface LocalFileTracerOptions extends TraceSinkOptions {
+  readonly shouldRecord?: (span: Tracer.Span) => boolean;
+  readonly onSpanEnd?: (snapshot: {
+    readonly considered: number;
+    readonly suppressed: number;
+  }) => void;
   readonly delegate?: Tracer.Tracer;
   readonly sink?: TraceSink;
   /**
@@ -403,144 +421,6 @@ function spanToTraceRecord(span: SerializableSpan): EffectTraceRecord {
   };
 }
 
-export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: TraceSinkOptions) {
-  const sink = yield* makeAsyncRotatingFileSink({
-    filePath: options.filePath,
-    maxBytes: options.maxBytes,
-    maxFiles: options.maxFiles,
-  }).pipe(Effect.orDie);
-
-  let buffer: Array<{ readonly text: string; readonly bytes: number }> = [];
-  let bufferBytes = 0;
-  const maxBufferBytes = Math.max(options.maxBytes, 4 * 1024 * 1024);
-  const flushRequests = yield* Queue.sliding<void>(1);
-  const flushSemaphore = yield* Semaphore.make(1);
-  let writeFailing = false;
-  let droppedCount = 0;
-  let failureReported = false;
-  let pendingFlushStats: TraceSinkFlushStats = {
-    logicalWriteBytes: 0,
-    count: 0,
-    durationMs: 0,
-  };
-
-  const flushBuffered = Effect.gen(function* () {
-    if (buffer.length === 0) {
-      return;
-    }
-
-    const records = buffer;
-    buffer = [];
-    bufferBytes = 0;
-    let persistedCount = 0;
-
-    while (persistedCount < records.length) {
-      const firstRecordBytes = records[persistedCount]!.bytes;
-      let nextIndex = persistedCount + 1;
-      let chunkBytes = firstRecordBytes;
-      while (nextIndex < records.length) {
-        const nextRecordBytes = records[nextIndex]!.bytes;
-        if (chunkBytes + nextRecordBytes > options.maxBytes) break;
-        chunkBytes += nextRecordBytes;
-        nextIndex += 1;
-      }
-
-      const chunk = records
-        .slice(persistedCount, nextIndex)
-        .map((record) => record.text)
-        .join("");
-      const startedAt = performance.now();
-      const written = yield* sink.write(chunk).pipe(Effect.result);
-      if (Result.isFailure(written)) {
-        // Drop the batch after disk failure to avoid an ever-growing retry backlog.
-        writeFailing = true;
-        droppedCount += records.length - persistedCount;
-        return;
-      }
-      writeFailing = false;
-      pendingFlushStats = {
-        logicalWriteBytes: pendingFlushStats.logicalWriteBytes + chunkBytes,
-        count: pendingFlushStats.count + nextIndex - persistedCount,
-        durationMs: pendingFlushStats.durationMs + Math.max(0, performance.now() - startedAt),
-      };
-      persistedCount = nextIndex;
-    }
-  });
-
-  const flush = flushSemaphore
-    .withPermits(1)(
-      Effect.gen(function* () {
-        const droppedAtStart = droppedCount;
-        yield* flushBuffered;
-        const stats = pendingFlushStats;
-        pendingFlushStats = {
-          logicalWriteBytes: 0,
-          count: 0,
-          durationMs: 0,
-        };
-        if (stats.count > 0 && options.onFlush) {
-          yield* options.onFlush(stats).pipe(Effect.ignore);
-        }
-        if (droppedCount > 0 && !failureReported) {
-          failureReported = true;
-          yield* Effect.logWarning(
-            "Trace writer could not keep up, dropping records until it recovers",
-            {
-              filePath: options.filePath,
-            },
-          );
-        } else if (failureReported && !writeFailing && droppedCount === droppedAtStart) {
-          yield* Effect.logInfo("Trace writes recovered", {
-            filePath: options.filePath,
-            droppedCount,
-          });
-          failureReported = false;
-          droppedCount = 0;
-        }
-      }),
-    )
-    .pipe(
-      // Cancelled OS writes still finish; await completion before rotation or finalizer drain.
-      Effect.uninterruptible,
-      Effect.withTracerEnabled(false),
-      // Drop the ended makeTraceSink parent span so timed-fiber logs cannot accumulate on it.
-      Effect.updateContext(Context.omit(Tracer.ParentSpan)<never>),
-    );
-
-  yield* Effect.addFinalizer(() => flush.pipe(Effect.ignore));
-  yield* Effect.forkScoped(
-    Queue.take(flushRequests).pipe(
-      Effect.timeoutOption(`${options.batchWindowMs} millis`),
-      Effect.andThen(flush),
-      Effect.forever,
-    ),
-  );
-
-  return {
-    filePath: options.filePath,
-    push(record) {
-      try {
-        const text = `${JSON.stringify(record)}\n`;
-        const bytes = Buffer.byteLength(text);
-        if (bytes > options.maxBytes) return;
-        if (bufferBytes + bytes > maxBufferBytes) {
-          droppedCount++;
-          return;
-        }
-        buffer.push({ text, bytes });
-        bufferBytes += bytes;
-        if (buffer.length >= FLUSH_BUFFER_THRESHOLD) {
-          Queue.offerUnsafe(flushRequests, undefined);
-        }
-      } catch {
-        return;
-      }
-    },
-    flush,
-    close: () => flush,
-  } satisfies TraceSink;
-});
-
 class LocalFileSpan implements Tracer.Span {
   readonly _tag = "Span";
   readonly name: string;
@@ -558,16 +438,22 @@ class LocalFileSpan implements Tracer.Span {
   private readonly delegate: Tracer.Span;
   private readonly push: (record: EffectTraceRecord) => void;
   private readonly redactCause: LocalFileTracerOptions["redactCause"];
+  private readonly shouldRecord: LocalFileTracerOptions["shouldRecord"];
+  private readonly recordDecision: ((included: boolean) => void) | undefined;
 
   constructor(
     options: Parameters<Tracer.Tracer["span"]>[0],
     delegate: Tracer.Span,
     push: (record: EffectTraceRecord) => void,
     redactCause: LocalFileTracerOptions["redactCause"],
+    shouldRecord: LocalFileTracerOptions["shouldRecord"],
+    recordDecision: ((included: boolean) => void) | undefined,
   ) {
     this.delegate = delegate;
     this.push = push;
     this.redactCause = redactCause;
+    this.shouldRecord = shouldRecord;
+    this.recordDecision = recordDecision;
     this.name = delegate.name;
     this.spanId = delegate.spanId;
     this.traceId = delegate.traceId;
@@ -595,7 +481,9 @@ class LocalFileSpan implements Tracer.Span {
     this.delegate.end(endTime, traceExit);
 
     if (this.sampled) {
-      this.push(spanToTraceRecord(this));
+      const included = this.shouldRecord?.(this) ?? true;
+      this.recordDecision?.(included);
+      if (included) this.push(spanToTraceRecord(this));
     }
   }
 
@@ -627,6 +515,8 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
       maxFiles: options.maxFiles,
       batchWindowMs: options.batchWindowMs,
       ...(options.onFlush ? { onFlush: options.onFlush } : {}),
+      ...(options.onDrop ? { onDrop: options.onDrop } : {}),
+      ...(options.onSnapshot ? { onSnapshot: options.onSnapshot } : {}),
     }));
 
   const delegate =
@@ -635,6 +525,16 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
       span: (spanOptions) => new Tracer.NativeSpan(spanOptions),
     });
 
+  let considered = 0;
+  let suppressed = 0;
+  const recordDecision = options.onSpanEnd
+    ? (included: boolean) => {
+        considered++;
+        if (!included) suppressed++;
+        options.onSpanEnd?.({ considered, suppressed });
+      }
+    : undefined;
+
   return Tracer.make({
     span(spanOptions) {
       return new LocalFileSpan(
@@ -642,6 +542,8 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
         delegate.span(spanOptions),
         sink.push,
         options.redactCause,
+        options.shouldRecord,
+        recordDecision,
       );
     },
     ...(delegate.context ? { context: delegate.context } : {}),
