@@ -11,7 +11,13 @@ import { RelayRateLimits } from "./RelayRateLimits.ts";
 
 export function hostTargetDigest(environmentId: string, publicKey: string): string {
   return createHash("sha256")
-    .update(JSON.stringify(["goat-host-revocation:v1", environmentId, publicKey]))
+    .update(
+      JSON.stringify([
+        "goat-host-revocation:v1",
+        environmentId,
+        publicKey.replace(/\r\n/gu, "\n").trim(),
+      ]),
+    )
     .digest("hex");
 }
 export class AccountErasure extends Context.Service<

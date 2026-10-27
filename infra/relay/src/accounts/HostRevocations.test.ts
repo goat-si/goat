@@ -28,7 +28,7 @@ it.live(
       });
       const credential = "fixture-opaque-credential";
       const credentialDigest = createHash("sha256").update(credential).digest("base64url");
-      const target = hostTargetDigest("env", key.publicKey);
+      const target = hostTargetDigest("env", key.publicKey.trim());
       let nonce = 0;
       const proof = (ack?: string) =>
         Effect.gen(function* () {
