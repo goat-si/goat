@@ -125,6 +125,7 @@ export class ConnectionTransientError extends Schema.TaggedError<ConnectionTrans
   "ConnectionTransientError",
   {
     reason: ConnectionTransientReason,
+    retryAfterMillis: Schema.optionalKey(Schema.Number),
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
     sshPreparationTimedOut: Schema.optionalKey(Schema.Boolean),

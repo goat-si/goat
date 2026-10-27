@@ -1403,9 +1403,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
 
       const inWakeWindow = (yield* Clock.monotonicTimeNanos) < (yield* Ref.get(wakeRetryUntil));
-      const delayMs = inWakeWindow
-        ? WAKE_RETRY_DELAY_MS
-        : retryDelayMs(failureCount, yield* Random.next, loopback);
+      const delayMs = Math.max(
+        error.retryAfterMillis ?? 0,
+        inWakeWindow
+          ? WAKE_RETRY_DELAY_MS
+          : retryDelayMs(failureCount, yield* Random.next, loopback),
+      );
       if (!inWakeWindow) failureCount += 1;
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({
         previousAttempt,

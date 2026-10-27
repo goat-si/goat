@@ -40,6 +40,29 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
   const detail = relayProtectedErrorMessage(error);
   const traceId = error.traceId;
   switch (error._tag) {
+    case "RelayAccountAccessDeniedError":
+    case "RelayAccountEpochStaleError":
+    case "RelayEnvironmentRelinkRequiredError":
+    case "RelayEnvironmentOwnerConflictError":
+    case "RelayEnvironmentOwnerMismatchError":
+    case "RelayAccountResourceLimitExceededError":
+    case "RelayMobileDeviceNotRegisteredError":
+      return new ConnectionBlockedError({ reason: "permission", detail, traceId, hop: "relay" });
+    case "RelayRateLimitExceededError":
+      return new ConnectionTransientError({
+        reason: "relay-unavailable",
+        detail,
+        traceId,
+        hop: "relay",
+        retryAfterMillis: error.retryAfterSeconds * 1000,
+      });
+    case "RelayAuthorizationUnavailableError":
+      return new ConnectionTransientError({
+        reason: "relay-unavailable",
+        detail,
+        traceId,
+        hop: "relay",
+      });
     case "RelayAuthInvalidError":
       return new ConnectionBlockedError({
         reason: "authentication",
@@ -139,8 +162,17 @@ export function mapManagedRelayError(error: ManagedRelayClientError): Connection
       if (error.relayError) {
         return relayProtectedError(error.relayError);
       }
+      if (error.status === 401 || error.status === 403 || error.status === 409)
+        return new ConnectionBlockedError({
+          reason: "permission",
+          detail: error.message,
+          hop: "relay",
+        });
       return new ConnectionTransientError({
         reason: "relay-unavailable",
+        ...(error.retryAfterMillis === undefined
+          ? {}
+          : { retryAfterMillis: error.retryAfterMillis }),
         detail: error.message,
         hop: "relay",
         // A status means the relay answered, so this device did reach it.
