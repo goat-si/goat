@@ -106,8 +106,9 @@ const before = (code: AgentSurfaceErrorCode): FailureClass => ({ code, nothingRa
 
 /**
  * Every domain literal the live surface can return, keyed by the literal itself: a failure's
- * code or reason, or its tag when it has neither. apps/server/src/mcp/agentSurface.test.ts walks
- * every served tool's failure and result schemas and fails on a literal with no row.
+ * code or reason, or its tag when it has neither. agentSurface.failureClasses.test.ts in
+ * apps/server/src/mcp walks every served tool's failure and result schemas and fails on a
+ * literal with no row.
  */
 export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   // OrchestratorMcpFailure
