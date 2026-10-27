@@ -315,6 +315,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       : undefined;
   // The macOS helper in agent connection mode draws the cursor overlay from fd 3 (#1214).
   const drawsOverlay = platform === "darwin" && descriptor.args.includes("--mcp");
+  // The app macOS asks for Automation consent: the helper, or GOAT's own in-process driver.
+  const automationHolder: "helper" | "app" | undefined =
+    platform === "darwin" ? (drawsOverlay ? "helper" : "app") : undefined;
 
   // A driver that reads its capability manifest from a path GOAT rewrites (the macOS helper's
   // --mcp mode, #1416) gets a fresh child when the file changes.
@@ -604,7 +607,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           process.stdout.write(guide(listed, context) + "\n");
         }),
       answersCursorTools: drawsOverlay,
-      ...(platform === "darwin" ? { automationHolder: drawsOverlay ? "helper" : "app" } : {}),
+      ...(automationHolder === undefined ? {} : { automationHolder }),
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its
       // overlay and input feed only when the proxy opens their channel.

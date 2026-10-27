@@ -9,6 +9,8 @@ const appsResult = {
     apps: [
       { pid: 42, bundle_id: "com.apple.TextEdit", name: "TextEdit" },
       { pid: 43, bundle_id: "com.apple.finder", name: "Finder" },
+      // An app without a bundle id is listed by its name, which can look like one.
+      { pid: 44, name: "Acme.Editor" },
     ],
   },
 };
@@ -42,7 +44,7 @@ const saveRefused = (
 };
 
 // set_value's Finder rename through Apple Events (driver tools/set_value.rs).
-const renameRefused = (id: number, cause: string) =>
+const renameRefused = (id: number, cause: string, pid = 43) =>
   JSON.stringify({
     jsonrpc: "2.0",
     id,
@@ -52,7 +54,7 @@ const renameRefused = (id: number, cause: string) =>
         code: "file_name_needs_rename",
         effect: "refused",
         path: "apple_events",
-        pid: 43,
+        pid,
         window_id: 9,
         reason: "x",
         cause,
@@ -82,6 +84,8 @@ const rename = call(2, "set_value", {
   element_index: 3,
   value: "b",
 });
+// The driver resolves an element token to its window without a pid in the call.
+const tokenRename = call(2, "set_value", { element_token: "s1:3", value: "b" });
 
 describe("lease proxy macOS Automation refusals", () => {
   it.effect(
@@ -93,7 +97,7 @@ describe("lease proxy macOS Automation refusals", () => {
         yield* h.send(save);
         yield* h.nextToDriver;
         yield* h.reply(saveRefused(2, "automation_denied"));
-        const reply = (yield* h.nextToProvider) as Reply;
+        const reply = (yield* h.nextToProvider) as unknown as Reply;
         const structured = reply.result.structuredContent;
         assert.equal(structured.refused, "permissionsNotGranted");
         assert.equal(structured.detail, "automation_not_allowed");
@@ -113,19 +117,19 @@ describe("lease proxy macOS Automation refusals", () => {
   );
 
   it.effect(
-    "lists the apps before an Apple Events call on a pid it cannot name, so the refusal names it",
+    "lists the apps before an Apple Events call it cannot tie to an app, so the refusal names it",
     () =>
       Effect.gen(function* () {
         const h = yield* harness({ automationHolder: "app" });
         // A whole-desktop control never lists apps for its scope.
         yield* h.push(active());
-        yield* h.send(rename);
+        yield* h.send(tokenRename);
         const lookup = yield* h.nextToDriver;
         assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
         yield* h.reply(apps(lookup.id));
         assert.equal((yield* h.nextToDriver).id, 2);
         yield* h.reply(renameRefused(2, "automation_timeout"));
-        const reply = (yield* h.nextToProvider) as Reply;
+        const reply = (yield* h.nextToProvider) as unknown as Reply;
         const structured = reply.result.structuredContent;
         assert.equal(structured.refused, "permissionsPending");
         assert.equal(structured.detail, "automation_pending");
@@ -136,9 +140,29 @@ describe("lease proxy macOS Automation refusals", () => {
           holder: "app",
           target: "com.apple.finder",
         });
-        // In development GOAT itself sends the Apple Events.
-        assert.include(reply.result.content.at(-1)?.text ?? "", "allowed GOAT to control");
+        // In development GOAT itself sends the Apple Events; a timeout only suggests a prompt.
+        const note = reply.result.content.at(-1)?.text ?? "";
+        assert.include(note, "Automation prompt for GOAT on this Mac");
+        assert.notInclude(note, "has not allowed");
       }),
+  );
+
+  it.effect("never names an app by a listed display name that only looks like a bundle id", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ automationHolder: "helper" });
+      yield* listApps(h);
+      yield* h.send(call(2, "set_value", { pid: 44, window_id: 9, element_index: 3, value: "b" }));
+      yield* h.nextToDriver;
+      yield* h.reply(renameRefused(2, "automation_denied", 44));
+      const structured = ((yield* h.nextToProvider) as unknown as Reply).result.structuredContent;
+      assert.equal(structured.refused, "permissionsNotGranted");
+      assert.notProperty(structured, "app");
+      assert.deepEqual(structured.block, {
+        reason: "permissionsNotGranted",
+        missing: ["automation"],
+        holder: "helper",
+      });
+    }),
   );
 
   it.effect(

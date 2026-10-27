@@ -89,7 +89,8 @@ On a Mac, a few actions, such as saving a document while its app stays in the
 background or renaming a file through Finder, also need macOS Automation
 permission for that app. macOS asks once per app. Until someone at the Mac
 answers, or while it is off in **System Settings > Privacy & Security >
-Automation**, the agent stops that action and tells you which app it needs.
+Automation**, the agent stops that action and tells you, naming the app when it
+can.
 
 Your pointer stays where you put it. By default agents never move it: they
 click through an element's accessibility action, the keyboard, or a background

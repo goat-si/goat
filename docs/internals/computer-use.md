@@ -468,8 +468,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   target app Apple Events, which macOS allows per app and asks about on first use. The driver
   refuses with `automation_denied` when the person turned it off and `automation_timeout` when
   the app did not answer, which is how an unanswered prompt shows; the lease proxy hands those to
-  the agent as `permissionsNotGranted` and `permissionsPending` with the app's bundle id and a
-  block whose `missing` is `automation` (`apps/server/src/cua/ComputerUseAutomationRefusal.ts`).
+  the agent as `permissionsNotGranted` and `permissionsPending`, with a block whose `missing` is
+  `automation` and the app's bundle id when `list_apps` reports one; the proxy lists apps first
+  when it cannot yet name the call's app (`apps/server/src/cua/ComputerUseAutomationRefusal.ts`).
   Readiness does not report Automation. Refusing a not yet consented app without a prompt in
   unattended runs needs the driver's own preflight.
 - **Development builds.** Ad-hoc signatures change the code hash on every build, and TCC keys

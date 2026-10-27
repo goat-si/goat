@@ -21,7 +21,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** The pinned driver's tools whose routes can send Apple Events (tools/invoke_menu.rs, set_value.rs). */
 const APPLE_EVENT_TOOLS: ReadonlySet<string> = new Set(["invoke_menu", "set_value"]);
 
-/** Whether this call may need Apple Events for an app the proxy cannot name yet. */
+/**
+ * Whether this call may need Apple Events for an app the proxy cannot name yet. A call by element
+ * token alone names no pid, so it is listed when nothing has been.
+ */
 export const sendsAppleEvents = (
   name: unknown,
   args: unknown,
@@ -29,7 +32,7 @@ export const sendsAppleEvents = (
 ): boolean => {
   if (typeof name !== "string" || !APPLE_EVENT_TOOLS.has(name)) return false;
   const pid = targetPid(isRecord(args) ? args : undefined);
-  return pid !== undefined && !listed.has(pid);
+  return pid === undefined ? listed.size === 0 : !listed.has(pid);
 };
 
 const CODES: ReadonlyMap<string, ComputerUseRefusalDetail> = new Map([
@@ -58,15 +61,10 @@ function automationDetail(
   return cause === undefined ? undefined : CODES.get(cause);
 }
 
-/** A macOS bundle id, as list_apps reports it; an app listed only by its name has none. */
-const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/u;
-
-const NEXT_STEP: Record<string, string> = {
-  automation_not_allowed:
-    "Tell the person which app it is, and do not try this route again until they say they have allowed it.",
-  automation_pending:
-    "macOS may be showing its Automation prompt for this app on this Mac. Ask the person to answer it, observe the window, then try once more.",
-};
+const note = (detail: ComputerUseRefusalDetail, block: CuaAgentPermissionsBlock) =>
+  detail === "automation_not_allowed"
+    ? `GOAT: ${cuaAgentBlockMessage(block)} Tell the person which app it is, and do not try this route again until they say they have allowed it.`
+    : `GOAT: ${block.target ?? "The app"} did not answer the Apple Events in time; macOS may be showing its Automation prompt for ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} on this Mac. Ask the person to answer it, observe the window, then try once more.`;
 
 /**
  * The driver's reply to a tools/call, with GOAT's typed refusal added when the driver refused it
@@ -77,7 +75,7 @@ export function typeAutomationRefusal(
   line: string,
   holder: "helper" | "app" | undefined,
   callArgs: unknown,
-  listed: ReadonlyMap<number, { readonly id: string }>,
+  listed: ReadonlyMap<number, { readonly bundleId?: string }>,
 ): string {
   if (holder === undefined) return line;
   let message: unknown;
@@ -89,18 +87,19 @@ export function typeAutomationRefusal(
   if (!isRecord(message) || !isRecord(message.result)) return line;
   const result = message.result;
   const structured = isRecord(result.structuredContent) ? result.structuredContent : undefined;
-  // Only a reply the driver itself marks refused.
+  // Only a reply the driver itself marks refused; an explicit other effect wins over a status.
   if (
     result.isError !== true ||
     structured === undefined ||
-    (structured.effect !== "refused" && structured.status !== "refused")
+    (structured.effect === undefined
+      ? structured.status !== "refused"
+      : structured.effect !== "refused")
   )
     return line;
   const detail = automationDetail(structured);
   if (detail === undefined) return line;
   const pid = targetPid(isRecord(callArgs) ? callArgs : undefined) ?? targetPid(structured);
-  const id = pid === undefined ? undefined : listed.get(pid)?.id;
-  const target = id !== undefined && BUNDLE_ID.test(id) ? id : undefined;
+  const target = pid === undefined ? undefined : listed.get(pid)?.bundleId;
   const block: CuaAgentPermissionsBlock = {
     reason: "permissionsNotGranted",
     missing: ["automation"],
@@ -112,10 +111,7 @@ export function typeAutomationRefusal(
     ...message,
     result: {
       ...result,
-      content: [
-        ...content,
-        { type: "text", text: `GOAT: ${cuaAgentBlockMessage(block)} ${NEXT_STEP[detail]}` },
-      ],
+      content: [...content, { type: "text", text: note(detail, block) }],
       structuredContent: {
         ...structured,
         refused: computerUseRefusalReason(detail),
