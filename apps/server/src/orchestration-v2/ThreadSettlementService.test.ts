@@ -515,6 +515,7 @@ interface HarnessOptions {
     input: ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput,
   ) => Effect.Effect<void>;
   readonly onCloseIdle?: () => Effect.Effect<void>;
+  readonly onCandidateRead?: (threadId?: ThreadId) => Effect.Effect<void>;
   readonly currentThreads?: ReadonlyArray<OrchestrationV2AppThread>;
 }
 
@@ -625,6 +626,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
         Ref.update(candidateReads, (reads) => [...reads, threadId]).pipe(
           Effect.andThen(Ref.updateAndGet(snapshotReadCount, (count) => count + 1)),
           Effect.tap((count) => Queue.offer(snapshotReads, count)),
+          Effect.andThen(options.onCandidateRead?.(threadId) ?? Effect.void),
           Effect.andThen(Ref.get(snapshots)),
           Effect.map((snapshot) =>
             threadId === undefined

@@ -64,6 +64,52 @@ export const settledEvent = (thread: OrchestrationV2AppThread): OrchestrationV2D
   payload: thread,
 });
 
+const terminalEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
+  type: "run.background-work-cancelled",
+  id: EventId.make(`ended:${threadId}`),
+  threadId,
+  occurredAt: DateTime.makeUnsafe(NOW),
+  payload: { runId: RunId.make(`run:${threadId}`), restartCancelledBackgroundWork: [] },
+});
+
+const shellMergeEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
+  type: "turn-item.updated",
+  id: EventId.make(`shell:${threadId}`),
+  threadId,
+  occurredAt: DateTime.makeUnsafe(NOW),
+  payload: {
+    id: TurnItemId.make(`shell:${threadId}`),
+    threadId,
+    runId: RunId.make(`run:${threadId}`),
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    title: null,
+    type: "command_execution",
+    status: "completed",
+    input: "gh pr merge 42",
+    startedAt: DateTime.makeUnsafe(NOW),
+    updatedAt: DateTime.makeUnsafe(NOW),
+    completedAt: DateTime.makeUnsafe(NOW),
+  },
+});
+
+const branchResult = (branch: string, refresh = false) => ({
+  number: 42,
+  title: "Pull request",
+  url: "https://example.test/pr/42",
+  baseRef: "main",
+  headRef: branch,
+  state: refresh ? ("merged" as const) : ("open" as const),
+  mergedAt: refresh ? NOW : null,
+  closedAt: null,
+  updatedAt: NOW,
+  repositoryKey: "example.test/owner/repository",
+});
+
 export function settlementAdmissionTests({
   makeHarness,
   makeThread,
@@ -71,6 +117,180 @@ export function settlementAdmissionTests({
   startHarness,
 }: Pick<typeof Harness, "makeHarness" | "makeThread" | "makeSnapshot" | "startHarness">) {
   admissionWorkerTests();
+  it.effect("forced reconciliation bypasses a shared cache repopulated by targeted work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const entered = yield* Queue.unbounded<void>();
+        const releaseTargets = yield* Deferred.make<void>();
+        const fullEntered = yield* Deferred.make<void>();
+        const releaseFull = yield* Deferred.make<void>();
+        const sharedEntered = yield* Queue.unbounded<void>();
+        const releaseRepeat = yield* Deferred.make<void>();
+        const forceFull = yield* Ref.make(false);
+        const sharedCalls = yield* Ref.make(0);
+        const marker = appThread("cache-race-marker", "settled");
+        const blockers = Array.from({ length: 8 }, (_, index) =>
+          makeThread(`cache-blocker-${index}`, { branch: `blocker-${index}` }),
+        );
+        const target = makeThread("cache-target", { branch: "shared" });
+        const overflow = makeThread("cache-overflow", { branch: "shared" });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          currentThreads: [marker],
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+          onCandidateRead: (id) =>
+            Effect.gen(function* () {
+              if (id === undefined && (yield* Ref.get(forceFull))) {
+                yield* Deferred.succeed(fullEntered, undefined);
+                yield* Deferred.await(releaseFull);
+              }
+            }),
+          branchPullRequest: (input, options) =>
+            Effect.gen(function* () {
+              if (input.branch.startsWith("blocker-") && !options?.refresh) {
+                yield* Queue.offer(entered, undefined);
+                yield* Deferred.await(releaseTargets);
+              }
+              if (input.branch === "shared" && !options?.refresh) {
+                const call = yield* Ref.updateAndGet(sharedCalls, (count) => count + 1);
+                yield* Queue.offer(sharedEntered, undefined);
+                if (call === 2) yield* Deferred.await(releaseRepeat);
+              }
+              return branchResult(input.branch, options?.refresh);
+            }),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* Ref.set(fixture.snapshots, makeSnapshot([...blockers, target, overflow]));
+          for (const thread of blockers) yield* fixture.publishEvent(terminalEvent(thread.id));
+          for (let index = 0; index < 8; index++) yield* Queue.take(entered);
+          yield* Ref.set(forceFull, true);
+          yield* fixture.publishEvent(terminalEvent(target.id));
+          for (let index = 0; index < 247; index++)
+            yield* fixture.publishEvent(terminalEvent(ThreadId.make(`cache-queued-${index}`)));
+          yield* fixture.publishEvent(terminalEvent(overflow.id));
+          yield* Deferred.await(fullEntered);
+          yield* Deferred.succeed(releaseTargets, undefined);
+          yield* Queue.take(sharedEntered);
+          yield* fixture.publishEvent(terminalEvent(target.id));
+          // A second lookup for this key starts only after its first pass cached the open result.
+          yield* Queue.take(sharedEntered);
+          yield* Deferred.succeed(releaseFull, undefined);
+          yield* Deferred.succeed(releaseRepeat, undefined);
+          yield* service.drain;
+          assert.include(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            overflow.id,
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("forced reconciliation retains shell hints for ineligible background work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const entered = yield* Queue.unbounded<void>();
+        const release = yield* Deferred.make<void>();
+        const marker = appThread("hint-retention-marker", "settled");
+        const thread = makeThread("hint-pending", { branch: "feature" });
+        const pending = {
+          ...thread,
+          pendingBackgroundTasks: [
+            { taskId: "active", kind: "subagent" as const, description: "Review" },
+          ],
+        };
+        const blockers = Array.from({ length: 8 }, (_, index) =>
+          makeThread(`hint-blocker-${index}`, { branch: `blocker-${index}` }),
+        );
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          currentThreads: [marker],
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+          branchPullRequest: (input, options) =>
+            Effect.gen(function* () {
+              if (input.branch.startsWith("blocker-")) {
+                yield* Queue.offer(entered, undefined);
+                yield* Deferred.await(release);
+              }
+              return branchResult(input.branch, options?.refresh);
+            }),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* Ref.set(fixture.snapshots, makeSnapshot([pending]));
+          yield* fixture.publishEvent(shellMergeEvent(thread.id));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* service.drain;
+          yield* Ref.set(fixture.snapshots, makeSnapshot([pending, ...blockers]));
+          for (const blocker of blockers) yield* fixture.publishEvent(terminalEvent(blocker.id));
+          for (let index = 0; index < 8; index++) yield* Queue.take(entered);
+          for (let index = 0; index < 249; index++)
+            yield* fixture.publishEvent(terminalEvent(ThreadId.make(`hint-queued-${index}`)));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* Deferred.succeed(release, undefined);
+          yield* service.drain;
+          yield* Ref.set(fixture.snapshots, makeSnapshot([thread]));
+          yield* fixture.publishEvent(terminalEvent(thread.id));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* service.drain;
+          assert.include(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            thread.id,
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect(
+    "shell hint capacity schedules full reconciliation while targeted admission is idle",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const marker = appThread("hint-capacity-marker", "settled");
+          const threads = Array.from({ length: 257 }, (_, index) =>
+            makeThread(`hint-capacity-${index}`, {
+              branch: `branch-${index}`,
+              pendingBackgroundTasks: [
+                { taskId: "active", kind: "subagent", description: "Review" },
+              ],
+            }),
+          );
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot(threads),
+            currentThreads: [marker],
+            settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+            yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+            for (const thread of threads.slice(0, 256)) {
+              yield* fixture.publishEvent(shellMergeEvent(thread.id));
+              yield* fixture.publishEvent(settledEvent(marker));
+              yield* Queue.take(fixture.closedIdle);
+              yield* service.drain;
+            }
+            yield* Ref.set(fixture.candidateReads, []);
+            yield* fixture.publishEvent(shellMergeEvent(ThreadId.make("hint-capacity-256")));
+            yield* fixture.publishEvent(settledEvent(marker));
+            yield* Queue.take(fixture.closedIdle);
+            yield* service.drain;
+            assert.include(yield* Ref.get(fixture.candidateReads), undefined);
+            assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
+
   it.effect(
     "reconciles settlement overflow without retaining a targeted waiter for every thread",
     () =>
