@@ -296,7 +296,7 @@ it.effect("a filtered read that misses says names from nearby text were not sear
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
     expect(budgetDetail(observation)).toBe(
-      "Not found in the driver's filtered read; names taken from text beside an element were not searched.",
+      "Not found in the driver's filtered read; names taken from text under an element were not searched.",
     );
   }),
 );

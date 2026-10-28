@@ -140,7 +140,7 @@ export const matchesQuery = (row: DesktopRow, query: DesktopQuery) =>
 export const queryOmission = (
   state: Record<string, unknown>,
   matched: number,
-  /** The driver filtered the read, so names GOAT takes from text beside an element were not there. */
+  /** The driver filtered the read, so names GOAT takes from text under an element were not there. */
   filtered = false,
 ): NonNullable<ScreenObservation["omitted"]> => {
   if (state.truncated === true) {
@@ -157,7 +157,7 @@ export const queryOmission = (
       {
         kind: "budget",
         detail:
-          "Not found in the driver's filtered read; names taken from text beside an element were not searched.",
+          "Not found in the driver's filtered read; names taken from text under an element were not searched.",
       },
     ];
   return state.elements_complete === true || matched > 0
