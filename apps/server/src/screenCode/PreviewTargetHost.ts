@@ -15,7 +15,6 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
-import * as Schedule from "effect/Schedule";
 import type { BoundPreviewTab } from "./BoundPreviewTabs.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
@@ -57,8 +56,6 @@ interface BoundTarget {
   readonly observationId?: string;
   /** The document the latest observation saw, when the host reports one; points belong to it. */
   readonly documentGeneration?: number;
-  /** A call timed out, so the broker dropped this route; the next call looks for the tab again. */
-  readonly evicted?: boolean;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -193,46 +190,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       ? bound
       : undefined;
   };
-  // A host that missed a reply is evicted and reconnects under a new connection (the server
-  // browser after a second). Its tabs keep their browser instance and tab id, so a target that
-  // lost a reply follows them there, waiting a bounded time for the reconnect.
-  const RECONNECT_WAIT_MS = 3_000;
-  const reachable = Effect.fn("PreviewTargetHost.reachable")(function* (
-    bound: BoundTarget,
-    context: ScreenHostContext,
-    deadlineMillis: number,
-  ) {
-    if (!bound.evicted) return bound;
-    const moved = list(context).pipe(
-      Effect.flatMap((tabs) => {
-        const found = tabs.find(
-          (tab) =>
-            tab.browserInstanceId === bound.tab.browserInstanceId && tab.tabId === bound.tab.tabId,
-        );
-        return found ? Effect.succeed(found) : Effect.fail("reconnecting" as const);
-      }),
-      Effect.retry(Schedule.spaced("100 millis")),
-    );
-    const now = yield* Clock.currentTimeMillis;
-    const live = yield* moved.pipe(
-      Effect.timeoutOption(Math.max(0, Math.min(RECONNECT_WAIT_MS, deadlineMillis - now))),
-      Effect.orElseSucceed(() => Option.none()),
-    );
-    if (Option.isNone(live)) return bound;
-    const next = {
-      ...bound,
-      evicted: false,
-      tab: { ...bound.tab, connectionId: live.value.connectionId },
-    };
-    targets.set(bound.ref.id, next);
-    // The turn's claim on the tab moves with it, keeping what opened it and why it is kept.
-    if (next.tab.connectionId !== bound.tab.connectionId)
-      yield* claims.assertCurrent(identity(bound, context)).pipe(
-        Effect.flatMap(() => claims.recordOpened(identity(next, context))),
-        Effect.ignore,
-      );
-    return next;
-  });
   const exact = (tab: BoundPreviewTab, expected = true) => ({
     browserInstanceId: tab.browserInstanceId,
     connectionId: tab.connectionId,
@@ -289,9 +246,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       })
       .pipe(
         Effect.mapError((error) => {
-          const latest = targets.get(bound.ref.id);
-          if (error._tag === "PreviewAutomationTimeoutError" && latest)
-            targets.set(bound.ref.id, { ...latest, evicted: true });
           const safety = classifyBrowserActionOutcome({
             operation,
             status: "failed",
@@ -420,9 +374,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         );
       }
-      const found = lookup(call, context);
-      if (!found) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));
-      const bound = yield* reachable(found, context, call.deadlineMillis);
+      const bound = lookup(call, context);
+      if (!bound) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));
       if (call.method === "tab_status") {
         const rawArg =
           Array.isArray(call.args) && call.args.length === 1 ? call.args[0] : undefined;
