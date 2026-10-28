@@ -11,13 +11,11 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
-import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
@@ -37,6 +35,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as SettlementAdmission from "./settlementAdmission.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -303,9 +302,8 @@ export const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
-  // A shell merge or close sends no event, and the branch lookup caches an open pull request for
-  // a minute, so these threads' next lookup reads the host fresh.
   const shellClosedThreads = new Set<ThreadId>();
+  let invalidateLookupsForRescan = false;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
@@ -319,16 +317,24 @@ export const make = Effect.gen(function* () {
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
+    refreshLookups = false,
   ) {
+    if (refreshLookups && threadId === undefined) invalidateLookupsForRescan = true;
     if ((yield* automationHold.current) !== null) return;
-    if (mergedPullRequest !== null) {
+    refreshLookups = threadId === undefined && invalidateLookupsForRescan;
+    if (mergedPullRequest !== null || refreshLookups) {
       mergeGeneration++;
       lookupCache.clear();
     }
+    if (refreshLookups && threadId === undefined) evaluated.clear();
     const generation = mergeGeneration;
     const settings = yield* settingsService.getSettings;
     if (!autoSettlementConfigured(settings)) {
       return;
+    }
+    if (refreshLookups) {
+      invalidateLookupsForRescan = false;
+      shellClosedThreads.clear();
     }
     const threads = yield* projections.getSettlementCandidates(threadId);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
@@ -574,8 +580,11 @@ export const make = Effect.gen(function* () {
       if (cwd === undefined) {
         return yield* Effect.die(new Error("thread project not found"));
       }
-      const refresh = group.filter((member) => shellClosedThreads.delete(member.id)).length > 0;
-      return yield* git.branchPullRequest({ cwd, branch: thread.branch }, { refresh });
+      const shellClosed = group.filter((member) => shellClosedThreads.delete(member.id)).length > 0;
+      return yield* git.branchPullRequest(
+        { cwd, branch: thread.branch },
+        { refresh: refreshLookups || shellClosed },
+      );
     });
 
     yield* Effect.forEach(
@@ -629,8 +638,14 @@ export const make = Effect.gen(function* () {
   const runSweep = (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
+    refreshLookups = false,
   ) =>
-    sweep(mergedPullRequest, threadId).pipe(
+    sweep(mergedPullRequest, threadId, refreshLookups).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          if (threadId === undefined) invalidateLookupsForRescan = true;
+        }),
+      ),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
@@ -641,33 +656,24 @@ export const make = Effect.gen(function* () {
     );
   // A thread that just stopped must not wait behind a full sweep or another thread's host
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
-  const fullSweeps = yield* makeDrainableWorker(() => runSweep(null));
-  const threadSweeps = yield* FiberSet.make<void>();
-  const threadSweepSlots = yield* Semaphore.make(8);
-  // One sweep per thread at a time; events during a running sweep coalesce into one more pass.
-  const threadSweepStates = new Map<ThreadId, "queued" | "running" | "rerun">();
-  const sweepThread = (
-    threadId: ThreadId,
-  ): Effect.Effect<void, Effect.Error<ReturnType<typeof runSweep>>> =>
-    Effect.sync(() => threadSweepStates.set(threadId, "running")).pipe(
-      Effect.andThen(runSweep(null, threadId)),
-      threadSweepSlots.withPermits(1),
-      Effect.andThen(
-        Effect.suspend(() => {
-          if (threadSweepStates.get(threadId) === "rerun") return sweepThread(threadId);
-          threadSweepStates.delete(threadId);
-          return Effect.void;
-        }),
-      ),
-    );
-  const enqueueThread = (threadId: ThreadId) =>
-    Effect.suspend(() => {
-      const state = threadSweepStates.get(threadId);
-      if (state === "running") threadSweepStates.set(threadId, "rerun");
-      if (state !== undefined) return Effect.void;
-      threadSweepStates.set(threadId, "queued");
-      return sweepThread(threadId).pipe(FiberSet.run(threadSweeps), Effect.asVoid);
-    });
+  const admission = yield* SettlementAdmission.make({
+    targeted: (threadId: ThreadId, refresh) =>
+      Effect.suspend(() => {
+        if (refresh) {
+          if (
+            shellClosedThreads.has(threadId) ||
+            shellClosedThreads.size < SettlementAdmission.TARGET_CAPACITY
+          ) {
+            shellClosedThreads.add(threadId);
+          } else {
+            invalidateLookupsForRescan = true;
+          }
+        }
+        return runSweep(null, threadId);
+      }),
+    full: (refresh) => runSweep(null, undefined, refresh),
+  });
+  const enqueueThread = admission.enqueue;
 
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
@@ -727,17 +733,14 @@ export const make = Effect.gen(function* () {
           : enqueueThread(event.threadId);
       case "turn-item.updated": {
         const item = event.payload;
-        if (
+        const refresh =
           item.type === "command_execution" &&
           !isOrchestrationV2WorkActive(item.status) &&
           sourceControlDefinitions.definitions.some(
             (definition) => definition.changeRequestCloseCommand?.test(item.input) === true,
-          )
-        ) {
-          shellClosedThreads.add(event.threadId);
-        }
+          );
         return turnItemUpdateCanEndBackgroundWork(item)
-          ? enqueueThread(event.threadId)
+          ? enqueueThread(event.threadId, refresh)
           : Effect.void;
       }
       case "provider-session.updated":
@@ -764,8 +767,8 @@ export const make = Effect.gen(function* () {
     let lastSettlementSettings = autoSettlementSettingsKey(initialSettings);
     yield* forkParked(
       Effect.gen(function* () {
-        yield* fullSweeps.enqueue(undefined);
-        yield* fullSweeps.drain;
+        yield* admission.enqueueFull;
+        yield* admission.drainFull;
       }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.asVoid),
     );
     yield* forkParked(
@@ -775,14 +778,14 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         lastSettlementSettings = key;
-        return fullSweeps.enqueue(undefined);
+        return admission.enqueueFull;
       }),
     );
     yield* forkParked(Stream.runForEach(mergedPullRequests, (event) => runSweep(event)));
     yield* forkParked(
       supervise("ThreadSettlementService.events", () =>
         Effect.gen(function* () {
-          yield* fullSweeps.enqueue(undefined);
+          yield* admission.enqueueFull;
           yield* Stream.runForEach(orchestrator.streamDomainEvents, processEvent);
         }),
       ),
@@ -791,7 +794,7 @@ export const make = Effect.gen(function* () {
 
   return {
     start,
-    drain: Effect.andThen(fullSweeps.drain, FiberSet.awaitEmpty(threadSweeps)),
+    drain: admission.drain,
   } satisfies ThreadSettlementServiceV2["Service"];
 });
 
