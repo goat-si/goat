@@ -23,6 +23,7 @@ import {
   formatVoiceRecordingDuration,
   isVoiceRecordingCancelledError,
   useVoiceRecorder,
+  VoiceMicrophoneError,
   type VoiceRecordingOptions,
   type VoiceRecordingPayload,
 } from "../../lib/voiceRecorder";
@@ -153,6 +154,9 @@ export class ComposerVoiceController {
         onLimitReached: () => {
           if (generation === this.generation) void this.confirm();
         },
+        onError: (error) => {
+          if (generation === this.generation) this.fail(error);
+        },
       });
       if (generation === this.generation) this.publish({ ...this.state, phase: "recording" });
     } catch (error) {
@@ -168,7 +172,8 @@ export class ComposerVoiceController {
       ...IDLE,
       phase: "error",
       error: error instanceof Error ? error.message : "Voice transcription failed.",
-      errorAction: "retry",
+      errorAction:
+        error instanceof VoiceMicrophoneError && error.opensSystemSettings ? "settings" : "retry",
     });
   }
 
@@ -368,7 +373,22 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
     confirm: controller.confirm,
     send: controller.send,
     cancel: controller.cancel,
+    /** Composer errors win; a macOS microphone denial adds a way to fix it. */
+    validation: (composerError: string | null) =>
+      composerError
+        ? { message: composerError }
+        : {
+            message: state.error,
+            action:
+              state.errorAction === "settings"
+                ? { label: "Open System Settings", onClick: openMicrophoneSettings }
+                : null,
+          },
   };
+}
+
+function openMicrophoneSettings() {
+  void window.desktopBridge?.openSystemSettings?.("microphone").catch(() => false);
 }
 
 export function useChatComposerVoiceController(

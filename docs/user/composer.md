@@ -212,6 +212,24 @@ microphone.
 Transcription runs on your device. GOAT deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
+## Voice input on desktop and web
+
+Click the composer's microphone to record, then confirm to insert the text or send it.
+The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
+declined, or turned GOAT off later, the composer says so and offers **Open System
+Settings**: turn on GOAT in **Privacy & Security › Microphone**. GOAT may need to
+restart to notice the change. In a browser, allow the microphone in the site's
+settings; recording also needs HTTPS or localhost.
+
+If no sound reaches GOAT within a few seconds, recording stops and the composer
+asks you to check the selected input. Your draft stays as it was.
+
+On a Mac, the microphone access you give GOAT also covers commands run by
+terminals and coding agents in GOAT, including work started from your other
+devices; those commands can record without asking again. GOAT does not ask for
+the camera, so camera commands such as `imagesnap` cannot use it when GOAT runs
+them.
+
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is

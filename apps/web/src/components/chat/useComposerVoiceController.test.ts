@@ -1,7 +1,11 @@
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import type { VoiceDraftSnapshot } from "@goat/client-runtime/voice-input";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { VoiceRecordingOptions, VoiceRecordingPayload } from "../../lib/voiceRecorder";
+import {
+  VoiceMicrophoneError,
+  type VoiceRecordingOptions,
+  type VoiceRecordingPayload,
+} from "../../lib/voiceRecorder";
 import { ComposerVoiceController, type ComposerVoiceTarget } from "./useComposerVoiceController";
 
 const payload: VoiceRecordingPayload = {
@@ -58,6 +62,7 @@ function setup() {
   return {
     target,
     controller,
+    startRecording,
     transcribe,
     prewarm,
     commitDraft,
@@ -70,11 +75,38 @@ function setup() {
     },
     chunk: (audioBase64: string) =>
       recordingOptions.onStreamingChunk?.({ ...payload, audioBase64 }),
+    failRecording: (error: VoiceMicrophoneError) => recordingOptions.onError?.(error),
     [Symbol.dispose]: () => controller.cancel(),
   };
 }
 
 describe("composer voice controller", () => {
+  it("offers System Settings only for a macOS denial and leaves the draft alone", async () => {
+    using session = setup();
+    session.startRecording.mockRejectedValueOnce(
+      new VoiceMicrophoneError("permission-denied", "macOS is blocking GOAT.", true),
+    );
+    await session.controller.start();
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "macOS is blocking GOAT.",
+      errorAction: "settings",
+    });
+
+    await session.controller.start();
+    session.failRecording(new VoiceMicrophoneError("no-input", "No sound is reaching GOAT."));
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "No sound is reaching GOAT.",
+      errorAction: "retry",
+    });
+    expect(session.controller.blocksSubmission()).toBe(false);
+    expect(await session.controller.confirm()).toBe(false);
+    expect(session.transcribe).not.toHaveBeenCalled();
+    expect(session.commitDraft).not.toHaveBeenCalled();
+    expect(session.readDraft().text).toBe("hello");
+  });
+
   it("records and commits a full clip even when prewarming fails", async () => {
     using session = setup();
     session.prewarm.mockRejectedValue(new Error("warmup unavailable"));

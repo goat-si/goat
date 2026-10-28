@@ -5,6 +5,81 @@ import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding"
 
 export const MAX_WAVEFORM_SAMPLES = 160;
 const STREAMING_CHUNK_SECONDS = 4;
+/** A working microphone delivers its first non-zero sample well within this; silence beyond it is a blocked or muted input. */
+const FIRST_AUDIO_SIGNAL_TIMEOUT_MS = 4_000;
+
+export type VoiceMicrophoneErrorReason =
+  | "insecure-context"
+  | "permission-denied"
+  | "permission-restricted"
+  | "microphone-unavailable"
+  | "no-device"
+  | "device-busy"
+  | "no-input";
+
+export class VoiceMicrophoneError extends Error {
+  override readonly name = "VoiceMicrophoneError";
+  constructor(
+    readonly reason: VoiceMicrophoneErrorReason,
+    message: string,
+    /** Only a macOS denial can be undone from System Settings. */
+    readonly opensSystemSettings = false,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
+const MACOS_MICROPHONE_SETTINGS =
+  "System Settings › Privacy & Security › Microphone, then try again. GOAT may need to restart to notice the change.";
+
+async function ensureDesktopMicrophoneAccess(): Promise<void> {
+  const access = await window.desktopBridge?.requestMicrophoneAccess?.();
+  if (access === "denied")
+    throw new VoiceMicrophoneError(
+      "permission-denied",
+      `macOS is blocking GOAT from the microphone. Turn on GOAT in ${MACOS_MICROPHONE_SETTINGS}`,
+      true,
+    );
+  if (access === "restricted")
+    throw new VoiceMicrophoneError(
+      "permission-restricted",
+      "Microphone access is restricted on this Mac by device management or Screen Time, so GOAT cannot record.",
+    );
+  if (access === "unavailable")
+    throw new VoiceMicrophoneError(
+      "microphone-unavailable",
+      "macOS did not report whether GOAT may use the microphone. Try again.",
+    );
+}
+
+function toMicrophoneError(error: unknown): unknown {
+  const name = error instanceof Error ? error.name : undefined;
+  if (name === "NotAllowedError" || name === "SecurityError")
+    return new VoiceMicrophoneError(
+      "permission-denied",
+      window.desktopBridge
+        ? `GOAT could not use the microphone. Check ${MACOS_MICROPHONE_SETTINGS}`
+        : "The browser blocked the microphone. Allow microphone access for this site in the browser's site settings, then try again.",
+      false,
+      { cause: error },
+    );
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return new VoiceMicrophoneError(
+      "no-device",
+      "No microphone was found. Connect one and try again.",
+      false,
+      { cause: error },
+    );
+  if (name === "NotReadableError" || name === "AbortError")
+    return new VoiceMicrophoneError(
+      "device-busy",
+      "The microphone could not be started. Another app may be using it.",
+      false,
+      { cause: error },
+    );
+  return error;
+}
 
 export interface VoiceRecordingPayload {
   readonly audioBase64: string;
@@ -16,6 +91,8 @@ export interface VoiceRecordingPayload {
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
   readonly onLimitReached?: () => void;
+  /** A recording that started but then failed, such as one that never received sound. */
+  readonly onError?: (error: VoiceMicrophoneError) => void;
 }
 
 interface RecorderState {
@@ -39,6 +116,7 @@ interface RecorderRuntime {
   hasAudioSignal: boolean;
   lastWaveformAt: number;
   limitReached: boolean;
+  firstSignalDeadline: ReturnType<typeof setTimeout> | null;
 }
 
 const IDLE: RecorderState = {
@@ -99,7 +177,10 @@ export class BrowserVoiceRecorder {
     if (this.state.isStarting || this.runtime)
       throw new Error("Voice recording is already running.");
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Microphone recording requires a supported browser and a secure connection.");
+      throw new VoiceMicrophoneError(
+        "insecure-context",
+        "Microphone recording needs a secure connection. Open GOAT over HTTPS or on localhost in a supported browser.",
+      );
     }
     const generation = ++this.generation;
     this.publish({ ...IDLE, isStarting: true });
@@ -123,9 +204,15 @@ export class BrowserVoiceRecorder {
       if (generation !== this.generation) throw new VoiceRecordingCancelledError();
     };
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      await ensureDesktopMicrophoneAccess();
+      assertCurrent();
+      stream = await navigator.mediaDevices
+        .getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        })
+        .catch((error: unknown) => {
+          throw toMicrophoneError(error);
+        });
       assertCurrent();
       context = new AudioContext({ latencyHint: "interactive" });
       this.releaseStarting = release;
@@ -148,6 +235,7 @@ export class BrowserVoiceRecorder {
         hasAudioSignal: false,
         lastWaveformAt: -Infinity,
         limitReached: false,
+        firstSignalDeadline: null,
       };
       processor.onaudioprocess = (event) => {
         if (this.runtime !== runtime || runtime.limitReached) return;
@@ -166,6 +254,10 @@ export class BrowserVoiceRecorder {
         for (const sample of mono) sum += sample * sample;
         // Cold microphones produce exact zeroes; retain quiet real input and all later silence.
         if (!runtime.hasAudioSignal && sum === 0) return;
+        if (!runtime.hasAudioSignal && runtime.firstSignalDeadline !== null) {
+          clearTimeout(runtime.firstSignalDeadline);
+          runtime.firstSignalDeadline = null;
+        }
         runtime.hasAudioSignal = true;
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
@@ -208,6 +300,18 @@ export class BrowserVoiceRecorder {
       this.releaseStarting = null;
       this.runtime = runtime;
       this.publish({ ...IDLE, isRecording: true });
+      runtime.firstSignalDeadline = setTimeout(() => {
+        runtime.firstSignalDeadline = null;
+        if (this.runtime !== runtime || runtime.hasAudioSignal) return;
+        void this.teardown().then(() =>
+          options.onError?.(
+            new VoiceMicrophoneError(
+              "no-input",
+              "No sound is reaching GOAT from the microphone. Check that the right input is selected and not muted, then try again.",
+            ),
+          ),
+        );
+      }, FIRST_AUDIO_SIGNAL_TIMEOUT_MS);
       this.timer = setInterval(() => {
         if (this.runtime !== runtime) return;
         if (this.state.durationMs === (runtime.sampleCount / runtime.context.sampleRate) * 1_000)
@@ -236,6 +340,8 @@ export class BrowserVoiceRecorder {
     this.publish(IDLE);
     if (releaseStarting) await releaseStarting();
     if (!runtime) return null;
+    if (runtime.firstSignalDeadline !== null) clearTimeout(runtime.firstSignalDeadline);
+    runtime.firstSignalDeadline = null;
     runtime.stream.getTracks().forEach((track) => track.stop());
     runtime.processor.onaudioprocess = null;
     runtime.source.disconnect();

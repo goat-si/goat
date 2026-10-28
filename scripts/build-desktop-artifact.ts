@@ -1492,7 +1492,7 @@ export function renderMacEntitlements(passkey?: MacPasskeyEntitlements): string 
     <true/>
     <!-- The hardened runtime denies the microphone, with no prompt, unless the app
          claims it. Voice input needs it; commands run by terminals and coding agents
-         share GOAT's grant (#2008). GOAT deliberately does not claim the camera. -->
+         share GOAT's grant. GOAT deliberately does not claim the camera. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
   </dict>
