@@ -205,11 +205,12 @@ export function ServerBrowserSurface(props: {
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
-  /** The agent pointer last drawn, with the canvas size it was placed at. */
+  /** The agent pointer last drawn, with the canvas size and viewport it was placed at. */
   const agentPointerRef = useRef<{
     pointer: PreviewStreamPointer;
     width: number;
     height: number;
+    viewport: PreviewStreamViewport | null;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const answerFileChooser = (files: ReadonlyArray<File>) => {
@@ -250,8 +251,8 @@ export function ServerBrowserSurface(props: {
     const drawn = agentPointerRef.current;
     if (!canvas || !drawn || privateRef.current) return;
     const { width, height, clientWidth, clientHeight } = canvas;
-    agentPointerRef.current = { ...drawn, width, height };
     const viewport = viewportRef.current;
+    agentPointerRef.current = { ...drawn, width, height, viewport };
     setAgentCursor((current) =>
       replaceAgentCursor(
         current,
@@ -419,7 +420,13 @@ export function ServerBrowserSurface(props: {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const painter = createPreviewFramePainter(canvas, () => {
       const drawn = agentPointerRef.current;
-      if (drawn && (drawn.width !== canvas.width || drawn.height !== canvas.height)) {
+      // A new viewport moves the cursor with the first frame painted after it, not before.
+      if (
+        drawn &&
+        (drawn.width !== canvas.width ||
+          drawn.height !== canvas.height ||
+          drawn.viewport !== viewportRef.current)
+      ) {
         replaceDrawnCursor();
       }
       if (hasFrameRef.current) return;
@@ -464,7 +471,12 @@ export function ServerBrowserSurface(props: {
           const placed = placeAgentCursor(shown, canvas, viewportRef.current);
           if (!placed) return;
           setAgentCursor(placed);
-          agentPointerRef.current = { pointer: shown, width: canvas.width, height: canvas.height };
+          agentPointerRef.current = {
+            pointer: shown,
+            width: canvas.width,
+            height: canvas.height,
+            viewport: viewportRef.current,
+          };
         },
         onCursorState: (state) =>
           setAgentCursor((current) => agentCursorAfterState(current, state)),
@@ -474,7 +486,6 @@ export function ServerBrowserSurface(props: {
         onFileChooser: setFileChooser,
         onViewport: (viewport) => {
           viewportRef.current = viewport;
-          replaceDrawnCursor();
           viewportChanged(viewport);
         },
         onControl: (next) => {
