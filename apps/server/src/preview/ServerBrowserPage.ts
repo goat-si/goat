@@ -232,6 +232,8 @@ const noPointer: PointerReporter = async () => {};
 export interface DispatchGate {
   (): void;
   readonly linger?: (work: Promise<unknown>) => void;
+  /** The gate's checks, including control changes since the action began, without dispatching. */
+  readonly check?: () => void;
   /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
   readonly deadline?: number;
 }

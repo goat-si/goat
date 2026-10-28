@@ -40,6 +40,8 @@ export const pointBefore = async <Input extends TargetInput>(
   // A desktop page's viewport is unknown to Playwright; its boxes are still in viewport pixels.
   const viewport = page.viewportSize();
   const point = box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  // A Stop and resume during the wait leave this action's control behind; its pointer stays.
+  gate.check?.();
   if (
     point &&
     left() > 0 &&

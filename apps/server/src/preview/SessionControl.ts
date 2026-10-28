@@ -272,7 +272,7 @@ export class SessionControl {
       const done = () => void this.lingering.delete(work);
       work.then(done, done);
     };
-    return Object.assign(gate, { linger });
+    return Object.assign(gate, { linger, check });
   }
 
   assertObservedGeneration(expectedGeneration: number) {

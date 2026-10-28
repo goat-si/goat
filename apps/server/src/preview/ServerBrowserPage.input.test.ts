@@ -130,3 +130,19 @@ it("draws no pointer for a caller that already gave up", () =>
     await pointBefore(page, { locator: "#f" }, async (point) => void points.push(point), gate);
     expect(points).toEqual([]);
   }));
+
+it("draws no pointer once the action's control changed during the wait", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f">');
+    const points: unknown[] = [];
+    // A Stop and resume during the wait: the current state allows input, this action's gate does not.
+    const gate = Object.assign(() => {}, {
+      check: () => {
+        throw new Error("control changed");
+      },
+    });
+    await expect(
+      pointBefore(page, { locator: "#f" }, async (point) => void points.push(point), gate),
+    ).rejects.toThrow("control changed");
+    expect(points).toEqual([]);
+  }));

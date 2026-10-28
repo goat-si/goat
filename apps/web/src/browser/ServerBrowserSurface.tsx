@@ -16,8 +16,6 @@ import {
 } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   type EnvironmentId,
-  type AgentCursorOwner,
-  type AgentCursorState,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
   ThreadId,
@@ -44,8 +42,13 @@ import { usePreviewTabAgentDriven } from "~/previewStateStore";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
 
-import { boxToViewport, viewportToBox } from "./letterbox";
-import { agentCursorAfterState, agentCursorOwnerFields } from "./agentCursorOwner";
+import { boxToViewport } from "./letterbox";
+import { agentCursorAfterState } from "./agentCursorOwner";
+import {
+  type AgentCursorPlacement,
+  placeAgentCursor,
+  replaceAgentCursor,
+} from "./agentCursorPlacement";
 
 export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
@@ -202,6 +205,12 @@ export function ServerBrowserSurface(props: {
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
+  /** The agent pointer last drawn, with the canvas size it was placed at. */
+  const agentPointerRef = useRef<{
+    pointer: PreviewStreamPointer;
+    width: number;
+    height: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const answerFileChooser = (files: ReadonlyArray<File>) => {
     const chooser = fileChooser;
@@ -391,6 +400,13 @@ export function ServerBrowserSurface(props: {
     if (!visible || accessDenied || hostSetup || !access || !cap || !canvas) return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const painter = createPreviewFramePainter(canvas, () => {
+      const drawn = agentPointerRef.current;
+      if (drawn && (drawn.width !== canvas.width || drawn.height !== canvas.height)) {
+        agentPointerRef.current = { ...drawn, width: canvas.width, height: canvas.height };
+        setAgentCursor((current) =>
+          replaceAgentCursor(current, drawn.pointer, canvas, viewportRef.current),
+        );
+      }
       if (hasFrameRef.current) return;
       hasFrameRef.current = true;
       firstFrame();
@@ -427,12 +443,12 @@ export function ServerBrowserSurface(props: {
         },
         onPointer: (pointer) => {
           // A thumbnail shows where the agent points, without the click marker's repainting ping.
-          const placed = placeAgentCursor(
-            thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" },
-            canvasRef.current,
-            viewportRef.current,
-          );
-          if (placed) setAgentCursor(placed);
+          const shown: PreviewStreamPointer =
+            thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" };
+          const placed = placeAgentCursor(shown, canvas, viewportRef.current);
+          if (!placed) return;
+          setAgentCursor(placed);
+          agentPointerRef.current = { pointer: shown, width: canvas.width, height: canvas.height };
         },
         onCursorState: (state) =>
           setAgentCursor((current) => agentCursorAfterState(current, state)),
@@ -451,6 +467,7 @@ export function ServerBrowserSurface(props: {
           if (hidden && !privateRef.current) {
             canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
             setAgentCursor(null);
+            agentPointerRef.current = null;
           }
           privateRef.current = hidden;
           painter.setSuppressed(hidden);
@@ -948,30 +965,4 @@ export function ServerBrowserSurface(props: {
       ) : null}
     </div>
   );
-}
-
-interface AgentCursorPlacement {
-  readonly phase: PreviewStreamPointer["phase"];
-  readonly sequence: number;
-  readonly left: number;
-  readonly top: number;
-  readonly owner?: AgentCursorOwner;
-  readonly cursorPhase?: AgentCursorState;
-}
-
-function placeAgentCursor(
-  pointer: PreviewStreamPointer,
-  canvas: HTMLCanvasElement | null,
-  viewport: PreviewStreamViewport | null,
-): AgentCursorPlacement | null {
-  if (!canvas || !viewport || canvas.width < 1 || canvas.height < 1) return null;
-  const box = { width: canvas.clientWidth, height: canvas.clientHeight };
-  const { x: left, y: top } = viewportToBox(pointer, box, canvas, viewport);
-  return {
-    phase: pointer.phase,
-    sequence: pointer.sequence,
-    left,
-    top,
-    ...agentCursorOwnerFields(pointer.cursor),
-  };
 }

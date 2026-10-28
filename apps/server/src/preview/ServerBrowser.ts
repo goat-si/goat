@@ -1578,12 +1578,11 @@ const make = Effect.gen(function* () {
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      // Before drawing too: a Stop during a long target lookup must not move the cursor later.
+      // Read-only checks, before drawing and after the move: a Stop then neither draws nor sends.
       tab.control.assertAgentMayDispatch();
       if (tab.viewers.size === 0 && !encoder && !tab.desktop) return screen.notePointer(tab, x, y);
       screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
-      // A Stop during the move refuses the input before it goes out, without marking dispatch.
       tab.control.assertAgentMayDispatch();
       if (phase === "click") {
         screen.showPointer(tab, x, y, "click");
@@ -2343,7 +2342,7 @@ const make = Effect.gen(function* () {
         ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
       ).catch(() => null);
       if (data) viewer.push({ _tag: "frame", data: Buffer.from(data, "base64"), ack: Effect.void });
-      screen.framed(tab, viewer);
+      if (data) screen.framed(tab, viewer);
     };
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     yield* Effect.addFinalizer(() =>
