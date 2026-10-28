@@ -900,13 +900,20 @@ const withToolAnalytics =
   });
 
 /** Applied outside the access and analytics wrappers, which keep keying by the shipped name. */
-const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
+const withListedNames = <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+  tools: Readonly<Record<string, Tool.Any>> = {},
+) =>
   Effect.flatMap(McpServer.McpServer, (server) =>
     Effect.provideService(registration, McpServer.McpServer, {
       ...server,
       addTool: (options) =>
         server.addTool(
-          forwardedContentRegistration(listedRegistration(advertisedRegistration(options))),
+          forwardedContentRegistration(
+            listedRegistration(
+              advertisedRegistration(options, tools[options.tool.name]?.parametersSchema.ast),
+            ),
+          ),
         ),
     }),
   );
@@ -924,6 +931,7 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   const registration = Layer.effectDiscard(
     withListedNames(
       withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+      toolkit.tools,
     ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.

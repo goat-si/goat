@@ -110,6 +110,9 @@ Turns, calls, and result bytes are summed over the counted runs, and the row rec
 queue is held and its delegated tasks stop, so no wake-up run follows that nobody measures. The
 row's `cleanup` lists the delegated tasks that were still unfinished.
 
+Each row records `unknownOutcome` from `goat_eval` tool results, including follow-up runs.
+Historical rows without this measurement cannot pass the composition gate.
+
 Each failed tool call is recorded with its tool, error code, and message in `failedCalls`, so
 an argument the server refused can be told apart from a tool the agent could not find.
 
@@ -131,7 +134,7 @@ baseline arm is the default core listing and the candidate is core plus `goat_ev
 mode (Claude is the reference population). The prompt still names no tool.
 
 The candidate passes when every one of these holds on one paired campaign (composition rule,
-version 1):
+version 1, recorded as `COMPOSITION_RULE_VERSION` in the report):
 
 - The control shows no gain, as for every gate, and its median turns rise by at most one at
   either end of the range.
@@ -252,10 +255,6 @@ out of committed replay data. Changing a case or grading rule raises `REPLAY_VER
 
 - This runner does not validate `goat_screen_run`; record screen-run
   evidence separately until a screen-task campaign is designed.
-- The report's `eval` verdict does not apply the [composition rule](#composition-campaigns)
-  yet: it requires every reduces task, manual ones included; it ignores result bytes; it lets
-  the control's turns rise without limit; and rows do not record halts with `unknown_outcome`.
-  Accept a composition campaign only after the report enforces all four.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.

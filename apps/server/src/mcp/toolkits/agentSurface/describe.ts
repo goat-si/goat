@@ -28,6 +28,7 @@ import type { DescribeResult } from "./tools.ts";
 
 const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
 const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
+const examplesOf = (entry: AgentSurfaceEntry) => entry.examples ?? [];
 
 // FNV-1a over every field an agent relies on or search reads, so a cursor from an earlier
 // registry is refused; stable across processes, unlike object identity.
@@ -128,6 +129,7 @@ export const makeDescribe = (
       ...signatureOf(entry, PATH_SIGNATURE_DEPTH),
       inputSchema: tool?.inputSchema ?? null,
       outputSchema: tool?.outputSchema ?? null,
+      ...(examplesOf(entry).length === 0 ? {} : { examples: examplesOf(entry) }),
     };
   };
 

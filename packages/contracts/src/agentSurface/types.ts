@@ -11,7 +11,6 @@ export type AgentSurfaceCapability = PermissionCapability | "none";
 export interface AgentSurfaceExample {
   readonly title: string;
   readonly args: Readonly<Record<string, unknown>>;
-  readonly expect: Readonly<Record<string, unknown>>;
 }
 export interface AgentSurfaceEntry {
   readonly resource: string;
@@ -28,6 +27,13 @@ export interface AgentSurfaceEntry {
    * can call them without asking goat_describe first (signature.ts renders the syntax).
    */
   readonly signatures?: ReadonlyArray<string>;
+  /**
+   * One line for each argument whose schema states nothing, keyed by name (a dotted name for a
+   * field one object down). The served input schema shows it; the schema's own text wins.
+   */
+  readonly parameters?: Readonly<Record<string, string>>;
+  /** Worked calls goat_describe serves for this path; each must decode as its arguments. */
+  readonly examples?: ReadonlyArray<AgentSurfaceExample>;
   /**
    * "core" lists the tool in the core listing and marks it to load up front in every listing.
    * "core_eval" loads it up front only under the opt-in core_eval listing; full lists it like any

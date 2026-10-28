@@ -474,3 +474,43 @@ it.effect("drops a call's image blocks before they count against the result budg
     ).toMatchObject({ status: "ok", value: { projects: [{ id: "a" }, { id: "b" }] } });
   }).pipe(Effect.provide(served)),
 );
+
+it.effect(
+  "counts each map element's calls toward the cap and refuses a map over 16 or nesting past 8",
+  () =>
+    Effect.gen(function* () {
+      const items = (n: number) => `[${Array.from({ length: n }, (_, i) => i).join(" ")}]`;
+      // 16 elements with three reads each is 48 calls, though the program names three.
+      const capped = yield* evaluate({
+        program: `(map x ${items(16)} (seq (project.list) (project.list) (project.list)))`,
+      });
+      expect(capped).toMatchObject({
+        status: "error",
+        error: { code: "resource_exhausted", reason: "eval_call_limit" },
+      });
+      expect((yield* probed).reads).toBe(32);
+
+      const wide = `(map x ${items(17)} (project.list))`;
+      const first = yield* evaluate({ program: wide });
+      expect(first).toMatchObject({
+        status: "error",
+        error: { code: "resource_exhausted", reason: "eval_map_limit" },
+      });
+      const again = yield* evaluate({ program: wide });
+      expect(again.status === "error" && again.error).toEqual(
+        first.status === "error" && first.error,
+      );
+
+      const nested = (depth: number) =>
+        Array.from({ length: depth - 1 }).reduce<string>(
+          (inner) => `(seq ${inner})`,
+          "(project.list)",
+        );
+      expect(yield* evaluate({ program: nested(8) })).toMatchObject({ status: "ok" });
+      expect(yield* evaluate({ program: nested(9) })).toMatchObject({
+        status: "error",
+        error: { reason: "eval_too_deep" },
+      });
+      expect((yield* probed).reads).toBe(33);
+    }).pipe(Effect.provide(served)),
+);

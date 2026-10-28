@@ -29,6 +29,7 @@ const row = (armId: "full" | "core", pair: number, extra: Partial<RunRow> = {}):
   failures: [],
   contamination: [],
   metrics: {
+    unknownOutcome: false,
     toolCalls: 2,
     toolRounds: 1,
     modelTurns: { min: 2, max: 3 },

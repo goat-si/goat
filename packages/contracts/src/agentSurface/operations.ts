@@ -12,6 +12,12 @@ export const operationSurfaceEntries = {
       "Read long-running work using its goat_call operation handle. An unknown state means GOAT cannot determine the outcome; inspect the result before deciding whether to retry the original work.",
     guide:
       "The operationId comes from meta.operation. GOAT verifies the handle, then reads the work through its status tool with that tool’s own checks, or reads its handoff and continuation. The response contains the operation and the underlying answer as a goat_call envelope. States are queued, running, waiting_human, succeeded, failed, cancelled and unknown. An expired handle exceeds its kind’s retention period; read the work directly instead. Handles are bound to the issuing environment and receiving thread, or to the client session when no thread is present. Another principal gets not_found and must find or start the work again; changing a client session invalidates a client-bound handle, while another turn in the same thread keeps the same principal.",
+    examples: [
+      {
+        title: "Read work started through goat_call",
+        args: { operationId: "<meta.operation.operationId>" },
+      },
+    ],
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -29,6 +35,12 @@ export const operationSurfaceEntries = {
       "Wait for long-running work through its goat_call operation handle and return the latest observation. A timeout never cancels the work; it may still be running. The wait also returns immediately when GOAT cannot determine the outcome.",
     guide:
       "GOAT verifies the handle once, then repeats the same reads as goat_operation_read at the kind’s pollAfterMs interval. timeoutMs defaults to 60000 and cannot exceed 300000. Terminal states and unknown return early. timedOut:true means the deadline won; the work may still be running. If the first read itself times out, the response has an unknown operation and no result. Handles are bound to the issuing environment and receiving thread, or to the client session when no thread is present. Another principal gets not_found and must find or start the work again; changing a client session invalidates a client-bound handle, while another turn in the same thread keeps the same principal.",
+    examples: [
+      {
+        title: "Wait up to two minutes for the work to finish",
+        args: { operationId: "<meta.operation.operationId>", timeoutMs: 120000 },
+      },
+    ],
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -46,6 +58,9 @@ export const operationSurfaceEntries = {
       "Request cancellation through the work’s own cancel tool. Cancellation is cooperative; use goat_operation_read afterwards to confirm the final state.",
     guide:
       "The response contains a fresh operation state and the cancel tool’s answer as result. GOAT verifies the handle and uses the underlying tool’s own checks. Work without a cancel path, including SSH setup and handoff-only operations, returns not_cancellable. Provider-sync approval that has not produced a sync to cancel also returns not_cancellable. Handles are bound to the issuing environment and receiving thread, or to the client session when no thread is present. Another principal gets not_found and must find or start the work again; changing a client session invalidates a client-bound handle, while another turn in the same thread keeps the same principal.",
+    examples: [
+      { title: "Ask the work to stop", args: { operationId: "<meta.operation.operationId>" } },
+    ],
     effect: "destructive",
     capability: "none",
     capabilityReason:

@@ -59,6 +59,12 @@ const FullEntry = Schema.Struct({
   signature: Schema.optionalKey(Schema.String),
   inputSchema: Schema.Unknown,
   outputSchema: Schema.NullOr(Schema.Unknown),
+  /** Worked calls: pass args to goat_call with this path. */
+  examples: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ title: Schema.String, args: Schema.Record(Schema.String, Schema.Unknown) }),
+    ),
+  ),
 });
 
 export const DescribeResult = Schema.Union([

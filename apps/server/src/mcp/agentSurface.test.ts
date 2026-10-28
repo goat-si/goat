@@ -20,6 +20,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
   canonicalToolName,
+  isKeyedWrite,
   legacyToolNameTargets,
   listedToolName,
   resolveAgentSurfaceEntry,
@@ -50,12 +51,23 @@ import {
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import { NodeHttpServer } from "@effect/platform-node";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import {
+  type Outcome,
+  INERT_SERVICE_DEFECT,
+  HANDLER_VALIDATION,
+  classify,
+  asDirectResult,
+  routeOutcome,
+} from "./agentSurfaceOutcome.testkit.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
+  // As served: ToolAdmission reserves keys and goat_eval journals steps in the database.
+  Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
@@ -342,57 +354,6 @@ const callers = {
 type Caller = keyof typeof callers;
 const TARGET_THREAD = "thread:conformance-target";
 
-/**
- * reached: the access layer let the call into its handler, which then met inert services.
- * unexpected and defect never match an expectation, so a wrong argument or a crash before the
- * handler cannot pass as access granted.
- */
-type Outcome =
-  | "thread_required"
-  | "read_only"
-  | "ssh_read_only"
-  | "denied"
-  | "uncoded"
-  | "reached"
-  | "unexpected"
-  | "defect";
-const INERT_SERVICE_DEFECT = "inert service";
-// The tool-level wrapper's text when a handler dies on an inert service.
-const HANDLER_DIED = "Tool execution failed due to an internal server error.";
-// Refusals a handler makes after access passed, from its own domain checks.
-const HANDLER_CODES = new Set(["target_required", "orchestration_error"]);
-// invalid_request from a rule the handler checks after access, on these sampled inputs.
-const HANDLER_VALIDATION: Readonly<Record<string, string>> = {
-  "attachment.discard": "Only the caller that prepared an upload may discard it.",
-  "thread.reschedule": "A caller outside a thread must pass a model to resume with.",
-  "project.create": "A project made from a title takes no other settings.",
-};
-const IMAGE_TOOL_FAILURE = /^(Preview snapshot|Device screenshot) failed/;
-const OPERATION_NOT_ISSUED = "No operation with that id was issued here to this caller.";
-// Read from the text alone: Pi and other text-only clients never see structuredContent.
-const refusalCode = (text: string) => /"code":"([a-z_]+)"/.exec(text)?.[1];
-const classify = (path: string, result: McpSchema.CallToolResult): Outcome => {
-  const content = result.content[0];
-  const text = content?.type === "text" ? content.text : "";
-  if (!result.isError) return "reached";
-  if (text === INERT_SERVICE_DEFECT || text === HANDLER_DIED) return "reached";
-  if (text.startsWith("defect:")) return "defect";
-  const code = refusalCode(text);
-  // An agent tells a refusal from a failure by its code, so a refusal without one fails the case.
-  const refused = (outcome: Outcome) => (code === undefined ? "uncoded" : outcome);
-  if (/thread_credential_required|acts as the calling GOAT thread/.test(text))
-    return refused("thread_required");
-  if (/reaches other machines with this machine's SSH keys/.test(text))
-    return refused("ssh_read_only");
-  if (/approved for read-only access/.test(text)) return refused("read_only");
-  if (code === "capability_denied") return "denied";
-  // Operation verbs refuse a sampled handle in their handler, after access passed.
-  if (path.startsWith("operation.") && text.includes(OPERATION_NOT_ISSUED)) return "reached";
-  if (IMAGE_TOOL_FAILURE.test(text)) return "reached";
-  if (code === "invalid_request" && path in HANDLER_VALIDATION) return "reached";
-  return code !== undefined && HANDLER_CODES.has(code) ? "reached" : "unexpected";
-};
-
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
 // machine's SSH keys unless asked for the local answer.
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
@@ -493,23 +454,20 @@ const via = {
     McpServer.McpServer.pipe(
       Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     ),
-  // The envelope's reason and message stand in for the direct result's text.
   goat_call: (name: string, args: Record<string, unknown>) =>
     McpServer.McpServer.pipe(
       Effect.flatMap((server) =>
         server.callTool({ name: "goat_call", arguments: { path: name, args } }),
       ),
-      Effect.map((result) => {
-        const envelope = result.structuredContent as AgentSurfaceResult;
-        if (envelope.status !== "error")
-          return new McpSchema.CallToolResult({ isError: false, content: [] });
-        // A plain-text failure stays the direct call's own text; a classified one names its code.
-        const text =
-          envelope.error.reason === "tool_error"
-            ? envelope.error.message
-            : JSON.stringify({ code: envelope.error.reason, message: envelope.error.message });
-        return new McpSchema.CallToolResult({ isError: true, content: [{ type: "text", text }] });
-      }),
+      Effect.map(asDirectResult),
+    ),
+  // A one-call program; quote keeps the arguments literal.
+  goat_eval: (name: string, args: Record<string, unknown>) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({ name: "goat_eval", arguments: { program: [name, ["quote", args]] } }),
+      ),
+      Effect.map(asDirectResult),
     ),
 };
 // legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
@@ -534,9 +492,18 @@ describe("agent surface access", () => {
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
           for (const route of ROUTES) {
-            // goat_call refuses to call itself or goat_eval by design.
+            // The admission store remembers keys, so each call gets its own; goat_eval derives a
+            // keyed write's key itself and refuses one the program passes.
+            const { clientRequestId, ...rest } = args;
+            const callArgs =
+              route === "goat_eval" && isKeyedWrite(entry)
+                ? rest
+                : typeof clientRequestId === "string"
+                  ? { ...rest, clientRequestId: `${clientRequestId}:${caller}:${route}` }
+                  : args;
+            // goat_call and goat_eval refuse to call either meta tool by design.
             if (
-              route === "goat_call" &&
+              (route === "goat_call" || route === "goat_eval") &&
               (entry.path === "surface.call" || entry.path === "surface.eval")
             )
               continue;
@@ -547,8 +514,8 @@ describe("agent surface access", () => {
               McpServer.McpServer
             > =
               route === "legacy"
-                ? http.callTool(caller, legacy!, args)
-                : via[route](listedToolName(entry), args).pipe(
+                ? http.callTool(caller, legacy!, callArgs)
+                : via[route](listedToolName(entry), callArgs).pipe(
                     Effect.provideService(McpInvocationContext, callers[caller]),
                     Effect.provideService(McpSchema.McpServerClient, client),
                   );
@@ -571,17 +538,20 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
-            // The envelope turns a refusal inside a successful value into an error; that is a
-            // domain answer after access passed, so it still counts as reaching the handler.
-            const outcome =
-              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
-                ? "reached"
-                : classified;
+            const content = result.content[0];
+            const text = content?.type === "text" ? content.text : "";
+            const outcome = routeOutcome({
+              route,
+              path: entry.path,
+              effect: entry.effect,
+              classified,
+              text,
+              directOutcome,
+            });
             if (route === "direct") directOutcome = outcome;
             const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
-              const content = result.content[0];
-              const detail = content?.type === "text" ? content.text.slice(0, 160) : "";
+              const detail = text.slice(0, 160);
               mismatches.push(
                 `${entry.path} ${caller} ${route}: expected ${expected}, got ${outcome} (${detail})`,
               );
@@ -605,11 +575,6 @@ describe("agent surface access", () => {
         agentSurfaceRegistry[path as keyof typeof agentSurfaceRegistry]?.name,
       );
   });
-
-  // quarantine: #778 goat_eval is gated on measurement (rollout step 11); add a one-call program to via if it ships.
-  it.todo(
-    "gives a goat_eval call step the same outcome as a direct call for every entry and caller",
-  );
 });
 
 const callerScope = (

@@ -1,5 +1,10 @@
+import type { AgentSurfaceEntry } from "@goat/contracts/agentSurface";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Predicate from "effect/Predicate";
+import type * as SchemaAST from "effect/SchemaAST";
 import { McpSchema, Tool } from "effect/ai";
+
+import { withParameterNotes, withTypeSideDescriptions } from "./servedDescriptions.ts";
 
 type Json = unknown;
 type JsonObject = { [key: string]: Json };
@@ -126,19 +131,38 @@ const compact = (schema: Json): Json => {
   return result;
 };
 
+const notesOf = (entry: AgentSurfaceEntry | undefined) => entry?.parameters;
+
+/** What the decoded schema and then the path's registry entry say about each argument. */
+const describedInput = (name: string, schema: JsonObject, parameters?: SchemaAST.AST) =>
+  withParameterNotes(
+    notesOf(resolveAgentSurfaceEntry(name)),
+    parameters === undefined ? schema : withTypeSideDescriptions(parameters, schema),
+  );
+
 /**
  * Compact model-facing inputs only; runtime codecs still enforce each union branch.
  * Nullable alternatives may clear stored values even on optional properties; preserve them.
  */
 export const advertisedJsonSchema = (tool: Tool.Any) =>
-  compact(Tool.getJsonSchema(tool)) as ReturnType<typeof Tool.getJsonSchema>;
+  compact(
+    describedInput(tool.name, Tool.getJsonSchema(tool) as JsonObject, tool.parametersSchema.ast),
+  ) as ReturnType<typeof Tool.getJsonSchema>;
 
+/** parameters is the registered tool's own schema, whose decoded side carries descriptions. */
 export const advertisedRegistration = <Registration extends { readonly tool: McpSchema.Tool }>(
   registration: Registration,
+  parameters?: SchemaAST.AST,
 ): Registration => ({
   ...registration,
   tool: new McpSchema.Tool({
     ...registration.tool,
-    inputSchema: compact(registration.tool.inputSchema) as ReturnType<typeof Tool.getJsonSchema>,
+    inputSchema: compact(
+      describedInput(
+        registration.tool.name,
+        registration.tool.inputSchema as JsonObject,
+        parameters,
+      ),
+    ) as ReturnType<typeof Tool.getJsonSchema>,
   }),
 });

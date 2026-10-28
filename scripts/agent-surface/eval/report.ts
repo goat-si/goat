@@ -15,6 +15,7 @@ import {
   type ArmSummary,
   CampaignError,
   CONTROL_TURN_ALLOWANCE,
+  COMPOSITION_RULE_VERSION,
   MIN_CLEAN_RUNS,
   type RunRow,
   gate,
@@ -35,6 +36,8 @@ const armLine = (summary: ArmSummary) =>
     summary.contaminated,
     summary.failed,
     percent(summary.failureRate),
+    summary.unknownOutcomes,
+    summary.unknownOutcomeUnmeasured,
     summary.wentFirst,
     cell(summary.turnsMin) + " to " + cell(summary.turnsMax),
     cell(summary.toolCalls),
@@ -46,8 +49,11 @@ const armLine = (summary: ArmSummary) =>
 
 const RULES = {
   eval:
-    "A reduction counts only when the candidate's most turns are a third below the baseline's " +
-    "fewest, and the control must show no gain.",
+    "Composition rule v" +
+    COMPOSITION_RULE_VERSION +
+    ": at least two automatic multi-step tasks must reduce " +
+    "turns and result bytes by a third. The control must show no gain and rise by at most one " +
+    "turn at either end. No failure rate may rise; no candidate run may halt with unknown_outcome.",
   listing:
     "The control may rise by at most " +
     CONTROL_TURN_ALLOWANCE +
@@ -149,7 +155,7 @@ const main = () => {
   const summaries = requiredTasks(taskSet, campaign.gate).map((task) =>
     summarizeTask(task, rows, campaign),
   );
-  const verdict = gate(summaries);
+  const verdict = gate(summaries, campaign.gate);
   const out: Array<string> = [
     campaign.gate === "listing" ? "# Listing measurement" : "# goat_eval measurement",
     "",
@@ -185,8 +191,8 @@ const main = () => {
       "## " + summary.task + " (" + summary.claim + "): " + summary.verdict,
       ...summary.reasons.map((reason) => "- " + reason),
       "",
-      "| arm | runs | contaminated | failed | failure rate | went first | median model turns | median tool calls | median failed calls | median result bytes | median wall time |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| arm | runs | contaminated | failed | failure rate | unknown_outcome | unmeasured outcome | went first | median model turns | median tool calls | median failed calls | median result bytes | median wall time |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
       armLine(summary.baseline),
       ...(summary.candidate === null ? [] : [armLine(summary.candidate)]),
       "",
@@ -214,6 +220,11 @@ const main = () => {
               ", " +
               row.metrics.resultBytes +
               " B") +
+          (row.unknownOutcome === true
+            ? ", unknown_outcome"
+            : row.unknownOutcome == null
+              ? ", outcome unmeasured"
+              : "") +
           (row.wallMs === null ? "" : ", " + seconds(row.wallMs)) +
           (row.followupRuns === undefined || row.followupRuns === 0
             ? ""

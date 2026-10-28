@@ -93,6 +93,8 @@ export class CampaignError extends Error {}
 
 /** The fewest successful clean runs per arm and task before a median means anything. */
 export const MIN_CLEAN_RUNS = 10;
+export const COMPOSITION_RULE_VERSION = 1;
+const COMPOSITION_TASKS = ["wait-running", "fan-out-review", "launch-and-wait"];
 /** D8: the candidate must need at least a third fewer model turns. */
 export const REQUIRED_TURN_RATIO = 2 / 3;
 /** Context diet: a single-call control may cost at most one more model turn. */
@@ -429,7 +431,42 @@ const resultBytesOf = (item: TimelineItem): number => {
   return Buffer.byteLength(text, "utf8");
 };
 
+const unknownOutcomeOf = (item: TimelineItem): boolean => {
+  if (item.type !== "dynamic_tool" || !namesTool(toolNameOf(item) ?? "", "goat_eval")) return false;
+  const inspect = (value: unknown): boolean => {
+    if (typeof value === "string") {
+      try {
+        return inspect(JSON.parse(value));
+      } catch {
+        return false;
+      }
+    }
+    if (!isObject(value)) return false;
+    if (
+      value["status"] === "error" &&
+      isObject(value["error"]) &&
+      value["error"]["code"] === "unknown_outcome" &&
+      typeof value["haltedAt"] === "string"
+    )
+      return true;
+    return (
+      inspect(value["structuredContent"]) ||
+      (Array.isArray(value["content"]) &&
+        value["content"].some(
+          (block: unknown) => isObject(block) && block["type"] === "text" && inspect(block["text"]),
+        ))
+    );
+  };
+  try {
+    const parsed: unknown = JSON.parse(item.text ?? "");
+    return isObject(parsed) && inspect(parsed["output"]);
+  } catch {
+    return false;
+  }
+};
+
 export interface RunMetrics {
+  readonly unknownOutcome: boolean;
   readonly toolCalls: number;
   readonly toolRounds: number;
   /**
@@ -504,6 +541,7 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
     }
   }
   return {
+    unknownOutcome: items.some(unknownOutcomeOf),
     toolCalls,
     toolRounds,
     modelTurns: { min: toolRounds + 1, max: toolCalls + 1 },
@@ -519,6 +557,7 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
 
 /** A run that took several runs of its thread to answer costs all of them. */
 export const sumMetrics = (runs: ReadonlyArray<RunMetrics>): RunMetrics => ({
+  unknownOutcome: runs.some((run) => run.unknownOutcome),
   toolCalls: runs.reduce((sum, run) => sum + run.toolCalls, 0),
   toolRounds: runs.reduce((sum, run) => sum + run.toolRounds, 0),
   modelTurns: {
@@ -627,6 +666,8 @@ export interface RunRow {
   /** 0 when this arm went first in its pair. */
   readonly slot: number;
   readonly threadId: string | null;
+  /** Null when the timeline could not be measured; absent in historical rows. */
+  readonly unknownOutcome?: boolean | null;
   readonly ok: boolean;
   /** Why the run failed. A failed run stays in the failure rate. */
   readonly failures: ReadonlyArray<string>;
@@ -667,6 +708,8 @@ const median = (values: ReadonlyArray<number>): number | null => {
 };
 
 export interface ArmSummary {
+  readonly unknownOutcomes: number;
+  readonly unknownOutcomeUnmeasured: number;
   readonly arm: string;
   readonly runs: number;
   readonly contaminated: number;
@@ -683,6 +726,7 @@ export interface ArmSummary {
 }
 
 export interface TaskSummary {
+  readonly manual: boolean;
   readonly task: string;
   readonly claim: Claim;
   readonly baseline: ArmSummary;
@@ -699,6 +743,8 @@ const summarizeArm = (rows: ReadonlyArray<RunRow>, arm: string): ArmSummary => {
   const failed = clean.length - ok.length;
   return {
     arm,
+    unknownOutcomes: own.filter((row) => row.unknownOutcome === true).length,
+    unknownOutcomeUnmeasured: own.filter((row) => row.unknownOutcome == null).length,
     runs: own.length,
     contaminated: own.length - clean.length,
     clean: clean.length,
@@ -769,6 +815,7 @@ export const summarizeTask = (
   if (campaign.candidateArm === null)
     return {
       task: task.id,
+      manual: task.manual === true,
       claim: task.claim,
       baseline,
       candidate: null,
@@ -776,17 +823,32 @@ export const summarizeTask = (
       reasons: baseline.clean === 0 ? ["the baseline has no clean runs"] : [],
     };
   const candidate = summarizeArm(own, campaign.candidateArm);
-  const base = { task: task.id, claim: task.claim, baseline, candidate };
+  const base = {
+    task: task.id,
+    manual: task.manual === true,
+    claim: task.claim,
+    baseline,
+    candidate,
+  };
   if (baseline.clean === 0 || candidate.clean === 0)
     return { ...base, verdict: "not_run", reasons: ["an arm has no clean runs"] };
   if (campaign.gate === "listing") return { ...base, ...listingVerdict(task, baseline, candidate) };
   const reasons: Array<string> = [];
   if (succeeded(baseline) < MIN_CLEAN_RUNS || succeeded(candidate) < MIN_CLEAN_RUNS)
     reasons.push("fewer than " + MIN_CLEAN_RUNS + " successful clean runs in an arm");
+  if (candidate.unknownOutcomes > 0) reasons.push("a candidate run halted with unknown_outcome");
+  if (candidate.unknownOutcomeUnmeasured > 0)
+    reasons.push("candidate unknown_outcome was not measured");
   // A control whose runs failed has no turns to compare, which must not read as "no gain".
   if (task.claim === "no_gain") {
     if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))
       reasons.push("the candidate failed more often");
+    if (
+      baseline.turnsMin !== null &&
+      candidate.turnsMin !== null &&
+      !turnsWithin(baseline, candidate, CONTROL_TURN_ALLOWANCE)
+    )
+      reasons.push("the candidate's median turns rose by more than " + CONTROL_TURN_ALLOWANCE);
     if (reasons.length > 0) return { ...base, verdict: "fail", reasons };
     return fewerTurns(baseline, candidate)
       ? {
@@ -798,21 +860,51 @@ export const summarizeTask = (
   }
   if (!fewerTurns(baseline, candidate))
     reasons.push("the candidate's most turns are not a third below the baseline's fewest");
+  if (
+    baseline.resultBytes === null ||
+    candidate.resultBytes === null ||
+    candidate.resultBytes > baseline.resultBytes * REQUIRED_TURN_RATIO
+  )
+    reasons.push("the candidate's median result bytes are not a third below the baseline's");
   if ((candidate.failureRate ?? 1) > (baseline.failureRate ?? 0))
     reasons.push("the candidate failed more often");
   return { ...base, verdict: reasons.length === 0 ? "pass" : "fail", reasons };
 };
 
-/**
- * D8 passes only when every reduces task, manual ones included, ran and passed, and every
- * control ran and showed no gain; a control that moved means the count itself is suspect.
- */
-export const gate = (summaries: ReadonlyArray<TaskSummary>) => {
-  const notPassed = summaries.filter((summary) =>
-    summary.claim === "reduces" ? summary.verdict !== "pass" : summary.verdict !== "as_expected",
+/** Composition needs two automatic reductions; safety and sample floors apply to every run task. */
+export const gate = (summaries: ReadonlyArray<TaskSummary>, kind: GateKind = "eval") => {
+  if (kind === "listing") {
+    const notPassed = summaries.filter((summary) =>
+      summary.claim === "reduces" ? summary.verdict !== "pass" : summary.verdict !== "as_expected",
+    );
+    return {
+      pass: summaries.some((summary) => summary.claim === "reduces") && notPassed.length === 0,
+      notPassed: notPassed.map((summary) => summary.task + ": " + summary.verdict),
+    };
+  }
+  const measured = summaries.filter(
+    (summary) => !summary.manual || summary.baseline.runs > 0 || (summary.candidate?.runs ?? 0) > 0,
   );
-  return {
-    pass: summaries.some((summary) => summary.claim === "reduces") && notPassed.length === 0,
-    notPassed: notPassed.map((summary) => summary.task + ": " + summary.verdict),
-  };
+  const notPassed: Array<string> = [];
+  for (const summary of measured) {
+    const candidate = summary.candidate;
+    if (
+      candidate === null ||
+      succeeded(summary.baseline) < MIN_CLEAN_RUNS ||
+      succeeded(candidate) < MIN_CLEAN_RUNS ||
+      (candidate.failureRate ?? 1) > (summary.baseline.failureRate ?? 0) ||
+      candidate.unknownOutcomes > 0 ||
+      candidate.unknownOutcomeUnmeasured > 0 ||
+      (summary.claim === "no_gain" && summary.verdict !== "as_expected")
+    )
+      notPassed.push(summary.task + ": " + summary.verdict);
+  }
+  for (const id of ["read-control", ...COMPOSITION_TASKS])
+    if (!measured.some((summary) => summary.task === id)) notPassed.push(id + ": not_run");
+  const reduced = measured.filter(
+    (summary) =>
+      !summary.manual && COMPOSITION_TASKS.includes(summary.task) && summary.verdict === "pass",
+  ).length;
+  if (reduced < 2) notPassed.push("fewer than two automatic tasks reduced turns and result bytes");
+  return { pass: notPassed.length === 0, notPassed };
 };

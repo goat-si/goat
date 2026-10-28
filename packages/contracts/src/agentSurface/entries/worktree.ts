@@ -13,6 +13,17 @@ export const worktreeEntries = {
       "Run inside a GOAT thread. The thread must not already have a worktree binding. Use goat_worktree_status first to check it.\n\nThe handoff creates a branch and worktree in GOAT's managed worktrees directory, optionally using the base branch's remote, then repoints this thread. Do not create ad-hoc worktrees or clones through the shell for lanes; shell commands do not update thread bindings. Project setup runs by default; pass runSetupScript:false to skip it.\n\nFor a separate thread, use goat_thread_launch with workspaceStrategy:{type:'worktree'} for a new worktree or type:'existing_worktree' to bind an existing one. For a bounded child lane needing its own checkout, use goat_task_create with isolation='worktree'.\n\nChanging the workspace detaches the provider session shortly after the handoff is recorded. Call this as the last action of the turn. Pass continuationPrompt with the remaining work to queue the next message and start a turn inside the worktree with the conversation preserved. Without a continuation, the thread stays idle until its next message. Check the returned continuation status for a queue failure. Deleting the thread does not automatically remove the worktree.",
     idempotencyReason:
       "WorktreeMcpService.handoff serializes per calling thread, refuses an already-bound worktree or existing branch, and rechecks binding before commit. Repeating cannot bind a second worktree or queue a second continuation.",
+    parameters: { branch: "The new branch the worktree checks out, such as feat/thread-search." },
+    examples: [
+      {
+        title: "Move this thread into its own worktree and continue there",
+        args: {
+          branch: "feat/thread-search",
+          baseRef: "dev",
+          continuationPrompt: "Continue implementing thread search in this worktree.",
+        },
+      },
+    ],
     effect: "destructive",
     capability: "worktree.create",
     hostRoutable: false,
@@ -35,6 +46,7 @@ export const worktreeEntries = {
       "Read this agent thread's worktree binding, path, branch, main workspace root, and the default startFromOrigin for goat_worktree_handoff. Check it before handing off.",
     guide:
       "Run inside a GOAT thread. Call goat_worktree_status before goat_worktree_handoff to see whether the thread already has a worktree binding and whether handoff is possible.",
+    examples: [{ title: "Check whether this thread already has a worktree", args: {} }],
     effect: "read",
     hostRoutable: false,
     requires: "thread",

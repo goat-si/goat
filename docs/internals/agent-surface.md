@@ -428,7 +428,8 @@ client-only, read-only client, not served, and for a GOAT thread the goatclaw ca
 effective profile lacks, judged as the call gate judges it. A profile that does not resolve
 reports its reason on every write that needs a capability. What depends on the call's
 arguments or the moment, such as a host allowlist and lanes left, is still judged
-only when the call is made; examples and related paths are not in it yet. `query` returns up to 20 paths whose path,
+only when the call is made. At detail `full` it adds the worked `examples` a registry entry
+declares; related paths are not in it yet. `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
@@ -825,9 +826,17 @@ the reference. Per-resource reference pages are not committed to the repository:
 [documentation rules](../../AGENTS.md#documentation) allow one catalog, which the registry
 already is.
 
-**Proposed.** `/llms.txt` is also filtered by the caller's permission profile, and
-`goat_describe` serves examples. CI fails when an entry's effect disagrees with its access
-declaration or when an example fails against the toolkit test harness. The rest of the
+**Now.** An entry's `parameters` describe arguments its input schema leaves bare, and the
+served schema shows them. Descriptions annotated on the decoded side of a transformation, such
+as any `TrimmedNonEmptyString` field, are copied to the advertised schema too, since JSON Schema
+shows only the encoded side ([servedDescriptions.ts](../../apps/server/src/mcp/servedDescriptions.ts)).
+[discovery.test.ts](../../apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts) fails
+when a path `goat_call` lists, or any path with examples, has an undescribed argument, a
+note the schema already covers, or an example its tool does not decode.
+
+**Proposed.** `/llms.txt` is also filtered by the caller's permission profile. CI fails when
+an entry's effect disagrees with its access declaration or when an example's call fails
+against the toolkit test harness. The rest of the
 hand-written tool prose in `orchestrator-mcp-server.md` moves to lifecycle and policy.
 
 ## The `goat` command
