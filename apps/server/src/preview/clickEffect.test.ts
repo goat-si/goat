@@ -131,3 +131,46 @@ it("stops aiming when the page cannot answer, so the click is not held", async (
   const page = fakePage(() => new Promise(() => undefined));
   await expect(aimClick(page, null, { x: 3, y: 4 })).resolves.toEqual({ point: { x: 3, y: 4 } });
 });
+
+it("does not confirm an inert click while banners land on its ancestor", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still">static</p><script>
+        setInterval(() => document.body.append(document.createElement("aside")), 5);
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
+
+it("confirms a menu whose trigger stops propagation and renders it elsewhere", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<span id="trigger">open</span><div id="overlays"></div><script>
+        trigger.addEventListener("click", (event) => {
+          event.stopPropagation();
+          queueMicrotask(() => overlays.append(document.createElement("menu")));
+        });
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#trigger" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));
+
+it("sends nothing when a dialog opened before the press, and does not call it the click's", () =>
+  fixture(async (page) => {
+    page.on("dialog", (dialog) => void dialog.dismiss());
+    await page.setContent(
+      `<button id="b" style="position:absolute;left:10px;top:10px" onclick="window.clicked = true">go</button><script>
+        document.elementFromPoint = () => { alert("unrelated"); return null; };
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { x: 20, y: 20 })).rejects.toMatchObject({
+      reason: "dialogPending",
+      beforeInput: true,
+    });
+    expect(await page.evaluate("window.clicked === true")).toBe(false);
+  }));

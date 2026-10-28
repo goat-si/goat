@@ -726,8 +726,12 @@ export const click = async (
   let dialog = false;
   let onDialog = constVoid;
   // Listening first: a dialog that opens while the watch installs still ends the wait.
+  let dialogBeforePress = false;
   const dialogOpened = new Promise<"dialog">((resolve) => {
-    onDialog = () => resolve("dialog");
+    onDialog = () => {
+      dialogBeforePress = !sent;
+      resolve("dialog");
+    };
     page.once("dialog", onDialog);
   });
   const aim = await aimClick(page, locator, point);
@@ -735,6 +739,13 @@ export const click = async (
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
+    // A dialog the page opened before the press is not the click's, and holds the page: send nothing.
+    if (dialogBeforePress)
+      throw new BrowserControlInterrupted(
+        'A browser dialog opened before the click, so nothing was sent. Read goat_call {path:"preview.status"} and answer it with goat_call {path:"preview.dialog"} first.',
+        "dialogPending",
+        true,
+      );
     // A later press after the deadline is refused too, but the first one may already have landed.
     if (count === 1) remaining(deadline);
     else if (performance.now() >= deadline)

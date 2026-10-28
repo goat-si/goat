@@ -41,21 +41,36 @@ const INSTALL = `(() => {
     seen.add(kind);
     resolve();
   };
-  const near = (node) => target !== null && (target.contains(node) || node.contains(target));
+  // A change counts as the target's when it happens inside it, changes an ancestor's own
+  // attributes, or adds or removes the target itself; children added to an ancestor do not.
+  const near = (record) => target !== null && (target.contains(record.target) ||
+    (record.type === "attributes" && record.target.contains(target)) ||
+    (record.type === "childList" && [...record.addedNodes, ...record.removedNodes]
+      .some((node) => node.contains(target))));
   const elementIn = (nodes) => Array.from(nodes).some((node) => node.nodeType === 1);
   const consider = (records, handled) => {
     for (const record of records)
-      if (near(record.target) || (handled && record.type === "childList" &&
+      if (near(record) || (handled && record.type === "childList" &&
           (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
         return note("dom");
   };
-  const observer = new MutationObserver((records) => consider(records, false));
+  // From the moment a click event starts until its task ends, microtasks included, element
+  // changes anywhere are its own, even when a handler stops propagation; earlier ones are ambient.
+  let handling = false;
+  let settleTask;
+  const observer = new MutationObserver((records) => consider(records, handling));
   observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  // Records pending when a click event starts are ambient; those its handlers made are its own.
-  const before = () => consider(observer.takeRecords(), false);
-  const after = () => consider(observer.takeRecords(), true);
-  const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].flatMap((type) => [
-    [window, type, before, true], [window, type, after, false]]);
+  const begin = () => {
+    consider(observer.takeRecords(), handling);
+    handling = true;
+    clearTimeout(settleTask);
+    settleTask = setTimeout(() => {
+      consider(observer.takeRecords(), true);
+      handling = false;
+    }, 0);
+  };
+  const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].map((type) => [
+    window, type, begin, true]);
   const onInput = () => note("input");
   const onFocus = () => note("focus");
   const onUrl = () => location.href !== href && note("url");
@@ -73,6 +88,7 @@ const INSTALL = `(() => {
     onUrl();
     armed = false;
     resolve();
+    clearTimeout(settleTask);
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
     for (const [on, type, listener, capture] of phases) on.removeEventListener(type, listener, capture);
