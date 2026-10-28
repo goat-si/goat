@@ -64,9 +64,11 @@ async function withToolMaintenance(root, operation) {
 function pruneTools(root, specs, flat) {
   return withToolMaintenance(root, () => {
     // Keep installs used by any running helper, including older GOAT releases.
+    // A busy host's full process list can pass spawnSync's 1 MiB default, which reads as a failed scan.
+    const scanOptions = { encoding: 'utf8', timeout: 10000, maxBuffer: 64 * 1024 * 1024 };
     const scan = process.platform === 'win32'
-      ? require('node:child_process').spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine'], { encoding: 'utf8', timeout: 10000 })
-      : require('node:child_process').spawnSync('ps', ['-ax', '-o', 'command='], { encoding: 'utf8', timeout: 10000 });
+      ? require('node:child_process').spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine'], scanOptions)
+      : require('node:child_process').spawnSync('ps', ['-ax', '-o', 'command='], scanOptions);
     if (scan.status !== 0 || !scan.stdout) return;
     for (const [name, required] of specs) {
       const parent = flat ? root : maintenancePath.join(root, name);

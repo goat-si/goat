@@ -466,7 +466,8 @@ export const make = Effect.gen(function* () {
             contentLength: request.headers["content-length"],
           })
         )
-          return HttpServerResponse.empty({ status: 403 });
+          // The body is left unread, so Node closes this connection; say so, or a client reusing it resets.
+          return HttpServerResponse.empty({ status: 403, headers: { connection: "close" } });
         const raw = yield* request.text;
         if (raw.length > 16384) return HttpServerResponse.empty({ status: 413 });
         const decoded = yield* decodeUnknownJson(raw).pipe(
