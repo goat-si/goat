@@ -60,6 +60,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1992,6 +1993,13 @@ const make = Effect.gen(function* () {
     const directory = pathService.dirname(filePath);
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
+    const watchEnded = PlatformError.systemError({
+      _tag: "Unknown",
+      module: "FileSystem",
+      method: "watch",
+      pathOrDescriptor: filePath,
+      description: "Settings filesystem watcher ended unexpectedly",
+    });
     return fileWatchResync(directory).pipe(
       Stream.provideService(FileSystem.FileSystem, fs),
       Stream.filter(
@@ -2001,13 +2009,12 @@ const make = Effect.gen(function* () {
           event.path === filePath ||
           pathService.resolve(directory, event.path) === resolvedFilePath,
       ),
+      Stream.concat(Stream.fail(watchEnded)),
     );
   };
 
   const startWatcher = Effect.gen(function* () {
-    const settingsDir = pathService.dirname(settingsPath);
-
-    yield* fs.makeDirectory(settingsDir, { recursive: true }).pipe(
+    yield* fs.makeDirectory(pathService.dirname(settingsPath), { recursive: true }).pipe(
       Effect.mapError(
         (cause) =>
           new ServerSettingsError({

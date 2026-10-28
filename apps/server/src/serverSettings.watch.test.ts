@@ -44,6 +44,7 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
         const diagnosed = yield* Deferred.make<void>();
         const reattached = yield* Deferred.make<void>();
         const counts = new Map<string, number>();
+        const links = new Map<string, string>();
         let failedDirectory = "";
         let settingsFile = "";
         let replacementDirectory = "";
@@ -62,10 +63,22 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
         const controlledFs = FileSystem.FileSystem.of({
           ...fs,
           readLink: (file) =>
-            Effect.suspend(() => {
+            Effect.gen(function* () {
               if (detached && file === settingsFile) retryLookups++;
-              return fs.readLink(file);
+              const target = links.get(file);
+              if (target === undefined)
+                return yield* PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "FileSystem",
+                  method: "readLink",
+                });
+              return target;
             }),
+          realPath: (file) => Effect.succeed(path.resolve(file)),
+          makeDirectory: (directory, options) =>
+            directory === failedDirectory || directory === replacementDirectory
+              ? Effect.void
+              : fs.makeDirectory(directory, options),
           watch: (directory, options) =>
             Stream.unwrap(
               Effect.sync(() => {
@@ -110,6 +123,7 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
           if (source !== "primary") {
             yield* fs.remove(settingsPath, { force: true });
             yield* fs.symlink(oldTarget, settingsPath);
+            links.set(settingsPath, oldTarget);
           }
           failedDirectory = source === "primary" ? path.dirname(settingsPath) : original;
           yield* service.start;
@@ -133,6 +147,7 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
             yield* fs.writeFileString(newTarget, changed);
             yield* fs.remove(settingsPath);
             yield* fs.symlink(newTarget, settingsPath);
+            links.set(settingsPath, newTarget);
           }
           yield* TestClock.adjust("1100 millis");
           assert.isAbove(retryLookups, 0);
