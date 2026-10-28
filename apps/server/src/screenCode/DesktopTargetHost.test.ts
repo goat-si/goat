@@ -798,9 +798,7 @@ it.effect.each(["unknown", "partial", "suspected_noop", "refused", "confirmed"])
         .invoke(call("click", { x: 10, y: 20 }, bound.value as ScreenTargetRef), context)
         .pipe(Effect.result);
       const safety = result._tag === "Success" ? result.success.safety : result.failure.safety;
-      expect(safety?.possibleCommit).toBe(effect !== "suspected_noop" && effect !== "refused");
-      expect(safety?.retryClass).toBe(
-        effect === "suspected_noop" || effect === "refused" ? "fix_input" : "never",
-      );
+      expect(safety?.possibleCommit).toBe(effect !== "refused");
+      expect(safety?.retryClass).toBe(effect === "refused" ? "fix_input" : "never");
     }),
 );
