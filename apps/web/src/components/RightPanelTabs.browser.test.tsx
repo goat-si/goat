@@ -23,6 +23,7 @@ function Fixture(props: {
   initial: RightPanelSurface[];
   width?: number;
   audio?: boolean;
+  open?: boolean;
   close?: (surface: RightPanelSurface, finish: () => void) => void;
 }) {
   const [surfaces, setSurfaces] = useState(props.initial);
@@ -32,7 +33,7 @@ function Fixture(props: {
     <div style={{ width: props.width ?? 640, height: 240 }}>
       <RightPanelTabs
         mode="embedded"
-        open
+        open={props.open ?? true}
         keybindings={[]}
         getShortcutContext={() => ({
           terminalFocus: false,
@@ -129,6 +130,24 @@ function viewport(container: HTMLElement) {
     '[data-right-panel-tab-list] [data-slot="scroll-area-viewport"]',
   )!;
 }
+
+it("reserves the replacement add button when a mounted panel closes and reopens", async () => {
+  const initial = files(4);
+  await using screen = await render(<Fixture initial={initial} />);
+  const width = tabs(screen.container)[0]!.getBoundingClientRect().width;
+  await screen.rerender(<Fixture initial={initial} open={false} />);
+  await expect
+    .element(screen.getByRole("button", { name: "Add panel surface" }))
+    .not.toBeInTheDocument();
+  await screen.rerender(<Fixture initial={initial} open />);
+  await expect.element(screen.getByRole("button", { name: "Add panel surface" })).toBeVisible();
+  await vi.waitFor(() => {
+    expect(tabs(screen.container)[0]!.getBoundingClientRect().width).toBeCloseTo(width, 1);
+    expect(viewport(screen.container).scrollWidth).toBeLessThanOrEqual(
+      viewport(screen.container).clientWidth + 1,
+    );
+  });
+});
 
 it("shares capped widths independently of titles, shrinks equally, then scrolls at the minimum", async () => {
   const initial = files(2);

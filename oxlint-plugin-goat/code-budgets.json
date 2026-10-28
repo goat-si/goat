@@ -481,7 +481,7 @@
   "apps/web/src/components/GitActionsControl.tsx": { "lines": 2133, "nonNull": 1 },
   "apps/web/src/components/LegacySidebar.tsx": { "lines": 4018, "nonNull": 2 },
   "apps/web/src/components/ProviderUpdateLaunchNotification.logic.ts": { "nonNull": 5 },
-  "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1072 },
+  "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1071 },
   "apps/web/src/components/Sidebar.drag.ts": { "nonNull": 1 },
   "apps/web/src/components/Sidebar.logic.test.ts": { "lines": 2382 },
   "apps/web/src/components/Sidebar.logic.ts": { "lines": 1897, "nonNull": 7 },

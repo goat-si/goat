@@ -24,7 +24,6 @@ import {
   useEffect,
   useEffectEvent,
   useId,
-  useRef,
   useState,
 } from "react";
 
@@ -539,11 +538,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
-  const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const {
     attachTabList,
+    attachAddButton,
+    addButtonRef: addSurfaceTriggerRef,
     scrollState: tabScrollState,
     scrollTabs,
     tabWidth,
@@ -554,7 +554,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     ids: props.surfaces.map((surface) => surface.id),
     activeId: props.activeSurfaceId,
     open: props.open !== false,
-    addButtonRef: addSurfaceTriggerRef,
   });
 
   if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
@@ -901,7 +900,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <TooltipTrigger
                     render={
                       <MenuTrigger
-                        ref={addSurfaceTriggerRef}
+                        ref={attachAddButton}
                         render={
                           <Button
                             aria-label="Add panel surface"

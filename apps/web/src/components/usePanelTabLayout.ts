@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { observeResize } from "~/lib/observeResize";
 
@@ -25,9 +25,9 @@ export function usePanelTabLayout(input: {
   ids: readonly string[];
   activeId: string | null;
   open: boolean;
-  addButtonRef: RefObject<HTMLButtonElement | null>;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const [measurement, setMeasurement] = useState({ width: 0, addWidth: 32 });
   const [scrollState, setScrollState] = useState({
     hasOverflow: false,
@@ -101,21 +101,35 @@ export function usePanelTabLayout(input: {
     });
   };
 
+  const measure = useStableCallback(() => {
+    const viewport = viewportOf(rootRef.current);
+    if (!viewport) return;
+    const width = viewport.clientWidth;
+    const addWidth = addButtonRef.current?.getBoundingClientRect().width ?? 0;
+    setMeasurement((previous) => {
+      if (previous.width === width && previous.addWidth === addWidth) return previous;
+      setClosing(null);
+      return { width, addWidth };
+    });
+    updateScroll(viewport);
+  });
+
+  const attachAddButton = useStableCallback((button: HTMLButtonElement | null) => {
+    addButtonRef.current = button;
+    measure();
+    if (!button) return;
+    const stopObserving = observeResize(button, measure);
+    return () => {
+      addButtonRef.current = null;
+      stopObserving();
+      measure();
+    };
+  });
+
   const attachTabList = useStableCallback((root: HTMLDivElement | null) => {
     rootRef.current = root;
     const viewport = viewportOf(root);
     if (!viewport) return;
-    const addButton = input.addButtonRef.current;
-    const measure = () => {
-      const width = viewport.clientWidth;
-      const addWidth = addButton?.getBoundingClientRect().width ?? 0;
-      setMeasurement((previous) => {
-        if (previous.width === width && previous.addWidth === addWidth) return previous;
-        setClosing(null);
-        return { width, addWidth };
-      });
-      updateScroll(viewport);
-    };
     const handleWheel = (event: WheelEvent) => {
       if (event.ctrlKey) return;
       release();
@@ -128,7 +142,7 @@ export function usePanelTabLayout(input: {
     };
     const update = () => updateScroll(viewport);
     const content = viewport.firstElementChild;
-    const elements = [viewport, ...(content ? [content] : []), ...(addButton ? [addButton] : [])];
+    const elements = [viewport, ...(content ? [content] : [])];
     const stopObserving = observeResize(elements, measure);
     viewport.addEventListener("scroll", update, { passive: true });
     viewport.addEventListener("wheel", handleWheel, { passive: false });
@@ -154,5 +168,15 @@ export function usePanelTabLayout(input: {
     revealActiveTab();
   }, [activeId, input.open, scrollState.hasOverflow]);
 
-  return { attachTabList, scrollState, scrollTabs, tabWidth, retainedWidth, prepareClose, release };
+  return {
+    attachTabList,
+    attachAddButton,
+    addButtonRef,
+    scrollState,
+    scrollTabs,
+    tabWidth,
+    retainedWidth,
+    prepareClose,
+    release,
+  };
 }
