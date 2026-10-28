@@ -74,11 +74,16 @@ const listedTools = (
     if (entry === undefined) return [tool];
     if (!availability(entry, scope, true, profile, listing.host ?? {}).now) return [];
     const tier = "listing" in entry ? entry.listing : undefined;
+    const visible =
+      listing.listed === "full" ||
+      tier === "core" ||
+      (tier === "core_eval" && listing.listed === "core_eval");
+    if (!visible) return [];
     // goat_eval loads up front only where agents get core_eval, so a client sees which they get.
     const resident =
       tier === "core" ||
       (tier === "core_eval" && (listing.listed === "core_eval" || listing.agents === "core_eval"));
-    if (!resident) return listing.listed === "full" ? [tool] : [];
+    if (!resident) return [tool];
     const meta = isRecord(tool._meta) ? tool._meta : {};
     return [{ ...tool, _meta: { ...meta, [ALWAYS_LOAD_META_KEY]: true } }];
   });

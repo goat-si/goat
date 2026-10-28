@@ -16,7 +16,7 @@ const base: Pick<McpInvocationScope, "environmentId" | "capabilities" | "issuedA
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"]),
   issuedAt: 0,
 };
-const callers: Record<"thread" | "client", McpInvocationScope> = {
+const callers: Record<"thread" | "client" | "readOnly", McpInvocationScope> = {
   thread: {
     ...base,
     requestNamespace: "provider:thread",
@@ -32,6 +32,12 @@ const callers: Record<"thread" | "client", McpInvocationScope> = {
     requestNamespace: "client:session",
     thread: undefined,
     client: { sessionId: "session", label: "Agent", access: "full-access" },
+  },
+  readOnly: {
+    ...base,
+    requestNamespace: "client:reader",
+    thread: undefined,
+    client: { sessionId: "reader", label: "Reader", access: "read-only" },
   },
 };
 
@@ -55,6 +61,7 @@ const listedAs = (
     return {
       thread: yield* http.listTools("thread"),
       client: yield* http.listTools("client"),
+      readOnly: yield* http.listTools("readOnly"),
     };
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest));
 
@@ -81,6 +88,14 @@ it.effect("lists goat_eval up front only where agents get the opt-in core_eval l
       "goat_describe",
       "goat_eval",
     ]);
+    // A client that asks for core gets core, whatever the agents' listing.
+    const core = { [AGENT_TOOL_LISTING_HEADER]: "core" };
+    const plain = yield* listedAs("core_eval", { client: core, readOnly: core });
+    for (const caller of ["client", "readOnly"] as const)
+      expect(plain[caller].map((tool) => tool.name).toSorted(), caller).toEqual([
+        "goat_call",
+        "goat_describe",
+      ]);
   }),
 );
 
