@@ -186,7 +186,7 @@ it("shows one Home pool with via Hub device references and account detail withou
     .element(status.getByRole("meter", { name: "OpenCodex pool quota used" }))
     .toHaveAttribute("aria-valuenow", "43");
   expect(screen.container.querySelectorAll("[data-fleet-quota]")).toHaveLength(1);
-  await expect.element(status.getByText("Weekly 43% · 5h 21% +1")).toBeVisible();
+  await expect.element(status.getByText("Weekly 43% · 5h 21% +1 account")).toBeVisible();
   await expect.element(status.getByText("Local weekly", { exact: false })).not.toBeInTheDocument();
   await userEvent.hover(status.getByLabelText("Show 1 more quota details"));
   await expect
