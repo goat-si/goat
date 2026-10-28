@@ -71,7 +71,7 @@ describe("ScreenCellRow", () => {
 
   it("takes a one-line agent title of at most 80 characters", () => {
     expect(inputTitle("  Terminal: run tests ")).toBe("Terminal: run tests");
-    for (const title of ["", "  ", "two\nlines", "x".repeat(81), 42])
+    for (const title of ["", "  ", "two\nlines", "a\u2028b", "a\u0085b", "x".repeat(81), 42])
       expect(inputTitle(title)).toBeUndefined();
   });
 

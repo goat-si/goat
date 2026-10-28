@@ -19,7 +19,16 @@ describe("screen run tool input", () => {
     expect(validScreenRunPayload({ code: "return 1", title: "Terminal: run the tests" })).toBe(
       true,
     );
-    for (const title of ["", "two\nlines", "carriage\rreturn", "x".repeat(81), 3])
+    for (const title of [
+      "",
+      "   ",
+      "two\nlines",
+      "carriage\rreturn",
+      "line\u2028separator",
+      "next\u0085line",
+      "x".repeat(81),
+      3,
+    ])
       expect(validScreenRunPayload({ code: "return 1", title })).toBe(false);
     // The schema, the guide and validation ship in one build, so no agent learns of title from a
     // server that refuses it.

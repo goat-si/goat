@@ -392,12 +392,13 @@ export const createDesktopTargetHost = (deps: {
         ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
       };
       targets.set(ref.id, bound);
+      // Only names the driver reported reach the row: an app it listed, or the window it matched.
       deps.labelTarget?.(
         ref.id,
         {
           kind: "app",
-          bundleId: string(app?.bundle_id) ?? bundleId,
-          name: string(app?.name) ?? name,
+          bundleId: string(app?.bundle_id),
+          name: string(app?.name) ?? string(named[0]?.app_name),
         },
         context,
       );

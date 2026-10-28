@@ -10,7 +10,7 @@ import type { ScreenEffectReceipt, ScreenMethod } from "@goat/contracts";
 export type ScreenCellEnd = "completed" | "failed" | "stopped" | "deadline" | "limit" | "unknown";
 
 const TITLE_MAX = 160;
-const INPUT_TITLE_MAX = 80;
+export const INPUT_TITLE_MAX = 80;
 const APP_NAME_MAX = 40;
 
 const NAMED_KEYS = new Map(
@@ -109,11 +109,18 @@ export function appSubject(label: { readonly bundleId?: string; readonly name?: 
   return name.length > APP_NAME_MAX ? `${name.slice(0, APP_NAME_MAX - 1)}…` : name;
 }
 
-/** The title an agent gave a cell: one line, at most 80 characters. */
+/**
+ * A one-line agent title with something to show: no line or paragraph separator of any kind.
+ * Plain ECMA syntax, since providers check the advertised JSON Schema pattern themselves.
+ */
+export const INPUT_TITLE =
+  /^[^\n\v\f\r\u0085\u2028\u2029]*[^\s\u0085][^\n\v\f\r\u0085\u2028\u2029]*$/u;
+
+/** The title an agent gave a cell: one line, at most 80 characters, not only spaces. */
 export function inputTitle(value: unknown): string | undefined {
-  if (typeof value !== "string" || /[\r\n]/u.test(value)) return undefined;
-  const title = value.trim();
-  return title.length > 0 && title.length <= INPUT_TITLE_MAX ? title : undefined;
+  return typeof value === "string" && value.length <= INPUT_TITLE_MAX && INPUT_TITLE.test(value)
+    ? value.trim()
+    : undefined;
 }
 
 type Verb = string | "observe" | null;

@@ -1053,7 +1053,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
             environmentId={props.environmentId}
             icon={icon}
             iconSubtleColor={props.iconSubtleColor}
-            label={displayText}
+            label={toolSummary ? `${displayText}  ${toolSummary}` : displayText}
             showIcon
             themeAppearance={props.themeAppearance}
             toolIcon={toolIcon}

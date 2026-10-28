@@ -7,6 +7,7 @@ import {
   ScreenRunResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import { INPUT_TITLE, INPUT_TITLE_MAX } from "../../../cua/ScreenCellRow.ts";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -47,9 +48,8 @@ export const ScreenRunToolInput = Schema.Struct({
   code: Schema.String.check(Schema.isNonEmpty()),
   title: Schema.optionalKey(
     Schema.String.check(
-      Schema.isNonEmpty(),
-      Schema.isMaxLength(80),
-      Schema.isPattern(/^[^\r\n]*$/u),
+      Schema.isMaxLength(INPUT_TITLE_MAX),
+      Schema.isPattern(INPUT_TITLE),
     ).annotate({
       description:
         "One line saying what the cell does; it titles the timeline row. Never typed text or secrets.",
