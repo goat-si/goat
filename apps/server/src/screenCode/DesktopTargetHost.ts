@@ -30,6 +30,7 @@ import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
+import { admitDesktopInput, inspectTreeElements, type GuardElement } from "./DesktopInputGuards.ts";
 import {
   aimOf,
   boundsOf,
@@ -104,6 +105,10 @@ interface BoundWindow {
   pointsStale?: "input" | "restart";
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
+  /** Element roles, labels and table-cell ancestry from the tree behind observationId. */
+  elementsByToken?: ReadonlyMap<string, GuardElement>;
+  /** Set when the previous input on this window clicked a table cell. */
+  lastClickedTableCell?: number | string;
   /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
   framesBasis?: Rect;
   /**
@@ -250,6 +255,8 @@ export const createDesktopTargetHost = (deps: {
     delete bound.observationId;
     delete bound.snapshotId;
     delete bound.pages;
+    delete bound.elementsByToken;
+    delete bound.lastClickedTableCell;
     bound.pointsStale = "restart";
     return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
   });
@@ -316,7 +323,9 @@ export const createDesktopTargetHost = (deps: {
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const named = array(object(driverValue(windowsReply))?.windows)
+      const listedWindows = object(driverValue(windowsReply))?.windows;
+      if (!Array.isArray(listedWindows)) return yield* Effect.fail(fail("downstream_failure"));
+      const named = listedWindows
         .map(object)
         .filter((window) => window !== undefined)
         .filter(
@@ -330,6 +339,11 @@ export const createDesktopTargetHost = (deps: {
         );
       const pid = integer(named[0]?.pid);
       if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
+      if (named.length === 0)
+        return yield* Effect.fail({
+          ...fail("target_missing", "That window is closed; pick one from screen.discover()."),
+          detail: "window_gone",
+        });
       if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
       const app = matches.find((candidate) => candidate.pid === pid);
       const listedBundle = string(app?.bundle_id);
@@ -464,6 +478,8 @@ export const createDesktopTargetHost = (deps: {
         delete bound.observationId;
         delete bound.snapshotId;
         delete bound.pages;
+        delete bound.elementsByToken;
+        delete bound.lastClickedTableCell;
       };
       let limit: number = READ_BOUNDS[0];
       let reply = yield* read(limit);
@@ -544,6 +560,8 @@ export const createDesktopTargetHost = (deps: {
         delete bound.snapshotId;
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
+        bound.elementsByToken = inspectTreeElements(elements, rows);
+        delete bound.lastClickedTableCell;
         if (bound.windowBounds === undefined) delete bound.framesBasis;
         else bound.framesBasis = bound.windowBounds;
       }
@@ -669,7 +687,8 @@ export const createDesktopTargetHost = (deps: {
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
       if (call.method === "invoke_menu") {
-        const path = array(callArgs(call.args).path);
+        const menuArgs = callArgs(call.args);
+        const path = array(menuArgs.path);
         if (
           path.length === 0 ||
           path.length > 16 ||
@@ -678,6 +697,14 @@ export const createDesktopTargetHost = (deps: {
           return yield* Effect.fail(
             fail("invalid_argument", "Name the menu path, such as ['File', 'Open…']."),
           );
+        const menuAdmission = admitDesktopInput({
+          method: "invoke_menu",
+          args: menuArgs,
+          appId: bound.appId,
+          ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        });
+        if (menuAdmission.refused !== undefined) return yield* Effect.fail(menuAdmission.refused);
+        delete bound.lastClickedTableCell;
         bound.pointsStale = "input";
         const reply = yield* boundRequest(
           bound,
@@ -783,7 +810,29 @@ export const createDesktopTargetHost = (deps: {
       }
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
       const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
+      const guardElement =
+        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
+      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
+      const windowBounds = bound.framesBasis ?? bound.windowBounds;
+      const admission = admitDesktopInput({
+        method: call.method,
+        args,
+        appId: bound.appId,
+        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        ...(elementToken === undefined ? {} : { elementToken }),
+        ...(guardElement === undefined ? {} : { element: guardElement }),
+        ...(placed === undefined ? {} : { placed }),
+        ...(windowBounds === undefined ? {} : { windowBounds }),
+        ...(bound.lastClickedTableCell === undefined
+          ? {}
+          : { lastClickedTableCell: bound.lastClickedTableCell }),
+      });
+      if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
+      if (admission.clickedTableCell !== undefined)
+        bound.lastClickedTableCell = admission.clickedTableCell;
+      else if (admission.clearClickedTableCell) delete bound.lastClickedTableCell;
       delete forwarded.elementRef;
+      delete forwarded.send;
       // The guest names its target in the call; the driver gets the window below instead.
       delete forwarded.targetRef;
       delete forwarded.element_token;

@@ -33,7 +33,10 @@ const COMPUTER_USE_APP_NOTES: Readonly<
       "Opening a chat marks its messages read for the sender. When the task only reads, read the chat list's previews and do not open the chat.",
       'In a chat, the message field is the `AXTextArea` labelled "Enter a message" ("Enter public message" in open chats, or a translation). Message bubbles are `AXTextArea` rows too, so pick the field by that label, `type_text` into it by its token and `press_key` Return to send. Older history shows as one "(offscreen rows: N ...)" line; if a read still misses the field, read again with `max_depth: 2`.',
       "After sending, read the chat again: the field is empty and the newest bubble shows your exact text. Otherwise say you could not confirm it was sent instead of sending again.",
-      "Sending a message goes to other people: confirm the recipient and the text with the person first.",
+      "Sending a message goes to other people: confirm the recipient and the text with the person first. Keys without a target and point clicks are refused here. To send, the call must say { send: true }, only when the person asked you to send that message to that chat.",
+    ].join("\n"),
+    TextEdit: [
+      "TextEdit: a new document is saved to iCloud as soon as it exists; close it with cmd+w and choose Delete (DontSaveButton), then check the folder.",
     ].join("\n"),
     Preview: [
       "Preview: toolbar zoom buttons and menu shortcuts work in the background (command+plus, command+minus, command+9 fits the window). Text in a PDF page is drawn, not in the tree; use the screenshot to read it.",
@@ -51,6 +54,7 @@ const COMPUTER_USE_APP_BUNDLE_IDS: Readonly<Record<string, string>> = {
   "com.kakao.kakaotalkmac": "KakaoTalk",
   "com.apple.preview": "Preview",
   "com.apple.safari": "Safari",
+  "com.apple.textedit": "TextEdit",
 };
 
 const frontmatter = [

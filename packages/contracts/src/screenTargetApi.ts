@@ -34,9 +34,9 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number }): Promise<Done>;
-  type(text: string, t?: Target): Promise<Done>;
-  press(key: string, t?: Target): Promise<Done>; // "Enter", "cmd+a"; a target is clicked first
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean }): Promise<Done>;
+  type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
+  press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target): Promise<Done>;
@@ -58,7 +58,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
-interface App extends TargetBase { menu(path: string[]): Promise<Done>; launch(): Promise<Done>;
+interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }): Promise<Done>; launch(): Promise<Done>;
   screenshot(): Promise<object> }`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL

@@ -16,6 +16,7 @@ import { actionErrorContext } from "./PreviewTargetHost.testkit.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { context as desktopContext, fixture } from "./DesktopTargetHost.testkit.ts";
 
 const invocation = {
   environmentId: "env" as EnvironmentId,
@@ -211,3 +212,59 @@ it.live("waitFor with a role and name on a tab waits for that element", () => {
     }),
   );
 });
+
+it.live(
+  "press with a target sends one press_key carrying that element, and send: true reaches the host only when passed",
+  () => {
+    const { host, sent } = fixture();
+    const hostArgs: Array<unknown> = [];
+    const wrappedHost: typeof host = {
+      ...host,
+      dispatch: (call, context) => {
+        if (call.method === "press_key") hostArgs.push(call.args);
+        return host.dispatch(call, context);
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: desktopContext.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+        await app.observe();
+        await app.press('Enter', 'Apply');
+        await app.press('Enter', 'Apply', { send: true });
+        return true;`,
+      });
+      expect(result).toMatchObject({ status: "completed", value: true });
+      expect(sent.map((entry) => entry.tool)).toEqual([
+        "list_apps",
+        "list_windows",
+        "get_window_state",
+        "press_key",
+        "press_key",
+      ]);
+      expect(sent[3]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
+      expect(sent[3]?.args).not.toHaveProperty("send");
+      expect(sent[4]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
+      expect(sent[4]?.args).not.toHaveProperty("send");
+      expect(hostArgs).toHaveLength(2);
+      expect((hostArgs[0] as Array<Record<string, unknown>>)[0]).not.toHaveProperty("send");
+      expect((hostArgs[1] as Array<Record<string, unknown>>)[0]).toMatchObject({ send: true });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: wrappedHost }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);

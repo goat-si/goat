@@ -255,16 +255,30 @@ const __target = (binding, note, owner) => {
       return act('click', options.button === 'right' ? 'right_click' : 'click', {
         ...aim(target),
         ...(!tab && options.count !== undefined ? { count: options.count } : {}),
+        ...(!tab && options.send === true ? { send: true } : {}),
       });
     },
-    type: (text, target) => {
+    type: (text, target, options = {}) => {
       if (Array.isArray(target))
         throw new ScreenError('invalid_argument', 'Click the point first, then type without a target.', true);
-      return act('type', 'type_text', { text, ...(target === undefined ? {} : aim(target)) });
+      return act('type', 'type_text', {
+        text,
+        ...(target === undefined ? {} : aim(target)),
+        ...(!tab && options && options.send === true ? { send: true } : {}),
+      });
     },
-    press: async (key, target) => {
-      if (target !== undefined) await common.click(target);
-      return act('press', 'press_key', __keys(key, tab));
+    press: async (key, target, options = {}) => {
+      const targetIsSendOpts =
+        target !== null && typeof target === 'object' && !Array.isArray(target) &&
+        'send' in target && !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
+      const actualTarget = targetIsSendOpts ? undefined : target;
+      const actualOpts = targetIsSendOpts ? target : (options ?? {});
+      if (tab && actualTarget !== undefined) await common.click(actualTarget);
+      return act('press', 'press_key', {
+        ...__keys(key, tab),
+        ...(!tab && actualTarget !== undefined ? aim(actualTarget) : {}),
+        ...(!tab && actualOpts && actualOpts.send === true ? { send: true } : {}),
+      });
     },
     scroll: (target, direction, amount = 3) => {
       if (typeof direction !== 'string') return call('scroll', target ?? {});
@@ -331,7 +345,7 @@ const __target = (binding, note, owner) => {
     select: (arg = {}) => call('select', arg),
   } : {
     ...common,
-    menu: (path) => act('menu', 'invoke_menu', { path }),
+    menu: (path, options = {}) => act('menu', 'invoke_menu', { path, ...(options && options.send === true ? { send: true } : {}) }),
     launch: () => act('launch', 'launch_app', {}),
     getWindowState: () => call('get_window_state'),
     verifyState: (arg = {}) => call('verify_state', arg),

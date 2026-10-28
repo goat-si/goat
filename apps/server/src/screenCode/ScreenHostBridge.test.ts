@@ -738,3 +738,34 @@ it.effect(
       yield* Fiber.interrupt(click);
     }),
 );
+
+it.effect(
+  "a pause before dispatch says nothing was sent; a pause after dispatch says it may have taken effect",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const started = yield* Deferred.make<void>();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const first = yield* bridge
+        .handle({ ...call(1), targetRef: app }, context())
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      const second = yield* bridge
+        .handle({ ...call(2), targetRef: app }, context())
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      bridge.cutCellNow("r", "t", "c", "pause");
+      const dispatched = yield* Fiber.join(first);
+      const queued = yield* Fiber.join(second);
+      const third = yield* bridge.handle({ ...call(3), targetRef: app }, context());
+      expect(dispatched?.error?.effectStarted).toBe(true);
+      expect(dispatched?.error?.nextStep).toContain("may have taken effect");
+      expect(dispatched?.error?.nextStep).not.toContain("nothing was sent");
+      expect(queued?.error?.effectStarted).toBe(false);
+      expect(queued?.error?.nextStep).toContain("nothing was sent");
+      expect(third?.error?.effectStarted).toBe(false);
+      expect(third?.error?.nextStep).toContain("nothing was sent");
+    }),
+);
