@@ -5,7 +5,8 @@ nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to s
 ([stable promotion](../docs/internals/release-channels.md#stable-promotion)), and `close-outside-prs.yml` closes pull requests from
 forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
-holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate` and `result`, the pinned
+holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
+`refresh-republished` and `connect-auth-postgres`, the pinned
 `ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expressions below, the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a

@@ -16,33 +16,47 @@ import * as NodeUtil from "node:util";
 const DEFAULT_REPO = "goat-si/goat";
 const RESULT_CHECK = "goat-ci-result";
 
-export interface CheckRun {
+/** A goat-ci workflow run, or one of its jobs, as the Actions API returns them. */
+export interface Run {
   readonly id: number;
+  readonly name?: string | undefined;
   readonly status: string;
   readonly conclusion: string | null;
   readonly html_url: string;
 }
 
 export type MergeVerdict =
-  | { readonly merge: true; readonly run: CheckRun; readonly knownFailure?: string }
+  | { readonly merge: true; readonly run: Run; readonly knownFailure?: string }
   | { readonly merge: false; readonly reason: string };
 
 /**
- * GitHub reads a required check from its newest run on the commit, and a re-run or an ignored
- * event's republished result is always the newest, so the highest id decides.
+ * Only the newest goat-ci run on the head counts, and only through its own goat-ci-result job: a
+ * newer run cancelled before that job ran leaves an older success as the newest result check.
+ * An ignored event's run counts too; its goat-ci-result repeats the real run's verdict.
  */
 export function mergeVerdict(
-  runs: ReadonlyArray<CheckRun>,
+  runs: ReadonlyArray<Run>,
+  jobsOf: (run: Run) => ReadonlyArray<Run>,
   head: string,
   knownFailure?: string,
 ): MergeVerdict {
-  const run = runs.reduce<CheckRun | undefined>(
-    (newest, candidate) => (newest === undefined || candidate.id > newest.id ? candidate : newest),
+  const newest = runs.reduce<Run | undefined>(
+    (latest, candidate) => (latest === undefined || candidate.id > latest.id ? candidate : latest),
     undefined,
   );
-  if (run === undefined) return { merge: false, reason: `no ${RESULT_CHECK} on ${head} yet` };
-  if (run.status !== "completed") {
-    return { merge: false, reason: `${RESULT_CHECK} on ${head} is ${run.status}: ${run.html_url}` };
+  if (newest === undefined) return { merge: false, reason: `no goat-ci run on ${head} yet` };
+  if (newest.status !== "completed") {
+    return {
+      merge: false,
+      reason: `the newest goat-ci run on ${head} is ${newest.status}: ${newest.html_url}`,
+    };
+  }
+  const run = jobsOf(newest).find((job) => job.name === RESULT_CHECK);
+  if (run === undefined || run.status !== "completed") {
+    return {
+      merge: false,
+      reason: `the newest goat-ci run on ${head} ended ${newest.conclusion} without ${RESULT_CHECK}; re-run it: ${newest.html_url}`,
+    };
   }
   if (run.conclusion === "success") return { merge: true, run };
   const reason = knownFailure?.trim();
@@ -89,12 +103,16 @@ function main(argv: ReadonlyArray<string>): number {
   const runs = JSON.parse(
     gh([
       "api",
-      `repos/${repo}/commits/${head}/check-runs?check_name=${RESULT_CHECK}&filter=all&per_page=100`,
+      `repos/${repo}/actions/workflows/goat-ci.yml/runs?head_sha=${head}&per_page=100`,
       "--jq",
-      ".check_runs",
+      ".workflow_runs",
     ]),
-  ) as ReadonlyArray<CheckRun>;
-  const verdict = mergeVerdict(runs, head, values["known-failure"]);
+  ) as ReadonlyArray<Run>;
+  const jobsOf = (run: Run) =>
+    JSON.parse(
+      gh(["api", `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "--jq", ".jobs"]),
+    ) as ReadonlyArray<Run>;
+  const verdict = mergeVerdict(runs, jobsOf, head, values["known-failure"]);
   if (!verdict.merge) {
     console.error(`not merging ${view.url}: ${verdict.reason}`);
     return 1;

@@ -1,38 +1,54 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeVerdict, type CheckRun } from "./merge-pr.ts";
+import { mergeVerdict, type Run } from "./merge-pr.ts";
 
 const HEAD = "a".repeat(40);
-const run = (id: number, status: string, conclusion: string | null): CheckRun => ({
+const run = (id: number, status: string, conclusion: string | null, name?: string): Run => ({
   id,
+  name,
   status,
   conclusion,
-  html_url: `https://github.com/goat-si/goat/runs/${id}`,
+  html_url: `https://github.com/goat-si/goat/actions/runs/${id}`,
 });
+const result = (status: string, conclusion: string | null) =>
+  run(900, status, conclusion, "goat-ci-result");
+/** Each workflow run's jobs, by run id. */
+const jobs =
+  (byRun: Record<number, ReadonlyArray<Run>>) =>
+  (workflow: Run): ReadonlyArray<Run> =>
+    byRun[workflow.id] ?? [];
 
 describe("mergeVerdict", () => {
-  it("refuses a head whose goat-ci-result is still running or missing, known failure or not (#2017)", () => {
-    expect(mergeVerdict([run(1, "in_progress", null)], HEAD).merge).toBe(false);
-    expect(mergeVerdict([run(1, "queued", null)], HEAD, "fails on dev too").merge).toBe(false);
-    expect(mergeVerdict([], HEAD).merge).toBe(false);
+  it("refuses a head whose newest goat-ci run is missing or still running, known failure or not (#2017)", () => {
+    expect(mergeVerdict([], jobs({}), HEAD).merge).toBe(false);
+    const running = [run(1, "in_progress", null)];
+    expect(mergeVerdict(running, jobs({}), HEAD, "fails on dev too").merge).toBe(false);
   });
 
-  it("refuses a failed or cancelled head unless a reason is given (#2046)", () => {
-    expect(mergeVerdict([run(1, "completed", "failure")], HEAD).merge).toBe(false);
-    expect(mergeVerdict([run(1, "completed", "cancelled")], HEAD, "  ").merge).toBe(false);
+  it("refuses a failed result unless a reason is given (#2046)", () => {
+    const failed = jobs({ 1: [result("completed", "failure")] });
+    expect(mergeVerdict([run(1, "completed", "failure")], failed, HEAD).merge).toBe(false);
+    expect(mergeVerdict([run(1, "completed", "failure")], failed, HEAD, "  ").merge).toBe(false);
     expect(
-      mergeVerdict([run(1, "completed", "failure")], HEAD, "same failure on dev: run 1"),
+      mergeVerdict([run(1, "completed", "failure")], failed, HEAD, "same failure on dev: run 1"),
     ).toEqual({
       merge: true,
-      run: run(1, "completed", "failure"),
+      run: result("completed", "failure"),
       knownFailure: "same failure on dev: run 1",
     });
   });
 
-  it("follows the newest run on the head, as GitHub's required check does", () => {
-    const passedAfterRerun = [run(1, "completed", "failure"), run(3, "completed", "success")];
-    expect(mergeVerdict(passedAfterRerun, HEAD).merge).toBe(true);
-    const newerRunPending = [run(3, "completed", "success"), run(4, "in_progress", null)];
-    expect(mergeVerdict(newerRunPending, HEAD).merge).toBe(false);
+  it("reads only the newest run, so an older success cannot stand in for a newer cancelled run", () => {
+    const runs = [run(1, "completed", "success"), run(2, "completed", "cancelled")];
+    const byRun = jobs({
+      1: [result("completed", "success")],
+      2: [run(5, "completed", "skipped", "goat-scope")],
+    });
+    expect(mergeVerdict(runs, byRun, HEAD, "fails on dev too").merge).toBe(false);
+    const rerun = jobs({
+      1: [result("completed", "failure")],
+      2: [result("completed", "success")],
+    });
+    expect(mergeVerdict(runs, rerun, HEAD).merge).toBe(true);
   });
 });
