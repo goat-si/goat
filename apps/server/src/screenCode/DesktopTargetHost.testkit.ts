@@ -80,32 +80,6 @@ const goat2Read = (read: ReturnType<typeof goat2Full>, args: Record<string, unkn
     ...(format === "elements" ? {} : { tree_markdown }),
   };
 };
-export const goat2Diff = {
-  window_id: 7,
-  pid: 42,
-  elements_complete: false,
-  snapshot_id: "s0000000b",
-  since: "s0000000a",
-  since_status: "diff",
-  tree_diff:
-    'since s0000000a: 1 added, 0 changed, 0 removed. Use element_tokens s0000000b:N for + and ~ rows and unchanged rows; - ids are from s0000000a.\n+ [2] AXButton "Save" [actions=[press]]',
-  diff_counts: { added: 1, changed: 0, removed: 0 },
-  elements: [goat2Element("s0000000b", 2, "AXButton", "Save")],
-  tree_format: "both",
-};
-export const goat2NoChange = {
-  window_id: 7,
-  pid: 42,
-  elements_complete: false,
-  snapshot_id: "s0000000d",
-  since: "s0000000b",
-  since_status: "no_change",
-  tree_diff:
-    "no change since s0000000b. Rows and indices are as before; use snapshot_id s0000000d in element_tokens (s0000000d:N).",
-  diff_counts: { added: 0, changed: 0, removed: 0 },
-  elements: [],
-  tree_format: "both",
-};
 export const goat2WindowState = (
   args: Record<string, unknown>,
   screenshot: Record<string, unknown> = { snapshot_id: "s0000000a" },
@@ -130,17 +104,7 @@ export const goat2WindowState = (
         },
         ...screenshot,
       }
-    : args.since === "s0000000a"
-      ? goat2Diff
-      : args.since === "s0000000b"
-        ? goat2NoChange
-        : args.since !== undefined
-          ? {
-              ...goat2Read(goat2Full("s0000000c"), args),
-              since: args.since,
-              since_status: "unknown_snapshot",
-            }
-          : goat2Read(goat2Full("s0000000a"), args);
+    : goat2Read(goat2Full("s0000000a"), args);
 
 /** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
 export class DriverError {

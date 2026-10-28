@@ -158,7 +158,7 @@ interface BoundWindow {
   readonly epoch: number;
   readonly connectionGeneration: string;
   observationId?: string;
-  /** The driver snapshot behind observationId; a diff read names it as `since`. */
+  /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
   /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
   pointsStale?: boolean;
@@ -340,12 +340,8 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(fail("unsupported"));
       const capture = call.method === "screenshot";
       const args = callArgs(call.args);
-      const baseObservationId = capture ? undefined : string(args.baseObservationId);
-      // The driver diffs against a snapshot it still holds; only this target's latest read has one.
-      const since =
-        !capture && args.mode === "diff" && baseObservationId === bound.observationId
-          ? bound.snapshotId
-          : undefined;
+      // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
+      // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
       const reply = yield* request(
         "get_window_state",
         {
@@ -355,7 +351,6 @@ export const createDesktopTargetHost = (deps: {
           include_screenshot: capture,
           max_elements: 4096,
           ...(capture ? {} : { tree_format: "both" }),
-          ...(since === undefined ? {} : { since }),
         },
         call,
         context,
@@ -385,23 +380,13 @@ export const createDesktopTargetHost = (deps: {
             },
           ];
         });
-      const sinceStatus = string(state.since_status);
-      const diff =
-        since !== undefined &&
-        (sinceStatus === "diff" || sinceStatus === "no_change") &&
-        typeof state.tree_diff === "string"
-          ? state.tree_diff
-          : undefined;
-      const resetReason =
-        capture || diff !== undefined
-          ? undefined
-          : args.mode === "diff"
-            ? since === undefined
-              ? "unknown_base_observation"
-              : (sinceStatus ?? "driver_read_full")
-            : args.mode === "query"
-              ? "desktop_query_unsupported"
-              : undefined;
+      const resetReason = capture
+        ? undefined
+        : args.mode === "diff"
+          ? "desktop_reads_full"
+          : args.mode === "query"
+            ? "desktop_query_unsupported"
+            : undefined;
       // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
       // tree's observation stays and only gains this region. Any other read has retired them in
       // the driver, so the old refs go now, before a render that may fail.
@@ -425,16 +410,13 @@ export const createDesktopTargetHost = (deps: {
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText:
-                diff ?? (typeof state.tree_markdown === "string" ? state.tree_markdown : ""),
+              indexedText: typeof state.tree_markdown === "string" ? state.tree_markdown : "",
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,
               elements,
             }),
-            mode: diff === undefined ? "full" : "diff",
-            ...(diff === undefined ? {} : { prediffed: true }),
-            ...(diff === undefined || baseObservationId === undefined ? {} : { baseObservationId }),
+            mode: "full",
             ...(resetReason === undefined ? {} : { resetReason }),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
