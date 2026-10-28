@@ -234,9 +234,10 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   the whole screen. `run_script` and `run_steps` cannot be read ahead, so under a list they run
   only with an `app_scope` of approved apps (cua-driver goat.6+), which the driver checks on every
   call the batch makes, its target lookups included, refusing one outside it with nothing sent.
-  The proxy adds the approved apps to a batch that names none once the driver's tool list shows
-  it keeps `app_scope`; a driver that does not could run the scope unscoped, so there a batch
-  naming one is refused (`outside_manifest`) and one without stays refused. A background scope
+  A scope goes only to a driver child that listed `app_scope` in its own tool list, asked again
+  for every replacement child; the proxy adds the approved apps to a batch that names none once
+  that child has. A driver without it could run the scope unscoped, so there a batch naming one is
+  refused (`outside_manifest`) and one without stays refused. A background scope
   takes neither the shared screen nor foreground approval, and a `run_steps` whose steps name only
   its own window reserves that window alone; any other batch reserves the desktop.
 - **Controls.** Every attached driver runs under a control the server mints per thread: an

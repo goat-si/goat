@@ -224,14 +224,16 @@ request receives `live_children_limit` until a slot is released.
 Element clicks, typing and `set_value` that a cell starts on one app window without awaiting
 each leave the guest as one batch group and reach the driver as one `run_steps`, kept by
 `app_scope` to that window's app in the background (`ScreenBatchGroups.ts`,
-`DesktopTargetHost.dispatchBatch`). Each call keeps its own admission, receipt and reply, and a
-group takes one pending place. The group's first call holds the window's gate until every member
-has passed its own checks, so a member refused on admission sends none of the group. Each step's
-receipt reads the driver's effect and code for that step, a reply that does not account for every
-step leaves them all possibly committed, and steps after a failed one get `not_run`. The driver
-does go on past a step that answered no-op, so those later steps may have run where single calls
-would have stopped; their receipts say what they did. A driver that refuses the batch before
-running it, such as one without `app_scope`, gets the calls one at a time.
+`DesktopTargetHost.dispatchBatch`). The runtime admits a group whole or refuses all of it before
+any goes out, and the group takes one pending place. Each call keeps its own admission, receipt and
+reply. The group's first call holds the window's gate until every member has passed its own checks,
+so a member refused on admission sends none of the group. Each step's receipt reads the driver's
+effect and code for that step, which stay on a failed call's error and receipt as evidence. Steps
+after a failed one get `not_run` only when the reply accounts for every step it ran and ends at the
+failure; any other reply leaves them all possibly committed. The driver does go on past a step that
+answered no-op, so those later steps may have run where single calls would have stopped; their
+receipts say what they did. A driver that refuses the batch before running it, such as one without
+`app_scope`, gets the calls one at a time.
 
 A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
 stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
