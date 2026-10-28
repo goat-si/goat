@@ -83,6 +83,11 @@ export interface ArmScores {
   readonly guidance: number | null;
 }
 
+/** Rows written before cleanupUnobserved existed fall back to what no GOAT web run can show. */
+const cleanupUnobserved = (row: RunRow) =>
+  row.cleanupUnobserved ??
+  (row.surface === "web" && ARMS.find((arm) => arm.id === row.arm)?.driver === "goat");
+
 const succeeded = (row: RunRow) => row.outcome === "pass" || row.outcome === "skipped";
 
 /** Rows of one campaign scored per arm. Speed is relative to the fastest arm on each task. */
@@ -111,9 +116,7 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
     const web = mine.filter((row) => row.surface === "web");
     // A run whose end was not observed cannot count as clean.
     // Cleanup that could not be observed counts against coexistence only when something was left.
-    const judged = whole.filter(
-      (row) => row.cleanupUnobserved !== true || row.leftovers.length > 0,
-    );
+    const judged = whole.filter((row) => !cleanupUnobserved(row) || row.leftovers.length > 0);
     const clean = judged.filter(
       (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
     );
@@ -170,7 +173,7 @@ const cell = (row: RunRow | undefined) => {
   const flags = [
     row.misreport === null ? "" : "misreport",
     row.leftovers.length > 0 ? "left " + row.leftovers.length : "",
-    row.cleanupUnobserved === true ? "tabs ?" : "",
+    cleanupUnobserved(row) ? "tabs ?" : "",
     row.violations.length > 0 ? "violation" : "",
   ].filter(Boolean);
   return (

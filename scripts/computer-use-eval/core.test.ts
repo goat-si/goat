@@ -872,3 +872,44 @@ describe("unobserved cleanup", () => {
     expect(renderReports([{ ...base, cleanupUnobserved: true }])).toContain("tabs ?");
   });
 });
+
+describe("older rows", () => {
+  it("treat a GOAT web row without cleanupUnobserved as unobserved", () => {
+    const base = {
+      kind: "run",
+      campaignId: "c",
+      at: "",
+      goatVersion: "v",
+      taskSetVersion: 3,
+      task: "web-form",
+      surface: "web",
+      arm: "goat-direct",
+      model: "m",
+      status: "ran",
+      contended: false,
+      error: null,
+      claimed: "done",
+      answerError: null,
+      actual: "done",
+      outcome: "pass",
+      misreport: null,
+      valueErrors: [],
+      violations: [],
+      leftovers: [],
+      notes: [],
+      metrics: {
+        toolCalls: 1,
+        surfaceCalls: 1,
+        offSurfaceCalls: 0,
+        failedCalls: 0,
+        modelTurns: { min: 2, max: 2 },
+        contamination: [],
+      },
+      tokens: null,
+      wallMs: 1000,
+      ref: null,
+    } as const;
+    expect(scoreArms([base])[0]?.coexistence).toBeNull();
+    expect(scoreArms([{ ...base, arm: "codex-cua" }])[0]?.coexistence).toBe(1);
+  });
+});
