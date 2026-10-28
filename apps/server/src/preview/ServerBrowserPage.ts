@@ -33,7 +33,7 @@ import {
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
-import { animating, dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
+import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -264,8 +264,8 @@ const unsentOnTimeout = (cause: unknown) =>
     : cause;
 
 /**
- * Waits for visible and enabled before the gate, and for stable only while the page animates:
- * the Playwright action after the gate checks stability again, so checking it twice cost a frame.
+ * Waits for visible, enabled and stable before the gate, within the request's deadline: the
+ * Playwright action after it has only a short budget, and motion can come from any script.
  */
 const settled = async (locator: Locator, deadline: number, enabled = true) => {
   const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
@@ -274,8 +274,7 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
   try {
     await handle.waitForElementState("visible", { timeout: remaining(deadline) });
     if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
-    if (await animating(handle))
-      await handle.waitForElementState("stable", { timeout: remaining(deadline) });
+    await handle.waitForElementState("stable", { timeout: remaining(deadline) });
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {

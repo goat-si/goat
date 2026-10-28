@@ -117,14 +117,27 @@ it("never clicks a moving target after its deadline, even once it settles", () =
     expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
   }));
 
-it("clicks a ready button once its animation ends, within the request's time", () =>
+it.each([
+  [
+    "a CSS animation",
+    `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide 1.4s linear}</style><button>Go</button>`,
+  ],
+  [
+    "page script",
+    `<button style="position:relative">Go</button><script>const start = performance.now();
+      const step = (now) => { if (now - start < 1400) { document.querySelector("button").style.left = (now - start) / 7 + "px"; requestAnimationFrame(step); } };
+      requestAnimationFrame(step);</script>`,
+  ],
+])("clicks a ready button once %s stops moving it, within the request's time", (_, html) =>
   fixture(async (page) => {
-    await page.setContent(
-      `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide 1.4s linear}</style><button onclick="window.clicks=(window.clicks??0)+1">Go</button>`,
+    await page.setContent(html);
+    await page.evaluate(
+      `document.querySelector("button").onclick = () => { window.clicks = (window.clicks ?? 0) + 1 }`,
     );
     await ServerBrowserPage.click(page, { locator: "button", timeoutMs: 5_000 });
     expect(await page.evaluate("window.clicks ?? 0")).toBe(1);
-  }));
+  }),
+);
 
 it("types into the field that had focus, even when the page moves focus while it waits", () =>
   fixture(async (page) => {

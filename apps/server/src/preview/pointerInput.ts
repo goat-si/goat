@@ -3,7 +3,7 @@
  *
  * @module pointerInput
  */
-import type { ElementHandle, Page } from "playwright-core";
+import type { Page } from "playwright-core";
 import { remaining } from "./actionReadiness.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
@@ -64,12 +64,6 @@ export const wheelAt = async (
   again(gate, deadline);
   await page.mouse.wheel(delta[0], delta[1]);
 };
-
-/** Whether anything in the element's document is animating, which can move it under the pointer. */
-export const animating = async (handle: ElementHandle) =>
-  (await handle.evaluate(
-    "document.getAnimations().some((animation) => animation.playState === 'running')",
-  )) === true;
 
 type Box = Point & { readonly width: number; readonly height: number };
 

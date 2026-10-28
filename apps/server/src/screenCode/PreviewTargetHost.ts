@@ -684,13 +684,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           input = { url: arg.url };
           break;
       }
-      // Typing and selecting wait for their target; the request deadline, which the server starts
+      // Input waits for its target or a dialog; the request deadline, which the server starts
       // before queueing, ends with the cell so nothing lands after the cell stopped waiting.
       let cellBudgetMs: number | undefined;
-      if (call.method === "select" || call.method === "set_value" || call.method === "type_text") {
+      if (["select", "type", "click", "drag", "scroll"].includes(operation)) {
         const now = yield* Clock.currentTimeMillis;
         cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
-        input = { ...input, timeoutMs: cellBudgetMs };
+        if (operation === "select" || operation === "type")
+          input = { ...input, timeoutMs: cellBudgetMs };
       }
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
