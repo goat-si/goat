@@ -76,7 +76,7 @@ describe("selectTasks", () => {
     assert.equal(result.server.mode, "related");
     assert.ok(result.server.files.length > 0);
     for (const file of result.server.files) {
-      assert.match(file, /^(?:src|integration)\/.*\.test\.tsx?$/);
+      assert.match(file, /^(?:src|integration|scripts)\/.*\.test\.tsx?$/);
       assert.equal(result.server.reached.get(file), changed);
     }
     assert.ok(result.server.shards >= 1 && result.server.shards <= 4);
