@@ -61,6 +61,8 @@ export interface LimitBoardSection {
 }
 
 const ORIGIN_RANK: Record<LimitOrigin["kind"], number> = { pool: 0, login: 1, proxy: 2 };
+/** Only Codex and Claude route through an OpenCodex pool. */
+const DRIVER_NAME: Partial<Record<string, string>> = { codex: "Codex", claudeAgent: "Claude" };
 const SHOWN_IN: Record<LimitOrigin["kind"], number> = { login: 0, pool: 1, proxy: 2 };
 const STATUS_RANK: Record<LimitRowStatus, number> = {
   ready: 0,
@@ -144,16 +146,20 @@ function underPoolBlock(rows: readonly LimitBoardRow[], blocks: ReadonlyArray<Ve
     block.resetsAt === undefined ? Number.NaN : Date.parse(block.resetsAt),
   );
   const releaseAt = resets.every(Number.isFinite) ? Math.max(...resets) : null;
-  return rows.map((row) =>
-    row.status === "ready" || row.status === "unknown"
-      ? {
-          ...row,
-          status: "blocked" as const,
-          releaseAt,
-          note: "OpenCodex reports every account blocked",
-        }
-      : row,
-  );
+  return rows.map((row) => {
+    if (row.status === "ready" || row.status === "unknown")
+      return {
+        ...row,
+        status: "blocked" as const,
+        releaseAt,
+        note: "OpenCodex reports every account blocked",
+      };
+    if (row.status !== "blocked") return row;
+    // Usable only once both its own block and the pool's have lifted.
+    const later =
+      row.releaseAt === null || releaseAt === null ? null : Math.max(row.releaseAt, releaseAt);
+    return { ...row, releaseAt: later };
+  });
 }
 
 /** The tightest quota left among the readings that decide the status. */
@@ -233,10 +239,24 @@ function readingRow(account: LimitAccount, now: number): Pending {
 
 function noReadingRow(
   base: Omit<LimitBoardRow, "account" | "status" | "releaseAt" | "alsoVia" | "active" | "note">,
-  state: LimitAccount["state"],
+  report: { readonly state?: LimitAccount["state"]; readonly observedAt?: string | undefined },
   note: string,
+  now: number,
 ): LimitBoardRow {
-  const status = state === "paused" ? "paused" : state === "reauth" ? "reauth" : "unknown";
+  const { state, observedAt } = report;
+  // A fresh "exhausted" can be OpenCodex's only evidence when its window has no percentage.
+  const exhausted =
+    state === "exhausted" &&
+    observedAt !== undefined &&
+    now - Date.parse(observedAt) <= STATE_MAX_AGE_MS;
+  const status =
+    state === "paused"
+      ? "paused"
+      : state === "reauth"
+        ? "reauth"
+        : exhausted
+          ? "blocked"
+          : "unknown";
   return {
     ...base,
     account: null,
@@ -244,7 +264,7 @@ function noReadingRow(
     releaseAt: null,
     note: status === "unknown" ? note : undefined,
     alsoVia: [],
-    active: status === "unknown",
+    active: status === "unknown" || status === "blocked",
   };
 }
 
@@ -262,7 +282,7 @@ function newestSources(presentations: LimitPresentations) {
 }
 
 /** Rows and pool states collectLimitAccounts leaves out because they carry no reading. */
-function withoutReadings(presentations: LimitPresentations) {
+function withoutReadings(presentations: LimitPresentations, now: number) {
   const pending: Pending[] = [];
   const unreadable = new Map<ServerProvider["driver"], { messages: Set<string>; via: string[] }>();
   // Same identity as collectLimitAccounts: an account with a reading anywhere, or one already
@@ -314,8 +334,9 @@ function withoutReadings(presentations: LimitPresentations) {
           email: provider.auth.email,
           plan: provider.auth.label,
         },
-        undefined,
+        {},
         note,
+        now,
       ),
     });
   };
@@ -328,7 +349,9 @@ function withoutReadings(presentations: LimitPresentations) {
         if (limits.quotaPool === undefined) {
           const entry = unreadable.get(provider.driver) ?? { messages: new Set(), via: [] };
           entry.messages.add(limitsNotice(limits) ?? "The OpenCodex pool could not be read.");
-          entry.via.push(`${provider.displayName?.trim() || provider.instanceId} on ${label}`);
+          entry.via.push(
+            `${provider.displayName?.trim() || (DRIVER_NAME[provider.driver] ?? "An instance")} on ${label}`,
+          );
           unreadable.set(provider.driver, entry);
         }
         const own = localLimits(limits);
@@ -366,8 +389,9 @@ function withoutReadings(presentations: LimitPresentations) {
               email: account.email,
               plan: account.plan,
             },
-            account.state,
+            account,
             notice,
+            now,
           ),
         });
       }
@@ -403,7 +427,7 @@ function groupWindows(accounts: readonly LimitAccount[], now: number) {
 /** The whole Limits view; notices are only what no group or row already shows. */
 export function limitBoard(presentations: LimitPresentations, now: number) {
   const accounts = collectLimitAccounts(presentations);
-  const { pending, unreadable } = withoutReadings(presentations);
+  const { pending, unreadable } = withoutReadings(presentations, now);
   const all = [...accounts.map((account) => readingRow(account, now)), ...pending];
   const lines = collectOpenCodexPools(presentations);
   const drivers = [

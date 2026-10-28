@@ -258,6 +258,24 @@ describe("Usage limits board", () => {
     ]);
   });
 
+  it("blocks a no-reading account OpenCodex just judged exhausted", () => {
+    const { sections } = limitBoard(
+      presentations(
+        [],
+        [
+          hub([
+            poolAccount("cli", [], { plan: undefined, state: "exhausted", observedAt: at(-1) }),
+          ]),
+        ],
+      ),
+      now,
+    );
+    expect(sections[0]?.groups[0]?.rows.map((row) => [row.status, row.active])).toEqual([
+      ["blocked", true],
+    ]);
+    expect(sections[0]?.verdict.text).toBe("All active accounts blocked · release time unknown");
+  });
+
   it("lets a pool-wide block override its own members but not this machine's login", () => {
     const routed = provider({
       instanceId: ProviderInstanceId.make("routed"),
@@ -280,7 +298,15 @@ describe("Usage limits board", () => {
     const { sections } = limitBoard(
       presentations(
         [routed, localLogin],
-        [hub([poolAccount("member", [window("5h", 10, 100)], { label: "p0membr" })])],
+        [
+          hub([
+            poolAccount("member", [window("5h", 10, 100)], { label: "p0membr" }),
+            // Its own block lifts in 10 minutes, but the pool's holds it for 50.
+            poolAccount("early", [window("5h", 100, 10, { exhausted: true })], {
+              label: "p0early",
+            }),
+          ]),
+        ],
       ),
       now,
     );
@@ -288,10 +314,16 @@ describe("Usage limits board", () => {
     expect(
       groups.map((group) => [group.kind, group.rows.map((row) => [row.status, row.releaseAt])]),
     ).toEqual([
-      ["pool", [["blocked", now + 50 * 60_000]]],
+      [
+        "pool",
+        [
+          ["blocked", now + 50 * 60_000],
+          ["blocked", now + 50 * 60_000],
+        ],
+      ],
       ["login", [["ready", null]]],
     ]);
-    expect(sections[0]?.verdict.text).toBe("1 of 2 ready");
+    expect(sections[0]?.verdict.text).toBe("1 of 3 ready");
   });
 
   it("shows an unreadable hub pool in its own group and keeps unrelated notices", () => {
@@ -309,13 +341,25 @@ describe("Usage limits board", () => {
       },
     });
     const { sections, notices } = limitBoard(
-      presentations([localLogin, routed], [hub([], "it could not be reached")]),
+      presentations(
+        [
+          localLogin,
+          routed,
+          { ...routed, instanceId: ProviderInstanceId.make("claude_2"), displayName: undefined },
+        ],
+        [hub([], "it could not be reached")],
+      ),
       now,
     );
     const claude = sections.find((section) => section.driver === "claudeAgent");
     expect(claude?.verdict).toEqual({ tone: "unknown", text: "Can't read the pool" });
     expect(claude?.groups).toMatchObject([
-      { kind: "pool", unreadable: message, detail: "Routed: Claude via Hub on Laptop", rows: [] },
+      {
+        kind: "pool",
+        unreadable: message,
+        detail: "Routed: Claude via Hub on Laptop, Claude on Laptop",
+        rows: [],
+      },
     ]);
     expect(notices).toEqual([`via OpenCodex Home ${HOME}: it could not be reached`]);
     expect(sections.find((section) => section.driver === "codex")?.groups[0]?.title).toBe(
