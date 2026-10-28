@@ -73,7 +73,7 @@ describe("actionOutcomeSafety", () => {
     });
   });
 
-  it("classifies suspected_noop and unapplied field values as rejected_before_commit with fix_input", () => {
+  it("keeps sent suspected_noop uncertain even with local value readback, while browser rejection stays unapplied", () => {
     const noop = classifyComputerUseActionOutcome(
       {
         outcome: "suspected_noop",
@@ -91,10 +91,10 @@ describe("actionOutcomeSafety", () => {
       },
     );
     expect(noop).toEqual({
-      possibleCommit: false,
-      retryClass: "fix_input",
-      writeStatus: "rejected_before_commit",
-      code: "write_unapplied",
+      possibleCommit: true,
+      retryClass: "never",
+      writeStatus: "may_have_applied",
+      code: "write_indeterminate",
       unappliedInput: {
         field: "quantity",
         requested: "5",

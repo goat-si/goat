@@ -347,10 +347,10 @@ export function actionResultFromDriver(
       return { ...sent, outcome: "confirmed", dispatch: "verified" };
     case "partial":
       return { ...sent, outcome: "partial", dispatch: "dispatched_unknown" };
-    // The driver saw the target and nothing changed: a drag no window accepted, a value the
-    // control did not take.
     case "suspected_noop":
     case "no_drop":
+      return { ...sent, outcome: "unverifiable", dispatch: "dispatched_unknown" };
+    // AXValue was read back unchanged; this proves only the local value did not take.
     case "not_applied":
       return { ...sent, outcome: "suspected_noop", dispatch: "verified" };
     default:

@@ -247,11 +247,10 @@ export function classifyComputerUseActionOutcome(
     case "confirmed":
       return classifyActionOutcome({ effect, status: "completed" });
     case "suspected_noop":
-      return classifyActionOutcome({
-        effect,
-        status: "unapplied",
-        unappliedInput: options?.unappliedInput,
-      });
+      return withOptionalUnapplied(
+        classifyActionOutcome({ effect, status: "indeterminate", dispatched: true }),
+        options?.unappliedInput,
+      );
     case "partial":
       return classifyActionOutcome({
         effect,

@@ -150,6 +150,14 @@ describe("computer use actions", () => {
       dispatch: "dispatched_unknown",
     });
     expect(result({ effect: "no_drop" })).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    expect(result({ effect: "suspected_noop" })).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    expect(result({ effect: "not_applied", code: "write_not_applied" }, true)).toMatchObject({
       outcome: "suspected_noop",
       dispatch: "verified",
     });
