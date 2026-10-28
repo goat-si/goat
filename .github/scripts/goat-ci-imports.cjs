@@ -74,6 +74,7 @@ const QUOTED_MODULE = /["'\x60]((?:\.{1,2}\/)*[A-Za-z][\w-]*(?:\/[\w.-]+)*)["'\x
 const MAX_NAME_MATCHES = 3;
 /** Build and test configs: reached like any file, but nothing depends on a file through one. */
 const CONFIG_FILE = /(?:^|\/)vite\.config\.[cm]?[jt]s$/;
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 /** Source text without comments, so a file name in prose is not a reference. URLs keep their //. */
 function withoutComments(source) {
@@ -254,11 +255,34 @@ function resolveExport(manifest, subpath) {
 }
 
 /**
+ * Tests and test configs, and files that only they import, directly or through other such files.
+ * Only these name files that a run executes: elsewhere a file name is mostly prose, a type-only
+ * import, or a self-spawn of the server entry, which would make every server change reach whatever
+ * imports the naming module.
+ */
+function testCodeOf(files, importers) {
+  const testCode = new Set(files.filter((file) => TEST_FILE.test(file) || CONFIG_FILE.test(file)));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const file of files) {
+      const users = importers.get(file);
+      if (testCode.has(file) || !users || users.size === 0) continue;
+      if ([...users].every((user) => testCode.has(user))) {
+        testCode.add(file);
+        grew = true;
+      }
+    }
+  }
+  return testCode;
+}
+
+/**
  * Builds the graph: { files, sources, importers, namers, packageDirs }. importers maps a file, or a
  * "package:<dir>" node that stands for a whole package when an import of it could not be pinned to
  * one file, to the set of source files that import it. namers maps a file to the source files that
- * name it in a string (see namedFilesOf); a config that names a build entry does not depend on it
- * the way an importer does, so callers can follow imports alone.
+ * name it in a string (see namedFilesOf), from test code only (see testCodeOf); a config that names
+ * a build entry does not depend on it the way an importer does, so callers can follow imports alone.
  */
 function buildImportGraph(root, files = listWorkspaceFiles(root)) {
   const fileSet = new Set(files);
@@ -303,6 +327,7 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
   };
 
   const namers = new Map();
+  const namings = [];
   const link = (edges, from, to) => {
     if (!edges.has(to)) edges.set(to, new Set());
     edges.get(to).add(from);
@@ -332,9 +357,12 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
       const target = resolve(specifier, file);
       if (target !== undefined && target !== file) link(importers, file, target);
     }
-    for (const named of namedFilesOf(source, file, { byBase, byStem, fileSet, packageDirFor })) {
-      if (!importers.get(named)?.has(file)) link(namers, file, named);
-    }
+    for (const named of namedFilesOf(source, file, { byBase, byStem, fileSet, packageDirFor }))
+      namings.push([file, named]);
+  }
+  const testCode = testCodeOf(files, importers);
+  for (const [file, named] of namings) {
+    if (testCode.has(file) && !importers.get(named)?.has(file)) link(namers, file, named);
   }
   return {
     files: fileSet,
