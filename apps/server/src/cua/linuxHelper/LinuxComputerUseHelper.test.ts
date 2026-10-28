@@ -31,6 +31,91 @@ import { CROPPED_CAPTURE } from "./windowCapture.ts";
 import { STILL_DRAWING, UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
+  it.each(["suspected_noop", "no_drop", "not_applied", "partial"])(
+    "keeps the driver's %s effect uncertain without capturing a readback",
+    async (effect) => {
+      const helper = await connect();
+      const first = await helper.observe();
+      const reads = helper.driver.state.reads.length;
+      helper.driver.state.nextAnswer = {
+        isError: false,
+        text: "Input was attempted.",
+        structured: { effect },
+        images: [],
+      };
+      expect(
+        await helper.act({ action: "pressKey", key: "enter" }, first.observation),
+      ).toMatchObject({
+        outcome: effect === "partial" ? "partial" : "unverifiable",
+        dispatch: "dispatched_unknown",
+      });
+      expect(helper.driver.state.reads).toHaveLength(reads);
+      await helper.close();
+    },
+  );
+
+  it("actions leave capture and token retirement to explicit observations", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    const reads = helper.driver.state.reads.length;
+    const params = helper.actionParams(
+      { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    const answer = await helper.request("click", params);
+    expect(answer.result).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    expect(answer.result).not.toHaveProperty("observation");
+    expect(answer.image).toBeUndefined();
+    expect(helper.driver.state.reads).toHaveLength(reads);
+    expect((await helper.request("click", params)).result).toMatchObject({
+      outcome: "unverifiable",
+    });
+    const after = await helper.observe({
+      since: first.observation.observationId,
+      screenshot: false,
+    });
+    expect(after.observation).toMatchObject({
+      kind: "diff",
+      changed: [expect.objectContaining({ value: "2" })],
+    });
+    expect(after.image).toBeUndefined();
+    await helper.close();
+  });
+
+  it.each([{}, { query: "Name" }, { maxElements: 2 }])(
+    "an empty explicit diff after targetless or targeted input stays uncertain (%j)",
+    async (scope) => {
+      const helper = await connect();
+      const first = await helper.observe(scope);
+      helper.driver.state.nextAnswer = {
+        isError: false,
+        text: "Key sent.",
+        structured: { effect: "unverifiable" },
+        images: [],
+      };
+      expect(
+        await helper.act({ action: "pressKey", key: "enter" }, first.observation),
+      ).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+      const after = await helper.observe({ ...scope, since: first.observation.observationId });
+      expect(after.observation).toMatchObject({
+        kind: "diff",
+        added: [],
+        changed: [],
+        removed: [],
+      });
+      expect(
+        await helper.act(
+          { action: "click", at: { element: helper.ref(first.observation, "Name") } },
+          after.observation,
+        ),
+      ).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+      await helper.close();
+    },
+  );
+
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
     let versionReads = 0;
     const gnomeShellVersion = () => {
@@ -155,18 +240,23 @@ describe("Linux computer use helper conformance", () => {
       dispatch: "dispatched_unknown",
       delivery: "background",
     });
-    if (result.outcome === "refused" || result.observation?.kind !== "diff")
-      throw new Error("no diff");
-    expect(result.observation.changed).toEqual([
-      expect.objectContaining({ ref: helper.ref(first.observation, "Count"), value: "1" }),
-    ]);
-
-    const again = await helper.observe({ since: result.observation.observationId });
+    expect(result).not.toHaveProperty("observation");
+    const after = await helper.observe({ since: first.observation.observationId });
+    expect(after.observation).toMatchObject({
+      kind: "diff",
+      changed: [
+        expect.objectContaining({
+          ref: helper.ref(first.observation, "Count"),
+          value: "1",
+        }),
+      ],
+    });
+    const again = await helper.observe({ since: after.observation.observationId });
     expect(again.observation).toMatchObject({ kind: "diff", added: [], changed: [], removed: [] });
     await helper.close();
   });
 
-  it("a change to the element the action named confirms it, and no change at all is suspected_noop", async () => {
+  it("an unverified value write needs an explicit observation, while driver confirmation is preserved", async () => {
     const helper = await connect();
     helper.driver.state.setValueEffect = "unverifiable";
     const first = await helper.observe();
@@ -174,13 +264,19 @@ describe("Linux computer use helper conformance", () => {
       { action: "setValue", element: helper.ref(first.observation, "Name"), value: "hello" },
       first.observation,
     );
-    expect(set).toMatchObject({ outcome: "confirmed", dispatch: "verified" });
-    if (set.outcome === "refused" || !set.observation) throw new Error("no observation");
-    const noop = await helper.act(
-      { action: "click", at: { element: helper.ref(first.observation, "Name") } },
-      set.observation,
+    expect(set).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+    const after = await helper.observe({ since: first.observation.observationId });
+    expect(after.observation).toMatchObject({
+      kind: "diff",
+      changed: [expect.objectContaining({ value: "hello" })],
+    });
+    helper.driver.state.setValueEffect = "confirmed";
+    const confirmed = await helper.act(
+      { action: "setValue", element: helper.ref(first.observation, "Name"), value: "world" },
+      after.observation,
     );
-    expect(noop).toMatchObject({ outcome: "suspected_noop", dispatch: "verified" });
+    expect(confirmed).toMatchObject({ outcome: "confirmed", dispatch: "verified" });
+    expect(confirmed).not.toHaveProperty("observation");
     await helper.close();
   });
 
@@ -679,7 +775,6 @@ describe("makeLinuxHelper shutdown", () => {
       secureFocus: async () => NOT_SECURE,
       capture: { route: "driver" },
       uinputWritable: async () => false,
-      settle: async () => undefined,
       newId: () => "o",
       now: () => 0,
       signals: makeSignalMonitor({

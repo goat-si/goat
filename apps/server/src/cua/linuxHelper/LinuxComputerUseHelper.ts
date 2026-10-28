@@ -33,8 +33,7 @@ import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
  * child, started on first use and again after it dies; every window the driver knew is then
- * forgotten, since its tokens died with it. Requests run one at a time, so an action and the
- * read that confirms it never interleave with another request.
+ * forgotten, since its tokens died with it. Requests run one at a time.
  */
 
 export interface LinuxHelperDependencies {
@@ -47,8 +46,6 @@ export interface LinuxHelperDependencies {
   /** See readLinuxReadiness: this helper's driver has a Hyprland instance agents' does not. */
   readonly agentLacksHyprland?: boolean;
   readonly uinputWritable: () => Promise<boolean>;
-  /** Waits for an action's effect to reach the accessibility tree before it is read back. */
-  readonly settle: () => Promise<void>;
   readonly newId: () => string;
   readonly now: () => number;
   /** The safety signals; watch and unwatch arm and disarm it for an agent session. */
@@ -99,12 +96,7 @@ interface DriverWindow {
   readonly is_on_screen?: boolean;
 }
 
-/** How a window was last read, so the read after an action is the same kind of read. */
 interface LastRead {
-  readonly observationId: string;
-  readonly screenshot: boolean;
-  readonly query: string | undefined;
-  readonly maxElements: number | undefined;
   readonly elements: Map<string, ComputerUseElement>;
 }
 
@@ -329,10 +321,6 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         known.set(element.ref, element);
     }
     lastReads.set(key, {
-      observationId: observation.observationId,
-      screenshot: observation.screenshot !== undefined,
-      query: input.query,
-      maxElements: input.maxElements,
       elements: known,
     });
     const image = observation.screenshot ? offered : undefined;
@@ -399,24 +387,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     // The driver did not start, so nothing was sent.
     if (isRefusal(answer)) return { result: answer };
-    const sent = linuxActionResult(request, answer, undefined);
-    if (sent.outcome === "refused" || !last) return { result: sent };
-    // Read the window back the way the agent last read it, as a diff of that observation.
-    await deps.settle();
-    if (closed) return { result: sent };
-    const after = await read({
-      pid,
-      windowId,
-      epoch: now.epoch,
-      since: request.observationId,
-      screenshot: last.screenshot,
-      query: last.query,
-      maxElements: last.maxElements,
-      deadlineMs: Math.max(1, left()),
-    });
-    const observation = isRefusal(after.result) ? undefined : after.result;
-    const result = linuxActionResult(request, answer, observation);
-    return after.image && observation ? { result, image: after.image } : { result };
+    return { result: linuxActionResult(request, answer) };
   };
 
   const handleNow = async (

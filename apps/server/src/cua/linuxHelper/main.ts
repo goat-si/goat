@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process outside the server's runtime.
-// @effect-diagnostics globalTimers:off -- Settle waits and the parent check are plain process timers.
+// @effect-diagnostics globalTimers:off -- Focus retries and the parent check are plain process timers.
 /**
  * goat-computer-use for Linux: the helper GOAT spawns to observe and act on one desktop
  * (WS10 #1138). It speaks the computer use protocol on stdio and runs the pinned Cua Driver as
@@ -31,7 +31,6 @@ import {
   readGnomeShellVersion,
 } from "./linuxSession.ts";
 
-const SETTLE_MS = 300;
 const PARENT_CHECK_MS = 2_000;
 /** How long a dropped accessibility bus connection waits before it is opened again. */
 const FOCUS_EVENTS_RETRY_MS = 2_000;
@@ -128,7 +127,6 @@ const helper = makeLinuxHelper({
       () => true,
       () => false,
     ),
-  settle: () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS)),
   newId: () => NodeCrypto.randomUUID(),
   now: monotonic,
   signals,
