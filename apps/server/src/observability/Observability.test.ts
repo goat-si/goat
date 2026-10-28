@@ -67,14 +67,14 @@ const TraceRecordJson = Schema.fromJsonString(
     name: Schema.String,
     traceId: Schema.String,
     spanId: Schema.String,
-    parentSpanId: Schema.optional(Schema.String),
+    parentSpanId: Schema.optionalKey(Schema.String),
     sampled: Schema.Boolean,
     kind: Schema.String,
     startTimeUnixNano: Schema.String,
     endTimeUnixNano: Schema.String,
     durationMs: Schema.Number,
     attributes: TraceAttributes,
-    resourceAttributes: Schema.optional(TraceAttributes),
+    resourceAttributes: Schema.optionalKey(TraceAttributes),
     events: Schema.Array(
       Schema.Struct({
         name: Schema.String,
@@ -86,13 +86,14 @@ const TraceRecordJson = Schema.fromJsonString(
       Schema.Struct({ traceId: Schema.String, spanId: Schema.String, attributes: TraceAttributes }),
     ),
     exit: Schema.Union([
-      Schema.Struct({ _tag: Schema.Literal("Success") }),
-      Schema.Struct({ _tag: Schema.Literal("Failure"), cause: Schema.String }),
-      Schema.Struct({ _tag: Schema.Literal("Interrupted"), cause: Schema.String }),
+      Schema.TaggedStruct("Success", {}),
+      Schema.TaggedStruct("Failure", { cause: Schema.String }),
+      Schema.TaggedStruct("Interrupted", { cause: Schema.String }),
     ]),
   }),
 );
-const decodeTraceRecord = Schema.decodeUnknownSync(TraceRecordJson);
+const decodeTraceRecordJson = Schema.decodeSync(TraceRecordJson);
+const decodeTraceRecord = (line: string) => decodeTraceRecordJson(line);
 const encodeTraceRecord = Schema.encodeSync(TraceRecordJson);
 
 const layerTraceCollector = (bodies: Array<string>) =>
