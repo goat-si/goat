@@ -59,7 +59,7 @@ const FENCED =
 const SHOWN =
   "This tab shows a password GOAT filled as plain text. Snapshots stay off until the field hides or clears it, or the page navigates.";
 const VISUAL =
-  "GOAT filled a password on this site in this thread, so image snapshots and recordings of it stay off. Take a text snapshot (captureImage false), or leave the site.";
+  "GOAT filled a password on this site in this thread, so image snapshots and recordings of it stay off. A snapshot without includeImage or save still works, as does leaving the site.";
 const ACCOUNT_CHANGED =
   "The sign-in form no longer shows the account it showed when GOAT found the field, or not the expectedAccount, so nothing was filled and the secretRef is used up. Check which account the page is for before asking the person again.";
 const UNCONFIRMED =
