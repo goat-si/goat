@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -14,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 
 import {
+  tryWithForeignWorkspaceSubtree,
   tryWithWorkspaceLease,
   tryWithWorkspaceSubtree,
   withWorkspaceLease,
@@ -270,8 +272,11 @@ const otherServer = (dir: string) =>
           env: {
             ...process.env,
             GOAT_LEASE_CHILD: JSON.stringify({
-              leases: NodePath.join(import.meta.dirname, "workspaceLease.ts"),
-              registry: NodePath.join(import.meta.dirname, "workspaceLeaseRegistry.ts"),
+              leases: NodeURL.pathToFileURL(NodePath.join(import.meta.dirname, "workspaceLease.ts"))
+                .href,
+              registry: NodeURL.pathToFileURL(
+                NodePath.join(import.meta.dirname, "workspaceLeaseRegistry.ts"),
+              ).href,
               dir,
             }),
           },
@@ -311,18 +316,21 @@ const twoServers = Effect.gen(function* () {
   const dir = base + "/registry";
   const folder = base + "/worktree";
   yield* fs.makeDirectory(folder + "/inner", { recursive: true });
-  yield* Effect.acquireRelease(
+  const joined = yield* Effect.acquireRelease(
     Effect.sync(() => enableWorkspaceLeaseRegistry(dir)),
     (joined) => Effect.sync(() => joined.disable()),
   );
   const other = yield* otherServer(dir);
-  return { fs, base, dir, folder, other };
+  return { fs, base, dir, folder, other, holder: joined.holder };
 });
 
 /** The key a server records for a folder, as workspaceLease.ts compares them. */
 const recordedKey = (folder: string) =>
   HostProcess.Platform.pipe(
-    Effect.map((platform) => (platform === "linux" ? folder : folder.toLowerCase())),
+    Effect.map((platform) => {
+      const slashed = folder.replaceAll("\\", "/");
+      return platform === "linux" ? slashed : slashed.toLowerCase();
+    }),
   );
 
 it.live(
@@ -434,6 +442,70 @@ it.live(
         assert.equal(tried._tag, "WorkspaceLeaseUnavailableError");
         const waited = yield* withWorkspaceLease(folder + "/inner", Effect.void).pipe(Effect.flip);
         assert.equal(waited._tag, "WorkspaceLeaseUnavailableError");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("a rollback under its own lease keeps only other servers out", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { folder, other } = yield* twoServers;
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      // Turn start holds the lease on the checkout it is recreating when that fails.
+      const turnStart = yield* withWorkspaceLease(
+        folder,
+        Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      assert.isTrue(Option.isNone(yield* tryWithWorkspaceSubtree(folder, Effect.die("busy"))));
+      assert.deepEqual(
+        yield* tryWithForeignWorkspaceSubtree(folder, Effect.succeed("rolled back")),
+        Option.some("rolled back"),
+      );
+      assert.equal(yield* other.answer("lease", folder + "/inner"), "held");
+      assert.isTrue(
+        Option.isNone(yield* tryWithForeignWorkspaceSubtree(folder, Effect.die("busy"))),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(turnStart);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "a released hold whose record could not be removed blocks until the next claim removes it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, base, dir, folder, other, holder } = yield* twoServers;
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const removal = yield* tryWithWorkspaceSubtree(
+          folder,
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(held);
+        const name = (yield* fs.readDirectory(dir)).find(
+          (entry) => entry.startsWith(holder + ".") && entry.endsWith(".json"),
+        );
+        assert.isDefined(name);
+        const record = dir + "/" + name;
+        const contents = yield* fs.readFileString(record);
+        // A directory in its place makes the release's unlink fail.
+        yield* fs.remove(record);
+        yield* fs.makeDirectory(record);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(removal);
+        yield* fs.remove(record, { recursive: true });
+        yield* fs.writeFileString(record, contents);
+        assert.equal(yield* other.answer("lease", folder + "/inner"), "busy");
+        assert.deepEqual(
+          yield* tryWithWorkspaceLease(base + "/elsewhere", Effect.succeed(1)),
+          Option.some(1),
+        );
+        assert.isFalse(yield* fs.exists(record));
+        assert.equal(yield* other.answer("lease", folder + "/inner"), "held");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
 );

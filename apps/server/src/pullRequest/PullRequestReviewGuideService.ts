@@ -300,17 +300,12 @@ const make = Effect.gen(function* () {
       },
       { concurrency: 4 },
     );
-    const directory = yield* fileSystem.makeTempDirectory({
-      directory: config.worktreesDir,
-      prefix: "review-guide-",
-    });
-    const path = `${directory}/checkout`;
     // Held whole while it goes, so nothing on this or another GOAT server is inside it then.
-    yield* Effect.addFinalizer(() =>
+    const removeGuideCheckout = (directory: string) =>
       tryWithWorkspaceSubtree(
         directory,
         git
-          .removeWorktree({ cwd: workspaceRoot, path, force: true })
+          .removeWorktree({ cwd: workspaceRoot, path: `${directory}/checkout`, force: true })
           .pipe(
             Effect.ignore({ log: true }),
             Effect.andThen(fileSystem.remove(directory, { recursive: true })),
@@ -322,8 +317,12 @@ const make = Effect.gen(function* () {
             : Effect.logWarning("Review guide kept its checkout, which is in use", { directory }),
         ),
         Effect.ignore({ log: true }),
-      ),
+      );
+    const directory = yield* Effect.acquireRelease(
+      fileSystem.makeTempDirectory({ directory: config.worktreesDir, prefix: "review-guide-" }),
+      removeGuideCheckout,
     );
+    const path = `${directory}/checkout`;
     yield* git.execute({
       operation: "PullRequestReviewGuideService.addWorktree",
       cwd: workspaceRoot,

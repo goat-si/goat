@@ -56,7 +56,7 @@ import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import { unquoteGitPath } from "./gitQuotedPath.ts";
-import { tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
+import { tryWithForeignWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
   missingWindowsCheckoutSettings,
@@ -4112,8 +4112,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         (yield* readBranchTip(input.cwd, newBranch)) !== null;
       const realTarget = yield* fileSystem.realPath(targetPath).pipe(Effect.option);
       if (!branchCreated && Option.isNone(realTarget)) return;
-      // Held whole so no turn, here or in another GOAT server, starts in it while it goes.
-      const removed = yield* tryWithWorkspaceSubtree(
+      // Turn start may lease this folder while recreating it; keep other GOAT servers out.
+      const removed = yield* tryWithForeignWorkspaceSubtree(
         targetPath,
         Effect.gen(function* () {
           const claimed = (yield* readWorktreeRecords(

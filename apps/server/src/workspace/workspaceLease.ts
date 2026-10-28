@@ -108,6 +108,17 @@ const leave = (admission: Admission) =>
     if (admission.lease.users === 0) leases.delete(admission.cwd);
   });
 
+/** Releases a claim; a record that cannot be removed yet keeps blocking other servers, so say so. */
+const releaseClaim = (release: () => string | null) =>
+  Effect.suspend(() => {
+    const failed = release();
+    return failed === null
+      ? Effect.void
+      : Effect.logWarning("A released workspace lease is still visible to other GOAT servers", {
+          reason: failed,
+        });
+  });
+
 /**
  * Runs effect holding a claim other GOAT servers on this machine respect, or None while one of
  * theirs conflicts. A lease inside a folder this fiber holds whole needs none: that hold already
@@ -131,10 +142,7 @@ const withForeignClaim = <A, E, R>(
                 : Effect.fail(
                     new WorkspaceLeaseUnavailableError({ path: key, reason: claim.reason }),
                   ),
-          (claim) =>
-            Effect.sync(() => {
-              if (claim.kind === "acquired") claim.release();
-            }),
+          (claim) => (claim.kind === "acquired" ? releaseClaim(claim.release) : Effect.void),
         ),
   );
 
@@ -221,7 +229,7 @@ export const tryWithWorkspaceSubtree = <A, E, R>(
       const none = Option.none<{
         readonly key: string;
         readonly held: ReadonlyArray<string>;
-        readonly release: () => void;
+        readonly release: () => string | null;
       }>();
       if (busy) return Effect.succeed(none);
       const claim = claimWorkspace("subtree", key);
@@ -243,9 +251,25 @@ export const tryWithWorkspaceSubtree = <A, E, R>(
     (hold) =>
       Effect.suspend(() => {
         if (Option.isNone(hold)) return Effect.void;
-        hold.value.release();
         const released = subtrees.get(hold.value.key);
         subtrees.delete(hold.value.key);
-        return released === undefined ? Effect.void : Deferred.succeed(released, undefined);
+        return releaseClaim(hold.value.release).pipe(
+          Effect.andThen(
+            released === undefined ? Effect.void : Deferred.succeed(released, undefined),
+          ),
+        );
       }),
+  );
+
+/**
+ * Holds root whole against other GOAT servers only, for a caller that may already hold a lease on
+ * it here, such as turn start rolling back the checkout it failed to recreate. None while another
+ * server has a claim on root or inside it.
+ */
+export const tryWithForeignWorkspaceSubtree = <A, E, R>(
+  root: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+  Effect.withFiber((fiber) =>
+    withForeignClaim("subtree", canonical(root, fiber.getRef(HostProcess.Platform)), effect),
   );

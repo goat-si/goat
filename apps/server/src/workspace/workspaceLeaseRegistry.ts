@@ -19,7 +19,8 @@ import * as Schema from "effect/Schema";
 export type WorkspaceClaimKind = "lease" | "subtree";
 
 export type WorkspaceClaim =
-  | { readonly kind: "acquired"; readonly release: () => void }
+  /** release returns why the record could not be removed yet; the next claim retries it. */
+  | { readonly kind: "acquired"; readonly release: () => string | null }
   | { readonly kind: "busy" }
   | { readonly kind: "unavailable"; readonly reason: string };
 
@@ -34,12 +35,14 @@ interface Registry {
   readonly holder: string;
   readonly lock: NodeSqlite.DatabaseSync;
   readonly records: Set<string>;
+  /** Released records whose file could not be removed; they still block other servers. */
+  readonly unreleased: Set<string>;
   sequence: number;
 }
 
 let registry: Registry | undefined;
 
-const ACQUIRED_LOCALLY: WorkspaceClaim = { kind: "acquired", release: () => {} };
+const ACQUIRED_LOCALLY: WorkspaceClaim = { kind: "acquired", release: () => null };
 
 const isBusy = (cause: unknown) =>
   cause instanceof Error &&
@@ -55,6 +58,20 @@ const unlinkQuietly = (file: string) => {
   } catch {
     // Already gone, or Windows still has it open; a later reader removes it.
   }
+};
+
+/** Removes a released record, or keeps it for the next claim to retry and says why. */
+const removeRecord = (current: Registry, record: string): string | null => {
+  try {
+    NodeFS.unlinkSync(record);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") {
+      current.unreleased.add(record);
+      return `${record} could not be removed: ${errorText(cause)}`;
+    }
+  }
+  current.unreleased.delete(record);
+  return null;
 };
 
 /** Keys are canonical: forward slashes, no trailing slash. */
@@ -147,6 +164,10 @@ const scan = (current: Registry, kind: WorkspaceClaimKind, key: string): Workspa
 export function claimWorkspace(kind: WorkspaceClaimKind, key: string): WorkspaceClaim {
   const current = registry;
   if (current === undefined) return ACQUIRED_LOCALLY;
+  for (const leftover of current.unreleased) {
+    const failed = removeRecord(current, leftover);
+    if (failed !== null) return { kind: "unavailable", reason: failed };
+  }
   const name = `${current.holder}.${++current.sequence}`;
   const record = NodePath.join(current.dir, name + ".json");
   try {
@@ -162,9 +183,7 @@ export function claimWorkspace(kind: WorkspaceClaimKind, key: string): Workspace
     };
   }
   current.records.add(record);
-  const release = () => {
-    if (current.records.delete(record)) unlinkQuietly(record);
-  };
+  const release = () => (current.records.delete(record) ? removeRecord(current, record) : null);
   const verdict = scan(current, kind, key);
   if (verdict === null) return { kind: "acquired", release };
   release();
@@ -194,15 +213,23 @@ export function enableWorkspaceLeaseRegistry(dir: string): {
     unlinkQuietly(file);
     throw cause;
   }
-  const current: Registry = { dir, holder, lock, records: new Set(), sequence: 0 };
+  const current: Registry = {
+    dir,
+    holder,
+    lock,
+    records: new Set(),
+    unreleased: new Set(),
+    sequence: 0,
+  };
   registry = current;
   return {
     holder,
     disable: () => {
       if (registry !== current) return;
       registry = undefined;
-      for (const record of current.records) unlinkQuietly(record);
+      for (const record of [...current.records, ...current.unreleased]) unlinkQuietly(record);
       current.records.clear();
+      current.unreleased.clear();
       current.lock.close();
       for (const suffix of ["", "-journal"]) unlinkQuietly(file + suffix);
     },
