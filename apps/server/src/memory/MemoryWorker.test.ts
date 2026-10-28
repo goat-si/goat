@@ -1032,6 +1032,29 @@ describe("MemoryWorker", () => {
       assert.strictEqual((yield* store.pendingReports(100)).length, 1);
     }).pipe(Effect.provide(live(true))),
   );
+  it.effect(
+    "keeps one failure report per summary work and drops it once the memory is generated",
+    () => {
+      let calls = 0;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(now));
+        yield* seed;
+        const worker = yield* Worker.MemoryWorker;
+        const store = yield* Store.MemoryStore;
+        yield* worker.sweepDue();
+        assert.strictEqual((yield* store.pendingReports(100)).length, 1);
+        yield* TestClock.adjust(Worker.memoryRetryDelay(1));
+        yield* worker.sweepDue();
+        assert.strictEqual(calls, 2);
+        // Retries of the same work replace its report instead of adding one per attempt.
+        assert.strictEqual((yield* store.pendingReports(100)).length, 1);
+        yield* TestClock.adjust(Worker.memoryRetryDelay(2));
+        yield* worker.sweepDue();
+        assert.strictEqual(calls, 3);
+        assert.deepStrictEqual(yield* store.pendingReports(100), []);
+      }).pipe(Effect.provide(live(() => (++calls < 3 ? "synthetic failure" : undefined))));
+    },
+  );
   it.effect("deleted thread cancels its jobs before generation", () =>
     Effect.gen(function* () {
       yield* seed;

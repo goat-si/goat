@@ -360,13 +360,15 @@ export const makeReports = (
           !["summary", "consolidate"].includes(current.kind)
         )
           return yield* new MemoryStoreConflict({ code: "unsupported_operation" });
-        const reportId = hashText(`${environment}:${work.id}:${work.attempt}:failed`);
+        // Nothing delivers summary failures, so one row per work keeps the latest outcome without
+        // filling the space's report capacity with every retry.
+        const reportId = hashText(`${environment}:${work.id}:failed`);
         yield* stored(
           "generation-failure-intent",
           sql`INSERT INTO memory_report_outbox
         (report_id,space,memory_id,operation_id,resolution_id,attempt_id,resolving_environment_id,outcome,state,failure_code,created_at,report_kind,report_approved,attempts_known)
         VALUES (${reportId},${current.space},${current.memoryId},${metadata.operationId},NULL,${metadata.operationId},${environment},'failed','pending',${code},${input.now},${current.kind},1,1)
-        ON CONFLICT(report_id) DO NOTHING`,
+        ON CONFLICT(report_id) DO UPDATE SET failure_code=excluded.failure_code,created_at=excluded.created_at WHERE memory_report_outbox.state!='delivered'`,
         );
         // Keep the safe failure on its existing work even if report admission refused it.
         yield* stored(
