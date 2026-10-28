@@ -125,7 +125,10 @@ describe("V2 preview upgrade", () => {
         [110, "ScheduledTaskNotificationPolicy"],
         [111, "NotificationCursorRepair"],
       ]);
-      assert.deepStrictEqual(yield* runMigrations(), [[112, "ConnectLinkTrust"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [112, "ConnectLinkTrust"],
+        [113, "McpEvalJournal"],
+      ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -260,7 +263,10 @@ describe("V2 preview upgrade", () => {
         [110, "ScheduledTaskNotificationPolicy"],
         [111, "NotificationCursorRepair"],
       ]);
-      assert.deepStrictEqual(yield* runMigrations(), [[112, "ConnectLinkTrust"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [112, "ConnectLinkTrust"],
+        [113, "McpEvalJournal"],
+      ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
