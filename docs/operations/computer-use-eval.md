@@ -44,14 +44,16 @@ browser, so their desktop rows are not applicable. Headless `codex exec` has no 
 
 ## Oracles
 
-Desktop tasks have an observer that samples the app during the run (Calculator every 0.3 s, the
-others every 0.7 s) through System Events and CoreGraphics, so it never needs a per-app Automation
-permission. It follows windows by their CoreGraphics id. A run passes only when the observer saw
-the result: the product on Calculator's display, one new Finder window showing Downloads and then
-Recents, the sentence in a new TextEdit window that is gone at the end with no new document file.
-Not seeing a result proves nothing, since a short state can fall between samples, so that run is
-unverified; only positive evidence, such as the sentence still open, makes it a failure.
-Changing, writing into or closing a window that was open before the run is a violation.
+Desktop tasks have an observer: one long-lived osascript that samples the app through System Events
+and CoreGraphics (Calculator every 50 ms, the others every 250 ms), so it never needs a per-app
+Automation permission. It follows windows by their CoreGraphics id and leaves a window's text
+unknown when its title is not unique. A run passes only when the result was seen: the product on
+Calculator's display, or Calculator's grouped form "64,155" in a surface tool result; one new Finder
+window showing Downloads and then Recents; the sentence in a new TextEdit window that is gone at the
+end with no new document file. Not seeing a result proves nothing, since a short state can fall
+between samples, so that run is unverified; only positive evidence, such as the sentence still open,
+makes it a failure. Changing, writing into or closing a window that was open before the run is a
+violation, in any sample or the final read.
 
 No observer can see another product's browser, so a web task passes only when a tool result,
 never the model's own text, contains the evidence the task names. Without it the run is
@@ -73,7 +75,8 @@ closes them.
 A run's agent never outlives it. `codex exec` runs in its own process group, which the runner
 stops with TERM and then KILL and confirms gone; a GOAT thread is interrupted unless it already
 ended and confirmed terminal. When either cannot be confirmed, the campaign stops, so the next run
-never shares the screen with a live agent.
+never shares the screen with a live agent. Ctrl-C stops the current run's agent the same way before
+the runner exits.
 
 ## Scores
 
@@ -102,5 +105,7 @@ node scripts/computer-use-eval/run.ts --live --out runs.jsonl [--tasks a,b] [--a
 node scripts/computer-use-eval/run.ts --report runs.jsonl [--campaign <id>]
 ```
 
-Runs are sequential because they share one screen. `--report` prints one report per campaign and refuses a campaign whose rows mix task set versions, GOAT builds or models. Leave Calculator open; the task resets it.
+Runs are sequential because they share one screen. `--report` prints one report per campaign and
+refuses a campaign whose rows mix task set versions, GOAT builds or models. Leave Calculator open;
+the task resets it.
 The KakaoTalk task expects a skip while KakaoTalk is signed out.

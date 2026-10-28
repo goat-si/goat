@@ -6,6 +6,7 @@
  * they are sequential.
  */
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -31,6 +32,7 @@ import {
   WITNESSES,
   chromeTabCount,
   documentsSince,
+  readWitness,
   sampleUntil,
   windowInventory,
 } from "./macos.ts";
@@ -46,6 +48,19 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Cleanup that could not be confirmed: the next run would share the screen with a live agent. */
 class HaltError extends Error {}
+
+/** What the current run started, so an operator's Ctrl-C stops it before the runner exits. */
+const active: { client: Client | null; threadId: string | null; group: number | null } = {
+  client: null,
+  threadId: null,
+  group: null,
+};
+
+const stopActive = async () => {
+  if (active.group !== null) await stopGroup(active.group);
+  if (active.client !== null && active.threadId !== null)
+    await settleThread(active.client, active.threadId);
+};
 
 interface Client {
   readonly call: (path: string, args: JsonObject) => Promise<JsonObject>;
@@ -190,7 +205,10 @@ const runGoat = async (
   options: Options,
   title: string,
 ): Promise<Ran> => {
-  const launched = await client.call("thread.launch", {
+  // The same clientRequestId returns the same thread, so a launch whose answer was lost can be
+  // asked again to learn which thread to stop.
+  const launch = {
+    clientRequestId: NodeCrypto.randomUUID(),
     scratch: true,
     title,
     runtimeMode: "full-access",
@@ -204,13 +222,27 @@ const runGoat = async (
     },
     notifyOnCompletion: false,
     message: prompt,
+  };
+  const launched = await client.call("thread.launch", launch).catch(async (first: unknown) => {
+    try {
+      return await client.call("thread.launch", launch);
+    } catch (error) {
+      throw new HaltError(
+        "launch failed and its thread cannot be identified: " +
+          String(first) +
+          "; " +
+          String(error),
+      );
+    }
   });
   const threadId = String(launched["threadId"]);
+  active.threadId = threadId;
   const runId = String(launched["runId"]);
   try {
     return await followGoat(client, task, threadId, runId);
   } finally {
     await settleThread(client, threadId);
+    active.threadId = null;
   }
 };
 
@@ -315,6 +347,7 @@ const runCodex = (task: Task, prompt: string, options: Options): Promise<Ran> =>
     );
     const group = child.pid;
     if (group === undefined) return reject(new Error("codex exec did not start"));
+    active.group = group;
     const notes: Array<string> = [];
     let buffer = "";
     const events: Array<JsonObject> = [];
@@ -340,6 +373,7 @@ const runCodex = (task: Task, prompt: string, options: Options): Promise<Ran> =>
       clearTimeout(timer);
       try {
         await stopGroup(group);
+        active.group = null;
       } catch (error) {
         return reject(error);
       }
@@ -475,12 +509,12 @@ const runStep = async (
       status: "unsupported",
       error: arm.id + " has no " + task.surface + " surface",
     };
-  const witness = task.witness === null ? undefined : WITNESSES[task.witness];
-  const read = witness === undefined ? null : witness(task.expect);
+  const makeWitness = task.witness === null ? undefined : WITNESSES[task.witness];
+  const witness = makeWitness === undefined ? null : makeWitness(task.expect);
+  const read = witness === null ? null : () => readWitness(witness);
   const before = await snapshot(arm, task);
   const baseline = read === null ? {} : await read();
-  const sampler =
-    read === null ? null : sampleUntil(read, task.witness === "calculator" ? 300 : 700);
+  const sampler = witness === null ? null : sampleUntil(witness);
   const startedMs = Date.now();
   let ran: Ran;
   try {
@@ -497,7 +531,15 @@ const runStep = async (
   } catch (error) {
     await sampler?.stop();
     if (error instanceof HaltError) throw error;
-    return { ...head, status: "error", error: String(error) };
+    const after = await snapshot(arm, task).catch(() => null);
+    const left = after === null ? null : await leftoversOf(null, arm, task, before, after, [], {});
+    return {
+      ...head,
+      status: "error",
+      error: String(error),
+      leftovers: left?.left ?? [],
+      notes: after === null ? ["the end of the run could not be observed"] : [],
+    };
   }
   const samples = (await sampler?.stop()) ?? [];
   const final: JsonObject =
@@ -620,6 +662,18 @@ const main = async () => {
     : null;
   if (client === null && arms.some((arm) => arm.driver === "goat"))
     throw new Error("GOAT arms need GOAT_EVAL_ENDPOINT and GOAT_EVAL_AUTHORIZATION");
+  active.client = client;
+  for (const signal of ["SIGINT", "SIGTERM"] as const)
+    process.once(signal, () => {
+      console.error("stopping the current run before exiting");
+      stopActive().then(
+        () => process.exit(130),
+        (error: unknown) => {
+          console.error("could not confirm the run stopped: " + String(error));
+          process.exit(1);
+        },
+      );
+    });
   const goatVersion =
     client === null
       ? null

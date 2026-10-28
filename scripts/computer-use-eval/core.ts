@@ -173,7 +173,7 @@ export const ARMS: ReadonlyArray<ArmSpec> = [
     instruction:
       "Do all screen work, desktop apps and web pages alike, with the cua_repl JavaScript tool (computer use). Do not use other tools to operate apps or pages.",
     surfaceTool: /^(cua_repl|node_repl)\./u,
-    forbiddenTool: /cua[-_]driver|^goat\.|^shell .*\b(aside|codemode)\b/u,
+    forbiddenTool: /cua[-_]driver|^goat\.|^shell .*\b(aside|codemode)\b/su,
   },
   {
     id: "aside-repl",
@@ -181,8 +181,8 @@ export const ARMS: ReadonlyArray<ArmSpec> = [
     surfaces: ASIDE_ONLY_BROWSER,
     instruction:
       "Do all browser work through the aside repl command in the shell, in Aside's browser (run aside guide repl first if you need its API). Do not use other browsers or tools to operate pages.",
-    surfaceTool: /^shell .*\baside\s+(repl|guide)\b/u,
-    forbiddenTool: /^(cua_repl|node_repl|goat)\.|cua[-_]driver|^shell .*\bcodemode\b/u,
+    surfaceTool: /^shell .*\baside\s+(repl|guide)\b/su,
+    forbiddenTool: /^(cua_repl|node_repl|goat)\.|cua[-_]driver|^shell .*\bcodemode\b/su,
   },
   {
     id: "aside-codemode",
@@ -190,13 +190,13 @@ export const ARMS: ReadonlyArray<ArmSpec> = [
     surfaces: ASIDE_ONLY_BROWSER,
     instruction:
       "Do all browser work through the installed aside-codemode codemode command in the shell; the aside-jun skill describes its usage. Do not use other browsers or tools to operate pages.",
-    surfaceTool: /^shell .*\bcodemode\b/u,
-    forbiddenTool: /^(cua_repl|node_repl|goat)\.|cua[-_]driver|^shell .*\baside\s+repl\b/u,
+    surfaceTool: /^shell .*\bcodemode\b/su,
+    forbiddenTool: /^(cua_repl|node_repl|goat)\.|cua[-_]driver|^shell .*\baside\s+repl\b/su,
   },
 ];
 
 /** Shell commands that operate apps or pages outside every arm's surface. */
-const UI_FROM_SHELL = /^shell .*\b(osascript|cliclick|screencapture|open\s+(-a|-b|https?:))/u;
+const UI_FROM_SHELL = /^shell .*\b(osascript|cliclick|screencapture|open\s+(-a|-b|https?:))/su;
 
 /** Rules every arm gets, so the arms differ only in their instruction. */
 export const COMMON_RULES =
@@ -336,13 +336,14 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
     if (item.itemId.includes(":native-item:workspace-preparation")) continue;
     const text = item.text ?? "";
     if (item.type === "command_execution") {
-      const [first = "", ...rest] = text.split("\n");
+      // The activity text joins a command and its output with no boundary a multi-line command
+      // keeps, so all of it is input and none of it can serve as evidence.
       steps.push({
         kind: "tool",
         name: "shell",
         failed: item.status === "failed",
-        input: first.replace(/^\$\s*/u, ""),
-        output: rest.join("\n"),
+        input: text.replace(/^\$\s*/u, ""),
+        output: "",
       });
     } else if (GOAT_TOOL_TYPES.has(item.type)) {
       let name = item.type;
@@ -486,30 +487,39 @@ const trackWindows = (
   samples: ReadonlyArray<Sample>,
   final: JsonObject,
 ): WindowTrack => {
-  const before = new Map(windowsOf(baseline).map((row) => [row.id, row.title]));
+  const before = new Map(
+    (Array.isArray(baseline["windows"])
+      ? (baseline["windows"] as ReadonlyArray<Json>)
+      : []
+    ).flatMap((row) =>
+      isObject(row) && typeof row["id"] === "number"
+        ? [[row["id"], { title: asText(row["title"]), hasTarget: row["hasTarget"] }] as const]
+        : [],
+    ),
+  );
   const created = new Map<number, Array<JsonObject>>();
   const violations = new Set<string>();
-  for (const sample of samples) {
-    const rows = Array.isArray(sample.value["windows"])
-      ? (sample.value["windows"] as ReadonlyArray<Json>)
-      : [];
+  // The final read is checked like a sample, so a change after the last sample still counts.
+  for (const value of [...samples.map((sample) => sample.value), final]) {
+    const rows = Array.isArray(value["windows"]) ? (value["windows"] as ReadonlyArray<Json>) : [];
     for (const row of rows) {
       if (!isObject(row) || typeof row["id"] !== "number") continue;
       const was = before.get(row["id"]);
       if (was !== undefined) {
-        if (was !== asText(row["title"]))
+        if (was.title !== asText(row["title"]))
           violations.add(
             "changed a " +
               app +
               " window open before the run: " +
-              was +
+              was.title +
               " → " +
               asText(row["title"]),
           );
-        if (row["hasTarget"] === true)
+        if (row["hasTarget"] === true && was.hasTarget === false)
           violations.add("wrote into a " + app + " window open before the run");
         continue;
       }
+      if (value === final) continue;
       const seen = created.get(row["id"]) ?? [];
       if (JSON.stringify(seen.at(-1)) !== JSON.stringify(row)) seen.push(row as JsonObject);
       created.set(row["id"], seen);
@@ -517,24 +527,37 @@ const trackWindows = (
   }
   if (Array.isArray(final["windows"])) {
     const open = new Set(windowsOf(final).map((row) => row.id));
-    for (const [id, title] of before)
+    for (const [id, was] of before)
       if (!open.has(id))
-        violations.add("closed a " + app + " window open before the run: " + title);
+        violations.add("closed a " + app + " window open before the run: " + was.title);
   }
   return { created, violations: [...violations] };
 };
 
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
-  calculatorMultiply: ({ task, samples }) => {
+  calculatorMultiply: ({ task, samples, toolOutputs }) => {
     const target = digits(task.expect["result"]);
     const saw = samples.some((sample) => digits(sample.value["display"]) === target);
+    // Calculator groups digits ("64,155") where arithmetic in a script would not, so a surface
+    // result holding that form was read from its display.
+    const read =
+      task.evidence.length > 0 &&
+      task.evidence.every((group) => toolOutputs.some((output) => groupHolds(group, output)));
     // Not seeing it proves nothing: a read and reset can fall between two samples.
     return {
-      actual: saw ? "done" : "unverified",
-      notes: saw ? [] : ["the observer never saw " + target + " on Calculator's display"],
+      actual: saw || read ? "done" : "unverified",
+      notes:
+        saw || read
+          ? []
+          : [
+              "neither the observer nor a tool result showed " +
+                target +
+                " on Calculator's display",
+            ],
       violations: [],
     };
   },
+
   finderSidebar: ({ baseline, samples, final }) => {
     const track = trackWindows("Finder", baseline, samples, final);
     const visited = [...track.created.values()].some((rows) => {
@@ -555,10 +578,15 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     const typed = [...track.created.values()].some((rows) =>
       rows.some((row) => row["hasTarget"] === true),
     );
+    const earlier = new Set(windowsOf(baseline).map((row) => row.id));
     const stillOpen =
       windowsOf(final).length > 0 &&
       (final["windows"] as ReadonlyArray<Json>).some(
-        (row) => isObject(row) && row["hasTarget"] === true,
+        (row) =>
+          isObject(row) &&
+          row["hasTarget"] === true &&
+          typeof row["id"] === "number" &&
+          !earlier.has(row["id"]),
       );
     const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
     const violations = [
@@ -578,21 +606,19 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     };
   },
   kakaoTabs: ({ baseline, samples, final }) => {
-    if (baseline["loggedIn"] !== true)
-      return {
-        actual: "skipped",
-        notes: ["KakaoTalk was signed out before the run"],
-        violations: [],
-      };
     const track = trackWindows("KakaoTalk", baseline, samples, final);
     const opened =
       track.created.size > 0 ? ["opened another KakaoTalk window, possibly a chat room"] : [];
+    const violations = [...track.violations, ...opened];
+    if (baseline["loggedIn"] !== true)
+      return { actual: "skipped", notes: ["KakaoTalk was signed out before the run"], violations };
     return {
       actual: "unverified",
       notes: ["the observer cannot read which KakaoTalk tab is selected"],
-      violations: [...track.violations, ...opened],
+      violations,
     };
   },
+
   webEvidence: ({ task, toolOutputs }) => {
     const missing = task.sameResult
       ? toolOutputs.some((output) => task.evidence.every((group) => groupHolds(group, output)))
@@ -643,8 +669,7 @@ export const judge = (task: Task, answer: JsonObject | null, oracle: OracleResul
   const claimed: Status | null =
     status === "done" || status === "failed" || status === "skipped" ? status : null;
   // A violation means the task was not done as asked, whatever the evidence of its result.
-  const actual: Actual =
-    oracle.violations.length > 0 && oracle.actual !== "skipped" ? "failed" : oracle.actual;
+  const actual: Actual = oracle.violations.length > 0 ? "failed" : oracle.actual;
   const valueErrors =
     claimed === "done"
       ? Object.entries(task.expect)
@@ -768,7 +793,10 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
       return own === null ? [] : [best / own];
     });
     const web = mine.filter((row) => row.surface === "web");
-    const clean = mine.filter((row) => row.leftovers.length === 0 && row.violations.length === 0);
+    // A run whose end was not observed cannot count as clean.
+    const clean = mine.filter(
+      (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
+    );
     const guided = mine.filter(
       (row) =>
         row.metrics !== null &&

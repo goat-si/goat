@@ -1,14 +1,22 @@
 {
-  "version": 1,
+  "version": 2,
   "tasks": [
     {
       "id": "calculator-multiply",
       "surface": "desktop",
-      "prompt": "Calculator is already open on this Mac. Use its existing window and do not open another. Clear it, enter 987 × 65 = in Calculator itself and read the result from Calculator's display; do not compute it yourself. Then press Escape in Calculator so its display returns to 0, and leave Calculator open.",
+      "prompt": "Calculator is already open on this Mac. Use its existing window and do not open another. Clear it, enter 987 × 65 = in Calculator itself and read the result from Calculator's display; do not compute it yourself. Then press Escape in Calculator so its display returns to 0, and leave Calculator open. Report result as the number Calculator displayed, digits only.",
       "answerKeys": ["status", "result"],
       "expect": {
         "result": "64155"
       },
+      "evidence": [
+        [
+          {
+            "pattern": "64,155",
+            "label": "64,155 read from Calculator"
+          }
+        ]
+      ],
       "witness": "calculator",
       "oracle": "calculatorMultiply",
       "deadlineMs": 300000
@@ -86,12 +94,12 @@
             "label": "[true, false] read from the page"
           },
           {
-            "pattern": "checked\\W{0,4}true[\\s\\S]{0,120}checked\\W{0,4}false",
+            "pattern": "\"?checked\"?\\s*:\\s*true[\\s\\S]{0,80}?\"?checked\"?\\s*:\\s*false",
             "label": "checked true then false"
           },
           {
-            "pattern": "checkbox[^\\n]*\\bchecked\\b[^\\n]*\\n[^\\n]*checkbox(?![^\\n]*\\bchecked\\b)",
-            "label": "first checkbox checked, second not"
+            "pattern": "checkbox[^\\n]*\\[checked\\][^\\n]*\\n[^\\n]*checkbox(?![^\\n]*\\[checked)",
+            "label": "first checkbox [checked], second not"
           }
         ]
       ],
@@ -131,7 +139,7 @@
         ],
         [
           {
-            "pattern": "radio[^\\n]*medium[^\\n]*\\bchecked\\b|\\bchecked\\b[^\\n]*medium|\"size\"\\s*:\\s*\"medium\"|value=\"medium\"[^>]*\\bchecked\\b",
+            "pattern": "radio[^\\n]*medium[^\\n]*\\[checked\\]|\\{[^{}]*medium[^{}]*\"?checked\"?\\s*:\\s*true[^{}]*\\}|\\{[^{}]*\"?checked\"?\\s*:\\s*true[^{}]*medium[^{}]*\\}|\"size\"\\s*:\\s*\"medium\"|value=\"medium\"[^>]*\\schecked(?![=\\w-])",
             "label": "Medium selected"
           }
         ],

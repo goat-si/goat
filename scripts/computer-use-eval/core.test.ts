@@ -310,7 +310,7 @@ describe("oracles", () => {
       }).violations,
     ).toHaveLength(1);
     const theirs = oracle("textedit-korean-discard", {
-      baseline: { windows: [{ id: 4, title: "notes.rtf" }] },
+      baseline: { windows: [{ id: 4, title: "notes.rtf", hasTarget: false }] },
       samples: [at({ windows: [{ id: 4, title: "notes.rtf", hasTarget: true }] })],
       final: { windows: [], savedFiles: [] },
     });
@@ -503,5 +503,109 @@ describe("the report", () => {
       row("a", "fail", 5_000, { contended: true }),
     ]);
     expect(only).toMatchObject({ runs: 1, passed: 1 });
+  });
+});
+
+describe("round two fixes", () => {
+  it("keeps window violations when KakaoTalk is skipped, and they outrank the skip", () => {
+    const result = oracle("kakaotalk-tabs", {
+      baseline: { loggedIn: false, windows: [{ id: 5, title: "Log in" }] },
+      final: { windows: [] },
+    });
+    expect(result).toMatchObject({
+      actual: "skipped",
+      violations: ["closed a KakaoTalk window open before the run: Log in"],
+    });
+    expect(
+      judge(task("kakaotalk-tabs"), { status: "skipped", startTab: null, visited: [] }, result),
+    ).toMatchObject({ actual: "failed", outcome: "fail" });
+  });
+
+  it("sees a change to an earlier Finder window in the final read too", () => {
+    const result = oracle("finder-sidebar", {
+      baseline: { windows: [{ id: 1, title: "Recents" }] },
+      samples: [at({ windows: [{ id: 1, title: "Recents" }] })],
+      final: { windows: [{ id: 1, title: "Downloads" }] },
+    });
+    expect(result.violations).toEqual([
+      "changed a Finder window open before the run: Recents → Downloads",
+    ]);
+  });
+
+  it("does not blame the run for a sentence an earlier TextEdit document already held, or count text it cannot place", () => {
+    const held = oracle("textedit-korean-discard", {
+      baseline: { windows: [{ id: 4, title: "notes.rtf", hasTarget: true }] },
+      samples: [at({ windows: [{ id: 4, title: "notes.rtf", hasTarget: true }] })],
+      final: { windows: [{ id: 4, title: "notes.rtf", hasTarget: true }], savedFiles: [] },
+    });
+    expect(held).toMatchObject({ actual: "unverified", violations: [] });
+    const ambiguous = oracle("textedit-korean-discard", {
+      samples: [at({ windows: [{ id: 7, title: "Untitled", hasTarget: null }] })],
+      final: { windows: [], savedFiles: [] },
+    });
+    expect(ambiguous.actual).toBe("unverified");
+  });
+
+  it("takes Calculator's grouped result from a tool result when no sample caught it", () => {
+    expect(
+      oracle("calculator-multiply", {
+        samples: [at({ display: "0" })],
+        toolOutputs: ['{"display":"64,155"}'],
+      }).actual,
+    ).toBe("done");
+    expect(
+      oracle("calculator-multiply", { samples: [at({ display: "0" })], toolOutputs: ["64155"] })
+        .actual,
+    ).toBe("unverified");
+  });
+
+  it("refuses an unselected Medium radio as the form's size", () => {
+    const read =
+      '- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n{"role":"radio","name":"Medium","checked":false}\n- textbox "Delivery instructions": 평가용 입력';
+    expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("unverified");
+  });
+
+  it("checks a whole multi-line GOAT shell command and never uses it as evidence", () => {
+    const transcript = goatTranscript([
+      {
+        itemId: "s",
+        type: "command_execution",
+        status: "completed",
+        text: "$ cd /tmp\naside repl 'await openTab(\"https://example.com\")'\nExample Domain",
+      },
+    ]);
+    const [step] = transcript.steps;
+    expect(step?.output).toBe("");
+    expect(metricsOf(transcript.steps, arm("goat-screen-run")).contamination).toHaveLength(1);
+  });
+
+  it("does not count a run whose end was not observed as clean", () => {
+    const base = {
+      kind: "run",
+      campaignId: "c",
+      at: "",
+      goatVersion: "v",
+      taskSetVersion: 2,
+      task: "web-form",
+      surface: "web",
+      arm: "a",
+      model: "m",
+      contended: false,
+      claimed: null,
+      answerError: null,
+      actual: null,
+      outcome: null,
+      misreport: null,
+      valueErrors: [],
+      violations: [],
+      leftovers: [],
+      notes: [],
+      metrics: null,
+      tokens: null,
+      wallMs: null,
+      ref: null,
+    } as const;
+    const [only] = scoreArms([{ ...base, status: "error", error: "RPC failed" }]);
+    expect(only?.coexistence).toBe(0);
   });
 });

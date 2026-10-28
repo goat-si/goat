@@ -44,12 +44,6 @@ const CG_WINDOWS =
   ".filter((w) => w.kCGWindowLayer === 0)" +
   ".map((w) => ({ id: w.kCGWindowNumber, owner: w.kCGWindowOwnerName, title: w.kCGWindowName || '' }));";
 
-const ownerWindows = (owner: string) =>
-  CG_WINDOWS +
-  "JSON.stringify({ windows: cgWindows().filter((w) => w.owner === " +
-  JSON.stringify(owner) +
-  ").map(({ id, title }) => ({ id, title })) })";
-
 /** On-screen, normal-layer windows of every app. */
 export const windowInventory = async () => {
   const value = await jxa(CG_WINDOWS + "JSON.stringify({ windows: cgWindows() })");
@@ -58,38 +52,55 @@ export const windowInventory = async () => {
 
 // The display's path in Calculator's accessibility tree on macOS 26; null when it moves.
 const CALCULATOR =
-  "const se = Application('System Events'); const procs = se.processes.whose({ name: 'Calculator' });" +
-  "let result = { running: procs.length > 0, display: null };" +
+  "const procs = se.processes.whose({ name: 'Calculator' });" +
+  "const result = { running: procs.length > 0, display: null };" +
   "if (procs.length > 0 && procs[0].windows.length > 0) { try { result.display = procs[0].windows[0]" +
   ".uiElements[0].uiElements[0].uiElements[1].uiElements[0].uiElements[0].uiElements[0].value(); } catch (e) { result.error = String(e); } }" +
-  "JSON.stringify(result)";
+  "return result;";
 
-// CoreGraphics gives each window a stable id; System Events gives its text. They meet on the title.
+// CoreGraphics gives each window a stable id and System Events its text; they meet on the title,
+// so text is unknown (null) for windows whose title is not unique.
 const textEdit = (target: string) =>
-  CG_WINDOWS +
-  "const se = Application('System Events'); const procs = se.processes.whose({ name: 'TextEdit' });" +
-  "const windows = procs.length === 0 ? [] : procs[0].windows().map((w) => { let hasTarget = false;" +
+  "const procs = se.processes.whose({ name: 'TextEdit' });" +
+  "const texts = procs.length === 0 ? [] : procs[0].windows().map((w) => { let hasTarget = null;" +
   "try { hasTarget = String(w.scrollAreas[0].textAreas[0].value()).includes(" +
   JSON.stringify(target) +
   "); } catch (e) {}" +
   "return { title: w.name(), hasTarget }; });" +
-  "JSON.stringify({ running: procs.length > 0, windows: cgWindows().filter((w) => w.owner === 'TextEdit')" +
-  ".map(({ id, title }) => ({ id, title, hasTarget: windows.some((s) => s.title === title && s.hasTarget) })) })";
+  "const own = cgWindows().filter((w) => w.owner === 'TextEdit');" +
+  "return { running: procs.length > 0, windows: own.map(({ id, title }) => { const same = texts.filter((t) => t.title === title);" +
+  "const unique = same.length === 1 && own.filter((w) => w.title === title).length === 1;" +
+  "return { id, title, hasTarget: unique ? same[0].hasTarget : null }; }) };";
 
 const KAKAO =
-  CG_WINDOWS +
   "const windows = cgWindows().filter((w) => w.owner === 'KakaoTalk').map(({ id, title }) => ({ id, title }));" +
-  "JSON.stringify({ windows, loggedIn: windows.length > 0 && !windows.some((w) => /^(log ?in|로그인)$/i.test(w.title)) })";
+  "return { windows, loggedIn: windows.length > 0 && !windows.some((w) => /^(log ?in|로그인)$/i.test(w.title)) };";
 
-/** Task witnesses: each returns one sample of the state its oracle judges. */
-export const WITNESSES: Readonly<
-  Record<string, (expect: JsonObject) => () => Promise<JsonObject>>
-> = {
-  calculator: () => () => jxa(CALCULATOR),
-  finder: () => () => jxa(ownerWindows("Finder")),
-  textEdit: (expect) => () => jxa(textEdit(String(expect["typedText"] ?? ""))),
-  kakao: () => () => jxa(KAKAO),
+const ownerWindows = (owner: string) =>
+  "return { windows: cgWindows().filter((w) => w.owner === " +
+  JSON.stringify(owner) +
+  ").map(({ id, title }) => ({ id, title })) };";
+
+const PRELUDE = CG_WINDOWS + "const se = Application('System Events');";
+
+export interface Witness {
+  /** A JXA function body that returns one sample. */
+  readonly body: string;
+  /** How often the observer samples during a run. */
+  readonly intervalMs: number;
+}
+
+/** Task witnesses: each samples the state its oracle judges. */
+export const WITNESSES: Readonly<Record<string, (expect: JsonObject) => Witness>> = {
+  calculator: () => ({ body: CALCULATOR, intervalMs: 50 }),
+  finder: () => ({ body: ownerWindows("Finder"), intervalMs: 250 }),
+  textEdit: (expect) => ({ body: textEdit(String(expect["typedText"] ?? "")), intervalMs: 250 }),
+  kakao: () => ({ body: KAKAO, intervalMs: 250 }),
 };
+
+/** One sample, read once. */
+export const readWitness = (witness: Witness) =>
+  jxa(PRELUDE + "JSON.stringify((() => {" + witness.body + "})())");
 
 /** Tab counts of Chrome's on-screen windows, read from its tab strip. */
 export const chromeTabCount = async (): Promise<number | null> => {
@@ -135,29 +146,46 @@ export const documentsSince = (sinceMs: number): ReadonlyArray<string> =>
   });
 
 /**
- * Samples a witness until stopped, keeping a sample only when it differs from the one before.
- * A failed read becomes a sample too, so a broken witness shows in the row.
+ * Samples a witness until stopped from one long-lived osascript, so a short state, such as a
+ * result shown and cleared within one cell, is still caught. Only changes are kept, and a failed
+ * read becomes a sample too, so a broken witness shows in the row.
  */
-export const sampleUntil = (read: () => Promise<JsonObject>, intervalMs: number) => {
+export const sampleUntil = (witness: Witness) => {
   const samples: Array<{ atMs: number; value: JsonObject }> = [];
   const start = Date.now();
-  const state = { stopped: false };
+  const child = NodeChildProcess.spawn("osascript", ["-l", "JavaScript"], {
+    stdio: ["pipe", "ignore", "pipe"],
+  });
+  let buffer = "";
   let last = "";
-  const loop = (async () => {
-    while (!state.stopped) {
-      const value = await read().catch(
-        (error: unknown) => ({ witnessError: String(error) }) as JsonObject,
-      );
-      const key = JSON.stringify(value);
-      if (key !== last) samples.push({ atMs: Date.now() - start, value });
-      last = key;
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  child.stderr.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("{") || line === last) continue;
+      last = line;
+      try {
+        samples.push({ atMs: Date.now() - start, value: JSON.parse(line) as JsonObject });
+      } catch {
+        samples.push({ atMs: Date.now() - start, value: { witnessError: line.slice(0, 200) } });
+      }
     }
-  })();
+  });
+  const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
+  // console.log in osascript writes to stderr.
+  child.stdin.end(
+    PRELUDE +
+      "while (true) { let line; try { line = JSON.stringify((() => {" +
+      witness.body +
+      "})()); } catch (e) { line = JSON.stringify({ witnessError: String(e) }); } console.log(line); delay(" +
+      witness.intervalMs / 1000 +
+      "); }",
+  );
   return {
     stop: async () => {
-      state.stopped = true;
-      await loop;
+      child.kill("SIGTERM");
+      await closed;
       return samples;
     },
   };
