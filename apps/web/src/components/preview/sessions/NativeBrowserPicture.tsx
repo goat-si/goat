@@ -11,6 +11,7 @@ import { cn } from "~/lib/utils";
 import { type DesktopPreviewOverlay, useThreadPreviewState } from "~/previewStateStore";
 
 import { AgentBrowserCursor } from "../AgentBrowserCursor";
+import { BROWSER_SCREEN_ASPECT, FittedScreen } from "./PreviewSessionThumbnail";
 
 /**
  * The stack is `fixed z-40`, so anything inside a card stays below 40. The tab's webview sits just
@@ -19,8 +20,8 @@ import { AgentBrowserCursor } from "../AgentBrowserCursor";
  */
 const WEBVIEW_Z_INDEX = 41;
 const OVERLAY_Z_INDEX = 42;
-/** The picture's rounded-xl corners, so the webview is clipped like the frame around it. */
-const PICTURE_RADIUS_PX = 12;
+/** The screen's rounded-lg corners, so the webview is clipped like the screen it stands for. */
+const SCREEN_RADIUS_PX = 8;
 
 /** Marks the stack's scrolling list; a webview is shown only while its picture is fully inside it. */
 export const AGENT_CARDS_SCROLL_ATTRIBUTE = "data-agent-cards-scroll";
@@ -82,8 +83,6 @@ export function NativeBrowserPicture(props: {
   readonly live: boolean;
   /** Changes whenever the stack moves the card without resizing it. */
   readonly layoutVersion: string;
-  /** The tone ring the card draws around its picture, redrawn over the webview. */
-  readonly ringClassName: string;
   /** The picture's corner controls, drawn in the card or, over the webview, in the layer above it. */
   readonly controls: (layer: { readonly overWebview: boolean }) => ReactNode;
   readonly fallback: ReactNode;
@@ -103,17 +102,21 @@ export function NativeBrowserPicture(props: {
         <div className={cn("size-full", covered && "invisible")} aria-hidden={covered || undefined}>
           {props.fallback}
         </div>
-        <BrowserSurfaceSlot
-          tabId={runtimeTabId}
-          visible={props.live && inView && overlay?.hasWebContents !== false}
-          passive
-          fitSourceContent
-          cornerRadius={PICTURE_RADIUS_PX}
-          zIndex={WEBVIEW_Z_INDEX}
-          layoutVersion={props.layoutVersion}
-          onPresentedChange={setPresented}
-          className="absolute inset-0"
-        />
+        <div className="absolute inset-0">
+          <FittedScreen aspect={BROWSER_SCREEN_ASPECT} lifted={covered}>
+            <BrowserSurfaceSlot
+              tabId={runtimeTabId}
+              visible={props.live && inView && overlay?.hasWebContents !== false}
+              passive
+              fitSourceContent
+              cornerRadius={SCREEN_RADIUS_PX}
+              zIndex={WEBVIEW_Z_INDEX}
+              layoutVersion={props.layoutVersion}
+              onPresentedChange={setPresented}
+              className="absolute inset-0"
+            />
+          </FittedScreen>
+        </div>
         {covered ? null : props.controls({ overWebview: false })}
       </div>
       {covered
@@ -133,20 +136,13 @@ export function NativeBrowserPicture(props: {
                 width: rect.width,
                 height: rect.height,
                 zIndex: OVERLAY_Z_INDEX,
-                borderRadius: PICTURE_RADIUS_PX,
+                borderRadius: SCREEN_RADIUS_PX,
               }}
             >
               <AgentBrowserCursor
                 tabId={runtimeTabId}
                 zoomFactor={zoomFactor}
                 controller={overlay?.controller ?? "none"}
-              />
-              <div
-                aria-hidden
-                className={cn(
-                  "pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset",
-                  props.ringClassName,
-                )}
               />
               {props.controls({ overWebview: true })}
             </div>,

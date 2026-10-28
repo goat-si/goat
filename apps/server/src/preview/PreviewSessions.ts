@@ -34,6 +34,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { hasCard } from "../cua/ComputerUseControl.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import {
@@ -153,6 +154,8 @@ export const desktopSession = (
   state: ComputerUseLeases.ComputerUseControlState,
   detection: ComputerUseLeases.ComputerUseDetection,
   handoffReason?: string,
+  /** The app of the window the agent last acted on, as its lease proxy learned it. */
+  bundleId?: string,
 ): PreviewSession | undefined => {
   const waiting = handoffReason !== undefined && state._tag !== "ended";
   // A turn's provider gets a control whether or not its agent touches the screen; one that only
@@ -175,6 +178,7 @@ export const desktopSession = (
     target: {
       kind: "desktop",
       motionSupport: base.platform === "mac" && detection.frames ? "supported" : "unsupported",
+      ...(bundleId === undefined ? {} : { bundleId }),
       ...(control.target === undefined
         ? {}
         : { pid: control.target.pid, windowId: control.target.windowId }),
@@ -258,6 +262,7 @@ const make = Effect.gen(function* () {
         )
       : Effect.void;
   const desktopFrames = yield* DesktopFrames.DesktopFrames;
+  const callApps = yield* ComputerUseCallApps;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const handoffs = yield* Handoffs.Handoffs;
   const requests = yield* Effect.serviceOption(PreviewHandoffs.PreviewHandoffs);
@@ -284,6 +289,7 @@ const make = Effect.gen(function* () {
           state,
           detection,
           reasons.get(control.controlId),
+          control.target === undefined ? undefined : callApps.bundleIdOf(control.target.pid),
         );
         if (session) sessions.push(session);
       }

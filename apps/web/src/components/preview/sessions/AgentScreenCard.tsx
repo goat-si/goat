@@ -45,6 +45,7 @@ import { useThreadShell } from "~/state/entities";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useEnvironmentScope } from "~/state/session";
 
+import { NativeAppIcon } from "../../chat/TimelineToolActivityIcon";
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { BrowserCardActions } from "./BrowserCardActions";
 import { NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
@@ -132,21 +133,43 @@ function CornerButton(props: {
   );
 }
 
-const KindIcon = (props: { readonly session: PreviewSession }) =>
-  props.session.kind === "browser" ? (
-    <GlobeIcon className="size-4 shrink-0 text-muted-foreground" />
-  ) : (
-    <MonitorIcon className="size-4 shrink-0 text-muted-foreground" />
-  );
+/** The header's icon, the size of the app icon a desktop card shows. */
+const ICON_TILE =
+  "flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground";
+
+const KindIcon = (props: { readonly session: PreviewSession }) => (
+  <span className={ICON_TILE}>
+    {props.session.kind === "browser" ? (
+      <GlobeIcon className="size-4" />
+    ) : (
+      <MonitorIcon className="size-4" />
+    )}
+  </span>
+);
 
 /** The page's favicon as the thread's browser recorded it; the server's URL may not load here. */
 function ThreadFavicon(props: { readonly threadRef: ScopedThreadRef; readonly url: string }) {
   const favicon = useFaviconForThreadUrl(props.threadRef, props.url);
   return (
-    <FaviconImage
-      sources={[favicon]}
-      fallback={<GlobeIcon className="size-4 shrink-0 text-muted-foreground" />}
-      className="size-4 shrink-0 rounded-sm"
+    <span className={ICON_TILE}>
+      <FaviconImage
+        sources={[favicon]}
+        fallback={<GlobeIcon className="size-4" />}
+        className="size-4 rounded-sm"
+      />
+    </span>
+  );
+}
+
+/** The app the agent last acted in, as timeline rows show it; the session kind's icon until then. */
+function DesktopAppIcon(props: { readonly session: PreviewSession; readonly bundleId: string }) {
+  return (
+    <NativeAppIcon
+      environmentId={props.session.environmentId}
+      app={{ _tag: "app-id", appId: props.bundleId }}
+      className="size-7 shrink-0"
+      bare
+      fallback={<KindIcon session={props.session} />}
     />
   );
 }
@@ -196,8 +219,9 @@ export interface AgentScreenCardViewProps {
 }
 
 /**
- * One agent-driven browser tab or desktop app, in Aside's card: a single line naming it, then its
- * picture. Controls sit on the picture's corners and appear on hover, keyboard focus, or a tap.
+ * One agent-driven browser tab or desktop app, in Aside's card: its icon, name and app or site,
+ * then its screen floating in a well. Controls sit on the well's corners and appear on hover,
+ * keyboard focus, or a tap.
  */
 export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const { session } = props;
@@ -424,20 +448,25 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       aria-label={`${name}: ${chip}`}
       style={props.width === undefined ? undefined : { width: props.width }}
       // Clipped content would otherwise let the scrolling list squeeze a card instead of scrolling.
-      className="group/card pointer-events-auto shrink-0 overflow-hidden rounded-2xl border bg-popover/95 p-1.5 text-popover-foreground shadow-lg backdrop-blur-sm"
+      className="group/card pointer-events-auto shrink-0 overflow-hidden rounded-2xl border bg-popover/95 p-3 text-popover-foreground shadow-lg backdrop-blur-sm"
     >
-      <div className="flex h-7 items-center gap-2 px-1.5 pb-1">
+      {/* Two fixed-height lines, so the layout's card chrome stays exact; the dot says who holds it. */}
+      <div className="relative flex h-[46px] items-center gap-2.5 px-0.5 pb-2.5">
         {props.icon ?? <KindIcon session={session} />}
         <Tooltip>
-          <TooltipTrigger render={<span className="min-w-0 flex-1 truncate font-medium text-sm" />}>
-            {name}
+          <TooltipTrigger render={<span className="flex min-w-0 flex-1 flex-col" />}>
+            <span className="truncate font-medium text-sm leading-5">{name}</span>
+            <span className="truncate text-muted-foreground text-xs leading-4">
+              {previewSessionDetail(session)}
+            </span>
           </TooltipTrigger>
           <TooltipPopup side="top">{detail ? `${detail} · ${chip}` : chip}</TooltipPopup>
         </Tooltip>
         {props.headerAction || browser ? (
+          // Over the name's end, so a hidden control never takes the name's room.
           <span
             className={cn(
-              "flex shrink-0 items-center gap-0.5 transition-opacity motion-reduce:transition-none",
+              "absolute top-0 right-5 flex h-9 items-center gap-0.5 rounded-lg bg-popover pl-1 transition-opacity motion-reduce:transition-none",
               shown ? "opacity-100" : HIDDEN_UNTIL_HOVER,
             )}
           >
@@ -469,13 +498,15 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       </div>
       {session.handoffReason ? (
         // What the agent asked the person to do, until they hand the screen back.
-        <p className="line-clamp-2 px-1.5 pb-1.5 text-muted-foreground text-xs">
+        <p className="line-clamp-2 px-0.5 pb-2.5 text-muted-foreground text-xs">
           {session.handoffReason}
         </p>
       ) : null}
+      {/* The screen floats in this well; the well, not the screen, wears who holds it. */}
       <div
         className={cn(
-          "relative aspect-[16/10] overflow-hidden rounded-xl bg-muted ring-1 ring-inset",
+          "relative aspect-[16/10] overflow-hidden rounded-xl bg-muted/70 ring-1 ring-inset",
+          large ? "p-4" : "p-2",
           tone.ring,
         )}
         onPointerDown={reveal}
@@ -485,7 +516,6 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
             hosted={hosted}
             live={props.live}
             layoutVersion={`${props.layoutVersion ?? ""}|${large ? "large" : "card"}`}
-            ringClassName={tone.ring}
             controls={corners}
             fallback={picture}
           />
@@ -552,6 +582,8 @@ export function AgentScreenCard(
       icon={
         threadRef && session.target.kind === "browser" ? (
           <ThreadFavicon threadRef={threadRef} url={session.target.url} />
+        ) : session.target.kind === "desktop" && session.target.bundleId !== undefined ? (
+          <DesktopAppIcon session={session} bundleId={session.target.bundleId} />
         ) : undefined
       }
       threadTitle={thread?.title ?? null}

@@ -91,6 +91,8 @@ vi.mock("../../../browser/serverPictureInPicture", () => ({
   closeServerPictureInPicture: () => undefined,
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
+// An app's icon comes from its host; here none loads, and the card keeps the kind's icon.
+vi.mock("../../../assets/assetUrls", () => ({ useAssetUrlState: () => ({ _tag: "Loading" }) }));
 vi.mock("../../../hooks/useThreadRouteTarget", () => ({
   useThreadRouteTarget: () =>
     state.routeThread === null

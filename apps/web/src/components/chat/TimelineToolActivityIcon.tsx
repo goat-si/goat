@@ -1,8 +1,12 @@
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
-import { type ToolActivityIcon } from "@goat/contracts";
+import {
+  type EnvironmentId,
+  type ToolActivityIcon,
+  type ToolActivityNativeAppReference,
+} from "@goat/contracts";
 import { toolActivityFaviconUrl } from "@goat/shared/favicon";
 import { getProjectFaviconCacheKey } from "@goat/shared/projectFavicon";
-import { use, useState } from "react";
+import { type ReactNode, use, useState } from "react";
 import { GoatWordmark } from "../GoatWordmark";
 import {
   BotIcon,
@@ -75,7 +79,7 @@ export function ToolActivityIconView(props: {
         key={src}
         cacheKey={src}
         src={src}
-        fallbackName={props.fallbackName}
+        fallback={<WorkEntryIcon name={props.fallbackName} className={fallbackClassName} />}
         className={props.className}
         muted={props.muted}
       />
@@ -93,7 +97,7 @@ export function ToolActivityIconView(props: {
         key={src}
         cacheKey={src}
         src={src}
-        fallbackName={props.fallbackName}
+        fallback={<WorkEntryIcon name={props.fallbackName} className={fallbackClassName} />}
         className={props.className}
         muted={props.muted}
       />
@@ -110,26 +114,47 @@ export function ToolActivityIconView(props: {
 }
 
 function NativeAppToolActivityIcon(props: {
-  app: Extract<ToolActivityIcon, { readonly _tag: "native-app" }>["app"];
+  app: ToolActivityNativeAppReference;
   fallbackName: WorkEntryIconName;
   className: string;
   muted: boolean;
 }) {
   const { activeThreadEnvironmentId } = use(TimelineRowCtx);
-  const asset = useAssetUrlState(activeThreadEnvironmentId, {
+  return (
+    <NativeAppIcon
+      environmentId={activeThreadEnvironmentId}
+      app={props.app}
+      className={props.className}
+      muted={props.muted}
+      fallback={
+        <WorkEntryIcon
+          name={props.fallbackName}
+          className={cn(props.className, props.muted && "opacity-70 light:brightness-60")}
+        />
+      }
+    />
+  );
+}
+
+/**
+ * A native app's icon as its environment's host draws it, the one timeline rows show; `fallback`
+ * until it loads, and when the host has none. `bare` drops the tile behind it.
+ */
+export function NativeAppIcon(props: {
+  environmentId: EnvironmentId;
+  app: ToolActivityNativeAppReference;
+  className: string;
+  fallback: ReactNode;
+  muted?: boolean;
+  bare?: boolean;
+}) {
+  const asset = useAssetUrlState(props.environmentId, {
     _tag: "native-app-icon",
     app: props.app,
   });
-  if (asset._tag !== "Success") {
-    return (
-      <WorkEntryIcon
-        name={props.fallbackName}
-        className={cn(props.className, props.muted && "opacity-70 light:brightness-60")}
-      />
-    );
-  }
+  if (asset._tag !== "Success") return props.fallback;
   const cacheKey = getProjectFaviconCacheKey(
-    activeThreadEnvironmentId,
+    props.environmentId,
     JSON.stringify(props.app),
     asset.url,
   );
@@ -138,9 +163,10 @@ function NativeAppToolActivityIcon(props: {
       key={cacheKey}
       cacheKey={cacheKey}
       src={asset.url}
-      fallbackName={props.fallbackName}
+      fallback={props.fallback}
       className={props.className}
-      muted={props.muted}
+      muted={props.muted ?? false}
+      bare={props.bare ?? false}
     />
   );
 }
@@ -150,9 +176,10 @@ const loadedToolActivityIconSrcs = new Map<string, string>();
 function ToolActivityImageIcon(props: {
   cacheKey: string;
   src: string;
-  fallbackName: WorkEntryIconName;
+  fallback: ReactNode;
   className: string;
   muted: boolean;
+  bare?: boolean;
 }) {
   const [displayedSrc, setDisplayedSrc] = useState<string | null>(
     () => loadedToolActivityIconSrcs.get(props.cacheKey) ?? null,
@@ -166,17 +193,13 @@ function ToolActivityImageIcon(props: {
   };
   return (
     <>
-      {displayedSrc === null ? (
-        <WorkEntryIcon
-          name={props.fallbackName}
-          className={cn(props.className, props.muted && "opacity-70 light:brightness-60")}
-        />
-      ) : null}
+      {displayedSrc === null ? props.fallback : null}
       {displayedSrc ? (
         <span
           className={cn(
             props.className,
-            "inline-block overflow-hidden rounded-xs bg-background",
+            "inline-block overflow-hidden",
+            !props.bare && "rounded-xs bg-background",
             props.muted && "dark:opacity-70",
           )}
         >
