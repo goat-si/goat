@@ -22,10 +22,10 @@ const MAX_ANSWER_CHARS = 65_536;
 // A screen cell's result holds its value, console and up to 64 receipts.
 const MAX_SCREEN_ANSWER_CHARS = 512 * 1024;
 const APP_ID = /^[A-Za-z0-9._-]+$/u;
-// The server prefixes resolveGoatMcpToolName in @goat/shared accepts: `goat.tool` (Codex, ACP),
-// `mcp__goat__tool` (Claude, Cursor, Pi), `goat-<thread>_tool` (OpenCode 2) and the legacy names.
+// The GOAT server prefixes resolveGoatMcpToolName in @goat/shared accepts: `goat.tool` (Codex,
+// ACP), `mcp__goat__tool` (Claude, Cursor, Pi) and `goat-<thread>_tool` (OpenCode 2).
 const SCREEN_RUN_TOOL =
-  /^(?:(?:mcp[-_]{1,2})?(?:goat|t3[-_ ]?code)(?:__|[-_.:/ ]|\s*·\s*)|goat-\S+_)?goat_screen_run$/iu;
+  /^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ]|\s*·\s*)|goat-\S+_)?goat_screen_run$/iu;
 
 /** What a screen host bound a cell target to: a desktop app, or a tab showing a page. */
 export type ScreenTargetLabel =
