@@ -711,21 +711,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const now = yield* Clock.currentTimeMillis;
         const requested =
           typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : DEFAULT_WAIT_MS;
-        const waitMs = Math.floor(
-          Math.min(
-            requested,
-            context.limits.cellWallMs,
-            call.deadlineMillis - now - WAIT_ANSWER_RESERVE_MS,
-          ),
-        );
+        const budgetMs = Math.floor(call.deadlineMillis - now - WAIT_ANSWER_RESERVE_MS);
         // Too little of the cell is left for any answer to arrive, so nothing is sent.
-        if (waitMs < 1)
+        if (budgetMs < 1)
           return yield* Effect.fail(
             fail(
               "deadline",
               "Too little of this cell is left for a wait to answer; wait in a new cell.",
             ),
           );
+        const waitMs = Math.max(
+          1,
+          Math.floor(Math.min(requested, context.limits.cellWallMs, budgetMs)),
+        );
         const waited = yield* broker
           .invoke({
             scope: context.invocation,

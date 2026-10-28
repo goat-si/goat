@@ -638,6 +638,8 @@ it.effect(
       yield* TestClock.adjust("899 millis");
       expect(gated.pollUnsafe()).toBeUndefined();
       yield* TestClock.adjust("1 millis");
+      // Answered at the boundary itself; a missing race fails here instead of hanging.
+      expect(gated.pollUnsafe()).toBeDefined();
       expect((yield* Fiber.join(gated))?.error).toMatchObject({
         code: "deadline",
         effectStarted: false,
@@ -653,6 +655,7 @@ it.effect(
       yield* TestClock.adjust("1899 millis");
       expect(authorizing.pollUnsafe()).toBeUndefined();
       yield* TestClock.adjust("1 millis");
+      expect(authorizing.pollUnsafe()).toBeDefined();
       expect((yield* Fiber.join(authorizing))?.error?.code).toBe("deadline");
       expect(receipt("auth").journal[0]?.receipt.dispatched).toBe(false);
 
@@ -663,6 +666,7 @@ it.effect(
       yield* TestClock.adjust("2899 millis");
       expect(unanswered.pollUnsafe()).toBeUndefined();
       yield* TestClock.adjust("1 millis");
+      expect(unanswered.pollUnsafe()).toBeDefined();
       expect((yield* Fiber.join(unanswered))?.error).toMatchObject({
         code: "deadline",
         effectStarted: false,

@@ -205,11 +205,17 @@ it.effect("a wait answers inside its cell or is refused with nothing sent", () =
     expect(budgeted + 1_000).toBeLessThanOrEqual(4_000 - 500);
     yield* inCell("wait_for", 82, { text: "Missing" }, 1_501);
     expect(waits().at(-1)?.timeoutMs).toBe(1);
+    // A positive timeout under a millisecond is still a wait, not a cell out of time.
+    const before = waits().length;
+    const tiny = yield* inCell("wait_for", 83, { text: "Missing", timeoutMs: 0.5 }, 60_000);
+    expect(tiny?.value).toEqual({ status: "timeout" });
+    expect(waits()).toHaveLength(before + 1);
+    expect(waits().at(-1)?.timeoutMs).toBe(1);
     const sent = waits().length;
-    const refused = yield* inCell("wait_for", 83, { text: "Missing" }, 1_500);
+    const refused = yield* inCell("wait_for", 84, { text: "Missing" }, 1_500);
     expect(refused?.error).toMatchObject({ code: "deadline", effectStarted: false });
     expect(waits()).toHaveLength(sent);
-    expect((yield* inCell("press_key", 84, { key: "Enter" }, 60_000))?.outcome).toBe("ok");
+    expect((yield* inCell("press_key", 85, { key: "Enter" }, 60_000))?.outcome).toBe("ok");
   }),
 );
 

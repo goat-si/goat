@@ -101,6 +101,8 @@ it.effect(
         yield* TestClock.adjust("1999 millis");
         expect(waiting.pollUnsafe()).toBeUndefined();
         yield* TestClock.adjust("1 millis");
+        // Timed out at the boundary itself; a missing timer fails here instead of hanging.
+        expect(waiting.pollUnsafe()).toBeDefined();
         const error = yield* Fiber.join(waiting);
         // The broker's own timeout: the host said nothing, so there is no remote tag to read.
         expect(error).toBeInstanceOf(PreviewAutomationTimeoutError);
