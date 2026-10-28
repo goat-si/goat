@@ -15,6 +15,8 @@ import {
   type PreviewTabSession,
 } from "@goat/contracts";
 
+import type { Dialog } from "playwright-core";
+
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 /** What a new agent tab opens with: isolated, or one persistent profile. */
@@ -230,4 +232,43 @@ const openTab = async <Snapshot, Tab extends { readonly session: PreviewTabSessi
   if (pinned === tab.session.store) return tab;
   await deps.discard(snapshot, tab);
   throw storeConflict(name, pinned);
+};
+
+/**
+ * A desktop app attached its own copy of a tab the server renders: an older app that ignores
+ * serverRendered, whose page uses its own sign-ins. The server closes the tab rather than let the
+ * person and the agent see different pages.
+ */
+export const hostedTwice = (tab: {
+  readonly desktop: unknown;
+  readonly session: PreviewTabSession;
+  readonly control: { readonly agentId: string | null };
+}) => tab.desktop === null && tab.control.agentId !== null && tab.session.store === "server";
+
+/** A pending dialog as status reports it. */
+export const dialogStatus = (dialog: Dialog | null) =>
+  dialog
+    ? {
+        type: dialog.type(),
+        message: dialog.message().slice(0, 4000),
+        defaultValue: dialog.defaultValue().slice(0, 4000),
+      }
+    : null;
+
+/** An agent tab must render where its session's store is; it never falls back to the other. */
+export const assertStoreUsed = (
+  snapshot: {
+    readonly automationOwner?: string | undefined;
+    readonly serverRendered?: true | undefined;
+    readonly profileId?: string | undefined;
+  },
+  desktop: unknown,
+  profiles: SessionProfiles,
+) => {
+  if (
+    desktop === null &&
+    snapshot.automationOwner !== undefined &&
+    snapshot.serverRendered !== true
+  )
+    throw desktopStoreUnavailable(profiles.name(snapshot.profileId ?? DEFAULT_BROWSER_PROFILE_ID));
 };

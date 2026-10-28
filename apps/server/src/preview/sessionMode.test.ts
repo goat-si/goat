@@ -18,6 +18,7 @@ const withProfiles = (names: ReadonlyArray<string>) => {
   const profiles = new SessionProfiles();
   profiles.report({
     profiles: names.map((name) => ({ id: name.toLowerCase(), name, kind: "persistent" as const })),
+    defaultProfileId: "default",
   });
   return profiles;
 };

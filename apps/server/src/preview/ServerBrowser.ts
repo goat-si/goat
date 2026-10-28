@@ -2,7 +2,6 @@
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
-  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   FILL_PREVIEW_VIEWPORT,
   INCOGNITO_BROWSER_PROFILE_ID,
@@ -111,7 +110,9 @@ import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import {
   assertReusable,
-  desktopStoreUnavailable,
+  assertStoreUsed,
+  dialogStatus,
+  hostedTwice,
   openInSession,
   SessionProfiles,
   tabSession,
@@ -443,15 +444,6 @@ const make = Effect.gen(function* () {
     },
   });
 
-  const dialogStatus = (tab: ServerTab) =>
-    tab.dialog
-      ? {
-          type: tab.dialog.type(),
-          message: tab.dialog.message().slice(0, 4000),
-          defaultValue: tab.dialog.defaultValue().slice(0, 4000),
-        }
-      : null;
-
   const updateFileChooserInterception = (tab: ServerTab) => {
     // Only agents and streamed controllers can answer intercepted uploads; native desktop views use the OS picker.
     const intercept = !tab.desktop || tab.agentOperating || tab.control.controller !== null;
@@ -468,7 +460,7 @@ const make = Effect.gen(function* () {
         _tag: "control",
         canOperate: viewer.canOperate,
         ...ServerBrowserScreen.viewerControl(tab.control, viewer.id),
-        dialog: dialogStatus(tab),
+        dialog: dialogStatus(tab.dialog),
       });
   };
 
@@ -662,12 +654,7 @@ const make = Effect.gen(function* () {
       adopted === undefined && snapshot.serverRendered !== true && (await desktopRenders(snapshot))
         ? await connectDesktop(snapshot)
         : null;
-    // An agent profile tab whose sign-ins live in the desktop app never falls back to the server.
-    const owned = snapshot.automationOwner !== undefined && snapshot.serverRendered !== true;
-    if (adopted === undefined && desktop === null && owned)
-      throw desktopStoreUnavailable(
-        profiles.name(snapshot.profileId ?? DEFAULT_BROWSER_PROFILE_ID),
-      );
+    if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
     const isolatedContext =
       adopted === undefined &&
       desktop === null &&
@@ -1286,10 +1273,9 @@ const make = Effect.gen(function* () {
           ),
         ensureTab,
         discard: async (snapshot, tab) => {
-          if (tab) void tab.control.close().catch(constVoid);
+          if (tab) return dropTab(tab, true);
           const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
           await runPromise(manager.close(key)).catch(constVoid);
-          if (tab) dropTab(tab, false);
         },
       },
       session,
@@ -1328,7 +1314,7 @@ const make = Effect.gen(function* () {
         generation: tab.control.generation,
         ...(tab.control.handoffReason === null ? {} : { waitingForPerson: true as const }),
       },
-      dialog: dialogStatus(tab),
+      dialog: dialogStatus(tab.dialog),
       fileChooser: tab.fileChooser
         ? { multiple: tab.fileChooser.chooser.isMultiple(), accept: tab.fileChooser.accept }
         : null,
@@ -2469,6 +2455,16 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         const tab = tabs.get(tabKey(key.threadId, key.tabId));
         if (tab?.desktop) dropTab(tab, false);
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  // An older desktop app ignores serverRendered and hosts the tab itself, with its own sign-ins.
+  yield* desktopChannel.attached.pipe(
+    Stream.runForEach((key) =>
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(key.threadId, key.tabId));
+        if (tab && hostedTwice(tab)) dropTab(tab, true);
       }),
     ),
     Effect.forkScoped,
