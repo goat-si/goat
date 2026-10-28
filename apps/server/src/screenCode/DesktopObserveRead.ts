@@ -8,12 +8,15 @@ import { fail } from "./DesktopDriverReplies.ts";
 import type { ScreenElementDetail, ScreenObservationDraft } from "./ScreenObservations.ts";
 import {
   actionName,
+  cleanActionText,
   idsFromLines,
   labelsFromTree,
   keepTreeLines,
   namesFromTree,
+  pairTreeText,
   parseTree,
   repeatedIndexes,
+  unmarkRepeated,
 } from "./DesktopTreeText.ts";
 
 export type DesktopRow = ScreenObservationDraft["elements"][number];
@@ -240,3 +243,38 @@ export const tooLargeStep = (capture: boolean, query: boolean) =>
     : query
       ? "Too many matches to return; use a more specific name or text."
       : "This window's accessibility tree is larger than GOAT carries even at 256 elements; nothing changed. Take a screenshot of it, or observe({query:{name}}).";
+
+/**
+ * A filtered read's tree text, rebuilt from the driver's element list: the filter can keep a line
+ * written inside another element's text and drop the real one, while each entry is one element.
+ */
+export const structuredTree = (elements: ReadonlyArray<Record<string, unknown>>): string =>
+  elements
+    .map((entry) => {
+      const index = natural(entry.element_index);
+      const label = string(entry.label);
+      const value = string(entry.value);
+      return [
+        `${"  ".repeat(Math.min(natural(entry.depth) ?? 0, 64))}- `,
+        index === undefined ? "" : `[${index}] `,
+        string(entry.role) ?? "unknown",
+        label === undefined ? "" : ` ${JSON.stringify(label)}`,
+        value === undefined || value === label ? "" : ` = ${JSON.stringify(value)}`,
+      ].join("");
+    })
+    .join("\n");
+
+/** The read's tree text: a filtered read may keep a line another element's text wrote and drop the real one. */
+export const treeOf = (
+  state: Record<string, unknown>,
+  elements: ReadonlyArray<Record<string, unknown>>,
+  filtered: boolean,
+) =>
+  filtered
+    ? structuredTree(elements)
+    : typeof state.tree_markdown === "string"
+      ? state.tree_markdown
+      : "";
+/** The tree text as shown: repeated numbers dropped, labels paired, action names cleaned. */
+export const shownTree = (markdown: string) =>
+  cleanActionText(pairTreeText(unmarkRepeated(markdown)));

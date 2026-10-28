@@ -39,7 +39,7 @@ import {
   POINT_KEYS,
 } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
-import { cleanActionText, isInteractive, keepTreeLines, pairTreeText } from "./DesktopTreeText.ts";
+import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import {
   boundedReadDetail,
   desktopQuery,
@@ -49,7 +49,9 @@ import {
   pageDraft,
   queryOmission,
   renderFailure,
+  shownTree,
   tooLargeStep,
+  treeOf,
   READ_BOUNDS,
   viewportOf,
   type DesktopPages,
@@ -527,7 +529,7 @@ export const createDesktopTargetHost = (deps: {
       const elements = array(state.elements)
         .map(object)
         .filter((entry) => entry !== undefined);
-      const markdown = typeof state.tree_markdown === "string" ? state.tree_markdown : "";
+      const markdown = treeOf(state, elements, filtered);
       const rows = desktopRows(elements, markdown);
       // An interactive-only read keeps controls, fields, disabled controls and named rows, and
       // spends the reply budget on them alone; a query keeps the elements matching every field.
@@ -537,7 +539,7 @@ export const createDesktopTargetHost = (deps: {
         : interactive
           ? rows.filter(isInteractive)
           : rows;
-      const treeText = cleanActionText(pairTreeText(markdown));
+      const treeText = shownTree(markdown);
       const shownText =
         query || interactive
           ? keepTreeLines(

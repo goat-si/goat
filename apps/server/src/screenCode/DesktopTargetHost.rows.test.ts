@@ -206,6 +206,9 @@ it.effect(
       // A description the element list does not carry cannot be checked, so its line gives no id.
       expect(elements[9]?.id).toBeUndefined();
       expect(elements[10]?.id).toBeUndefined();
+      // Neither line written for [7] or [8] keeps its number, so the text cannot show a false one.
+      expect(observation.indexedText).not.toMatch(/\[[78]\]/);
+      expect(elements[7]?.name).toBe("Save");
     }),
 );
 

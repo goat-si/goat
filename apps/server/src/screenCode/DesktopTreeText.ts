@@ -85,6 +85,16 @@ export const repeatedIndexes = (lines: ReadonlyArray<TreeLine>): ReadonlySet<num
   return repeated;
 };
 
+/** The tree text with every line of a repeated index unnumbered: none of them can be trusted. */
+export const unmarkRepeated = (markdown: string): string => {
+  const repeated = repeatedIndexes(parseTree(markdown));
+  return repeated.size === 0
+    ? markdown
+    : markdown.replace(/^(\s*- )\[(\d+)\] /gm, (marker, head: string, index: string) =>
+        repeated.has(Number(index)) ? head : marker,
+      );
+};
+
 /**
  * Ids from the tree text, which the driver writes unescaped: only from the one line for an index
  * that is exactly what the driver writes from the element's role, label and value, then its
