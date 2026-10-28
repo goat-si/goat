@@ -152,7 +152,7 @@ it.effect.each([
                 id: childId,
                 threadId,
                 runId: a.id,
-                parentNodeId: a.rootNodeId,
+                parentNodeId: harness.started[0]!.rootNodeId,
                 origin: "app_owned",
                 createdBy: "agent",
                 driver,
