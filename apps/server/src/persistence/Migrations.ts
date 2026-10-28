@@ -120,6 +120,7 @@ import Migration0109 from "./Migrations/109_ScheduledTaskRuns.ts";
 import Migration0110 from "./Migrations/110_ScheduledTaskNotificationPolicy.ts";
 import Migration0112 from "./Migrations/112_ConnectLinkTrust.ts";
 import Migration0117 from "./Migrations/117_MemoryGenerationReportBacklog.ts";
+import Migration0118 from "./Migrations/118_ChannelSessionReceipts.ts";
 import Migration0111 from "./Migrations/111_NotificationCursorRepair.ts";
 import Migration0113 from "./Migrations/113_McpEvalJournal.ts";
 import Migration0114 from "./Migrations/114_DecisionRoutes.ts";
@@ -247,6 +248,7 @@ export const migrationEntries = [
   [115, "HubConnectAccess", Migration0115],
   [116, "ChannelBotSessions", Migration0116],
   [117, "MemoryGenerationReportBacklog", Migration0117],
+  [118, "ChannelSessionReceipts", Migration0118],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
