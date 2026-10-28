@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type {
   ComputerUsePrimitiveReply,
+  ComputerUseOverlayPoint,
   ScreenHostCall,
   ScreenImage,
   ScreenImageMetadata,
@@ -16,6 +17,7 @@ import {
   COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
   ComputerUseRefusalDetail,
   ComputerUseRefusalReason,
+  EnvironmentId,
 } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
@@ -51,6 +53,75 @@ const natural = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+const frameOf = (entry: Record<string, unknown> | undefined) => {
+  const frame = object(entry?.frame);
+  return frame && finite(frame.x) && finite(frame.y) && finite(frame.w) && finite(frame.h)
+    ? { x: frame.x, y: frame.y, w: frame.w, h: frame.h }
+    : undefined;
+};
+/**
+ * Each framed element's center as a fraction of its window, by driver token. Frames share the
+ * driver's screen space; get_window_state returns window_bounds only beside a screenshot, so the
+ * window is the root the element's parents reach when that root is a window, else the bounds
+ * list_windows gave. A center outside the window, such as a menu bar item's, gives no point.
+ */
+const elementAims = (
+  entries: readonly Record<string, unknown>[],
+  bounds?: { x: number; y: number; w: number; h: number },
+) => {
+  const byIndex = new Map<number, Record<string, unknown>>();
+  for (const entry of entries) {
+    const index = natural(entry.element_index);
+    if (index !== undefined) byIndex.set(index, entry);
+  }
+  const aims = new Map<string, ComputerUseOverlayPoint>();
+  for (const entry of entries) {
+    const token = string(entry.element_token);
+    const frame = frameOf(entry);
+    if (!token || !frame) continue;
+    let root: Record<string, unknown> | undefined = entry;
+    for (let hops = 0; root && natural(root.parent_index) !== undefined; hops++)
+      root = hops < 64 ? byIndex.get(natural(root.parent_index) ?? -1) : undefined;
+    const role = string(root?.role)?.toLowerCase() ?? "";
+    const window = (WINDOW_ROLES.has(role) ? frameOf(root) : undefined) ?? bounds;
+    if (!window || window.w <= 0 || window.h <= 0) continue;
+    const fx = (frame.x + frame.w / 2 - window.x) / window.w;
+    const fy = (frame.y + frame.h / 2 - window.y) / window.h;
+    if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) aims.set(token, { fx, fy });
+  }
+  return aims;
+};
+/** macOS indexes only actionable elements, so a window without actions is not in the tree. */
+const hasWindowRoot = (entries: readonly Record<string, unknown>[]) =>
+  entries.some(
+    (entry) =>
+      natural(entry.parent_index) === undefined &&
+      WINDOW_ROLES.has(string(entry.role)?.toLowerCase() ?? "") &&
+      frameOf(entry) !== undefined,
+  );
+/** A window's screen bounds from list_windows, in the shape element frames use. */
+const listedBounds = (value: unknown, windowId: number) => {
+  const window = array(object(value)?.windows)
+    .map(object)
+    .find((entry) => entry?.window_id === windowId);
+  const bounds = object(window?.bounds);
+  return bounds &&
+    finite(bounds.x) &&
+    finite(bounds.y) &&
+    finite(bounds.width) &&
+    finite(bounds.height)
+    ? { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height }
+    : undefined;
+};
+/** Top-level roots as the driver names them, lowercased: macOS, Windows, then Linux AT-SPI. */
+const WINDOW_ROLES: ReadonlySet<string> = new Set([
+  "axwindow",
+  "window",
+  "frame",
+  "dialog",
+  "alert",
+  "file chooser",
+]);
 /** The driver's state and geometry for one element, in the observation's own names. */
 const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
   const frame = object(entry.frame);
@@ -167,6 +238,8 @@ interface BoundWindow {
   snapshotId?: string;
   /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
   pointsStale?: boolean;
+  /** Element centers from the tree behind observationId, by driver token. */
+  aims?: ReadonlyMap<string, ComputerUseOverlayPoint>;
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -208,6 +281,8 @@ export const createDesktopTargetHost = (deps: {
     call: ScreenHostCall,
     context: ScreenHostContext,
     expectedConnectionGeneration?: string,
+    /** The input's cursor: the bound target that owns it and, for an element, its center. */
+    cursor?: { readonly bound: BoundWindow; readonly point?: ComputerUseOverlayPoint | undefined },
   ) {
     if (!isJson(args)) return yield* Effect.fail(fail("invalid_argument"));
     const reply = yield* deps.primitiveChannel.request({
@@ -219,6 +294,22 @@ export const createDesktopTargetHost = (deps: {
       tool,
       args,
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
+      ...(cursor === undefined
+        ? {}
+        : {
+            cursor: {
+              // The owner ScreenCursorPhases names for this target, before its first phase.
+              owner: {
+                environmentId: EnvironmentId.make(cursor.bound.ref.environmentId),
+                runId: cursor.bound.ref.runId,
+                turnId: cursor.bound.ref.turnId,
+                targetId: cursor.bound.ref.id,
+                generation: cursor.bound.ref.generation,
+                sequence: 0,
+              },
+              ...(cursor.point === undefined ? {} : { point: cursor.point }),
+            },
+          }),
     });
     const safety = driverOutcomeSafety(tool, reply);
     const error = driverError(reply);
@@ -237,6 +328,22 @@ export const createDesktopTargetHost = (deps: {
       ref.turnId === context.turnId &&
       ref.generation === bound.epoch
       ? bound
+      : undefined;
+  };
+  /** The driver token behind an element ref of the bound window's latest observation. */
+  const tokenOf = (element: Record<string, unknown>, bound: BoundWindow) => {
+    const ref = {
+      id: string(element.id) ?? "",
+      targetId: string(element.targetId) ?? "",
+      observationId: string(element.observationId) ?? "",
+      surfaceGeneration: element.surfaceGeneration,
+    };
+    return ref.targetId === bound.ref.id &&
+      ref.observationId === bound.observationId &&
+      ref.surfaceGeneration === bound.epoch
+      ? observations.index.resolveElement(
+          ref as Parameters<typeof observations.index.resolveElement>[0],
+        )
       : undefined;
   };
   const discover: DesktopTargetHost["discover"] = Effect.fn("DesktopTargetHost.discover")(
@@ -393,22 +500,22 @@ export const createDesktopTargetHost = (deps: {
       }
       const elements = array(state.elements)
         .map(object)
-        .filter((entry) => entry !== undefined)
-        .flatMap((entry) => {
-          const token = string(entry.element_token);
-          if (!token) return [];
-          const index = natural(entry.element_index);
-          return [
-            {
-              role: string(entry.role) ?? "unknown",
-              name: string(entry.label) ?? "",
-              ...(typeof entry.value === "string" ? { text: entry.value } : {}),
-              ...(index === undefined ? {} : { index }),
-              ...elementDetail(entry),
-              driverToken: token,
-            },
-          ];
-        });
+        .filter((entry) => entry !== undefined);
+      const rows = elements.flatMap((entry) => {
+        const token = string(entry.element_token);
+        if (!token) return [];
+        const index = natural(entry.element_index);
+        return [
+          {
+            role: string(entry.role) ?? "unknown",
+            name: string(entry.label) ?? "",
+            ...(typeof entry.value === "string" ? { text: entry.value } : {}),
+            ...(index === undefined ? {} : { index }),
+            ...elementDetail(entry),
+            driverToken: token,
+          },
+        ];
+      });
       const resetReason = capture
         ? undefined
         : args.mode === "diff"
@@ -431,6 +538,23 @@ export const createDesktopTargetHost = (deps: {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
+        // Without its window in the tree, the window's own bounds place the elements.
+        const listed =
+          elements.some((entry) => frameOf(entry) !== undefined) && !hasWindowRoot(elements)
+            ? yield* request(
+                "list_windows",
+                { pid: bound.pid },
+                call,
+                context,
+                bound.connectionGeneration,
+              ).pipe(Effect.option)
+            : Option.none();
+        bound.aims = elementAims(
+          elements,
+          Option.isSome(listed)
+            ? listedBounds(driverValue(listed.value), bound.windowId)
+            : undefined,
+        );
       }
       const render = Effect.try({
         try: () =>
@@ -443,7 +567,7 @@ export const createDesktopTargetHost = (deps: {
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,
-              elements,
+              elements: rows,
             }),
             mode: "full",
             ...(resetReason === undefined ? {} : { resetReason }),
@@ -554,6 +678,7 @@ export const createDesktopTargetHost = (deps: {
           call,
           context,
           bound.connectionGeneration,
+          { bound },
         );
         return driverResult("invoke_menu", reply);
       }
@@ -640,21 +765,7 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(fail("invalid_argument"));
       let elementToken: string | undefined;
       if (element) {
-        const ref = {
-          id: string(element.id) ?? "",
-          targetId: string(element.targetId) ?? "",
-          observationId: string(element.observationId) ?? "",
-          surfaceGeneration: element.surfaceGeneration,
-        };
-        if (
-          ref.targetId !== bound.ref.id ||
-          ref.observationId !== bound.observationId ||
-          ref.surfaceGeneration !== bound.epoch
-        )
-          return yield* Effect.fail(fail("stale_reference"));
-        elementToken = observations.index.resolveElement(
-          ref as Parameters<typeof observations.index.resolveElement>[0],
-        );
+        elementToken = tokenOf(element, bound);
         if (!elementToken) return yield* Effect.fail(fail("stale_reference"));
       }
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
@@ -687,7 +798,10 @@ export const createDesktopTargetHost = (deps: {
         );
       // Any input, even one that fails, may change what is under a pixel.
       bound.pointsStale = true;
-      const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration);
+      const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration, {
+        bound,
+        point: elementToken === undefined ? undefined : bound.aims?.get(elementToken),
+      });
       return driverResult(tool, reply);
     },
   );

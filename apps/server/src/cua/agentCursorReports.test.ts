@@ -4,8 +4,8 @@ import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
-import { makeScopedAgentCursorReports } from "./agentCursorReports.ts";
-import { EnvironmentId } from "@goat/contracts";
+import { makeOverlayDrawer, makeScopedAgentCursorReports } from "./agentCursorReports.ts";
+import { EnvironmentId, type AgentCursorReport } from "@goat/contracts";
 
 /** A PNG header the proxy reads the screenshot size from. */
 const pngOf = (width: number, height: number) => {
@@ -18,6 +18,53 @@ const pngOf = (width: number, height: number) => {
 };
 
 describe("agent cursor reports", () => {
+  it.effect("a scoped preview report carries the point the overlay drew for that owner", () =>
+    Effect.gen(function* () {
+      const reports: AgentCursorReport[] = [];
+      const drawer = yield* makeOverlayDrawer(
+        undefined,
+        () => undefined,
+        (report) => Effect.sync(() => reports.push(report) > 0),
+      );
+      const owner = {
+        environmentId: EnvironmentId.make("environment"),
+        runId: "run",
+        turnId: "turn",
+        targetId: "target",
+        generation: 1,
+      };
+      const phase = (sequence: number, next: "thinking" | "resting") =>
+        drawer.draw({
+          type: "cursor",
+          event: { op: "show", identity: { ...owner, sequence }, phase: next },
+        });
+      yield* phase(1, "thinking");
+      // The host's element point rides on the driver call; the owner's own events have none.
+      yield* drawer.draw({
+        type: "call",
+        id: "1",
+        name: "click",
+        args: { pid: 4, window_id: 9, element_token: "s1:1" },
+        codeMode: true,
+        cursor: { owner: { ...owner, sequence: 0 }, point: { fx: 0.5, fy: 0.45 } },
+      });
+      // The point reaches the preview during the action, beside the owner's thinking phase.
+      yield* TestClock.adjust("250 millis");
+      assert.deepEqual(reports.at(-1)?.cursor, {
+        windowId: 9,
+        point: { fx: 0.5, fy: 0.45 },
+        phase: "acting",
+      });
+      yield* drawer.draw({ type: "reply", id: "1" });
+      yield* phase(2, "resting");
+      yield* TestClock.adjust("250 millis");
+      assert.deepEqual(reports.at(-1)?.cursor, {
+        windowId: 9,
+        point: { fx: 0.5, fy: 0.45 },
+        phase: "resting",
+      });
+    }),
+  );
   it.effect(
     "coalesces intermediate positions but delivers the newest identity-bearing tombstone",
     () =>

@@ -55,4 +55,21 @@ describe("scoped computer-use cursor", () => {
       })?.cursor?.phase,
     ).toBe("resting");
   });
+
+  it("takes the point a same-sequence report adds and ignores an exact repeat", () => {
+    const thinking = targeted(control, {
+      report: { identity: { ...owner, sequence: 1 }, cursor: null, phase: "thinking" },
+    })!;
+    const point = { windowId: 9, point: { fx: 0.5, fy: 0.45 }, phase: "acting" } as const;
+    // The overlay drew the call's element point while the owner was still thinking.
+    const placed = targeted(thinking, {
+      report: { identity: { ...owner, sequence: 1 }, cursor: point, phase: "thinking" },
+    });
+    expect(placed?.cursor).toEqual(point);
+    expect(
+      targeted(placed!, {
+        report: { identity: { ...owner, sequence: 1 }, cursor: point, phase: "thinking" },
+      }),
+    ).toBeUndefined();
+  });
 });

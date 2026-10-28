@@ -95,6 +95,7 @@ export interface PrimitiveChannelRequest {
   readonly deadlineMillis: number;
   readonly tool: string;
   readonly args: ComputerUsePrimitiveRequest["args"];
+  readonly cursor?: ComputerUsePrimitiveRequest["cursor"];
 }
 
 export class ComputerUsePrimitiveChannel extends Context.Service<
@@ -318,6 +319,7 @@ export const make = Effect.gen(function* () {
       deadlineMillis: input.deadlineMillis,
       tool: input.tool,
       args: input.args,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     };
     const pending: Pending = { request, answer, sent: false };
     record.pending.set(request.requestId, pending);

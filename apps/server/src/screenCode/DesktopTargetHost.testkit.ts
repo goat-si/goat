@@ -131,9 +131,19 @@ export const fixture = (
   connection = { id: "driver:1" },
   observations?: ScreenObservations,
 ) => {
-  const sent: Array<{ tool: string; args: unknown; expectedConnectionGeneration?: string }> = [];
+  const sent: Array<{
+    tool: string;
+    args: unknown;
+    expectedConnectionGeneration?: string;
+    cursor?: { owner: unknown; point?: unknown };
+  }> = [];
   const channel = {
-    request: (request: { tool: string; args: unknown; expectedConnectionGeneration?: string }) =>
+    request: (request: {
+      tool: string;
+      args: unknown;
+      expectedConnectionGeneration?: string;
+      cursor?: { owner: unknown; point?: unknown };
+    }) =>
       request.expectedConnectionGeneration !== undefined &&
       request.expectedConnectionGeneration !== connection.id
         ? Effect.fail({
@@ -148,6 +158,7 @@ export const fixture = (
               ...(request.expectedConnectionGeneration === undefined
                 ? {}
                 : { expectedConnectionGeneration: request.expectedConnectionGeneration }),
+              ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
             });
             const answer =
               override[request.tool] ??

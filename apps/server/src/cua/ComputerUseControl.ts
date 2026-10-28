@@ -152,12 +152,24 @@ const sameOwner = (a: AgentCursorReport, b: AgentCursorReport) =>
   a.identity.targetId === b.identity.targetId &&
   a.identity.generation === b.identity.generation;
 
+/** The same phase and drawn point: a repeat of what the control already holds. */
+const sameReported = (a: AgentCursorReport, b: AgentCursorReport) =>
+  a.phase === b.phase &&
+  (a.cursor === null || b.cursor === null
+    ? a.cursor === b.cursor
+    : a.cursor.windowId === b.cursor.windowId &&
+      a.cursor.phase === b.cursor.phase &&
+      a.cursor.point.fx === b.cursor.point.fx &&
+      a.cursor.point.fy === b.cursor.point.fy);
+
 export const staleCursorReport = (record: ComputerUseControl, report: AgentCursorReport) => {
   const previous = record.cursorReport;
   if (previous === undefined) return false;
+  // A same-sequence report adds the point the overlay drew for that phase's call.
   if (sameOwner(previous, report))
     return (
-      report.identity.sequence <= previous.identity.sequence ||
+      report.identity.sequence < previous.identity.sequence ||
+      (report.identity.sequence === previous.identity.sequence && sameReported(previous, report)) ||
       ((previous.phase === "hidden" || previous.phase === "yielded") &&
         report.phase !== "hidden" &&
         report.phase !== "yielded")

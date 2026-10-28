@@ -37,6 +37,36 @@ const reply = (id: string, image?: { width: number; height: number }): OverlayEv
 const snapshot = [call("s", "get_window_state"), reply("s", { width: 1000, height: 500 })];
 
 describe("ComputerUseOverlay", () => {
+  it("a call that overtakes its owner's phases shows under that owner, past an ended one", () => {
+    const ended = {
+      environmentId: EnvironmentId.make("environment"),
+      runId: "run",
+      turnId: "turn",
+      targetId: "a",
+      generation: 1,
+      sequence: 3,
+    };
+    const next = { ...ended, targetId: "b", generation: 2, sequence: 0 };
+    const { sent } = run([
+      { type: "cursor", event: { op: "hide", identity: ended, phase: "hidden", reason: "ended" } },
+      {
+        type: "call",
+        id: "b",
+        name: "click",
+        args: { ...WINDOW, element_token: "s1:1" },
+        codeMode: true,
+        cursor: { owner: next, point: { fx: 0.5, fy: 0.45 } },
+      },
+      // b's own first phase still supersedes the call's stand-in.
+      {
+        type: "cursor",
+        event: { op: "show", identity: { ...next, sequence: 1 }, phase: "thinking" },
+      },
+    ]);
+    const shown = { pid: 42, windowId: 7, point: { fx: 0.5, fy: 0.45 }, phase: "acting" };
+    assert.deepEqual(sent[1], [{ op: "show", identity: next, ...shown }]);
+    assert.deepEqual(sent[2], [{ op: "show", identity: { ...next, sequence: 1 }, ...shown }]);
+  });
   it("keeps a hidden capture above concurrent thinking and refuses a stale show", () => {
     const owner = {
       environmentId: EnvironmentId.make("environment"),

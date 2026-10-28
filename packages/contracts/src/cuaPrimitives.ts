@@ -4,7 +4,11 @@ import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { AgentCursorEvent } from "./computerUseOverlay.ts";
+import {
+  AgentCursorEvent,
+  AgentCursorOwner,
+  ComputerUseOverlayPoint,
+} from "./computerUseOverlay.ts";
 import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
 
 // Screen primitives on the computer use lease stream. A leaf: cua.ts re-exports it and joins the
@@ -55,6 +59,13 @@ export const ComputerUsePrimitiveRequest = Schema.Struct({
   ),
   tool: primitiveId,
   args: primitiveJson,
+  /**
+   * The agent cursor this call draws, never sent to the driver: the host-owned owner (sequence 0,
+   * before any of its phases) and where in the window the call acts, when the host knows.
+   */
+  cursor: Schema.optionalKey(
+    Schema.Struct({ owner: AgentCursorOwner, point: Schema.optionalKey(ComputerUseOverlayPoint) }),
+  ),
 });
 export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
 
