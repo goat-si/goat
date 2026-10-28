@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeWorkerThreads from "node:worker_threads";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -27,6 +28,7 @@ import {
   maintenancePrelude,
   holdMaintenance,
   captureWriterNotices,
+  gateAdmissionRetries,
   awaitAdmissionRecovery,
 } from "./nodeSqliteWriter.testFixtures.ts";
 
@@ -705,6 +707,7 @@ it.effect(
           const transaction = yield* sql.withTransaction(sql`SELECT 1`).pipe(Effect.forkChild);
           yield* Deferred.await(held.requested);
           yield* TestClock.adjust("60 seconds");
+          yield* notices.stalled;
           const warningsWhileHeld = notices.warnings.length;
           held.release();
           yield* Fiber.join(transaction);
@@ -739,12 +742,7 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
     seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
     assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
     const notices = captureWriterNotices();
-    const refusals = [
-      yield* Deferred.make<void>(),
-      yield* Deferred.make<void>(),
-      yield* Deferred.make<void>(),
-    ];
-    let refusalCount = 0;
+    const retries = yield* gateAdmissionRetries;
     const startupCheckpoints: Array<string> = [];
     let ready = false;
     nativeFixture.prelude = `
@@ -761,9 +759,6 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
 `;
     nativeFixture.onStart = (worker) =>
       worker.on("message", (reply) => {
-        // Retries may produce more refusals than the milestones this test awaits.
-        const refusal = reply?.backpressure ? refusals[refusalCount++] : undefined;
-        if (refusal !== undefined) Deferred.doneUnsafe(refusal, Effect.void);
         if (reply?.type === "ready") ready = true;
         if (reply?.type === "checkpoint-observed" && !ready) startupCheckpoints.push(reply.sql);
       });
@@ -782,21 +777,27 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
       yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
       const transaction = yield* sql
         .withTransaction(sql`INSERT INTO existing_wal VALUES ('after pressure')`)
-        .pipe(Effect.forkChild);
+        .pipe(Effect.provideService(Clock.Clock, retries.clock), Effect.forkChild);
       assert.isTrue(
         (yield* Deferred.await(firstReply)).backpressure,
         "the first BEGIN must be refused before it executes",
       );
       assert.isUndefined(transaction.pollUnsafe());
       assert.equal(seed.prepare("SELECT COUNT(*) AS count FROM existing_wal").get()?.count, 2);
+      const firstRetry = yield* retries.nextRetry;
       yield* TestClock.adjust("10 seconds");
-      yield* Deferred.await(refusals[1]!);
-      yield* TestClock.adjust("10 seconds");
-      yield* Deferred.await(refusals[2]!);
+      yield* Deferred.succeed(firstRetry, undefined);
+      yield* TestClock.adjust("100 millis");
+      yield* notices.admissionDegraded;
+      const secondRetry = yield* retries.nextRetry;
+      yield* Deferred.succeed(secondRetry, undefined);
+      yield* TestClock.adjust("100 millis");
+      const thirdRetry = yield* retries.nextRetry;
       const warningsUnderPressure = notices.warnings.slice();
-      using recovery = awaitAdmissionRecovery(worker);
+      assert.equal(notices.recoveries.length, 0);
       reader.exec("ROLLBACK");
-      yield* recovery.recovered;
+      yield* notices.admissionRecovered;
+      yield* Deferred.succeed(thirdRetry, undefined);
       yield* TestClock.adjust("100 millis");
       yield* Fiber.join(transaction);
       assert.equal(

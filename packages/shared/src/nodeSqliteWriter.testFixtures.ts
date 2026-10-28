@@ -1,7 +1,10 @@
 import type * as NodeWorkerThreads from "node:worker_threads";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
+import * as Queue from "effect/Queue";
 import { vi } from "vite-plus/test";
 
 export const awaitWorkerExit = (worker: NodeWorkerThreads.Worker) =>
@@ -182,12 +185,49 @@ export const holdMaintenance = (worker: NodeWorkerThreads.Worker) => {
 export const captureWriterNotices = () => {
   const warnings: Array<unknown> = [];
   const recoveries: Array<unknown> = [];
+  const admissionDegraded = Deferred.makeUnsafe<void>();
+  const admissionRecovered = Deferred.makeUnsafe<void>();
+  const stalled = Deferred.makeUnsafe<void>();
   const logger = Logger.make(({ logLevel, message }) => {
     if (logLevel === "Warn") warnings.push(message);
     if (logLevel === "Info") recoveries.push(message);
+    const text = String(message);
+    if (logLevel === "Warn" && text.startsWith("SQLite writer WAL admission degraded;"))
+      Deferred.doneUnsafe(admissionDegraded, Effect.void);
+    if (logLevel === "Info" && text === "SQLite writer WAL admission recovered")
+      Deferred.doneUnsafe(admissionRecovered, Effect.void);
+    if (logLevel === "Warn" && text.startsWith("SQLite writer request stalled;"))
+      Deferred.doneUnsafe(stalled, Effect.void);
   });
-  return { warnings, recoveries, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+  return {
+    warnings,
+    recoveries,
+    admissionDegraded: Deferred.await(admissionDegraded),
+    admissionRecovered: Deferred.await(admissionRecovered),
+    stalled: Deferred.await(stalled),
+    layer: Logger.layer([logger], { mergeWithExisting: false }),
+  };
 };
+
+export const gateAdmissionRetries = Effect.gen(function* () {
+  const clock = yield* Clock.Clock;
+  const retries = yield* Queue.make<Deferred.Deferred<void>>();
+  return {
+    nextRetry: Queue.take(retries),
+    clock: {
+      ...clock,
+      sleep: Effect.fn("WriterTest.sleep")(function* (duration: Duration.Duration) {
+        if (Duration.toMillis(duration) === 100) {
+          // The retry starts after the parent processes the reply and cancels its watchdog.
+          const release = yield* Deferred.make<void>();
+          yield* Queue.offer(retries, release);
+          yield* Deferred.await(release);
+        }
+        yield* clock.sleep(duration);
+      }),
+    },
+  };
+});
 
 export const awaitAdmissionRecovery = (worker: NodeWorkerThreads.Worker) => {
   const recovered = Deferred.makeUnsafe<void>();
