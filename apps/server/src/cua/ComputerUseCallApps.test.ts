@@ -127,8 +127,12 @@ describe("ComputerUseCallApps", () => {
 
   describe("screen cells", () => {
     const goatSource = { key: "mcp:goat", name: "goat", kind: "integration" } as const;
-    const screenCall = (toolName: string, output: unknown): DynamicToolItem => {
-      const { toolSurface: _surface, ...item } = driverCall(toolName, { code: "..." });
+    const screenCall = (
+      toolName: string,
+      output: unknown,
+      input: unknown = { code: "..." },
+    ): DynamicToolItem => {
+      const { toolSurface: _surface, ...item } = driverCall(toolName, input);
       return { ...item, toolSource: goatSource, output };
     };
     const receipt = (callId: number, targetId?: string) => ({
@@ -243,6 +247,57 @@ describe("ComputerUseCallApps", () => {
         screenCall("goat.goat_screen_run", undefined),
       ])
         expect(apps.present(item)).toBe(item);
+    });
+
+    it("names a finished cell from the server's record when its result kept no receipts", () => {
+      const apps = makeCallApps();
+      apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/" });
+      apps.screenTarget("calc-1", {
+        kind: "app",
+        bundleId: "com.apple.calculator",
+        name: "Calculator",
+      });
+      apps.screenTarget("notes-1", { kind: "app", bundleId: "com.apple.Notes", name: "Notes" });
+      apps.screenCell("thread-1", "await calc()", ["tab-1", "calc-1", "notes-1"]);
+
+      for (const item of [
+        // Antigravity hands back the step's summary in place of the result.
+        screenCall("goat.goat_screen_run", "Ran the screen cell.", { code: "await calc()" }),
+        // ACP keeps only the tail of a long result, with the arguments in its envelope.
+        screenCall("goat.goat_screen_run", '...ole":[],"truncated":[]}', {
+          server: "goat",
+          tool: "goat_screen_run",
+          arguments: { code: "await calc()" },
+        }),
+        // A failed cell's receipts keep only its last calls; the record keeps the first.
+        screenCall("mcp__goat__goat_screen_run", completed("notes-1"), { code: "await calc()" }),
+      ]) {
+        const presented = decodeTurnItem(apps.present(item));
+        expect(presented.toolSource).toEqual(calculator);
+        expect(presented.toolIcon).toEqual(calculator.icon);
+      }
+
+      const running = {
+        ...screenCall("goat.goat_screen_run", undefined, { code: "await calc()" }),
+        status: "running" as const,
+      };
+      const otherThread = {
+        ...screenCall("goat.goat_screen_run", "Ran the screen cell.", { code: "await calc()" }),
+        threadId: ThreadId.make("thread-2"),
+      };
+      for (const item of [running, otherThread]) expect(apps.present(item)).toBe(item);
+    });
+
+    it("falls back to a cell's receipts once a later cell with its code acted on nothing", () => {
+      const apps = makeCallApps();
+      apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/" });
+      apps.screenTarget("calc-1", { kind: "app", bundleId: "com.apple.calculator" });
+      apps.screenCell("thread-1", "await run()", ["calc-1"]);
+      apps.screenCell("thread-1", "await run()", []);
+      const presented = apps.present(
+        screenCall("goat.goat_screen_run", completed("tab-1"), { code: "await run()" }),
+      );
+      expect(presented.toolIcon).toEqual({ _tag: "website", pageUrl: "https://example.com/" });
     });
   });
 });

@@ -1,4 +1,4 @@
-// @effect-diagnostics preferSchemaOverJson:off -- Reads two display fields from a driver answer.
+// @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off -- Reads display fields from a driver answer; a synchronous hash keys a cell's source.
 /**
  * The app or page a computer use call acted on, for its timeline name and icon. Lease proxies label
  * the app each pid runs and screen hosts each target id they bind; a pid or target id names one
@@ -6,6 +6,7 @@
  *
  * @module ComputerUseCallApps
  */
+import * as NodeCrypto from "node:crypto";
 import type {
   ComputerUseCallAppLabel,
   OrchestrationV2TurnItem,
@@ -18,6 +19,7 @@ import { targetPid } from "./ComputerUseScope.ts";
 
 const MAX_APPS = 512;
 const MAX_SCREEN_TARGETS = 1024;
+const MAX_SCREEN_CELLS = 512;
 const MAX_ANSWER_CHARS = 65_536;
 // A screen cell's result holds its value, console and up to 64 receipts.
 const MAX_SCREEN_ANSWER_CHARS = 512 * 1024;
@@ -91,8 +93,8 @@ function answerFields(
 }
 
 /** The targets a screen cell's receipts name, in call order; a failed cell lists them too. */
-function screenRunTargetIds(item: OrchestrationV2TurnItem): readonly string[] {
-  if (item.type !== "dynamic_tool" || !SCREEN_RUN_TOOL.test(item.toolName ?? "")) return [];
+function receiptTargetIds(item: OrchestrationV2TurnItem): readonly string[] {
+  if (item.type !== "dynamic_tool") return [];
   const fields = answerFields(item.output, MAX_SCREEN_ANSWER_CHARS);
   const journal = Array.isArray(fields?.journal) ? fields.journal : [];
   const receipts = [
@@ -101,6 +103,18 @@ function screenRunTargetIds(item: OrchestrationV2TurnItem): readonly string[] {
     fields,
   ];
   return receipts.flatMap((receipt) => text(receipt?.targetId, 200) ?? []);
+}
+
+const cellKey = (threadId: string, source: string) =>
+  `${threadId}\u0000${NodeCrypto.createHash("sha256").update(source).digest("hex")}`;
+
+/** A finished screen cell, with the code it ran in whichever envelope its provider kept. */
+function finishedScreenCell(item: OrchestrationV2TurnItem) {
+  if (item.type !== "dynamic_tool" || !SCREEN_RUN_TOOL.test(item.toolName ?? "")) return undefined;
+  if (item.status !== "completed" && item.status !== "failed") return undefined;
+  const input = record(item.input);
+  const code = input?.code ?? record(input?.arguments)?.code;
+  return { code: typeof code === "string" ? code : undefined };
 }
 
 function websiteUrl(value: unknown) {
@@ -154,6 +168,9 @@ export const makeCallApps = () => {
     | { readonly kind: "app"; readonly label: ComputerUseCallAppLabel }
     | { readonly kind: "tab"; readonly pageUrl: string }
   >();
+  // The targets each cell acted on, in order, kept by the server: providers may hand back a
+  // summary or a truncated tail in place of the cell's receipts, and receipts keep only 16 calls.
+  const screenCells = new Map<string, readonly string[]>();
   const labelOf = (
     tool: string,
     args: Readonly<Record<string, unknown>> | undefined,
@@ -223,13 +240,29 @@ export const makeCallApps = () => {
         screenTargets.delete(oldest.value);
     },
     /**
-     * A cua-driver call presented as its app, with the app's name and icon, when the call names
-     * the app or acts on a pid a proxy labelled. A screen cell is presented as the first app its
-     * receipts name, or else with the icon of the first page they name. Any other item, a call
-     * whose provider already named its app, or an unknown pid or target stays as it came.
+     * Keeps the targets a finished cell acted on, in first-use order, for its row to name. A cell
+     * that acted on none forgets an earlier cell with the same code.
+     */
+    screenCell: (threadId: string, source: string, targetIds: readonly string[]) => {
+      const key = cellKey(threadId, source);
+      screenCells.delete(key);
+      if (targetIds.length === 0) return;
+      screenCells.set(key, targetIds.slice(0, 64));
+      const oldest = screenCells.keys().next();
+      if (screenCells.size > MAX_SCREEN_CELLS && oldest.done !== true)
+        screenCells.delete(oldest.value);
+    },
+    /**
+     * A cua-driver call presented as the app it names or whose pid a proxy labelled; a finished
+     * screen cell as the first app it acted on, else the first page, from the server's record of
+     * the cell or else its receipts. Anything else, or a call whose provider named its app, stays.
      */
     present: (item: OrchestrationV2TurnItem): OrchestrationV2TurnItem => {
-      const targets = screenRunTargetIds(item).flatMap((id) => screenTargets.get(id) ?? []);
+      const cell = finishedScreenCell(item);
+      const recorded =
+        cell?.code === undefined ? undefined : screenCells.get(cellKey(item.threadId, cell.code));
+      const targetIds = cell === undefined ? [] : (recorded ?? receiptTargetIds(item));
+      const targets = targetIds.flatMap((id) => screenTargets.get(id) ?? []);
       const app = targets.find((target) => target.kind === "app");
       if (app !== undefined) return asApp(item, app.label);
       const tab = targets.find((target) => target.kind === "tab");

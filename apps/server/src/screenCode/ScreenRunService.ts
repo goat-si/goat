@@ -229,6 +229,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
   const bridge = new ScreenHostBridge(cursorPhases);
+  const callApps = yield* ComputerUseCallApps;
   if (options.dispatcher) {
     const dispatcher = options.dispatcher;
     bridge.setDispatcher({
@@ -588,6 +589,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           }),
           Effect.ensuring(
             Effect.sync(() => {
+              // Before the provider sees the result, so the cell's row can name what it acted on.
+              callApps.screenCell(input.threadId, input.source, [
+                ...bridge.cellTargetIds(input.runId, input.turnId, cellId),
+              ]);
               if (activeCells.get(id) === cellId) activeCells.delete(id);
             }),
           ),
