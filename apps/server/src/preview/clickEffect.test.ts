@@ -486,3 +486,38 @@ it("does not credit a click with a page load other work started, and does credit
       evidence: expect.arrayContaining(["navigation"]),
     });
   }));
+
+it("does not confirm a navigation a guard cancelled, or a measuring probe the handler removed", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<a id="guarded" href="https://slow.test/next">next</a>
+          <button id="measure" onclick="const probe = document.createElement('span'); document.body.append(probe); probe.textContent = 'wide'; probe.style.font = '12px serif'; probe.getBoundingClientRect(); probe.remove()">measure</button><script>
+            navigation.addEventListener("navigate", (event) => event.preventDefault());
+          </script>`,
+      }),
+    );
+    await page.route("https://page.test/late", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<a id="late" href="https://slow.test/next" onclick="navigation.addEventListener('navigate', (event) => event.preventDefault(), { once: true })">next</a>`,
+      }),
+    );
+    await page.route("https://slow.test/**", () => {});
+    await page.goto("https://page.test/");
+    await page.focus("#guarded");
+    await expect(ServerBrowserPage.click(page, { selector: "#guarded" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.focus("#measure");
+    await expect(ServerBrowserPage.click(page, { selector: "#measure" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    // A guard added during the click runs after the watch's own navigate listener.
+    await page.goto("https://page.test/late");
+    await page.focus("#late");
+    await expect(ServerBrowserPage.click(page, { selector: "#late" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));

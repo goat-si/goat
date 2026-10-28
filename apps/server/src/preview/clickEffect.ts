@@ -77,6 +77,8 @@ const INSTALL = `(() => {
     const lists = new Map();
     for (const record of records) if (record.type === "childList") lists.set(record.target, null);
     for (const parent of lists.keys()) {
+      // A detached node, such as a measuring probe already removed, is not part of the page.
+      if (!parent.isConnected) continue;
       let children = [...parent.childNodes];
       for (const record of [...records].reverse()) {
         if (record.type !== "childList" || record.target !== parent) continue;
@@ -97,7 +99,7 @@ const INSTALL = `(() => {
     if (childrenChanged(records)) return true;
     const before = new Map();
     for (const record of records) {
-      if (record.type === "childList") continue;
+      if (record.type === "childList" || !record.target.isConnected) continue;
       const key = record.target;
       const name = record.type === "attributes" ? record.attributeName : "";
       const entries = before.get(key) ?? new Map();
@@ -171,10 +173,18 @@ const INSTALL = `(() => {
   const onFocus = (event) => related(event) && note("focus");
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
+  // Judged after the event's dispatch, in a message task (timers can be throttled), since a guard
+  // listener may cancel it after this one ran.
   const onNavigate = (event) => {
     if (!armed || !(event.userInitiated || handled())) return;
-    note("navigation");
-    navigatedNow(true);
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      if (event.defaultPrevented) return;
+      note("navigation");
+      navigatedNow(true);
+    };
+    channel.port2.postMessage(null);
   };
   const navigation = window.navigation;
   const listeners = [[document, "input", onInput], [document, "change", onInput],
