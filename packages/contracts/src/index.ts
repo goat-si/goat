@@ -129,6 +129,7 @@ export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
+export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";
 export * from "./humanStepResult.ts";

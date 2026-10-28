@@ -2202,6 +2202,8 @@ export const GenerateMemorySummaryInput = struct({
   messages: array(struct({ messageId: MessageId, text: Schema.String, completed: Schema.Boolean })),
   previousSummary: Schema.optionalKey(MemoryPayload),
   modelSelection: MemoryModelSelection,
+  /** Also ask for durable facts that hold beyond this thread (consolidation only). */
+  promote: Schema.optionalKey(Schema.Boolean),
 }).check(
   Schema.makeFilter((v) => jsonBytes(v) <= 262144 && unique(v.messages.map((m) => m.messageId))),
 );
@@ -2241,17 +2243,6 @@ export const ResolveMemoryConflictExecutionResult = struct({
 });
 export type ResolveMemoryConflictExecutionResult = typeof ResolveMemoryConflictExecutionResult.Type;
 
-export const GenerateMemorySummaryExecutionResult = struct({
-  result: GenerateMemorySummaryResult,
-  execution: MemoryGenerationExecution,
-});
-export type GenerateMemorySummaryExecutionResult = typeof GenerateMemorySummaryExecutionResult.Type;
-/** A provider's answer: null when the supplied messages hold nothing durable to keep. */
-export const GenerateMemorySummaryOutcome = struct({
-  result: Schema.NullOr(GenerateMemorySummaryResult),
-  execution: MemoryGenerationExecution,
-});
-export type GenerateMemorySummaryOutcome = typeof GenerateMemorySummaryOutcome.Type;
 export function validateMemoryGenerationResult(
   input: ResolveMemoryConflictInput | GenerateMemorySummaryInput,
   result: ResolveMemoryConflictResult | GenerateMemorySummaryResult,

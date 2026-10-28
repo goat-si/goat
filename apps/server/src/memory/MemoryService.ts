@@ -29,6 +29,7 @@ import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -46,14 +47,6 @@ export type MemoryServiceError =
   | Store.MemoryStoreConflict
   | Store.MemoryCapacityError;
 type Permit = Effect.Effect<void, MemoryAccessError>;
-type SummaryCommit = {
-  readonly work: Store.MemoryWork;
-  readonly generated: M.GenerateMemorySummaryExecutionResult;
-  readonly input: M.GenerateMemorySummaryInput;
-  readonly expectedHeads: ReadonlyArray<M.MemoryRevisionId>;
-  /** Re-read committed source/exclusions inside the commit transaction. */
-  readonly recheckSource: Effect.Effect<void, MemoryServiceError>;
-};
 export type IntentBinding = {
   memorySpaceId: M.MemorySpaceId | null;
   coordinatorEpoch: number;
@@ -290,7 +283,6 @@ const decodeRead = Schema.decodeUnknownEffect(M.MemoryReadInput);
 const decodeList = Schema.decodeUnknownEffect(M.MemoryListInput);
 const decodeSearch = Schema.decodeUnknownEffect(M.MemorySearchInput);
 const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryInput);
-const decodeSummary = Schema.decodeUnknownEffect(M.GenerateMemorySummaryExecutionResult);
 const encodeRevert = Schema.encodeSync(Schema.fromJsonString(M.MemoryRevertResolutionInput));
 const encodeHubReceipt = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubReceipt));
 const encodeReadSource = Schema.encodeEffect(Schema.fromJsonString(M.MemoryReadSourceInput));
@@ -1360,21 +1352,35 @@ const make = Effect.fnUntraced(function* (
           const suppressedContent = lineage.flatMap((r) =>
             r.kind === "content" ? [r.content] : [],
           );
-          const sourceExclusions: M.MemorySourceExclusion[] = [];
+          // A consolidation that rereads the same run shares its source and watermark with the
+          // summary before it; one exclusion per source keeps the tombstone's entries distinct.
+          const exclusionsBySource = new Map<string, M.MemorySourceExclusion>();
           for (const { revision, payload } of current.revisions) {
             const p = revision.provenance;
             if (p.sourceThread && p.sourceWatermark) {
+              const w = p.sourceWatermark;
+              const key = [
+                p.sourceThread.environmentId,
+                p.sourceThread.threadId,
+                w.fromEventId,
+                w.toEventId,
+                w.throughSequence,
+              ].join("\u0000");
               const messageIds = [
-                ...new Set((payload?.evidence ?? []).flatMap((e) => e.messageIds)),
+                ...new Set([
+                  ...(exclusionsBySource.get(key)?.messageIds ?? []),
+                  ...(payload?.evidence ?? []).flatMap((e) => e.messageIds),
+                ]),
               ];
               if (messageIds.length)
-                sourceExclusions.push({
+                exclusionsBySource.set(key, {
                   sourceThread: p.sourceThread,
                   sourceWatermark: p.sourceWatermark,
                   messageIds,
                 });
             }
           }
+          const sourceExclusions = [...exclusionsBySource.values()];
           const op: Extract<M.MemoryOperation, { kind: "forget" }> = old ?? {
             protocolVersion: 1,
             kind: "forget",
@@ -1914,114 +1920,16 @@ const make = Effect.fnUntraced(function* (
       }),
     );
   });
-  const commitSummary = Effect.fn("MemoryService.commitSummary")(function* (input: SummaryCommit) {
-    const generated = yield* decode(decodeSummary(input.generated, strict));
-    const work = input.work;
-    if (work.metadata.kind !== "summary" || !work.memoryId)
-      return yield* new Store.MemoryStoreConflict({ code: "unsupported_operation" });
-    const meta = work.metadata;
-    if (
-      generated.execution.environmentId !== environmentId ||
-      generated.execution.providerInstanceId !== meta.modelSelection.instanceId ||
-      encodeSelection(generated.execution.requestedModelSelection) !==
-        encodeSelection(meta.modelSelection)
-    )
-      return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-    if (!M.validateMemoryGenerationResult(input.input, generated.result)) return yield* invalid();
-    if (scanMemoryValue(generated.result).kind !== "allowed")
-      return yield* new Store.MemoryStoreConflict({ code: "secret_detected" });
-    return yield* store.transact(
-      Effect.gen(function* () {
-        const currentWork = yield* store.readWork(work.id);
-        if (
-          !currentWork ||
-          currentWork.status !== "running" ||
-          currentWork.claimedBy !== work.claimedBy ||
-          currentWork.attempt !== work.attempt ||
-          currentWork.claimedUntil !== work.claimedUntil ||
-          work.claimedUntil === null ||
-          work.claimedUntil <= (yield* Clock.currentTimeMillis)
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
-        yield* input.recheckSource;
-        const current = yield* store.loadAggregate(
-          M.MemorySpaceId.make(work.space),
-          work.memoryId!,
-          {},
-          {},
-        );
-        if (current.tombstone || current.pendingForget)
-          return yield* new Store.MemoryStoreConflict({ code: "forgotten" });
-        if (encodeHeads(current.heads) !== encodeHeads(input.expectedHeads))
-          return yield* new Store.MemoryStoreConflict({ code: "revision_changed" });
-        const lineage = yield* store.readThreadLineage(
-          meta.sourceThread,
-          M.MemorySpaceId.make(work.space),
-        );
-        if (lineage.state !== "tracked")
-          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
-        // The final input also carries lineage across in-memory generation chunks. Rebuilds
-        // without the old summary must not inherit dependencies from the discarded head.
-        const payload = yield* decode(
-          decodeSummaryPayload(
-            {
-              text: generated.result.text,
-              evidence: generated.result.evidence,
-              derivedFromMemoryRevisions: [
-                ...new Set([
-                  ...lineage.revisions,
-                  ...(input.input.previousSummary?.derivedFromMemoryRevisions ?? []),
-                ]),
-              ],
-            },
-            strict,
-          ),
-        );
-        yield* validateSummaryDependencies(M.MemorySpaceId.make(work.space), payload).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-        );
-        const execution = generated.execution;
-        const receipt = yield* apply(
-          {
-            protocolVersion: 1,
-            kind: "upsert",
-            memorySpaceId: M.MemorySpaceId.make(work.space),
-            memoryId: work.memoryId!,
-            operationId: meta.operationId,
-            originEnvironmentId: environmentId,
-            expectedHeads: input.expectedHeads,
-            payload,
-            revision: {
-              memorySpaceId: M.MemorySpaceId.make(work.space),
-              memoryId: work.memoryId!,
-              revisionId: meta.revisionId,
-              operationId: meta.operationId,
-              parents: input.expectedHeads,
-              scope: { kind: "thread", thread: meta.sourceThread },
-              payloadRef: meta.revisionId,
-              assertionKind: generated.result.assertionKind,
-              createdAtUtc: M.MemoryUtcTimestamp.make(
-                DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-              ),
-              provenance: {
-                environmentId,
-                providerInstanceId: execution.providerInstanceId,
-                provider: execution.effectiveProvider,
-                requestedModelSelection: execution.requestedModelSelection,
-                effectiveModel: execution.effectiveModel,
-                sourceThread: meta.sourceThread,
-                sourceWatermark: meta.sourceWatermark,
-              },
-            },
-          },
-          Store.localIntent,
-          Effect.void,
-        );
-        if (!(yield* store.completeSummaryWork(work)))
-          return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
-        return receipt;
-      }),
-    );
+  const commitSummary = makeCommitSummary({
+    store,
+    sql,
+    environmentId,
+    apply,
+    validateDependencies: (space, payload) =>
+      validateSummaryDependencies(space, payload).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      ),
+    stableUuid: memoryStableUuid,
   });
   const queueSummary = Effect.fn("MemoryService.queueSummary")(function* (work: Store.MemoryWork) {
     if (

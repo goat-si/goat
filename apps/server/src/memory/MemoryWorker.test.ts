@@ -34,133 +34,11 @@ import {
   encodeRun,
   countingTracer,
   seed,
+  work,
+  seedDerivedSummary,
+  incrementalSummary,
+  seedRolledBackRegeneration,
 } from "./MemoryWorker.testkit.ts";
-const work = (kind: Store.MemoryWork["kind"] = "summary"): Store.MemoryWork => ({
-  id: "work",
-  space,
-  memoryId,
-  kind,
-  status: "running",
-  attempt: 1,
-  nextAttemptAt: 0,
-  claimedBy: "worker",
-  claimedUntil: Number.MAX_SAFE_INTEGER,
-  payloadRef: null,
-  metadata: {
-    kind: "summary",
-    sourceThread: { environmentId, threadId },
-    sourceWatermark: {
-      fromEventId: M.EventId.make(id(10)),
-      toEventId: M.EventId.make(id(11)),
-      throughSequence: 2,
-    },
-    memoryId,
-    operationId: M.MemoryOperationId.make(id(4)),
-    revisionId: M.MemoryRevisionId.make(id(5)),
-    modelSelection: selection,
-  },
-});
-// Build canonical lineage through the real Worker/Service/Store, with synthetic content only.
-const seedDerivedSummary = Effect.gen(function* () {
-  yield* TestClock.setTime(Date.parse(now));
-  yield* seed;
-  const worker = yield* Worker.MemoryWorker;
-  const service = yield* Service.MemoryService;
-  const store = yield* Store.MemoryStore;
-  yield* worker.sweepDue();
-  const target = M.MemoryId.make(Service.memoryStableUuid(`${environmentId}:${threadId}:summary`));
-  const current = yield* store.loadAggregate(space, target);
-  const first = current.revisions.find((p) => p.revision.revisionId === current.heads[0])!;
-  yield* service.upsert(
-    {
-      memorySpaceId: space,
-      memoryId,
-      operationId: M.MemoryOperationId.make(id(8100)),
-      expectedHeads: [],
-      scope: { kind: "user" },
-      assertionKind: "inference",
-      payload: { text: "synthetic source A", evidence: [], derivedFromMemoryRevisions: [] },
-      baseBoundary: null,
-    },
-    Effect.void,
-  );
-  const rA = (yield* store.loadAggregate(space, memoryId)).heads[0]!;
-  yield* service.upsert(
-    {
-      memorySpaceId: space,
-      memoryId: target,
-      operationId: M.MemoryOperationId.make(id(8101)),
-      expectedHeads: current.heads,
-      scope: first.revision.scope,
-      assertionKind: "inference",
-      payload: { ...first.payload!, text: "synthetic derived A", derivedFromMemoryRevisions: [rA] },
-      baseBoundary: null,
-    },
-    Effect.void,
-  );
-  return { target, rA, d0: (yield* store.loadAggregate(space, target)).heads[0]! };
-});
-const incrementalSummary = (target: M.MemoryId) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const store = yield* Store.MemoryStore;
-    const worker = yield* Worker.MemoryWorker;
-    const original = (yield* sql<{
-      payload_json: string;
-    }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
-    const message = yield* decodeMessage(original.payload_json);
-    // Force two generation calls in the same claim, covering the in-memory carry too.
-    for (let index = 3; index <= 103; index++)
-      yield* sql`INSERT INTO orchestration_events VALUES (${index},${id(8200 + index)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make(`increment-${index}`), runId: null })},${now},2,'thread')`;
-    const queued: Store.MemoryWork = {
-      ...work(),
-      id: "lineage-increment",
-      memoryId: target,
-      status: "pending",
-      claimedBy: null,
-      claimedUntil: null,
-      metadata: {
-        ...(work().metadata as Extract<Store.MemoryWork["metadata"], { kind: "summary" }>),
-        memoryId: target,
-        operationId: M.MemoryOperationId.make(id(8102)),
-        revisionId: M.MemoryRevisionId.make(id(8103)),
-        fromSequence: 2,
-        sourceWatermark: {
-          fromEventId: M.EventId.make(id(8203)),
-          toEventId: M.EventId.make(id(8303)),
-          throughSequence: 103,
-        },
-      },
-    };
-    yield* store.enqueueWork(queued);
-    yield* store.claimWork(queued.id, "worker", Date.parse(now), Number.MAX_SAFE_INTEGER);
-    yield* worker.execute((yield* store.readWork(queued.id))!);
-    return yield* store.loadAggregate(space, target);
-  });
-// Summary A covers a run that is then rolled back, and run B adds 101 messages. The next
-// summary must drop A and regenerate from the start: two bounded chunks in one work item.
-const seedRolledBackRegeneration = Effect.gen(function* () {
-  yield* seed;
-  const sql = yield* SqlClient.SqlClient;
-  const worker = yield* Worker.MemoryWorker;
-  const earlyMessageRow = (yield* sql<{
-    payload_json: string;
-  }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
-  const earlyMessage = yield* decodeMessage(earlyMessageRow.payload_json);
-  yield* sql`UPDATE orchestration_events SET sequence=3 WHERE sequence=2`;
-  yield* sql`INSERT INTO orchestration_events VALUES (2,${id(1299)},${threadId},'message.updated',${encodeMessage({ ...earlyMessage, id: M.MessageId.make("survivor"), runId: null })},${now},2,'thread')`;
-  yield* worker.sweepDue();
-  const runRow = (yield* sql<{
-    payload_json: string;
-  }>`SELECT payload_json FROM orchestration_events WHERE sequence=3`)[0]!;
-  const run = yield* decodeRun(runRow.payload_json);
-  yield* sql`INSERT INTO orchestration_events VALUES (4,${id(1300)},${threadId},'run.updated',${encodeRun({ ...run, status: "rolled_back" })},${now},2,'thread')`;
-  const nextRunId = M.RunId.make("run-b");
-  for (let index = 0; index < 101; index++) {
-    yield* sql`INSERT INTO orchestration_events VALUES (${index + 5},${id(1400 + index)},${threadId},'message.updated',${encodeMessage({ ...earlyMessage, id: M.MessageId.make(`run-b-${index}`), runId: nextRunId })},${now},2,'thread')`;
-  }
-  yield* sql`INSERT INTO orchestration_events VALUES (106,${id(1600)},${threadId},'run.updated',${encodeRun({ ...run, id: nextRunId, userMessageId: M.MessageId.make("run-b-0"), status: "completed" })},${now},2,'thread')`;
-});
 describe("MemoryWorker", () => {
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(
@@ -845,36 +723,6 @@ describe("MemoryWorker", () => {
       );
     }).pipe(Effect.provide(live())),
   );
-  it.effect("never summarizes or consolidates a delegated child thread", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(Date.parse(now));
-      yield* seed;
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO orchestration_events VALUES (0,${id(9)},${threadId},'thread.created','{"creationSource":"mcp","lineage":{"relationshipToParent":"subagent"}}',${now},2,'thread')`;
-      const worker = yield* Worker.MemoryWorker;
-      const store = yield* Store.MemoryStore;
-      yield* worker.sweepDue();
-      // A later recovery scan, past the consolidation age, must not pick the thread up either.
-      yield* TestClock.adjust(86400000 + Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
-      yield* worker.sweepDue();
-      yield* worker.drain;
-      assert.strictEqual(
-        (yield* sql<{
-          count: number;
-        }>`SELECT count(*) AS count FROM memory_outbox WHERE kind IN ('summary','consolidate') AND status!='cancelled'`)[0]!
-          .count,
-        0,
-      );
-      assert.deepStrictEqual(
-        yield* store.list({
-          memorySpaceId: space,
-          scope: { kind: "thread", thread: { environmentId, threadId } },
-          limit: 20,
-        }),
-        [],
-      );
-    }).pipe(Effect.provide(live())),
-  );
   it.effect("consolidates delayed terminal events using the processing clock", () =>
     Effect.gen(function* () {
       yield* seed;
@@ -1031,69 +879,6 @@ describe("MemoryWorker", () => {
       yield* worker.drain;
       assert.strictEqual((yield* store.pendingReports(100)).length, 1);
     }).pipe(Effect.provide(live(true))),
-  );
-  it.effect(
-    "keeps one failure report per summary work and drops it once the memory is generated",
-    () => {
-      let calls = 0;
-      return Effect.gen(function* () {
-        yield* TestClock.setTime(Date.parse(now));
-        yield* seed;
-        const worker = yield* Worker.MemoryWorker;
-        const store = yield* Store.MemoryStore;
-        yield* worker.sweepDue();
-        assert.strictEqual((yield* store.pendingReports(100)).length, 1);
-        yield* TestClock.adjust(Worker.memoryRetryDelay(1));
-        yield* worker.sweepDue();
-        assert.strictEqual(calls, 2);
-        // Retries of the same work replace its report instead of adding one per attempt.
-        assert.strictEqual((yield* store.pendingReports(100)).length, 1);
-        yield* TestClock.adjust(Worker.memoryRetryDelay(2));
-        yield* worker.sweepDue();
-        assert.strictEqual(calls, 3);
-        assert.deepStrictEqual(yield* store.pendingReports(100), []);
-      }).pipe(Effect.provide(live(() => (++calls < 3 ? "synthetic failure" : undefined))));
-    },
-  );
-  it.effect("a summary with nothing durable writes no memory and settles its range", () =>
-    Effect.gen(function* () {
-      yield* seed;
-      const worker = yield* Worker.MemoryWorker;
-      const store = yield* Store.MemoryStore;
-      const sql = yield* SqlClient.SqlClient;
-      yield* worker.sweepDue();
-      assert.deepStrictEqual(
-        yield* store.list({
-          memorySpaceId: space,
-          scope: { kind: "thread", thread: { environmentId, threadId } },
-          limit: 20,
-        }),
-        [],
-      );
-      assert.deepStrictEqual(
-        (yield* sql<{
-          status: string;
-        }>`SELECT status FROM memory_outbox WHERE kind='summary'`).map((row) => row.status),
-        ["completed"],
-      );
-      assert.deepStrictEqual(yield* store.pendingReports(100), []);
-    }).pipe(Effect.provide(live(false, undefined, false, 0, false, () => true))),
-  );
-  it.effect("an empty later chunk keeps the useful chunk before it", () =>
-    Effect.gen(function* () {
-      const { target, d0 } = yield* seedDerivedSummary;
-      const after = yield* incrementalSummary(target);
-      assert.notStrictEqual(after.heads[0], d0);
-      const head = after.revisions.find((pair) => pair.revision.revisionId === after.heads[0]);
-      assert.include(head?.payload?.text, "increment-102");
-      assert.notInclude(head?.payload?.text, "increment-103");
-    }).pipe(
-      Effect.provide(
-        live(false, undefined, false, 0, false, (input) =>
-          input.messages.some((message) => message.messageId === "increment-103"),
-        ),
-      ),
-    ),
   );
   it.effect("deleted thread cancels its jobs before generation", () =>
     Effect.gen(function* () {

@@ -8,6 +8,8 @@ const frame =
 const end = "\n</untrusted_memory_data>";
 const summaryGuidance =
   "Keep durable information: stable preferences, decisions, recurring constraints, and verified results. Omit one-off progress reports, repeated tool output, and no-change or closing remarks. Preserve useful information from the existing summary and correct facts contradicted by the supplied evidence. When the supplied messages add nothing durable, set summary to null instead of writing that nothing was found; any existing summary is kept unchanged.\n";
+const promotionGuidance =
+  "Also return project and user. project holds only durable decisions, preferences, and constraints that apply to every thread of this project; user holds only the user's own durable preferences that apply in every project. Each is null unless the supplied evidence states it, and each cites that evidence the same way. Never promote one-off task instructions, review verdicts, or progress.\n";
 const utf8 = (text: string) => new TextEncoder().encode(text).length;
 const encodeConflict = Schema.encodeEffect(Schema.fromJsonString(M.ResolveMemoryConflictInput));
 const encodeSummary = Schema.encodeEffect(Schema.fromJsonString(M.GenerateMemorySummaryInput));
@@ -54,16 +56,20 @@ export type MemorySummaryModelOutput = typeof MemorySummaryModelOutput.Type;
 /** Strict structured output needs an object root, so the nullable summary is one required key. */
 const memorySummaryModelAnswer = (origins: ReadonlyArray<MemoryOrigin>) =>
   Schema.Struct({ summary: Schema.NullOr(memorySummaryModelOutput(origins)) });
+const memoryPromotingModelAnswer = (origins: ReadonlyArray<MemoryOrigin>) =>
+  Schema.Struct({
+    summary: Schema.NullOr(memorySummaryModelOutput(origins)),
+    project: Schema.NullOr(memorySummaryModelOutput(origins)),
+    user: Schema.NullOr(memorySummaryModelOutput(origins)),
+  });
 export const MemorySummaryModelAnswer = memorySummaryModelAnswer(MEMORY_ORIGINS);
 export type MemorySummaryModelAnswer = typeof MemorySummaryModelAnswer.Type;
+export const MemoryPromotingModelAnswer = memoryPromotingModelAnswer(MEMORY_ORIGINS);
+export type MemoryPromotingModelAnswer = typeof MemoryPromotingModelAnswer.Type;
 export const MemoryConflictModelOutput = memoryConflictModelOutput(MEMORY_ORIGINS);
 export type MemoryConflictModelOutput = typeof MemoryConflictModelOutput.Type;
 
-/**
- * Models that ignore the null answer write a sentence saying nothing durable was found. Only a
- * whole text of that shape counts: its first sentence says so, and every other sentence only
- * explains the work was one-off. A text that also reports a verified result keeps it.
- */
+/** A whole text that only says nothing durable was found (models that ignore the null answer). */
 export function isNoDurableMemoryText(text: string) {
   const sentences = text.trim().split(/(?<=[.!?])\s+/);
   return (
@@ -110,11 +116,9 @@ export function memoryEvidenceSources(
 }
 
 /**
- * The contract-shaped (still undecoded) result. Null references become absent keys; an entry takes
- * the references of the first source holding its messages (models miscopy long event ids, and a
- * consolidation rereads messages its previous summary cites), or splits into one entry per source.
- * Ids no source of the same origin holds support nothing and are dropped, and a fact left without
- * non-model evidence becomes an inference. Validation still decides the result.
+ * The contract-shaped result: each entry takes the references of the same-origin source holding
+ * its messages (models miscopy long ids) or splits per source. Ids no such source holds are
+ * dropped, and a fact left without non-model evidence becomes an inference. Validation decides.
  */
 export function memoryResultFromModelOutput(
   output: MemorySummaryModelOutput | MemoryConflictModelOutput,
@@ -179,9 +183,16 @@ const invalidInput = (
     detail: "Memory generation input is invalid or exceeds its budget.",
     cause,
   });
-const render = (operation: "resolveMemoryConflict" | "generateMemorySummary", json: string) => {
+const render = (
+  operation: "resolveMemoryConflict" | "generateMemorySummary",
+  json: string,
+  extraGuidance = "",
+) => {
   const prompt =
-    (operation === "generateMemorySummary" ? summaryGuidance : "") + frame + json + end;
+    (operation === "generateMemorySummary" ? summaryGuidance + extraGuidance : "") +
+    frame +
+    json +
+    end;
   return utf8(prompt) > MEMORY_GENERATION_PROMPT_MAX_UTF8_BYTES
     ? Effect.fail(
         invalidInput(
@@ -216,14 +227,14 @@ export const buildMemorySummaryPrompt = Effect.fn("buildMemorySummaryPrompt")(fu
   const checked = yield* decodeSummary(input, { onExcessProperty: "error" }).pipe(
     Effect.mapError((cause) => invalidInput("generateMemorySummary", cause)),
   );
-  const json = yield* encodeSummary(checked).pipe(
+  const { promote, ...data } = checked;
+  const json = yield* encodeSummary(data).pipe(
     Effect.mapError((cause) => invalidInput("generateMemorySummary", cause)),
   );
+  const origins = allowedOrigins(memoryEvidenceSources(checked), ["model"]);
   return {
-    prompt: yield* render("generateMemorySummary", json),
-    outputSchema: memorySummaryModelAnswer(
-      allowedOrigins(memoryEvidenceSources(checked), ["model"]),
-    ),
+    prompt: yield* render("generateMemorySummary", json, promote ? promotionGuidance : ""),
+    outputSchema: promote ? memoryPromotingModelAnswer(origins) : memorySummaryModelAnswer(origins),
   };
 });
 

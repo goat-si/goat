@@ -28,29 +28,10 @@ import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./Memo
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
+import { MemoryWorkerError } from "./MemoryWorkerError.ts";
+import { generateSummaryChunks } from "./memorySummaryChunks.ts";
 
-export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
-  "MemoryWorkerError",
-  {
-    code: M.MemoryFailureCode,
-    stage: Schema.optionalKey(
-      Schema.Literals([
-        "catch-up",
-        "deferred",
-        "due-work",
-        "claim-work",
-        "read-work",
-        "execute",
-        "maintenance",
-      ]),
-    ),
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {
-  override get message() {
-    return "Memory work failed.";
-  }
-}
+export { MemoryWorkerError };
 export class MemoryWorker extends Context.Service<
   MemoryWorker,
   {
@@ -241,6 +222,30 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(workerError));
+  });
+  // Repository discovery can run here, outside SQL; the commit rechecks the binding it used.
+  const threadProject = Effect.fn("MemoryWorker.threadProject")(function* (
+    thread: M.ScopedThreadRef,
+    space: M.MemorySpaceId,
+  ) {
+    const rows = yield* query(
+      sql<{
+        project_id: string | null;
+      }>`SELECT project_id FROM orchestration_v2_projection_threads WHERE thread_id=${thread.threadId}`,
+    );
+    const projectId = rows[0]?.project_id;
+    if (!projectId) return null;
+    const project = { environmentId, projectId: M.ProjectId.make(projectId) };
+    // A project removed since the run leaves only the user-wide promotion.
+    const projectKey = yield* query(
+      service.resolveProjectKey(space, project).pipe(
+        Effect.catchTags({
+          MemoryStoreConflict: () => Effect.succeed(null),
+          MemoryAccessError: () => Effect.succeed(null),
+        }),
+      ),
+    );
+    return projectKey ? { project, projectKey } : null;
   });
   const summaryEvidenceValid = Effect.fn("MemoryWorker.summaryEvidenceValid")(function* (
     work: Store.MemoryWork,
@@ -635,83 +640,53 @@ const make = Effect.gen(function* () {
       const generated = yield* Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "memory-generation-" });
-          let lastGenerated:
-            | {
-                input: M.GenerateMemorySummaryInput;
-                output: M.GenerateMemorySummaryExecutionResult;
-              }
-            | undefined;
-          while (true) {
-            // Empty filtered pages still consume their bounded source range. A trailing
-            // empty page completes the work without sending an invalid empty model input.
-            if (!source.messages.length) {
-              if (source.watermark.throughSequence >= meta.sourceWatermark.throughSequence)
-                return lastGenerated;
-              yield* renewClaim;
-              sourceWork = {
-                ...work,
-                metadata: { ...meta, fromSequence: source.watermark.throughSequence },
-              };
-              source = yield* readSource(sourceWork);
-              continue;
-            }
-            const input = yield* query(
-              decodeInput(
-                {
-                  cwd,
-                  sourceThread: meta.sourceThread,
-                  sourceWatermark: source.watermark,
-                  messages: source.messages,
-                  ...(previousSummary ? { previousSummary } : {}),
-                  modelSelection: meta.modelSelection,
-                },
-                strict,
-              ),
-            );
-            if (!generation.generateMemorySummary)
-              return yield* new MemoryWorkerError({ code: "unsupported_operation" });
-            yield* renewClaim;
-            const generate = generation.generateMemorySummary;
-            const output = yield* hold
-              .guard(yield* hold.keyFor(meta.modelSelection), redacted(generate(input)))
-              .pipe(
-                Effect.mapError((cause) =>
-                  cause._tag === "MemoryGenerationHeld"
-                    ? new MemoryWorkerError({ code: "unavailable", cause })
-                    : new MemoryWorkerError({ code: safeCode(cause), cause }),
+          const generate = generation.generateMemorySummary;
+          const holdKey = yield* hold.keyFor(meta.modelSelection);
+          return yield* generateSummaryChunks({
+            first: source,
+            throughSequence: meta.sourceWatermark.throughSequence,
+            previousSummary,
+            dependencies,
+            // Consolidation is the daily durability pass, so only it proposes promotions.
+            promote: work.kind === "consolidate" && !work.space.startsWith("_local:"),
+            buildInput: (chunk, previous, promote) =>
+              query(
+                decodeInput(
+                  {
+                    cwd,
+                    sourceThread: meta.sourceThread,
+                    sourceWatermark: chunk.watermark,
+                    messages: chunk.messages,
+                    ...(previous ? { previousSummary: previous } : {}),
+                    modelSelection: meta.modelSelection,
+                    ...(promote ? { promote } : {}),
+                  },
+                  strict,
                 ),
-              );
-            if (
-              output.execution.providerInstanceId !== meta.modelSelection.instanceId ||
-              encodeSelection(output.execution.requestedModelSelection) !==
-                encodeSelection(meta.modelSelection)
-            )
-              return yield* new MemoryWorkerError({ code: "identity_mismatch" });
-            // Nothing durable in this chunk: the previous summary stands and later chunks still run.
-            const result = output.result;
-            if (result !== null) {
-              if (!M.validateMemoryGenerationResult(input, result))
-                return yield* new MemoryWorkerError({ code: "invalid_output" });
-              if (scanMemoryValue(result).kind !== "allowed")
-                return yield* new MemoryWorkerError({ code: "secret_detected" });
-              lastGenerated = { input, output: { ...output, result } };
-              previousSummary = {
-                text: result.text,
-                evidence: result.evidence,
-                derivedFromMemoryRevisions: dependencies,
-              };
-            }
-            if (source.watermark.throughSequence >= meta.sourceWatermark.throughSequence)
-              return lastGenerated;
-            sourceWork = {
-              ...work,
-              metadata: { ...meta, fromSequence: source.watermark.throughSequence },
-            };
-            source = yield* readSource(sourceWork);
-          }
+              ),
+            readFrom: (fromSequence) =>
+              readSource({ ...work, metadata: { ...meta, fromSequence } }),
+            renewClaim,
+            generate: (input) =>
+              generate
+                ? hold
+                    .guard(holdKey, redacted(generate(input)))
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        cause._tag === "MemoryGenerationHeld"
+                          ? new MemoryWorkerError({ code: "unavailable", cause })
+                          : new MemoryWorkerError({ code: safeCode(cause), cause }),
+                      ),
+                    )
+                : Effect.fail(new MemoryWorkerError({ code: "unsupported_operation" })),
+            sameExecution: (execution) =>
+              execution.providerInstanceId === meta.modelSelection.instanceId &&
+              encodeSelection(execution.requestedModelSelection) ===
+                encodeSelection(meta.modelSelection),
+          });
         }),
       );
-      if (!generated) {
+      if (!generated.summary) {
         yield* store.transact(
           Effect.gen(function* () {
             yield* recheckSource;
@@ -721,10 +696,11 @@ const make = Effect.gen(function* () {
         );
         return;
       }
+      const summary = generated.summary;
       if (work.space.startsWith("_local:")) {
         if (
-          generated.output.execution.environmentId !== environmentId ||
-          generated.output.execution.providerInstanceId !== meta.modelSelection.instanceId
+          summary.output.execution.environmentId !== environmentId ||
+          summary.output.execution.providerInstanceId !== meta.modelSelection.instanceId
         )
           return yield* new MemoryWorkerError({ code: "identity_mismatch" });
         yield* store.transact(
@@ -739,19 +715,19 @@ const make = Effect.gen(function* () {
               owner.claimedUntil <= (yield* Clock.currentTimeMillis)
             )
               return yield* new MemoryWorkerError({ code: "attempt_expired" });
-            const execution = generated.output.execution;
+            const execution = summary.output.execution;
             yield* store.refreshLocalSummaryIntent({
               intentId: `${environmentId}:${meta.sourceThread.threadId}:summary`,
               memoryId: work.memoryId!,
               environmentId,
               scope: { kind: "thread", thread: meta.sourceThread },
-              assertionKind: generated.output.result.assertionKind,
+              assertionKind: summary.output.result.assertionKind,
               createdAtUtc: M.MemoryUtcTimestamp.make(
                 DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
               ),
               payload: {
-                text: generated.output.result.text,
-                evidence: generated.output.result.evidence,
+                text: summary.output.result.text,
+                evidence: summary.output.result.evidence,
                 derivedFromMemoryRevisions: dependencies,
               },
               provenance: {
@@ -771,9 +747,20 @@ const make = Effect.gen(function* () {
       } else
         yield* service.commitSummary({
           work: owned,
-          input: generated.input,
-          generated: generated.output,
+          input: summary.input,
+          generated: summary.output,
           expectedHeads: current!.heads,
+          ...(generated.promotions
+            ? {
+                promotions: {
+                  ...generated.promotions,
+                  project: yield* threadProject(
+                    meta.sourceThread,
+                    M.MemorySpaceId.make(work.space),
+                  ),
+                },
+              }
+            : {}),
           recheckSource: recheckSource.pipe(
             Effect.asVoid,
             Effect.mapError((cause) => new Store.MemoryStoreConflict({ code: safeCode(cause) })),
