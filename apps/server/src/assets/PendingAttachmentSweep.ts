@@ -40,9 +40,10 @@ export const layerWithFileSystem = (fileSystem: SweepFileSystem) =>
         ),
       );
       let nextDue = -Infinity;
-      const request = Effect.fn("PendingAttachmentSweep.request")(function* () {
-        yield* Queue.offer(wakes, undefined);
-      })();
+      const request = Queue.offer(wakes, undefined).pipe(
+        Effect.asVoid,
+        Effect.withSpan("PendingAttachmentSweep.request"),
+      );
       const consume = Effect.fn("PendingAttachmentSweep.consume")(function* () {
         yield* Queue.take(wakes);
         const now = yield* Clock.currentTimeMillis;
