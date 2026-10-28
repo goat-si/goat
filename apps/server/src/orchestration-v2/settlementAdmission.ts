@@ -2,7 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as TxRef from "effect/TxRef";
 
-export const TARGET_CAPACITY = 256;
+const TARGET_CAPACITY = 256;
 const TARGET_WORKERS = 8;
 
 type Target = {
