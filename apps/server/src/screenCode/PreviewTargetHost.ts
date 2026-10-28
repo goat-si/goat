@@ -228,30 +228,39 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     context: ScreenHostContext,
     operation: Parameters<typeof broker.invoke>[0]["operation"],
     input: unknown,
+    timeoutMs?: number,
   ) =>
-    broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
-      Effect.mapError((error) => {
-        const safety = classifyBrowserActionOutcome({
-          operation,
-          status: "failed",
-          errorTag: error._tag,
-          ...(error._tag === "PreviewAutomationControlInterruptedError"
-            ? { controlReason: error.reason }
-            : {}),
-          ...("dispatched" in error && error.dispatched !== undefined
-            ? { dispatched: error.dispatched }
-            : {}),
-        });
-        return {
-          ...previewTargetFailure(error, operation),
-          code: safety.possibleCommit
-            ? ("unknown_outcome" as const)
-            : ("downstream_failure" as const),
-          effectStarted: safety.possibleCommit,
-          safety,
-        };
-      }),
-    );
+    broker
+      .invoke({
+        scope: context.invocation,
+        operation,
+        input,
+        exact: exact(bound.tab),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      })
+      .pipe(
+        Effect.mapError((error) => {
+          const safety = classifyBrowserActionOutcome({
+            operation,
+            status: "failed",
+            errorTag: error._tag,
+            ...(error._tag === "PreviewAutomationControlInterruptedError"
+              ? { controlReason: error.reason }
+              : {}),
+            ...("dispatched" in error && error.dispatched !== undefined
+              ? { dispatched: error.dispatched }
+              : {}),
+          });
+          return {
+            ...previewTargetFailure(error, operation),
+            code: safety.possibleCommit
+              ? ("unknown_outcome" as const)
+              : ("downstream_failure" as const),
+            effectStarted: safety.possibleCommit,
+            safety,
+          };
+        }),
+      );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
       yield* authorize(context);
@@ -603,10 +612,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           input = { url: arg.url };
           break;
       }
-      // Typing and selecting wait for their target; nothing may land after the cell stopped waiting.
+      // Typing and selecting wait for their target; the request deadline, which the server starts
+      // before queueing, ends with the cell so nothing lands after the cell stopped waiting.
+      let cellBudgetMs: number | undefined;
       if (call.method === "select" || call.method === "set_value" || call.method === "type_text") {
         const now = yield* Clock.currentTimeMillis;
-        input = { ...input, timeoutMs: Math.max(1, Math.min(15_000, call.deadlineMillis - now)) };
+        cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
+        input = { ...input, timeoutMs: cellBudgetMs };
       }
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
@@ -635,7 +647,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
       observations.index.invalidateTarget(bound.ref.id);
-      const result = yield* invoke(bound, context, operation, input).pipe(
+      const result = yield* invoke(bound, context, operation, input, cellBudgetMs).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             if (!ownClose) return;

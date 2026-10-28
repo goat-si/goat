@@ -219,17 +219,16 @@ it.effect("typing and selecting from a cell wait no longer than the cell has lef
     yield* fixture.dispatch("claim_tab");
     const first = yield* fixture.observe();
     yield* fixture.dispatch("type_text", { ref: first.elements[0]!.ref, text: "x" });
-    expect(fixture.requests.find((entry) => entry.operation === "type")?.input).toMatchObject({
-      text: "x",
-      timeoutMs: 1000,
-    });
+    const typed = fixture.requests.find((entry) => entry.operation === "type");
+    expect(typed?.input).toMatchObject({ text: "x", timeoutMs: 1000 });
+    // The request deadline also covers time queued behind other browser work on the server.
+    expect(typed?.timeoutMs).toBe(1000);
     yield* TestClock.adjust("400 millis");
     const second = yield* fixture.observe();
     yield* fixture.dispatch("select", { ref: second.elements[0]!.ref, values: ["a"] });
-    expect(fixture.requests.find((entry) => entry.operation === "select")?.input).toMatchObject({
-      values: ["a"],
-      timeoutMs: 600,
-    });
+    const selected = fixture.requests.find((entry) => entry.operation === "select");
+    expect(selected?.input).toMatchObject({ values: ["a"], timeoutMs: 600 });
+    expect(selected?.timeoutMs).toBe(600);
   }),
 );
 
