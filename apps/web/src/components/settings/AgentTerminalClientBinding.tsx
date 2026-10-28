@@ -14,6 +14,10 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
+function bindingErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : "Terminal binding could not be saved.";
+}
+
 export function AgentTerminalClientBinding({
   clientSession,
 }: {
@@ -103,13 +107,12 @@ function BindingControl({
       });
       if (result._tag === "Failure") {
         const cause = Cause.squash(result.cause);
-        setError(cause instanceof Error ? cause.message : "Terminal binding could not be saved.");
+        setError(bindingErrorMessage(cause));
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Terminal binding could not be saved.");
-    } finally {
-      setPending(false);
+      setError(bindingErrorMessage(cause));
     }
+    setPending(false);
   };
   return (
     <div className="mt-3 space-y-2">

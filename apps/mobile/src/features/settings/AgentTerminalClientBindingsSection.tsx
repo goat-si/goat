@@ -23,6 +23,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 
+function bindingErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : "Terminal binding could not be saved.";
+}
+
 const authEnvironment = createAuthEnvironmentAtoms(connectionAtomRuntime);
 
 export function AgentTerminalClientBindingsSection({
@@ -128,13 +132,12 @@ function ClientBinding({
       });
       if (result._tag === "Failure") {
         const cause = Cause.squash(result.cause);
-        setError(cause instanceof Error ? cause.message : "Terminal binding could not be saved.");
+        setError(bindingErrorMessage(cause));
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Terminal binding could not be saved.");
-    } finally {
-      setPending(false);
+      setError(bindingErrorMessage(cause));
     }
+    setPending(false);
   };
   return (
     <View className="gap-3 px-4 py-3">
