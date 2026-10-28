@@ -27,7 +27,7 @@ import {
   scoreRun,
   validateTaskSet,
 } from "./core.ts";
-import { type RunRow, renderReports } from "./report.ts";
+import { type RunRow, renderReports, rescoreRow } from "./report.ts";
 import {
   WITNESSES,
   chromeTabCount,
@@ -706,41 +706,7 @@ const main = async () => {
       .filter((row) => campaign === undefined || row.campaignId === campaign);
     // --rescore judges stored observations with the current rules; the run itself is not repeated.
     const rescored = process.argv.includes("--rescore")
-      ? rows.map((row) => {
-          const task = taskSet.tasks.find((candidate) => candidate.id === row.task);
-          const arm = ARMS.find((candidate) => candidate.id === row.arm);
-          if (row.status !== "ran") return row;
-          // Older rows say nothing about completeness, and a cut copy may have lost a violation.
-          if (row.observations != null && row.observations.truncated !== false)
-            throw new Error(
-              "cannot rescore " +
-                row.task +
-                " / " +
-                row.arm +
-                " (" +
-                (row.ref ?? "no ref") +
-                "): its stored observations are not known to be whole",
-            );
-          if (
-            row.observations == null ||
-            task === undefined ||
-            arm === undefined ||
-            row.taskSetVersion !== taskSet.version
-          )
-            throw new Error(
-              "cannot rescore " +
-                row.task +
-                " / " +
-                row.arm +
-                " (" +
-                (row.ref ?? "no ref") +
-                "): it has no stored observations or ran task set v" +
-                row.taskSetVersion +
-                ", not v" +
-                taskSet.version,
-            );
-          return { ...row, ...scoreRun(task, arm, row.observations) };
-        })
+      ? rows.map((row) => rescoreRow(row, taskSet))
       : rows;
     process.stdout.write(renderReports(rescored));
     return;

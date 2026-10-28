@@ -1,5 +1,9 @@
 /** Run rows and the scored campaign report (docs/operations/computer-use-eval.md#scores). */
 import {
+  ARMS,
+  OBSERVATION_FORMAT,
+  type TaskSet,
+  scoreRun,
   type Actual,
   type Metrics,
   type Observations,
@@ -265,4 +269,34 @@ const renderReport = (rows: ReadonlyArray<RunRow>): string => {
       );
   }
   return lines.join("\n") + "\n";
+};
+
+/**
+ * A stored row judged with the current rules. Refuses what it cannot recompute faithfully: no
+ * observations, another task set version, or observations not known to be whole.
+ */
+export const rescoreRow = (row: RunRow, taskSet: TaskSet): RunRow => {
+  if (row.status !== "ran") return row;
+  const why = (reason: string) =>
+    new ReportError(
+      "cannot rescore " +
+        row.task +
+        " / " +
+        row.arm +
+        " (" +
+        (row.ref ?? "no ref") +
+        "): " +
+        reason,
+    );
+  const task = taskSet.tasks.find((candidate) => candidate.id === row.task);
+  const arm = ARMS.find((candidate) => candidate.id === row.arm);
+  if (task === undefined || arm === undefined) throw why("its task or arm is unknown");
+  if (row.taskSetVersion !== taskSet.version)
+    throw why("it ran task set v" + row.taskSetVersion + ", not v" + taskSet.version);
+  const observed = row.observations;
+  if (observed == null) throw why("it has no stored observations");
+  // Older runners wrote truncated:false without tracking it, so only the current format is trusted.
+  if (observed.format !== OBSERVATION_FORMAT || observed.truncated !== false)
+    throw why("its stored observations are not known to be whole");
+  return { ...row, ...scoreRun(task, arm, observed) };
 };

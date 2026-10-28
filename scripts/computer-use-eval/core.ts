@@ -739,7 +739,12 @@ export interface Observations {
   readonly notes: ReadonlyArray<string>;
   /** A stored copy lost text to the size limits, so evidence of a failure may be missing. */
   readonly truncated?: boolean;
+  /** OBSERVATION_FORMAT of the runner that stored it; older copies did not track completeness. */
+  readonly format?: number;
 }
+
+/** Raised when the stored observation shape changes in a way that --rescore must not trust. */
+export const OBSERVATION_FORMAT = 2;
 
 const OUTPUT_LIMIT = 200_000;
 const INPUT_LIMIT = 20_000;
@@ -747,6 +752,7 @@ const INPUT_LIMIT = 20_000;
 /** A run's raw observations in the size a row keeps. */
 export const keepObservations = (observed: Observations): Observations => ({
   ...observed,
+  format: OBSERVATION_FORMAT,
   toolOutputs: observed.toolOutputs.map((output) => output.slice(0, OUTPUT_LIMIT)),
   steps: observed.steps.map((step) => ({
     ...step,

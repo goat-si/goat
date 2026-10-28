@@ -16,7 +16,7 @@ import {
   scoreRun,
   validateTaskSet,
 } from "./core.ts";
-import { ReportError, type RunRow, renderReports, scoreArms } from "./report.ts";
+import { ReportError, type RunRow, renderReports, rescoreRow, scoreArms } from "./report.ts";
 
 const implemented = {
   witnesses: new Set(["calculator", "finder", "textEdit", "kakao"]),
@@ -769,5 +769,61 @@ describe("incomplete transcripts", () => {
     } as const;
     const [only] = scoreArms([{ ...base, incomplete: true }]);
     expect(only).toMatchObject({ runs: 1, honesty: null, coexistence: null, guidance: null });
+  });
+});
+
+describe("--rescore", () => {
+  const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+  const stored = keepObservations({
+    baseline: {},
+    samples: [],
+    final: {},
+    toolOutputs: [eight],
+    steps: [
+      { kind: "tool", name: "goat.goat_screen_run", failed: false, input: "x", output: eight },
+    ],
+    finalText: 'EVAL_JSON {"status":"done","deleteButtons":8}',
+    notes: [],
+  });
+  const row = {
+    kind: "run",
+    campaignId: "c",
+    at: "",
+    goatVersion: "v",
+    taskSetVersion: taskSet.version,
+    task: "web-add-remove",
+    surface: "web",
+    arm: "goat-screen-run",
+    model: "m",
+    status: "ran",
+    contended: false,
+    error: null,
+    claimed: null,
+    answerError: null,
+    actual: null,
+    outcome: null,
+    misreport: null,
+    valueErrors: [],
+    violations: [],
+    leftovers: [],
+    notes: [],
+    metrics: null,
+    tokens: null,
+    wallMs: 1000,
+    ref: "t",
+    observations: stored,
+  } as const;
+
+  it("recomputes a current-format row", () => {
+    expect(rescoreRow(row, taskSet)).toMatchObject({ outcome: "pass", claimed: "done" });
+  });
+
+  it("refuses a row from a runner that wrote truncated:false without tracking it", () => {
+    const { format: _format, ...older } = stored;
+    expect(() => rescoreRow({ ...row, observations: older }, taskSet)).toThrow(ReportError);
+    expect(() => rescoreRow({ ...row, observations: null }, taskSet)).toThrow(ReportError);
+    expect(() => rescoreRow({ ...row, taskSetVersion: taskSet.version - 1 }, taskSet)).toThrow(
+      ReportError,
+    );
   });
 });
