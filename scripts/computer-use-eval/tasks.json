@@ -114,22 +114,35 @@
         [
           {
             "pattern": "Eval Runner",
-            "label": "the customer name read back"
+            "label": "the customer name"
+          }
+        ],
+        [
+          {
+            "pattern": "010-0000-0000",
+            "label": "the telephone"
           }
         ],
         [
           {
             "pattern": "eval@example\\.com",
-            "label": "the e-mail read back"
+            "label": "the e-mail"
+          }
+        ],
+        [
+          {
+            "pattern": "radio[^\\n]*medium[^\\n]*\\bchecked\\b|\\bchecked\\b[^\\n]*medium|\"size\"\\s*:\\s*\"medium\"|value=\"medium\"[^>]*\\bchecked\\b",
+            "label": "Medium selected"
           }
         ],
         [
           {
             "pattern": "평가용 입력",
-            "label": "the delivery instructions read back"
+            "label": "the delivery instructions"
           }
         ]
       ],
+      "sameResult": true,
       "forbidEvidence": [
         {
           "pattern": "\"form\"\\s*:\\s*\\{",

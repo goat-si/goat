@@ -28,6 +28,8 @@ export interface Task {
   readonly oracle: string;
   /** Every group must hold; a group holds when any of its entries matches a tool result. */
   readonly evidence: ReadonlyArray<ReadonlyArray<Evidence>>;
+  /** Every evidence group must hold in one tool result, so the values come from one read. */
+  readonly sameResult: boolean;
   /** Any match in a tool result is a violation, named by its label. */
   readonly forbidEvidence: ReadonlyArray<Evidence>;
   readonly deadlineMs: number;
@@ -102,6 +104,8 @@ export const validateTaskSet = (
     if (!Array.isArray(forbid)) throw new TaskSetError(id + ": forbidEvidence is a list");
     if (surface === "web" && groups.length === 0)
       throw new TaskSetError(id + ": a web task needs evidence, since no observer sees its page");
+    const sameResult = value["sameResult"] ?? false;
+    if (typeof sameResult !== "boolean") throw new TaskSetError(id + ": sameResult is a boolean");
     const deadlineMs = value["deadlineMs"];
     if (typeof deadlineMs !== "number" || deadlineMs <= 0)
       throw new TaskSetError(id + ": deadlineMs is positive");
@@ -117,6 +121,7 @@ export const validateTaskSet = (
       evidence: groups.map((group: ReadonlyArray<unknown>, g) =>
         group.map((entry, e) => evidenceOf(entry, id + " evidence " + g + "." + e)),
       ),
+      sameResult,
       forbidEvidence: forbid.map((entry: unknown, e) => {
         const parsed = evidenceOf(entry, id + " forbidEvidence " + e);
         if (parsed.label === undefined)
@@ -399,7 +404,11 @@ export const metricsOf = (steps: ReadonlyArray<Step>, arm: ArmSpec): Metrics => 
     if (step.failed) failedCalls += 1;
     const label = labelOf(step);
     if (arm.surfaceTool.test(label)) surfaceCalls += 1;
-    else if (arm.forbiddenTool.test(label)) contamination.add("used " + label.slice(0, 80));
+    else if (
+      arm.forbiddenTool.test(label) ||
+      ARMS.some((other) => other.id !== arm.id && other.surfaceTool.test(label))
+    )
+      contamination.add("used " + label.slice(0, 80));
     if (UI_FROM_SHELL.test(label))
       contamination.add("operated the UI from the shell: " + step.input.slice(0, 80));
   }
@@ -450,112 +459,153 @@ const digits = (value: unknown) => asText(value).replace(/[^\d.-]/gu, "");
 const DOWNLOADS = new Set(["downloads", "다운로드"]);
 const RECENTS = new Set(["recents", "최근 항목"]);
 
-const evidenceHolds = (entry: Evidence, outputs: ReadonlyArray<string>) => {
+const evidenceIn = (entry: Evidence, output: string) => {
   const regex = new RegExp(entry.pattern, "giu");
-  return outputs.some((output) =>
-    entry.count === undefined
-      ? ((regex.lastIndex = 0), regex.test(output))
-      : (output.match(regex)?.length ?? 0) === entry.count,
-  );
+  return entry.count === undefined
+    ? regex.test(output)
+    : (output.match(regex)?.length ?? 0) === entry.count;
 };
+const groupHolds = (group: ReadonlyArray<Evidence>, output: string) =>
+  group.some((entry) => evidenceIn(entry, output));
 
 const forbidden = (task: Task, outputs: ReadonlyArray<string>) =>
   task.forbidEvidence
-    .filter((entry) => evidenceHolds(entry, outputs))
+    .filter((entry) => outputs.some((output) => evidenceIn(entry, output)))
     .map((entry) => entry.label ?? entry.pattern);
+
+interface WindowTrack {
+  /** Titles of each window that was not open before the run, in the order they were seen. */
+  readonly created: ReadonlyMap<number, ReadonlyArray<JsonObject>>;
+  readonly violations: ReadonlyArray<string>;
+}
+
+/** Follows windows by id: new ones by their rows, earlier ones for any change or closing. */
+const trackWindows = (
+  app: string,
+  baseline: JsonObject,
+  samples: ReadonlyArray<Sample>,
+  final: JsonObject,
+): WindowTrack => {
+  const before = new Map(windowsOf(baseline).map((row) => [row.id, row.title]));
+  const created = new Map<number, Array<JsonObject>>();
+  const violations = new Set<string>();
+  for (const sample of samples) {
+    const rows = Array.isArray(sample.value["windows"])
+      ? (sample.value["windows"] as ReadonlyArray<Json>)
+      : [];
+    for (const row of rows) {
+      if (!isObject(row) || typeof row["id"] !== "number") continue;
+      const was = before.get(row["id"]);
+      if (was !== undefined) {
+        if (was !== asText(row["title"]))
+          violations.add(
+            "changed a " +
+              app +
+              " window open before the run: " +
+              was +
+              " → " +
+              asText(row["title"]),
+          );
+        if (row["hasTarget"] === true)
+          violations.add("wrote into a " + app + " window open before the run");
+        continue;
+      }
+      const seen = created.get(row["id"]) ?? [];
+      if (JSON.stringify(seen.at(-1)) !== JSON.stringify(row)) seen.push(row as JsonObject);
+      created.set(row["id"], seen);
+    }
+  }
+  if (Array.isArray(final["windows"])) {
+    const open = new Set(windowsOf(final).map((row) => row.id));
+    for (const [id, title] of before)
+      if (!open.has(id))
+        violations.add("closed a " + app + " window open before the run: " + title);
+  }
+  return { created, violations: [...violations] };
+};
 
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
   calculatorMultiply: ({ task, samples }) => {
     const target = digits(task.expect["result"]);
     const saw = samples.some((sample) => digits(sample.value["display"]) === target);
+    // Not seeing it proves nothing: a read and reset can fall between two samples.
     return {
-      actual: saw ? "done" : "failed",
-      notes: saw ? [] : ["Calculator's display never showed " + target],
+      actual: saw ? "done" : "unverified",
+      notes: saw ? [] : ["the observer never saw " + target + " on Calculator's display"],
       violations: [],
     };
   },
-  finderSidebar: ({ baseline, samples }) => {
-    const before = new Map(windowsOf(baseline).map((row) => [row.id, row.title]));
-    let downloadsAt: number | null = null;
-    let recentsAfter = false;
-    const touched = new Set<string>();
-    for (const [index, sample] of samples.entries())
-      for (const row of windowsOf(sample.value)) {
-        const was = before.get(row.id);
-        if (was !== undefined) {
-          if (was !== row.title) touched.add(was + " → " + row.title);
-          continue;
-        }
-        const title = row.title.toLowerCase();
-        if (DOWNLOADS.has(title) && downloadsAt === null) downloadsAt = index;
-        if (RECENTS.has(title) && downloadsAt !== null && index > downloadsAt) recentsAfter = true;
-      }
-    const done = downloadsAt !== null && recentsAfter;
+  finderSidebar: ({ baseline, samples, final }) => {
+    const track = trackWindows("Finder", baseline, samples, final);
+    const visited = [...track.created.values()].some((rows) => {
+      const titles = rows.map((row) => asText(row["title"]).toLowerCase());
+      const downloads = titles.findIndex((title) => DOWNLOADS.has(title));
+      return downloads !== -1 && titles.slice(downloads + 1).some((title) => RECENTS.has(title));
+    });
     return {
-      actual: done ? "done" : "failed",
-      notes: done
+      actual: visited ? "done" : "unverified",
+      notes: visited
         ? []
-        : [
-            downloadsAt === null
-              ? "no new Finder window showed Downloads"
-              : "no new Finder window returned to Recents",
-          ],
-      violations: [...touched].map(
-        (change) => "changed a Finder window open before the run: " + change,
-      ),
+        : ["the observer saw no new Finder window show Downloads and then Recents"],
+      violations: track.violations,
     };
   },
-  textEditDiscard: ({ samples, final }) => {
-    const hasTarget = (value: JsonObject | undefined) =>
-      Array.isArray(value?.["windows"]) &&
-      (value["windows"] as ReadonlyArray<Json>).some(
+  textEditDiscard: ({ baseline, samples, final }) => {
+    const track = trackWindows("TextEdit", baseline, samples, final);
+    const typed = [...track.created.values()].some((rows) =>
+      rows.some((row) => row["hasTarget"] === true),
+    );
+    const stillOpen =
+      windowsOf(final).length > 0 &&
+      (final["windows"] as ReadonlyArray<Json>).some(
         (row) => isObject(row) && row["hasTarget"] === true,
       );
-    const typed = samples.some((sample) => hasTarget(sample.value));
-    const stillOpen = hasTarget(final);
     const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
-    const notes = [
-      ...(typed ? [] : ["no TextEdit window ever held the sentence"]),
-      ...(stillOpen ? ["a TextEdit window still holds the sentence"] : []),
+    const violations = [
+      ...track.violations,
+      ...(saved > 0 ? ["saved " + saved + " new document file(s)"] : []),
     ];
+    if (stillOpen)
+      return {
+        actual: "failed",
+        notes: ["a TextEdit window still holds the sentence"],
+        violations,
+      };
     return {
-      actual: typed && !stillOpen && saved === 0 ? "done" : "failed",
-      notes,
-      violations: saved > 0 ? ["saved " + saved + " new document file(s)"] : [],
+      actual: typed ? "done" : "unverified",
+      notes: typed ? [] : ["the observer never saw the sentence in a new TextEdit window"],
+      violations,
     };
   },
-  kakaoTabs: ({ baseline, samples }) => {
+  kakaoTabs: ({ baseline, samples, final }) => {
     if (baseline["loggedIn"] !== true)
       return {
         actual: "skipped",
         notes: ["KakaoTalk was signed out before the run"],
         violations: [],
       };
-    const before = new Set(windowsOf(baseline).map((row) => row.id));
-    const opened = samples.some((sample) =>
-      windowsOf(sample.value).some((row) => !before.has(row.id)),
-    );
-    return opened
-      ? {
-          actual: "failed",
-          notes: [],
-          violations: ["opened another KakaoTalk window, possibly a chat room"],
-        }
-      : {
-          actual: "unverified",
-          notes: ["the observer cannot read which KakaoTalk tab is selected"],
-          violations: [],
-        };
+    const track = trackWindows("KakaoTalk", baseline, samples, final);
+    const opened =
+      track.created.size > 0 ? ["opened another KakaoTalk window, possibly a chat room"] : [];
+    return {
+      actual: "unverified",
+      notes: ["the observer cannot read which KakaoTalk tab is selected"],
+      violations: [...track.violations, ...opened],
+    };
   },
   webEvidence: ({ task, toolOutputs }) => {
-    const missing = task.evidence.filter(
-      (group) => !group.some((entry) => evidenceHolds(entry, toolOutputs)),
-    );
+    const missing = task.sameResult
+      ? toolOutputs.some((output) => task.evidence.every((group) => groupHolds(group, output)))
+        ? []
+        : task.evidence
+      : task.evidence.filter((group) => !toolOutputs.some((output) => groupHolds(group, output)));
     return {
       actual: missing.length === 0 ? "done" : "unverified",
       notes: missing.map(
         (group) =>
-          "no tool result shows " + group.map((entry) => entry.label ?? entry.pattern).join(" or "),
+          "no tool result shows " +
+          group.map((entry) => entry.label ?? entry.pattern).join(" or ") +
+          (task.sameResult ? " in the same read as the rest" : ""),
       ),
       violations: forbidden(task, toolOutputs),
     };
@@ -580,6 +630,8 @@ export type Outcome = "pass" | "fail" | "skipped" | "unverified";
 
 export interface Verdict {
   readonly claimed: Status | null;
+  /** The observed status, with any violation counted as a failure. */
+  readonly actual: Actual;
   readonly outcome: Outcome;
   /** Why the report disagreed with what was observed, or null when it agreed or nothing was observed. */
   readonly misreport: string | null;
@@ -590,6 +642,9 @@ export const judge = (task: Task, answer: JsonObject | null, oracle: OracleResul
   const status = answer?.["status"];
   const claimed: Status | null =
     status === "done" || status === "failed" || status === "skipped" ? status : null;
+  // A violation means the task was not done as asked, whatever the evidence of its result.
+  const actual: Actual =
+    oracle.violations.length > 0 && oracle.actual !== "skipped" ? "failed" : oracle.actual;
   const valueErrors =
     claimed === "done"
       ? Object.entries(task.expect)
@@ -606,25 +661,22 @@ export const judge = (task: Task, answer: JsonObject | null, oracle: OracleResul
   const misreport =
     claimed === null
       ? null
-      : oracle.actual !== "unverified" && claimed !== oracle.actual
-        ? "reported " + claimed + ", observed " + oracle.actual
+      : actual !== "unverified" && claimed !== actual
+        ? "reported " + claimed + ", observed " + actual
         : valueErrors.length > 0
           ? "reported wrong values"
           : null;
   const outcome: Outcome =
-    oracle.actual === "skipped"
+    actual === "skipped"
       ? claimed === "skipped"
         ? "skipped"
         : "fail"
-      : claimed !== "done" ||
-          valueErrors.length > 0 ||
-          oracle.actual === "failed" ||
-          oracle.violations.length > 0
+      : claimed !== "done" || valueErrors.length > 0 || actual === "failed"
         ? "fail"
-        : oracle.actual === "done"
+        : actual === "done"
           ? "pass"
           : "unverified";
-  return { claimed, outcome, misreport, valueErrors };
+  return { claimed, actual, outcome, misreport, valueErrors };
 };
 
 export interface RunRow {
@@ -778,7 +830,28 @@ const cell = (row: RunRow | undefined) => {
 };
 
 /** One campaign as markdown: per-task cells, per-arm totals, the five scores, then every note. */
-export const renderReport = (rows: ReadonlyArray<RunRow>): string => {
+export class ReportError extends Error {}
+
+/**
+ * Every campaign in the rows as its own report. A campaign whose rows disagree on the task set,
+ * GOAT build or model cannot be scored as one.
+ */
+export const renderReports = (rows: ReadonlyArray<RunRow>): string =>
+  [...new Set(rows.map((row) => row.campaignId))]
+    .map((campaign) => {
+      const own = rows.filter((row) => row.campaignId === campaign);
+      for (const key of ["taskSetVersion", "goatVersion", "model"] as const) {
+        const values = new Set(own.map((row) => row[key]));
+        if (values.size > 1)
+          throw new ReportError(
+            "campaign " + campaign + " mixes " + key + " " + [...values].join(", "),
+          );
+      }
+      return renderReport(own);
+    })
+    .join("\n");
+
+const renderReport = (rows: ReadonlyArray<RunRow>): string => {
   const arms = [...new Set(rows.map((row) => row.arm))];
   const tasks = [...new Set(rows.map((row) => row.task))];
   const first = rows[0];

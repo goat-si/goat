@@ -24,7 +24,7 @@ import {
   goatTranscript,
   judge,
   metricsOf,
-  renderReport,
+  renderReports,
   validateTaskSet,
 } from "./core.ts";
 import {
@@ -41,6 +41,12 @@ const argument = (name: string) => {
 };
 const list = (name: string) => argument(name)?.split(",").filter(Boolean);
 
+const RPC_LIMIT_MS = 60_000;
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Cleanup that could not be confirmed: the next run would share the screen with a live agent. */
+class HaltError extends Error {}
+
 interface Client {
   readonly call: (path: string, args: JsonObject) => Promise<JsonObject>;
 }
@@ -49,9 +55,10 @@ interface Client {
 const connect = async (endpoint: string, authorization: string): Promise<Client> => {
   let sessionId: string | null = null;
   let nextId = 1;
-  const post = async (method: string, params: JsonObject, id?: number) => {
+  const post = async (method: string, params: JsonObject, id?: number, limitMs = RPC_LIMIT_MS) => {
     const response = await fetch(endpoint, {
       method: "POST",
+      signal: AbortSignal.timeout(limitMs),
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
@@ -73,8 +80,8 @@ const connect = async (endpoint: string, authorization: string): Promise<Client>
         : [JSON.parse(text) as JsonObject];
     return payloads.find((payload) => payload["id"] === id);
   };
-  const rpc = async (method: string, params: JsonObject) => {
-    const message = await post(method, params, nextId++);
+  const rpc = async (method: string, params: JsonObject, limitMs?: number) => {
+    const message = await post(method, params, nextId++, limitMs);
     if (message === undefined) throw new Error(method + ": no response");
     if (message["error"] !== undefined)
       throw new Error(method + ": " + JSON.stringify(message["error"]));
@@ -88,7 +95,14 @@ const connect = async (endpoint: string, authorization: string): Promise<Client>
   await post("notifications/initialized", {});
   return {
     call: async (path, args) => {
-      const result = await rpc("tools/call", { name: "goat_call", arguments: { path, args } });
+      // A wait may hold the request for its own timeout; anything else answers promptly.
+      const limitMs =
+        typeof args["timeoutMs"] === "number" ? args["timeoutMs"] + RPC_LIMIT_MS : RPC_LIMIT_MS;
+      const result = await rpc(
+        "tools/call",
+        { name: "goat_call", arguments: { path, args } },
+        limitMs,
+      );
       const content = result["content"] as ReadonlyArray<{ type: string; text?: string }>;
       const body =
         (result["structuredContent"] as JsonObject | undefined) ??
@@ -193,15 +207,42 @@ const runGoat = async (
   });
   const threadId = String(launched["threadId"]);
   const runId = String(launched["runId"]);
+  try {
+    return await followGoat(client, task, threadId, runId);
+  } finally {
+    await settleThread(client, threadId);
+  }
+};
+
+/** Stops the thread unless it already ended, and confirms it did; otherwise halts the campaign. */
+const settleThread = async (client: Client, threadId: string) => {
+  const terminal = async () =>
+    (await client.call("thread.status", { threadId }))["terminal"] === true;
+  try {
+    if (await terminal()) return;
+    await client.call("thread.interrupt", { threadId, stopCascade: true });
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (await terminal()) return;
+      await pause(2000);
+    }
+  } catch (error) {
+    throw new HaltError("could not stop eval thread " + threadId + ": " + String(error));
+  }
+  throw new HaltError("eval thread " + threadId + " did not stop");
+};
+
+const followGoat = async (
+  client: Client,
+  task: Task,
+  threadId: string,
+  runId: string,
+): Promise<Ran> => {
   const deadline = Date.now() + task.deadlineMs;
   const notes: Array<string> = [];
   for (;;) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       notes.push("deadline of " + task.deadlineMs + " ms passed; the run was interrupted");
-      await client
-        .call("thread.interrupt", { threadId, stopCascade: true })
-        .catch((error: unknown) => notes.push("interrupt failed: " + String(error)));
       break;
     }
     const waited = await client.call("thread.wait", {
@@ -211,9 +252,6 @@ const runGoat = async (
     });
     if (Array.isArray(waited["pendingRequestIds"]) && waited["pendingRequestIds"].length > 0) {
       notes.push("the agent asked for input; the run was interrupted");
-      await client
-        .call("thread.interrupt", { threadId, stopCascade: true })
-        .catch((error: unknown) => notes.push("interrupt failed: " + String(error)));
       break;
     }
     if (waited["timedOut"] !== true) break;
@@ -228,6 +266,30 @@ const runGoat = async (
     ref: threadId,
     notes,
   };
+};
+
+const groupAlive = (group: number) => {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Stops a process group this run started: TERM, then KILL, then proof that it is gone. */
+const stopGroup = async (group: number) => {
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    if (!groupAlive(group)) return;
+    try {
+      process.kill(-group, signal);
+    } catch {
+      return;
+    }
+    for (let wait = 0; wait < 25 && groupAlive(group); wait += 1) await pause(200);
+  }
+  if (groupAlive(group))
+    throw new HaltError("codex exec process group " + group + " survived SIGKILL");
 };
 
 const runCodex = (task: Task, prompt: string, options: Options): Promise<Ran> =>
@@ -248,14 +310,17 @@ const runCodex = (task: Task, prompt: string, options: Options): Promise<Ran> =>
         'model_reasoning_effort="' + options.effort + '"',
         prompt,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      // Its own process group, so a stop reaches the shells and helpers it starts.
+      { stdio: ["ignore", "pipe", "pipe"], detached: true },
     );
+    const group = child.pid;
+    if (group === undefined) return reject(new Error("codex exec did not start"));
     const notes: Array<string> = [];
     let buffer = "";
     const events: Array<JsonObject> = [];
     const timer = setTimeout(() => {
       notes.push("deadline of " + task.deadlineMs + " ms passed; codex exec was stopped");
-      child.kill("SIGTERM");
+      stopGroup(group).catch(reject);
     }, task.deadlineMs);
     child.stdout.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
@@ -271,8 +336,13 @@ const runCodex = (task: Task, prompt: string, options: Options): Promise<Ran> =>
         }
     });
     child.on("error", reject);
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       clearTimeout(timer);
+      try {
+        await stopGroup(group);
+      } catch (error) {
+        return reject(error);
+      }
       NodeFS.rmSync(cwd, { recursive: true, force: true });
       if (code !== 0 && code !== null) notes.push("codex exec exited " + code);
       const thread = events.find((event) => event["type"] === "thread.started");
@@ -409,7 +479,8 @@ const runStep = async (
   const read = witness === undefined ? null : witness(task.expect);
   const before = await snapshot(arm, task);
   const baseline = read === null ? {} : await read();
-  const sampler = read === null ? null : sampleUntil(read, 700);
+  const sampler =
+    read === null ? null : sampleUntil(read, task.witness === "calculator" ? 300 : 700);
   const startedMs = Date.now();
   let ran: Ran;
   try {
@@ -425,6 +496,7 @@ const runStep = async (
     } else ran = await runCodex(task, promptFor(task, arm), options);
   } catch (error) {
     await sampler?.stop();
+    if (error instanceof HaltError) throw error;
     return { ...head, status: "error", error: String(error) };
   }
   const samples = (await sampler?.stop()) ?? [];
@@ -455,7 +527,7 @@ const runStep = async (
     contended,
     claimed: verdict.claimed,
     answerError: answer.ok ? null : answer.why,
-    actual: oracle.actual,
+    actual: verdict.actual,
     outcome: verdict.outcome,
     misreport: verdict.misreport,
     valueErrors: verdict.valueErrors,
@@ -502,7 +574,7 @@ const main = async () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as RunRow)
       .filter((row) => campaign === undefined || row.campaignId === campaign);
-    process.stdout.write(renderReport(rows));
+    process.stdout.write(renderReports(rows));
     return;
   }
   const taskSet = validateTaskSet(

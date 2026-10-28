@@ -64,14 +64,17 @@ const CALCULATOR =
   ".uiElements[0].uiElements[0].uiElements[1].uiElements[0].uiElements[0].uiElements[0].value(); } catch (e) { result.error = String(e); } }" +
   "JSON.stringify(result)";
 
+// CoreGraphics gives each window a stable id; System Events gives its text. They meet on the title.
 const textEdit = (target: string) =>
+  CG_WINDOWS +
   "const se = Application('System Events'); const procs = se.processes.whose({ name: 'TextEdit' });" +
   "const windows = procs.length === 0 ? [] : procs[0].windows().map((w) => { let hasTarget = false;" +
   "try { hasTarget = String(w.scrollAreas[0].textAreas[0].value()).includes(" +
   JSON.stringify(target) +
   "); } catch (e) {}" +
   "return { title: w.name(), hasTarget }; });" +
-  "JSON.stringify({ running: procs.length > 0, windows })";
+  "JSON.stringify({ running: procs.length > 0, windows: cgWindows().filter((w) => w.owner === 'TextEdit')" +
+  ".map(({ id, title }) => ({ id, title, hasTarget: windows.some((s) => s.title === title && s.hasTarget) })) })";
 
 const KAKAO =
   CG_WINDOWS +

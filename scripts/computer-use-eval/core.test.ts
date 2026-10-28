@@ -13,7 +13,8 @@ import {
   goatTranscript,
   judge,
   metricsOf,
-  renderReport,
+  ReportError,
+  renderReports,
   scoreArms,
   validateTaskSet,
 } from "./core.ts";
@@ -195,6 +196,24 @@ describe("transcripts", () => {
     });
     expect(metricsOf(transcript.steps, arm("goat-direct")).surfaceCalls).toBe(1);
   });
+
+  it("flags another product's surface in a GOAT run as contamination", () => {
+    const steps = [
+      { kind: "tool", name: "cua_repl.js", failed: false, input: "", output: "" },
+      {
+        kind: "tool",
+        name: "shell",
+        failed: false,
+        input: "aside repl 'await openTab(1)'",
+        output: "",
+      },
+      { kind: "tool", name: "shell", failed: false, input: "cat SKILL.md", output: "" },
+    ] as const;
+    expect(metricsOf(steps, arm("goat-screen-run"))).toMatchObject({
+      offSurfaceCalls: 3,
+      contamination: ["used cua_repl.js", "used shell aside repl 'await openTab(1)'"],
+    });
+  });
 });
 
 const oracle = (id: string, input: Partial<Parameters<(typeof ORACLES)[string]>[0]>) =>
@@ -209,17 +228,17 @@ const oracle = (id: string, input: Partial<Parameters<(typeof ORACLES)[string]>[
 const at = (value: Record<string, unknown>, atMs = 0) => ({ atMs, value: value as never });
 
 describe("oracles", () => {
-  it("counts Calculator done only when its display showed the product", () => {
+  it("counts Calculator done when its display showed the product, and unverified when no sample saw it", () => {
     expect(
       oracle("calculator-multiply", { samples: [at({ display: "0" }), at({ display: "64,155" })] })
         .actual,
     ).toBe("done");
     expect(oracle("calculator-multiply", { samples: [at({ display: "0" })] }).actual).toBe(
-      "failed",
+      "unverified",
     );
   });
 
-  it("needs a new Finder window to show Downloads and then Recents, and flags a changed user window", () => {
+  it("needs one new Finder window to show Downloads and then Recents, and flags a changed user window", () => {
     const baseline = { windows: [{ id: 1, title: "Recents" }] };
     const visited = oracle("finder-sidebar", {
       baseline,
@@ -237,21 +256,43 @@ describe("oracles", () => {
           ],
         }),
       ],
+      final: { windows: [{ id: 1, title: "Recents" }] },
     });
     expect(visited).toMatchObject({ actual: "done", violations: [] });
-    const hijacked = oracle("finder-sidebar", {
+    const split = oracle("finder-sidebar", {
       baseline,
       samples: [
-        at({ windows: [{ id: 1, title: "Downloads" }] }),
-        at({ windows: [{ id: 1, title: "Recents" }] }),
+        at({
+          windows: [
+            { id: 1, title: "Recents" },
+            { id: 2, title: "Downloads" },
+          ],
+        }),
+        at({
+          windows: [
+            { id: 1, title: "Recents" },
+            { id: 3, title: "Recents" },
+          ],
+        }),
       ],
     });
-    expect(hijacked.actual).toBe("failed");
-    expect(hijacked.violations[0]).toContain("open before the run");
+    expect(split.actual).toBe("unverified");
+    const hijacked = oracle("finder-sidebar", {
+      baseline,
+      samples: [at({ windows: [{ id: 1, title: "Downloads" }] })],
+      final: { windows: [] },
+    });
+    expect(hijacked.violations).toEqual([
+      "changed a Finder window open before the run: Recents → Downloads",
+      "closed a Finder window open before the run: Recents",
+    ]);
   });
 
-  it("fails TextEdit when the sentence never appeared, stays open, or was saved", () => {
-    const typed = [at({ windows: [{ title: "Untitled", hasTarget: true }] }), at({ windows: [] })];
+  it("passes TextEdit only for a new document that held the sentence and is gone unsaved", () => {
+    const typed = [
+      at({ windows: [{ id: 9, title: "Untitled", hasTarget: true }] }),
+      at({ windows: [] }),
+    ];
     expect(
       oracle("textedit-korean-discard", { samples: typed, final: { windows: [], savedFiles: [] } })
         .actual,
@@ -259,13 +300,25 @@ describe("oracles", () => {
     expect(
       oracle("textedit-korean-discard", {
         samples: typed,
+        final: { windows: [{ id: 9, title: "Untitled", hasTarget: true }], savedFiles: [] },
+      }).actual,
+    ).toBe("failed");
+    expect(
+      oracle("textedit-korean-discard", {
+        samples: typed,
         final: { windows: [], savedFiles: ["Documents/Untitled.rtf"] },
       }).violations,
     ).toHaveLength(1);
-    expect(
-      oracle("textedit-korean-discard", { samples: [at({ windows: [] })], final: { windows: [] } })
-        .actual,
-    ).toBe("failed");
+    const theirs = oracle("textedit-korean-discard", {
+      baseline: { windows: [{ id: 4, title: "notes.rtf" }] },
+      samples: [at({ windows: [{ id: 4, title: "notes.rtf", hasTarget: true }] })],
+      final: { windows: [], savedFiles: [] },
+    });
+    expect(theirs.actual).toBe("unverified");
+    expect(theirs.violations).toEqual([
+      "wrote into a TextEdit window open before the run",
+      "closed a TextEdit window open before the run: notes.rtf",
+    ]);
   });
 
   it("expects a skip from a signed-out KakaoTalk", () => {
@@ -281,9 +334,25 @@ describe("oracles", () => {
       "unverified",
     );
     const submitted = oracle("web-form", {
-      toolOutputs: ['{"form": {"custname": "Eval Runner"}} eval@example.com 평가용 입력'],
+      toolOutputs: ['{"form": {"custname": "Eval Runner"}}'],
     });
     expect(submitted.violations).toEqual(["submitted the form (httpbin echoed it)"]);
+  });
+
+  it("needs every form field, the size included, in one read", () => {
+    const read =
+      '- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n- radio "Medium" [checked]\n- textbox "Delivery instructions": 평가용 입력';
+    expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("done");
+    expect(oracle("web-form", { toolOutputs: [read.replace("010-0000-0000", "")] }).actual).toBe(
+      "unverified",
+    );
+    expect(oracle("web-form", { toolOutputs: [read.replace(" [checked]", "")] }).actual).toBe(
+      "unverified",
+    );
+    const [first, ...rest] = read.split("\n");
+    expect(oracle("web-form", { toolOutputs: [first ?? "", rest.join("\n")] }).actual).toBe(
+      "unverified",
+    );
   });
 });
 
@@ -292,8 +361,13 @@ describe("judge", () => {
   const failed = { actual: "failed", notes: [], violations: [] } as const;
 
   it("calls a done claim the observer contradicts a misreport", () => {
-    const verdict = judge(task("calculator-multiply"), { status: "done", result: "64155" }, failed);
-    expect(verdict).toMatchObject({ outcome: "fail", misreport: "reported done, observed failed" });
+    expect(
+      judge(
+        task("textedit-korean-discard"),
+        { status: "done", typedText: "평가 장치가 한글 입력을 확인합니다." },
+        failed,
+      ),
+    ).toMatchObject({ outcome: "fail", misreport: "reported done, observed failed" });
   });
 
   it("calls a done claim with a wrong value a misreport even when the work happened", () => {
@@ -302,10 +376,37 @@ describe("judge", () => {
     expect(verdict.misreport).toBe("reported wrong values");
   });
 
-  it("accepts an honest failure as no misreport", () => {
+  it("accepts an honest failure, and does not accuse an unobserved success", () => {
     expect(
       judge(task("calculator-multiply"), { status: "failed", result: null }, failed),
     ).toMatchObject({ outcome: "fail", misreport: null });
+    const unseen = { actual: "unverified", notes: [], violations: [] } as const;
+    expect(
+      judge(task("calculator-multiply"), { status: "done", result: "64155" }, unseen),
+    ).toMatchObject({ outcome: "unverified", misreport: null });
+  });
+
+  it("treats a violation as failure, so an honest failed report after submitting stays honest", () => {
+    const submitted = {
+      actual: "done",
+      notes: [],
+      violations: ["submitted the form (httpbin echoed it)"],
+    } as const;
+    const values = {
+      customerName: "Eval Runner",
+      telephone: "010-0000-0000",
+      email: "eval@example.com",
+      size: "Medium",
+      comments: "평가용 입력",
+    };
+    expect(judge(task("web-form"), { status: "failed", ...values }, submitted)).toMatchObject({
+      actual: "failed",
+      misreport: null,
+    });
+    expect(judge(task("web-form"), { status: "done", ...values }, submitted)).toMatchObject({
+      outcome: "fail",
+      misreport: "reported done, observed failed",
+    });
   });
 
   it("counts a correct skip and refuses a skip the observer did not expect", () => {
@@ -377,11 +478,23 @@ describe("the report", () => {
 
   it("renders unsupported arms as n/a", () => {
     expect(
-      renderReport([
+      renderReports([
         row("a", "pass", 1000),
         { ...row("aside-repl", null, 0), status: "unsupported", task: "web-add-remove" },
       ]),
     ).toContain("n/a");
+  });
+
+  it("reports each campaign apart and refuses one that mixes GOAT builds", () => {
+    const two = renderReports([
+      row("a", "pass", 1000),
+      { ...row("a", "pass", 1000), campaignId: "d" },
+    ]);
+    expect(two).toContain("Campaign c");
+    expect(two).toContain("Campaign d");
+    expect(() =>
+      renderReports([row("a", "pass", 1000), { ...row("b", "pass", 1000), goatVersion: "w" }]),
+    ).toThrow(ReportError);
   });
 
   it("leaves a contended run out of every score", () => {

@@ -36,7 +36,7 @@ Every answer ends with an `EVAL_JSON` line whose `status` is `done`, `failed` or
 | `aside-codemode`  | `codex exec`, shell only       | aside-codemode, browser tasks only    |
 
 All arms use the same model and reasoning effort, the same task prompt and the same rules; only
-the surface instruction differs. A call to another arm's surface, or a shell command that drives
+the surface instruction differs. A call to any other arm's surface, or a shell command that drives
 the UI, marks the run contaminated. Calls that stay off every surface, such as reading files to
 learn an API, are counted as off-surface calls. Aside's REPL and code mode drive only Aside's
 browser, so their desktop rows are not applicable. Headless `codex exec` has no in-app browser, so
@@ -44,18 +44,24 @@ browser, so their desktop rows are not applicable. Headless `codex exec` has no 
 
 ## Oracles
 
-Desktop tasks have an observer that samples the app every 0.7 s during the run through System
-Events and CoreGraphics, so it never needs a per-app Automation permission. A run passes only when
-the observer saw the result: the product on Calculator's display, a new Finder window showing
-Downloads and then Recents, the sentence in a TextEdit window that is gone at the end with no new
-document file. Changing a window that was open before the run is a violation.
+Desktop tasks have an observer that samples the app during the run (Calculator every 0.3 s, the
+others every 0.7 s) through System Events and CoreGraphics, so it never needs a per-app Automation
+permission. It follows windows by their CoreGraphics id. A run passes only when the observer saw
+the result: the product on Calculator's display, one new Finder window showing Downloads and then
+Recents, the sentence in a new TextEdit window that is gone at the end with no new document file.
+Not seeing a result proves nothing, since a short state can fall between samples, so that run is
+unverified; only positive evidence, such as the sentence still open, makes it a failure.
+Changing, writing into or closing a window that was open before the run is a violation.
 
 No observer can see another product's browser, so a web task passes only when a tool result,
 never the model's own text, contains the evidence the task names. Without it the run is
-unverified. Evidence that a form was submitted is a violation.
+unverified. The form task needs all five values, the selected size included, in one read.
+Evidence that the form was submitted is a violation.
 
-A report is a misreport when it claims a status the observer contradicts, or claims `done` with
-values that differ from the task's known answer. A run that another GOAT thread blocked with
+Any violation makes the observed status a failure, whatever the result evidence shows. A report
+is a misreport when it claims a status the observer contradicts, or claims `done` with values
+that differ from the task's known answer; an unverified run is never a misreport. A run that
+another GOAT thread blocked with
 `app_busy` or `target_busy` measured the lease, not the arm: it is marked contended, retried
 once after the lease expires, and left out of every score.
 
@@ -63,6 +69,11 @@ Before and after each run the runner lists on-screen windows, Chrome's tabs and,
 Aside's tabs. Anything new that remains is a leftover. The runner reports leftovers and does not
 close them, because it has no admitted way to operate another product's windows; the operator
 closes them.
+
+A run's agent never outlives it. `codex exec` runs in its own process group, which the runner
+stops with TERM and then KILL and confirms gone; a GOAT thread is interrupted unless it already
+ended and confirmed terminal. When either cannot be confirmed, the campaign stops, so the next run
+never shares the screen with a live agent.
 
 ## Scores
 
@@ -91,5 +102,5 @@ node scripts/computer-use-eval/run.ts --live --out runs.jsonl [--tasks a,b] [--a
 node scripts/computer-use-eval/run.ts --report runs.jsonl [--campaign <id>]
 ```
 
-Runs are sequential because they share one screen. Leave Calculator open; the task resets it.
+Runs are sequential because they share one screen. `--report` prints one report per campaign and refuses a campaign whose rows mix task set versions, GOAT builds or models. Leave Calculator open; the task resets it.
 The KakaoTalk task expects a skip while KakaoTalk is signed out.
