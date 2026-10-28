@@ -630,6 +630,62 @@ it.effect(
     ),
 );
 
+it.effect(
+  "refuses the first transaction when an existing WAL is pinned above the frame ceiling",
+  () =>
+    Effect.gen(function* () {
+      setup();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-existing-wal-" });
+      const filename = path.join(directory, "state.sqlite");
+      const open = (readonly = false) =>
+        Effect.acquireRelease(
+          Effect.sync(() => new NodeSqlite.DatabaseSync(filename, { readOnly: readonly })),
+          (db) => Effect.sync(() => db.close()),
+        );
+      const seed = yield* open();
+      seed.exec(
+        "PRAGMA page_size = 4096; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0",
+      );
+      seed.exec(
+        "CREATE TABLE existing_wal(value BLOB); INSERT INTO existing_wal VALUES ('initial')",
+      );
+      const reader = yield* open(true);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM existing_wal").all();
+      seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
+      assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const firstReply = yield* Deferred.make<{ backpressure?: boolean }>();
+        const worker = startedWorkers[0]!;
+        const listener = (reply: { backpressure?: boolean }) =>
+          Deferred.doneUnsafe(firstReply, Effect.succeed(reply));
+        worker.once("message", listener);
+        yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
+        const transaction = yield* sql
+          .withTransaction(sql`INSERT INTO existing_wal VALUES ('after pressure')`)
+          .pipe(Effect.forkChild);
+        assert.isTrue(
+          (yield* Deferred.await(firstReply)).backpressure,
+          "the first BEGIN must be refused before it executes",
+        );
+        assert.isUndefined(transaction.pollUnsafe());
+        assert.equal(seed.prepare("SELECT COUNT(*) AS count FROM existing_wal").get()?.count, 2);
+        reader.exec("ROLLBACK");
+        yield* TestClock.adjust("100 millis");
+        yield* Fiber.join(transaction);
+        assert.equal((yield* sql`SELECT COUNT(*) AS count FROM existing_wal`)[0]?.count, 3);
+        assert.equal(startedWorkers.length, 1);
+      }).pipe(
+        Effect.provide(
+          SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true }),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["frames", "journal-size"] as const)(
   "pauses mutations under pinned-reader %s pressure and resumes after zero-busy truncate",
   (pressure) =>
