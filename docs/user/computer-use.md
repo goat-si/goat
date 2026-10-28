@@ -107,7 +107,7 @@ action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
 automatically only on its next turn.
 
-Full access skips only the app approval. Everything else on this page still
+Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
 secret field in a browser tab still pauses agents, each action stays within
 what its call may reach, and work that runs on its own still shares the screen
