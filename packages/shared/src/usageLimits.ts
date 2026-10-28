@@ -282,8 +282,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
             ? { environmentId, input: { instanceId: provider.instanceId } }
             : null,
           limits: own.limits,
-          // Usually also one of the pool's accounts; counting it again would double it.
-          aggregated: false,
+          // Usually also one of the pool's accounts, so it counts only when the pool is unreadable.
+          aggregated: provider.usageLimits.quotaPool === undefined,
         });
         continue;
       }

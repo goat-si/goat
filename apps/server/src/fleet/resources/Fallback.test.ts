@@ -709,3 +709,62 @@ describe("Fallback quota evidence", () => {
     );
   });
 });
+
+describe("Fallback on a routed current instance", () => {
+  it.effect(
+    "skips another model on the same routed instance when its pool blocks that family",
+    () => {
+      const world = makeWorld();
+      const opusB = { instanceId: codex, model: "claude-opus-4-6" };
+      const layerFor = Layer.mergeAll(Fallback.layer, Fallback.layerChains).pipe(
+        Layer.provide(threadsLayer(world)),
+        Layer.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            fleet: {
+              fallbackChains: { short: { steps: [opus, opusB, sol], scope: "goals_and_threads" } },
+            },
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([provider(codex, [opus.model, opusB.model, sol.model])]),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(UsageLimitSources.UsageLimitSources)({
+            projectProviders: (providers) =>
+              Effect.succeed(
+                providers.map(
+                  (item) =>
+                    ({
+                      ...item,
+                      usageLimits: {
+                        checkedAt: "2026-10-19T23:59:00.000Z",
+                        windows: [],
+                        availability: [
+                          {
+                            id: "availability:family:opus",
+                            label: "Opus availability",
+                            exhausted: true,
+                            scopeModel: "family:opus",
+                            resetsAt: LATER,
+                          },
+                        ],
+                        quotaPoolRoute: { provider: "openai" },
+                      },
+                    }) as ServerProvider,
+                ),
+              ),
+          }),
+        ),
+      );
+      return withClock(
+        Effect.gen(function* () {
+          assert.isTrue(yield* continueOnce);
+          assert.include(summary(world.commands), "thread.model-selection.set " + sol.model);
+          assert.notInclude(summary(world.commands), "thread.model-selection.set " + opusB.model);
+        }).pipe(Effect.provide(layerFor)),
+      );
+    },
+  );
+});

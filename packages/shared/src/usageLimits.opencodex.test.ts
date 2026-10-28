@@ -259,3 +259,40 @@ describe("OpenCodex pools in Usage", () => {
     expect(windowless?.resetCreditInput).toBeUndefined();
   });
 });
+
+describe("routed login when the pool is unreadable", () => {
+  it("counts the login as its own account so its quota and redeem target stay visible", () => {
+    const unreadable = provider({
+      auth: { status: "authenticated", email: "main@example.com" },
+      usageLimits: {
+        checkedAt: "2026-09-03T11:59:00.000Z",
+        windows: [],
+        unavailable: {
+          reason: "probeFailed",
+          message: "OpenCodex pool unavailable (OpenCodex 2.86.0): x.",
+        },
+        quotaPoolRoute: { provider: "openai", openCodexVersion: "2.86.0" },
+        localAccount: {
+          checkedAt: "2026-09-03T11:59:00.000Z",
+          windows: [window],
+          resetCredits: { availableCount: 1, nextCreditId: "credit" },
+          redeemable: true,
+        },
+      },
+    });
+    const accounts = collectLimitAccounts(
+      new Map([
+        [
+          EnvironmentId.make("studio"),
+          { entry: { target: { label: "Studio" } }, serverConfig: { providers: [unreadable] } },
+        ],
+      ]),
+    );
+    const [codex] = collectLimitPools(accounts, now);
+    expect(codex?.windows.map((item) => item.usedPercent)).toEqual([40]);
+    expect(accounts[0]?.redeem).toEqual({
+      environmentId: "studio",
+      input: { instanceId: "codex" },
+    });
+  });
+});

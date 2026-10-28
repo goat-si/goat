@@ -156,12 +156,12 @@ export const make = Effect.gen(function* () {
       const provider = providers.find((candidate) => candidate.instanceId === step.instanceId);
       if (provider === undefined) return "is not configured here";
       if (!provider.enabled) return "is disabled";
-      // One instance can route several accounts (opencodex routes); its windows then
-      // describe whichever account failed, so they only rule out another instance.
+      // A login's windows describe whichever account failed, so they only rule out another
+      // instance; an OpenCodex pool's verdict holds for every model on the instance.
       const windows =
         provider.usageLimits === undefined ? [] : verdictWindows(provider.usageLimits);
       if (
-        step.instanceId !== current &&
+        (provider.usageLimits?.quotaPoolRoute !== undefined || step.instanceId !== current) &&
         windows.length > 0 &&
         isExhausted(
           {

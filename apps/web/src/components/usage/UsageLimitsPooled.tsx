@@ -250,8 +250,10 @@ function ActiveSegmentPopover({
 }) {
   const available = pools.some((pool) =>
     displayLimitWindows(pool).some((window) =>
-      window.members.some(
+      // Columns include accounts left out of the pooled math, which still have segments.
+      window.columns.some(
         (member) =>
+          member.window !== null &&
           member.account.key === payload.account.key &&
           member.window.id === payload.window.id &&
           member.window.kind === payload.window.kind &&

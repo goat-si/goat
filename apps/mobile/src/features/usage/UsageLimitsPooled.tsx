@@ -451,7 +451,8 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
   const pool = collectLimitPools(accounts, now)
     .find((candidate) => candidate.driver === account?.driver)
     ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
-  const window = pool?.members.find((member) => member.account.key === accountKey)?.window;
+  const window =
+    pool?.columns.find((member) => member.account.key === accountKey)?.window ?? undefined;
   const evenPace = window ? paceRemainingPercent(window, now) : null;
   const reset = pool?.resets.find((candidate) => candidate.member.account.key === accountKey);
   const [revealed, setRevealed] = useState(false);
