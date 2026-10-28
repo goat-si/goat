@@ -206,6 +206,10 @@ const __target = (binding, note, owner) => {
       ...(wanted.url === undefined ? {} : { urlIncludes: wanted.url }),
       ...(wanted.load === undefined ? {} : { loadState: wanted.load }),
       ...(wanted.target === undefined ? {} : aim(wanted.target)),
+      // {role, name} waits for an element that may not exist yet, so it names it by role.
+      ...(wanted.target !== undefined || wanted.role === undefined
+        ? {}
+        : { selector: 'role=' + String(wanted.role) + (wanted.name === undefined ? '' : '[name=' + JSON.stringify(String(wanted.name)) + ' s]') }),
     };
   };
   const wait = async (wanted, timeoutMs) => {
@@ -217,6 +221,7 @@ const __target = (binding, note, owner) => {
   const common = {
     kind: ref.kind,
     identity: ref.id,
+    ...(tab && binding.tab && binding.tab.tabId !== undefined ? { tabId: binding.tab.tabId } : {}),
     environment: ref.environmentId,
     generation: ref.generation,
     ...(owner === undefined ? {} : { owner }),

@@ -97,3 +97,117 @@ it.live("a tab wait takes its timeout as a number or as options", () => {
     );
   });
 });
+
+const runCells = (
+  broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">,
+  sources: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const results = [];
+      for (const source of sources)
+        results.push(
+          yield* service
+            .runCell({
+              runId: "r",
+              turnId: "t",
+              threadId: "thread",
+              environmentId: "env",
+              invocation,
+              source,
+            })
+            .pipe(Effect.result),
+        );
+      return results;
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+          tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+
+const formTab = {
+  environmentId: "env",
+  browserInstanceId: "server-browser",
+  connectionId: "connection",
+  threadId: "thread",
+  tabId: PreviewTabId.make("form"),
+  title: "Form",
+  url: "https://httpbin.test/forms/post",
+  owner: "unclaimed" as const,
+  ownedByCaller: false,
+  controlGeneration: 0,
+};
+
+it.live("a tab target can be bound again in a later cell by its identity or tabId", () => {
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>() =>
+      Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "unclaimed", generation: 0 },
+      } as A),
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab({tabId: 'form'});
+     screen.values.identity = tab.identity;
+     return { identity: tab.identity, tabId: tab.tabId };`,
+    `const again = await screen.tab({identity: screen.values.identity});
+     const byId = await screen.tab({tabId: again.tabId});
+     return [again.tabId, byId.tabId];`,
+  ]).pipe(
+    Effect.map(([first, second]) => {
+      expect(first).toMatchObject({ _tag: "Success", success: { status: "completed" } });
+      const bound = first?._tag === "Success" ? (first.success.value as { tabId?: string }) : {};
+      expect(bound.tabId).toBe("form");
+      expect(second).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: ["form", "form"] },
+      });
+    }),
+  );
+});
+
+it.live("waitFor with a role and name on a tab waits for that element", () => {
+  const waits: unknown[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "waitFor") waits.push(request.input);
+      return Effect.succeed(
+        (request.operation === "waitFor"
+          ? { status: "met" }
+          : {
+              tabId: formTab.tabId,
+              url: formTab.url,
+              control: { owner: "unclaimed", generation: 0 },
+            }) as A,
+      );
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab({tabId: 'form'});
+     return (await tab.waitFor({role: 'textbox', name: 'Customer name:'}, 500)).met;`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: true },
+      });
+      expect(waits).toEqual([
+        expect.objectContaining({ locator: 'role=textbox[name="Customer name:" s]' }),
+      ]);
+    }),
+  );
+});
