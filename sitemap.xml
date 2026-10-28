@@ -30,4 +30,34 @@
     <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/legal/" />
     <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/legal/" />
   </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/privacy-policy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/privacy-policy/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/privacy-policy/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/privacy-policy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/privacy-policy/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/privacy-policy/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/terms-of-service/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/terms-of-service/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/terms-of-service/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/terms-of-service/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/terms-of-service/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/terms-of-service/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/security-policy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/security-policy/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/security-policy/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/security-policy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/security-policy/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/security-policy/" />
+  </url>
 </urlset>
