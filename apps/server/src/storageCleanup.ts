@@ -8,7 +8,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type {
   OrchestrationV2ThreadShell,
-  ProjectId,
   ServerSettings,
   ServerSettingsError,
   TerminalSummary,
@@ -18,6 +17,11 @@ import type {
 } from "@goat/contracts";
 import { resolveWorktreeCleanup } from "@goat/shared/projectSettings";
 import { makeStorageCleanupWorker } from "./storageCleanupWorker.ts";
+import {
+  anyWorktreePolicy,
+  sameProjectWorktreePolicies,
+  worktreeCleanupEnabled,
+} from "./storageCleanupPolicy.ts";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
@@ -34,7 +38,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
-import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
+import { otherHomeReason, ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -48,7 +52,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
-import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { tryWithWorkspaceSubtree } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { isNetworkPath } from "@goat/shared/path";
@@ -81,39 +85,6 @@ function cleanupFailureReason(error: { readonly message: string }) {
   return isGitCommandError(error)
     ? `${error.command}: ${error.detail.split(/\r?\n/)[0]}${error.reason ? ` (${error.reason})` : ""}`
     : (error.message.split(/\r?\n/)[0] ?? error.message);
-}
-
-const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
-  rules.worktreeAfterDays !== null ||
-  rules.worktreeSettledAfterDays !== null ||
-  rules.worktreeOnMerge ||
-  rules.worktreeOnDelete ||
-  rules.worktreeUnchanged;
-
-function anyWorktreePolicy(
-  settings: ServerSettings,
-  predicate: (rules: WorktreeCleanupRules) => boolean,
-): boolean {
-  return (
-    predicate(resolveWorktreeCleanup(settings, null)) ||
-    Object.keys(settings.projectSettingsOverrides).some((projectId) =>
-      predicate(resolveWorktreeCleanup(settings, projectId as ProjectId)),
-    )
-  );
-}
-
-function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings): boolean {
-  return [
-    ...new Set([
-      ...Object.keys(left.projectSettingsOverrides),
-      ...Object.keys(right.projectSettingsOverrides),
-    ]),
-  ].every((projectId) =>
-    Equal.equals(
-      left.projectSettingsOverrides[projectId as ProjectId]?.worktreeCleanup,
-      right.projectSettingsOverrides[projectId as ProjectId]?.worktreeCleanup,
-    ),
-  );
 }
 
 export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
@@ -698,9 +669,10 @@ const make = Effect.gen(function* () {
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
     roots.splice(0, roots.length, ...(yield* ownWorktreeRoots({ roots, baseDir: config.baseDir })));
-    const otherBindings = yield* readOtherHomeBindings({ ownDatabase: config.dbPath }).pipe(
+    const readOtherBindings = readOtherHomeBindings({ ownDatabase: config.dbPath }).pipe(
       Effect.provideService(AuxiliarySqlite.AuxiliarySqlite, auxiliary),
     );
+    const otherBindings = yield* readOtherBindings;
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
           SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t
@@ -783,10 +755,8 @@ const make = Effect.gen(function* () {
           return keep("worktree is a symbolic link");
         if (!roots.some((root) => inside(root, realPath)))
           return keep("outside the managed worktree folder");
-        if (otherBindings.unreadable.length > 0)
-          return keep("another GOAT app's data on this machine could not be checked");
-        if (otherBindings.worktreePaths.has(realPath))
-          return keep("another GOAT app on this machine uses this worktree");
+        const otherHome = otherHomeReason(path, otherBindings, realPath);
+        if (otherHome !== null) return keep(otherHome);
         if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
@@ -904,6 +874,9 @@ const make = Effect.gen(function* () {
           );
         // Re-read this path's threads and sessions so new activity cancels removal; full per-worktree snapshots take seconds.
         const blockedSinceCheck = Effect.fnUntraced(function* () {
+          // Another app may have bound it since the pass began; the hold keeps its turns out now.
+          const otherHomeNow = otherHomeReason(path, yield* readOtherBindings, realPath);
+          if (otherHomeNow !== null) return otherHomeNow;
           const latestProjects = yield* projectStore.listShells();
           if (yield* containsProjectRoot(worktreePath, [project, ...latestProjects]))
             return "contains a project checkout";
@@ -1014,7 +987,9 @@ const make = Effect.gen(function* () {
         // Preserve branch/path so ProviderTurnStartService can recreate the checkout on resume.
         yield* Effect.logInfo("storage cleanup removed worktree", { threadId: thread.id });
       }).pipe(
-        (effect) => withWorkspaceLease(worktreePath, effect),
+        // Held whole: no turn starts in it or in a folder inside it, here or in another GOAT server.
+        (effect) => tryWithWorkspaceSubtree(worktreePath, effect),
+        Effect.map(Option.getOrElse(() => keep("worktree is in use"))),
         Effect.catch((error) =>
           Effect.gen(function* () {
             entries.push({

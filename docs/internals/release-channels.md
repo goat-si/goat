@@ -66,9 +66,12 @@ its own** (a Scheduler source, a timer, a recovery pass at startup, an inbound h
 **must check the hold** or wait for its release; Scheduler sources skip while held unless registered
 with `whileAutomationHeld: "run"`. Work a person starts on the copy is not automation and runs.
 
-Both databases point at the same worktree folders, and the workspace lease is in-process only. Storage
-cleanup therefore ignores worktree roots inside another local GOAT home and keeps any worktree another
-home's database binds (`apps/server/src/otherGoatHomes.ts`); a cross-process lease is tracked in #1681.
+Both databases point at the same worktree folders. Storage cleanup ignores worktree roots inside another
+local GOAT home and keeps any worktree another home's database binds, re-reading those bindings while it
+holds the worktree (`apps/server/src/otherGoatHomes.ts`). Every server joins a machine-wide lease
+registry in `~/.goat/workspace-leases` (`apps/server/src/workspace/workspaceLeaseRegistry.ts`), so a
+removal in one app turns away a turn starting in the other, and the reverse. A server that cannot join it
+does not start: without it, the other app's removals cannot see this one's work.
 
 ## Version rule
 

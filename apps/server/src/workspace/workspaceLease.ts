@@ -8,6 +8,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
@@ -22,6 +23,8 @@ export class WorkspaceLeaseUnavailableError extends Schema.TaggedError<Workspace
     return `${this.path} is not available: ${this.reason}`;
   }
 }
+
+export const isWorkspaceLeaseUnavailableError = Schema.is(WorkspaceLeaseUnavailableError);
 
 interface Lease {
   readonly semaphore: Semaphore.Semaphore;
@@ -157,7 +160,8 @@ const waitForForeignClaim = <A, E, R>(
                       "another GOAT server on this machine is removing a folder that holds it",
                   }),
                 )
-              : Effect.sleep(Duration.millis(150 + Math.floor(Math.random() * 200))).pipe(
+              : Random.nextIntBetween(150, 350).pipe(
+                  Effect.flatMap((millis) => Effect.sleep(Duration.millis(millis))),
                   Effect.andThen(Effect.suspend(() => waitForForeignClaim(key, effect))),
                 ),
           ),

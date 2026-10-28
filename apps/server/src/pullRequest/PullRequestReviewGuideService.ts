@@ -35,6 +35,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { PATCH_RENDER_PREFIX_ARGS } from "../vcs/GitVcsDriverCore.ts";
+import { tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import { pullRequestSyncKey } from "./pullRequestSyncKey.ts";
 import { reviewGuideInputFromPullRequest } from "./pullRequestReviewGuideInput.ts";
@@ -299,11 +300,30 @@ const make = Effect.gen(function* () {
       },
       { concurrency: 4 },
     );
-    const directory = yield* fileSystem.makeTempDirectoryScoped({
+    const directory = yield* fileSystem.makeTempDirectory({
       directory: config.worktreesDir,
       prefix: "review-guide-",
     });
     const path = `${directory}/checkout`;
+    // Held whole while it goes, so nothing on this or another GOAT server is inside it then.
+    yield* Effect.addFinalizer(() =>
+      tryWithWorkspaceSubtree(
+        directory,
+        git
+          .removeWorktree({ cwd: workspaceRoot, path, force: true })
+          .pipe(
+            Effect.ignore({ log: true }),
+            Effect.andThen(fileSystem.remove(directory, { recursive: true })),
+          ),
+      ).pipe(
+        Effect.flatMap((removed) =>
+          Option.isSome(removed)
+            ? Effect.void
+            : Effect.logWarning("Review guide kept its checkout, which is in use", { directory }),
+        ),
+        Effect.ignore({ log: true }),
+      ),
+    );
     yield* git.execute({
       operation: "PullRequestReviewGuideService.addWorktree",
       cwd: workspaceRoot,
@@ -313,11 +333,6 @@ const make = Effect.gen(function* () {
       env: { GOAT_WORKTREE_SETUP: "0" },
       timeoutMs: 5 * 60_000,
     });
-    yield* Effect.addFinalizer(() =>
-      git
-        .removeWorktree({ cwd: workspaceRoot, path, force: true })
-        .pipe(Effect.ignore({ log: true })),
-    );
     const mergeBase = yield* git.execute({
       operation: "PullRequestReviewGuideService.mergeBase",
       cwd: path,

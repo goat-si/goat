@@ -35,7 +35,11 @@ import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
-import { tryWithWorkspaceSubtree, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import {
+  isWorkspaceLeaseUnavailableError,
+  tryWithWorkspaceSubtree,
+  withWorkspaceLease,
+} from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { goatDataReason, resolveGoatDataPaths } from "./goatData.ts";
@@ -338,11 +342,14 @@ const make = Effect.gen(function* () {
 
   /**
    * Runs a removal holding the folder whole, so no lease on it or inside it goes to anyone else
-   * meanwhile; skipped when something on this server already works inside it.
+   * meanwhile; skipped when something on this or another GOAT server already works inside it.
    */
   const holdingWhole = <E, R>(folder: string, effect: Effect.Effect<string | null, E, R>) =>
     tryWithWorkspaceSubtree(path.resolve(folder), effect).pipe(
-      Effect.map(Option.getOrElse(() => "something on this server is working inside it")),
+      Effect.map(
+        Option.getOrElse(() => "something on this or another GOAT server is working inside it"),
+      ),
+      Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) => Effect.succeed(error.message)),
     );
 
   /**
@@ -469,7 +476,12 @@ const make = Effect.gen(function* () {
         return yield* holdingWhole(
           worktree,
           keys.reduceRight(
-            (inner, key) => withWorkspaceLease(key, inner),
+            (inner, key) =>
+              withWorkspaceLease(key, inner).pipe(
+                Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) =>
+                  Effect.succeed(error.message),
+                ),
+              ),
             Effect.gen(function* () {
               const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
               const current = facts?.find((fact) => samePath(fact.entry.path, worktree, rules));

@@ -10,6 +10,7 @@ import { SERVICE_LAUNCHER_CONTEXT_ENV } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
 import { awaitLauncherLoss } from "../launcherWatch.ts";
 import { runServer } from "../server.ts";
+import { holdWorkspaceLeaseRegistry } from "../workspace/workspaceLeaseRegistry.ts";
 import {
   acquireServerOwnerLock,
   launcherContextFromEnvironment,
@@ -54,6 +55,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
         serverRuntimeStatePath: config.serverRuntimeStatePath,
         waitForOwner: launcherContext !== undefined,
       });
+      // Other GOAT servers on this machine bind the same checkouts; removal must see their work.
+      yield* holdWorkspaceLeaseRegistry();
       const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
       if (config.mode !== "desktop" || config.desktopBootstrapToken === undefined)
         return yield* run;

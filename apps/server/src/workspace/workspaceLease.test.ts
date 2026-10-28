@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -320,7 +321,9 @@ const twoServers = Effect.gen(function* () {
 
 /** The key a server records for a folder, as workspaceLease.ts compares them. */
 const recordedKey = (folder: string) =>
-  process.platform === "linux" ? folder : folder.toLowerCase();
+  HostProcess.Platform.pipe(
+    Effect.map((platform) => (platform === "linux" ? folder : folder.toLowerCase())),
+  );
 
 it.live(
   "a lease another server holds keeps a folder from being removed, and a removal it runs keeps leases out",
@@ -399,12 +402,13 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, dir, folder, other } = yield* twoServers;
+        const key = yield* recordedKey(folder);
         // What the other server has written before it reads anyone else's claims.
         const published = `${dir}/${other.holder}.900.json`;
         const hold = JSON.stringify({
           holder: other.holder,
           kind: "subtree",
-          key: recordedKey(folder),
+          key,
         });
         yield* fs.writeFileString(published, hold);
         assert.isTrue(
@@ -415,7 +419,7 @@ it.live(
         const orphan = dir + "/0dead.1.json";
         yield* fs.writeFileString(
           orphan,
-          JSON.stringify({ holder: "0dead", kind: "subtree", key: recordedKey(folder) }),
+          JSON.stringify({ holder: "0dead", kind: "subtree", key }),
         );
         assert.deepEqual(
           yield* tryWithWorkspaceLease(folder + "/inner", Effect.succeed(1)),

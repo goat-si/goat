@@ -10,14 +10,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 /**
- * Workspace leases shared by every GOAT server of this user on this machine (#1681). Stable and
- * Nightly bind the same worktrees, so one server's removal must see another server's turn start.
- *
- * Each server keeps an exclusive SQLite lock on its own holder file for its whole life, as
- * `server-owner.lock` does, so the OS drops it when the server dies. A claim is a record file
- * that names its holder. A claimant publishes its record first and only then reads the others',
- * so of two conflicting claims at least one sees the other. Records of a holder whose lock can be
- * taken are a dead server's and are removed by whoever finds them.
+ * Leases every GOAT server of this user on this machine sees. Each holds an SQLite lock on its
+ * holder file for life (as `server-owner.lock`), which the OS drops when it dies. A claim is a
+ * record naming its holder, published before the others are read, so of two conflicting claims
+ * at least one sees the other. Records whose holder's lock can be taken are a dead server's.
  */
 
 export type WorkspaceClaimKind = "lease" | "subtree";

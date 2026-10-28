@@ -2,6 +2,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import {
   GitManagerError,
@@ -32,7 +34,16 @@ import {
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import {
+  isWorkspaceLeaseUnavailableError,
+  tryWithWorkspaceSubtree,
+  withWorkspaceLease,
+  type WorkspaceLeaseUnavailableError,
+} from "../workspace/workspaceLease.ts";
+
+const leaseUnavailable =
+  (operation: string, command: string, cwd: string) => (error: WorkspaceLeaseUnavailableError) =>
+    new GitCommandError({ operation, command, cwd, detail: error.message });
 
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
@@ -181,12 +192,21 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
     fileSystem.realPath(rootPath).pipe(
       Effect.orElseSucceed(() => rootPath),
-      Effect.flatMap((cwd) => withWorkspaceLease(cwd, effect)),
+      Effect.flatMap((cwd) =>
+        withWorkspaceLease(cwd, effect).pipe(
+          Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) =>
+            Effect.fail(
+              leaseUnavailable("GitWorkflowService.withCheckoutLease", "git", cwd)(error),
+            ),
+          ),
+        ),
+      ),
     );
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
@@ -468,8 +488,32 @@ export const make = Effect.gen(function* () {
       },
     ),
     removeWorktree: Effect.fn("GitWorkflowService.removeWorktree")(function (input) {
+      // Hold the folder git will delete, which it resolves against cwd, so no turn starts in it.
+      const target = path.resolve(input.cwd, input.path);
+      const operation = "GitWorkflowService.removeWorktree";
       return ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
+        Effect.andThen(
+          tryWithWorkspaceSubtree(target, git.removeWorktree({ ...input, path: target })).pipe(
+            Effect.catchTags({
+              WorkspaceLeaseUnavailableError: (error) =>
+                Effect.fail(leaseUnavailable(operation, "git worktree remove", input.cwd)(error)),
+            }),
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  Effect.fail(
+                    new GitCommandError({
+                      operation,
+                      command: "git worktree remove",
+                      cwd: input.cwd,
+                      detail: `${target} is in use by a turn, terminal or another removal. Try again when it finishes.`,
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        ),
       );
     }),
     inspectExistingBranch: (input) =>
