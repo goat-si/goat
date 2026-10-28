@@ -578,23 +578,26 @@ different target, and an index-keyed receipt would answer it with another call's
 journal keys a step by its place in the program instead. A run has an `evalRunId`, derived from
 the caller and its `clientRequestId` when one is given. A call's coordinate is its position in
 the parsed program; inside `map` it adds the element's index and the first 12 hex digits of the
-element's digest. A keyed write without its own key gets
+element's digest. Every keyed write gets
 `clientRequestId = "eval:" + sha256(evalRunId \0 stepCoord \0 path \0 argumentsDigest)[0:48]`, so
-ToolAdmission deduplicates it like any keyed write and changed arguments get a different key.
-`mcp_eval_runs` holds the run, its program and the grant it ran under; `mcp_eval_steps` holds
-each step outcome by `(eval_run_id, step_coord)`.
+ToolAdmission deduplicates it like any keyed write and changed arguments get a different key. A
+program may not pass its own `clientRequestId` to a call, so each key is first used by its
+step.
+`mcp_eval_runs` holds the run and its program; `mcp_eval_steps` holds each step's outcome by
+`(eval_run_id, step_coord)` and the caller's grant when that step ran, recorded before it runs.
 
 A retry with the same `clientRequestId`, or `resume` with an `evalRunId`, continues the run:
 
-- Only the caller that started a run sees it, only with the same program and bindings
-  (`conflict`, `eval_program_changed` otherwise), and only while it still holds the grant
-  recorded for the run, checked as ToolAdmission checks a replay: modes, goatclaw profile and
-  scopes, with a client's scopes reauthorized live. A caller that lost any of it gets
-  `permission_denied` and no stored step or result. Each claim records the caller's current
-  grant, so a later replay must hold everything any earlier claim ran under.
+- Only the caller that started a run sees it, and only with the same program and bindings
+  (`conflict`, `eval_program_changed` otherwise). A stored step or result is returned only while
+  the caller holds every grant a recorded step ran under, checked as ToolAdmission checks a
+  replay: modes, goatclaw profile and scopes, with a client's scopes reauthorized live. A caller
+  that lost any of it gets `permission_denied` and nothing stored.
 - Every outcome the program's control flow saw is journaled, refusals caught by `try` included,
-  and replays as recorded, so a resumed run takes the same branches. Only a failure that stopped
-  the program and proves nothing ran is dropped, so resume tries it again. A step whose
+  and replays as recorded, so a resumed run takes the same branches. A write whose failure does
+  not prove what happened (ToolAdmission would settle it unknown, as for `host_unavailable`)
+  stops the run with `unknown_outcome` even inside `try`. Only a failure that stopped the program
+  and proves nothing ran is dropped, so resume tries it again. A step whose
   arguments no longer match its record is `conflict` (`eval_step_changed`).
 - A read that started and never finished runs again. A keyed write that did is sent again with
   its derived key, but only within the 24 hours ToolAdmission keeps that key; later, and for any
