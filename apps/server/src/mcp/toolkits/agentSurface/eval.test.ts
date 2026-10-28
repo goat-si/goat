@@ -196,7 +196,11 @@ const handoffReader =
         : { status: "ok", value: { handoff: handoff("completed"), applying: false } },
     );
 
-const evaluate = (input: EvalInput, as = caller) =>
+const evaluate = (
+  input: EvalInput,
+  as = caller,
+  answer: (result: AgentSurfaceResult) => AgentSurfaceResult = (result) => result,
+) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const probe = yield* Probe;
@@ -204,7 +208,7 @@ const evaluate = (input: EvalInput, as = caller) =>
       // Exactly what goat_call does for a direct caller.
       invoke: (path, args) =>
         server.callTool({ name: "goat_call", arguments: { path, args } }).pipe(
-          Effect.map((result) => result.structuredContent as AgentSurfaceResult),
+          Effect.map((result) => answer(result.structuredContent as AgentSurfaceResult)),
           Effect.provideService(McpSchema.McpServerClient, mcpClient),
           Effect.orDie,
         ),
@@ -455,5 +459,18 @@ it.effect("compares maps by their own keys only", () =>
       status: "ok",
       value: false,
     });
+  }).pipe(Effect.provide(served)),
+);
+
+it.effect("drops a call's image blocks before they count against the result budget", () =>
+  Effect.gen(function* () {
+    // As a mounted goat_eval sees a screenshot: goat_call's own handle keeps the blocks in meta.
+    const withImage = (result: AgentSurfaceResult): AgentSurfaceResult =>
+      result.status === "ok"
+        ? { ...result, meta: { content: [{ type: "image", data: new Uint8Array(300_000) }] } }
+        : result;
+    expect(
+      yield* evaluate({ program: '(pick (project.list) "projects")' }, caller, withImage),
+    ).toMatchObject({ status: "ok", value: { projects: [{ id: "a" }, { id: "b" }] } });
   }).pipe(Effect.provide(served)),
 );

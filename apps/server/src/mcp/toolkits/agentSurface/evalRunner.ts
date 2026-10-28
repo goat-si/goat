@@ -106,6 +106,17 @@ const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const toJson = Schema.encodeSync(UnknownJson);
 const fromJson = Schema.decodeSync(UnknownJson);
 
+/**
+ * Programs compose JSON, so images and other non-text blocks a call returns are dropped before
+ * they are journaled or counted; the tool called directly still returns them.
+ */
+const textOnly = (envelope: Envelope): Envelope => {
+  if (envelope.meta?.content === undefined) return envelope;
+  const { content: _content, ...meta } = envelope.meta;
+  const { meta: _meta, ...rest } = envelope;
+  return Object.keys(meta).length === 0 ? rest : { ...rest, meta };
+};
+
 /** JSON with finite numbers only: what the journal stores is what a resumed run reads back. */
 const isFiniteJson = (value: unknown): boolean =>
   value === null ||
@@ -484,7 +495,9 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
             case "replay":
               envelope = yield* withOperation(
                 entry,
-                storedEnvelope(entry.name, args, entry.effect, outcome.result, outcome.failure),
+                textOnly(
+                  storedEnvelope(entry.name, args, entry.effect, outcome.result, outcome.failure),
+                ),
               );
               collect(envelope, entry, at);
               yield* stored(journal.settleStep(evalRunId, at, "completed", toJson(envelope)), at);
@@ -549,6 +562,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         );
         if (entry.effect !== "read") state.inflightWrite = at;
         const answered = yield* invoke(entry.path, sent).pipe(
+          Effect.map(textOnly),
           Effect.onInterrupt(() =>
             journal
               .settleStep(evalRunId, at, entry.effect === "read" ? "released" : "unknown", null)

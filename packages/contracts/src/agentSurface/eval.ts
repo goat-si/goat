@@ -35,6 +35,7 @@ export const EVAL_GUIDE = [
   "Calls: (resource.verb :key val ...), (resource.verb {map}) or (call resource.verb {map}). A call runs as goat_call would, and an ok result evaluates to its value. Programs may not pass clientRequestId: each write's key is derived from the run and the step.",
   "Forms: (let ((name expr) ...) body ...) binds in order; (. x key ...) or (get x key ...) follows keys or indexes, null when missing; (pick x key ...) keeps only those keys, element by element on an array; (map name coll body) runs body per element, at most 16; (filter name coll pred) keeps elements whose pred is true, and pred may not call anything; (if c a b); (eq a b); (not x); (seq e ...) returns every value; (try e) returns e's envelope instead of stopping; (quote x); (list e ...) or [e ...]; (var name). false and null are false.",
   "An error stops the run unless try wraps the call. needs_human, unknown_outcome and limits stop it even inside try.",
+  "Images and other non-text blocks a call returns are dropped; call that tool directly to see them.",
   "Limits: 16 KiB program, depth 8, 32 calls, 16 map elements, 256 KiB of results, 120 s.",
   "Pass the same clientRequestId, or resume with the evalRunId a halted run returned, to continue: completed steps come from the run's journal and are not called again. A run that stopped at needs_human returns its handoff's state on resume; put the remaining work in a new program.",
 ].join("\n");
