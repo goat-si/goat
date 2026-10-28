@@ -252,7 +252,7 @@ export function settlementAdmissionTests({
   );
 
   it.effect(
-    "shell hint capacity schedules full reconciliation while targeted admission is idle",
+    "shell hint capacity reconciles idle admission and refreshes when background work ends",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -266,14 +266,22 @@ export function settlementAdmissionTests({
               ],
             }),
           );
+          const overflow = { ...threads[256]!, pendingBackgroundTasks: [] };
+          const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
           const fixture = yield* makeHarness({
-            snapshot: makeSnapshot(threads),
+            snapshot: makeSnapshot([overflow]),
             currentThreads: [marker],
             settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+            branchPullRequest: (input, options) =>
+              Ref.update(refreshes, (values) => [...values, options?.refresh === true]).pipe(
+                Effect.as(branchResult(input.branch, options?.refresh)),
+              ),
           });
           yield* Effect.gen(function* () {
             const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
             yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+            assert.deepStrictEqual(yield* Ref.get(refreshes), [false]);
+            yield* Ref.set(fixture.snapshots, makeSnapshot(threads));
             for (const thread of threads.slice(0, 256)) {
               yield* fixture.publishEvent(shellMergeEvent(thread.id));
               yield* fixture.publishEvent(settledEvent(marker));
@@ -287,6 +295,16 @@ export function settlementAdmissionTests({
             yield* service.drain;
             assert.include(yield* Ref.get(fixture.candidateReads), undefined);
             assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+            yield* Ref.set(fixture.snapshots, makeSnapshot([overflow]));
+            yield* fixture.publishEvent(terminalEvent(overflow.id));
+            yield* fixture.publishEvent(settledEvent(marker));
+            yield* Queue.take(fixture.closedIdle);
+            yield* service.drain;
+            assert.deepStrictEqual(yield* Ref.get(refreshes), [false, true]);
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+              [overflow.id],
+            );
           }).pipe(Effect.provide(fixture.layer));
         }),
       ),
