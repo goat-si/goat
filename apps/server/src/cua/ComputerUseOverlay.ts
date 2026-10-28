@@ -13,12 +13,15 @@
  * Points are fractions of the last screenshot the driver returned for that window. The helper
  * maps them onto the window's current frame. Without a screenshot size, or for an element or a
  * zoomed region, the glow shows without a cursor point.
+ * A code-mode call instead carries its cursor: the host-owned owner, and for an element action
+ * the element's center, which the host read from the element's frame and sent with that call.
  *
  * @module ComputerUseOverlay
  */
 import type {
   ComputerUseOverlayCommand,
   AgentCursorEvent,
+  AgentCursorOwner,
   ComputerUseOverlayHideReason,
   ComputerUseOverlayPoint,
   ComputerUsePauseReason,
@@ -108,6 +111,11 @@ export type OverlayEvent =
       readonly name: string;
       readonly args: unknown;
       readonly codeMode?: boolean;
+      /** The host's cursor for this call; its point wins over one read from its arguments. */
+      readonly cursor?: {
+        readonly owner: AgentCursorOwner;
+        readonly point?: ComputerUseOverlayPoint;
+      };
     }
   | {
       readonly type: "reply";
@@ -160,6 +168,35 @@ function hideReason(state: OverlayState): ComputerUseOverlayHideReason | undefin
   if (state.scoped?.op === "hide") return state.scoped.reason;
   if (!state.target) return "idle";
   return undefined;
+}
+
+const sameOwner = (a: AgentCursorOwner, b: AgentCursorOwner) =>
+  a.environmentId === b.environmentId &&
+  a.runId === b.runId &&
+  a.turnId === b.turnId &&
+  a.targetId === b.targetId &&
+  a.generation === b.generation;
+
+/**
+ * The owner a code-mode call names, when its own phase events have not reached the proxy yet:
+ * calls can overtake them. It shows at sequence 0, so the owner's first phase still supersedes it.
+ */
+function callOwner(
+  state: OverlayState,
+  owner: AgentCursorOwner | undefined,
+  window: { readonly pid: number; readonly windowId: number },
+  point: ComputerUseOverlayPoint | undefined,
+): AgentCursorEvent | undefined {
+  const current = state.scoped;
+  if (owner === undefined || (current !== undefined && sameOwner(current.identity, owner)))
+    return current;
+  if (
+    current !== undefined &&
+    current.op !== "hide" &&
+    owner.generation <= current.identity.generation
+  )
+    return current;
+  return { op: "show", identity: owner, phase: "acting", ...window, ...(point ? { point } : {}) };
 }
 
 function desired(state: OverlayState): ComputerUseOverlayCommand {
@@ -232,9 +269,12 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         return { ...state, capturing: new Set(state.capturing).add(event.id), snapshots };
       }
       if (!(event.name in INPUT_POINTS) || !window) return state;
-      const point = pointOf(state, event.name, args, window.windowId);
+      const point = event.cursor?.point ?? pointOf(state, event.name, args, window.windowId);
       return {
         ...state,
+        scoped: event.codeMode
+          ? callOwner(state, event.cursor?.owner, window, point)
+          : state.scoped,
         target: { ...window, ...(point ? { point } : {}) },
         acting: new Set(state.acting).add(event.id),
         directActing: event.codeMode

@@ -824,6 +824,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
         codeMode: typeof id === "string" && id.startsWith(PRIMITIVE_ID),
+        ...(primitive?.cursor === undefined ? {} : { cursor: primitive.cursor }),
       });
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
       if (
