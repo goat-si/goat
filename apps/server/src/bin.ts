@@ -83,6 +83,16 @@ if (
       // the CLI without one. Never for the fast paths, whose stdin is a pipe.
       const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
       attachConsoleStdin();
+      const bootstrapArg = process.argv.indexOf("--bootstrap-fd");
+      const bootstrapRaw =
+        process.argv
+          .find((arg) => arg.startsWith("--bootstrap-fd="))
+          ?.slice("--bootstrap-fd=".length) ??
+        (bootstrapArg < 0 ? process.env.GOAT_BOOTSTRAP_FD : process.argv[bootstrapArg + 1]);
+      if (bootstrapRaw !== undefined && /^\d+$/.test(bootstrapRaw)) {
+        const { prepareManagedDesktopBootstrap } = await import("./managed/ManagedBootstrap.ts");
+        await prepareManagedDesktopBootstrap(Number(bootstrapRaw));
+      }
       const { runCli } = await import("./binCli.ts");
       runCli();
     }

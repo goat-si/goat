@@ -1,3 +1,4 @@
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -115,6 +116,7 @@ const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
 /** @public */
 export const make = Effect.gen(function* () {
   const electronMenu = yield* ElectronMenu.ElectronMenu;
+  const backendPool = yield* DesktopBackendPool.DesktopBackendPool;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const context = yield* Effect.context<DesktopApplicationMenuRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
@@ -190,6 +192,20 @@ export const make = Effect.gen(function* () {
       {
         label: "File",
         submenu: [
+          {
+            label: "Server recovery...",
+            click: () =>
+              runMenuEffect(
+                "server-recovery",
+                backendPool.list.pipe(
+                  Effect.flatMap((instances) =>
+                    Effect.forEach(instances, (instance) => instance.showRecovery ?? Effect.void, {
+                      discard: true,
+                    }),
+                  ),
+                ),
+              ),
+          },
           ...(environment.platform === "darwin"
             ? []
             : [

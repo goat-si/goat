@@ -523,6 +523,10 @@
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"
     },
+    "./managedRecoveryPolicy": {
+      "types": "./src/managedRecoveryPolicy.ts",
+      "import": "./src/managedRecoveryPolicy.ts"
+    },
     "./runtimeManifest": {
       "types": "./src/runtimeManifest.ts",
       "import": "./src/runtimeManifest.ts"

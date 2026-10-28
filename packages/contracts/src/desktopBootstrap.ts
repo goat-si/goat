@@ -3,6 +3,7 @@ import {
   GOAT_DESKTOP_BOOTSTRAP_HOME_KEY,
 } from "@goat/contracts/legacyT3Names";
 import * as Schema from "effect/Schema";
+import { ManagedWatchdogBootstrap } from "./desktopBackendHealth.ts";
 import * as SchemaGetter from "effect/SchemaGetter";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -12,6 +13,8 @@ export const SERVER_EXIT_CODE_STATE_DIR_OWNED = 78;
 
 // A supervisor must not restart a server whose database a newer build migrated; only a newer build can open it.
 export const SERVER_EXIT_CODE_DATABASE_AHEAD = 79;
+
+export const SERVER_EXIT_CODE_PERSISTENCE_FATAL = 80;
 
 const GoatDesktopBackendBootstrap = Schema.Struct({
   mode: Schema.Literal("desktop"),
@@ -34,6 +37,7 @@ const GoatDesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   desktopBrowserFd: Schema.optionalKey(PositiveInt),
   desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
+  backendWatchdog: Schema.optionalKey(ManagedWatchdogBootstrap),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
@@ -42,6 +46,21 @@ export const DesktopBackendBootstrap = Schema.Struct({
   ...GoatDesktopBackendBootstrap.fields,
   [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optionalKey(Schema.String),
 }).pipe(
+  Schema.check(
+    Schema.makeFilter((value) => {
+      const watchdog = value.backendWatchdog;
+      return (
+        watchdog?.mode !== "fd" ||
+        ![
+          3,
+          value.desktopTelemetryFd,
+          value.desktopTelemetryControlFd,
+          value.desktopBrowserFd,
+          value.desktopBrowserControlFd,
+        ].includes(watchdog.healthFd)
+      );
+    }),
+  ),
   Schema.decodeTo(Schema.toType(GoatDesktopBackendBootstrap), {
     decode: SchemaGetter.transform(
       ({ [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: legacyHome, ...bootstrap }) => ({

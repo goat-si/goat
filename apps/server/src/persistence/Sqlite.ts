@@ -1,3 +1,4 @@
+import { publishManagedPhase } from "../managed/ManagedBootstrap.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
@@ -69,6 +70,7 @@ export const layerMemory = Layer.provideMerge(
 export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* Effect.sync(() => publishManagedPhase("migrating"));
     yield* initializeV2Database(dbPath);
     return layerFromPath(dbPath);
   }),

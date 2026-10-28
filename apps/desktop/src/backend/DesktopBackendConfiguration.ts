@@ -1,3 +1,5 @@
+import { ownRuntimeManifest, supportsManagedWatchdog } from "@goat/shared/runtimeManifest";
+import { resolveWslWatchdog } from "./DesktopBackendWatchdogCapability.ts";
 import {
   GOAT_DESKTOP_BOOTSTRAP_HOME_KEY,
   LEGACY_RESOURCE_MONITOR_BINARY_NAME,
@@ -17,6 +19,7 @@ import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { ChildProcessSpawner } from "effect/process";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
 
@@ -248,6 +251,7 @@ const readBackendObservabilitySettings = Effect.gen(function* () {
 });
 
 interface SharedBootstrapInput {
+  readonly watchdogGeneration: string;
   readonly bootstrapToken: string;
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
@@ -550,10 +554,29 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         GOAT_CLI_PATH: Option.getOrUndefined(input.cliPath),
       },
       extendEnv: true,
-      bootstrap,
+      bootstrap: supportsManagedWatchdog(
+        ownRuntimeManifest({ version: environment.appVersion }),
+        `${environment.platform}-${environment.processArch}`,
+      )
+        ? {
+            ...bootstrap,
+            backendWatchdog: {
+              protocol: 1 as const,
+              mode: "fd" as const,
+              generation: input.watchdogGeneration,
+              healthFd: 8,
+            },
+          }
+        : bootstrap,
       bootstrapDelivery: "fd3",
       httpBaseUrl: backendExposure.httpBaseUrl,
       captureOutput: true,
+      recoveryStateDirectory: environment.path.join(
+        environment.stateDir,
+        "runtime",
+        "desktop-recovery",
+      ),
+      backendLogPath: environment.logDir,
       preflightFailure: Option.none(),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
@@ -571,6 +594,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   | DesktopWslEnvironment.DesktopWslEnvironment
   | DesktopWslServerTree.DesktopWslServerTree
   | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner
 > {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
@@ -693,6 +717,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const wslEnv = mergeWslEnv(parentEnvWithoutGoatHome.WSLENV, forwardedEnvNames);
 
   const baseConfig = {
+    recoveryStateDirectory: environment.path.join(
+      environment.stateDir,
+      "runtime",
+      "desktop-recovery",
+    ),
+    backendLogPath: environment.logDir,
     executablePath: "wsl.exe",
     entryPath:
       preflight._tag === "Ready" ? preflight.windowsEntryPath : environment.backendEntryPath,
@@ -745,9 +775,18 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     runtime.kind === "executable"
       ? [runtime.entryPath]
       : [runtime.nodePath, runtime.linuxEntryPath];
+  const backendWatchdog = yield* resolveWslWatchdog({
+    version: environment.appVersion,
+    arch: environment.processArch,
+    generation: input.watchdogGeneration,
+    distro: preflight.runningDistro,
+    command,
+    path: launchPath,
+  });
 
   return {
     ...baseConfig,
+    bootstrap: backendWatchdog === undefined ? bootstrap : { ...bootstrap, backendWatchdog },
     args: [
       ...distroArgs,
       "--exec",
@@ -773,6 +812,7 @@ export const make = Effect.gen(function* () {
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const crypto = yield* Crypto.Crypto;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // Random generation yields; serialize it so concurrent backends cannot capture distinct bootstrap secrets.
   const secretRef = yield* SynchronizedRef.make(Option.none<string>());
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
@@ -799,6 +839,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
     return {
+      watchdogGeneration: yield* crypto.randomUUIDv4(),
       bootstrapToken,
       bootstrapSecret,
       observabilitySettings,
@@ -815,6 +856,7 @@ export const make = Effect.gen(function* () {
       port: backendExposure.port,
       distro: persistedSettings.wslDistro,
     }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
       Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
@@ -884,6 +926,7 @@ export const make = Effect.gen(function* () {
       function* (input) {
         const shared = yield* sharedInputs;
         return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
           Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),

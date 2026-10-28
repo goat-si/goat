@@ -1,8 +1,10 @@
+import { makeBackendHealthFramer } from "../../shared/src/managedRecoveryPolicy.ts";
 import { expect, it } from "vite-plus/test";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { DesktopBackendBootstrap } from "./desktopBootstrap.ts";
-import { DesktopBackendHealth, makeBackendHealthFramer } from "./desktopBackendHealth.ts";
+import { DesktopBackendHealth } from "./desktopBackendHealth.ts";
+const decodeHealth = Schema.decodeUnknownOption(DesktopBackendHealth);
 const frame = {
   version: 1,
   type: "backendHealth",
@@ -18,11 +20,7 @@ it("decodes fragmented private health frames and rejects unsafe sequences and ov
   expect(framer.push(raw.subarray(0, 8))).toEqual([]);
   expect(framer.push(raw.subarray(8))).toEqual([frame]);
   expect(() => framer.push(new Uint8Array(513).fill(65))).toThrow();
-  expect(
-    Option.isNone(
-      Schema.decodeUnknownOption(DesktopBackendHealth)({ ...frame, mainSequence: 2 ** 53 }),
-    ),
-  ).toBe(true);
+  expect(Option.isNone(decodeHealth({ ...frame, mainSequence: 2 ** 53 }))).toBe(true);
 });
 it("requires an explicit channel mode and prevents descriptor collisions", () => {
   const base = {

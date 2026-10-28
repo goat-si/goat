@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Native acceptance owns a disposable child process.
+import * as NodeChildProcess from "node:child_process";
 import {
   SERVER_EXIT_CODE_DATABASE_AHEAD,
   SERVER_EXIT_CODE_STATE_DIR_OWNED,
@@ -91,13 +93,6 @@ function makeProcess(options?: {
   });
 }
 
-function responseForRequest(
-  request: HttpClientRequest.HttpClientRequest,
-  status: number,
-): HttpClientResponse.HttpClientResponse {
-  return HttpClientResponse.fromWeb(request, new Response(null, { status }));
-}
-
 function layerHttpClient(
   handler: (
     request: HttpClientRequest.HttpClientRequest,
@@ -110,7 +105,7 @@ function layerHttpClient(
 }
 
 const layerHealthyHttpClient = layerHttpClient((request) =>
-  Effect.succeed(responseForRequest(request, 200)),
+  Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
 );
 
 function decodeBootstrap(raw: string) {
@@ -118,6 +113,7 @@ function decodeBootstrap(raw: string) {
 }
 
 interface MakeInstanceInput {
+  readonly onRecoveryPaused?: DesktopBackendManager.BackendInstanceSpec["onRecoveryPaused"];
   readonly spawnerLayer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
@@ -193,6 +189,7 @@ function makeTestInstance(input: MakeInstanceInput) {
   const instance = DesktopBackendManager.makeBackendInstance({
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
+    ...(input.onRecoveryPaused ? { onRecoveryPaused: input.onRecoveryPaused } : {}),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onStartupFailure ? { onStartupFailure: input.onStartupFailure } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
@@ -555,7 +552,7 @@ describe("DesktopBackendManager", () => {
 
         yield* Deferred.succeed(finishTeardown, undefined);
         yield* Fiber.join(stopFiber).pipe(Effect.timeout("1 second"));
-        yield* TestClock.adjust(Duration.millis(500));
+        yield* TestClock.adjust(Duration.millis(1000));
 
         assert.equal(yield* Queue.take(starts).pipe(Effect.timeout("1 second")), 2);
         const restarted = yield* instance.snapshot;
@@ -732,7 +729,8 @@ it.effect("retires only its captured backend on a confirmed silent-main verdict"
               ...makeProcess({
                 exitCode: Deferred.await(exit),
                 getOutputFd: (fd) => (fd === 8 ? Stream.fromQueue(frames) : Stream.empty),
-                kill: (signal) => Ref.update(signals, (xs) => [...xs, signal ?? "SIGTERM"]),
+                kill: (signal) =>
+                  Ref.update(signals, (xs) => [...xs, signal?.killSignal ?? "SIGTERM"]),
               }),
               isRunning: Effect.succeed(true),
             }),
@@ -743,7 +741,12 @@ it.effect("retires only its captured backend on a confirmed silent-main verdict"
         ...baseConfig,
         bootstrap: {
           ...baseConfig.bootstrap,
-          backendWatchdog: { protocol: 1 as const, generation: "run-one", healthFd: 8 },
+          backendWatchdog: {
+            protocol: 1 as const,
+            mode: "fd" as const,
+            generation: "run-one",
+            healthFd: 8,
+          },
         },
         watchdog: { generation: "run-one", protocol: 1 as const, healthFd: 8 },
         desktopTelemetryStream: Stream.empty,
@@ -752,8 +755,7 @@ it.effect("retires only its captured backend on a confirmed silent-main verdict"
       };
       yield* Effect.addFinalizer(() => Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)));
       const fiber = yield* DesktopBackendManager.runBackendProcess(options).pipe(
-        Effect.provide(spawner),
-        Effect.provide(layerHealthyHttpClient),
+        Effect.provide(Layer.merge(spawner, layerHealthyHttpClient)),
         Effect.forkChild,
       );
       yield* Deferred.await(ready);
@@ -777,4 +779,214 @@ it.effect("retires only its captured backend on a confirmed silent-main verdict"
       assert.deepEqual(result.code, Option.some(80));
     }),
   ),
+);
+
+it.effect("continues health receipt while a non-heartbeat control handler is held", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
+      const receipts = yield* Queue.unbounded<number>();
+      const health = yield* Queue.unbounded<Uint8Array>();
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const signals = yield* Ref.make<ReadonlyArray<string>>([]);
+      const business = JSON.stringify({ version: 1, type: "setDiagnosticsDemand", enabled: true });
+      const spawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              ...makeProcess({
+                exitCode: Deferred.await(exit),
+                getOutputFd: (fd) =>
+                  fd === 8
+                    ? Stream.fromQueue(health)
+                    : fd === 5
+                      ? Stream.concat(Stream.encodeText(Stream.make(`${business}\n`)), Stream.never)
+                      : Stream.empty,
+                kill: (signal) =>
+                  Ref.update(signals, (xs) => [...xs, signal?.killSignal ?? "SIGTERM"]),
+              }),
+              isRunning: Effect.succeed(true),
+            }),
+          ),
+        ),
+      );
+      const options = {
+        ...baseConfig,
+        desktopTelemetryStream: Stream.empty,
+        bootstrap: {
+          ...baseConfig.bootstrap,
+          backendWatchdog: {
+            protocol: 1 as const,
+            mode: "fd" as const,
+            generation: "A",
+            healthFd: 8,
+          },
+        },
+        watchdog: {
+          protocol: 1 as const,
+          mode: "fd" as const,
+          generation: "A",
+          healthFd: 8,
+          onReceipt: (sequence: number) => Queue.offerUnsafe(receipts, sequence),
+        },
+        onDesktopTelemetryControl: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        onReady: () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+        }),
+      );
+      const run = yield* DesktopBackendManager.runBackendProcess(options).pipe(
+        Effect.provide(Layer.merge(spawner, layerHealthyHttpClient)),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(ready);
+      yield* Deferred.await(entered);
+      for (let sequence = 1; sequence <= 30; sequence++) {
+        yield* TestClock.adjust("2 seconds");
+        yield* Queue.offer(
+          health,
+          new TextEncoder().encode(
+            JSON.stringify({
+              version: 1,
+              type: "backendHealth",
+              generation: "A",
+              observerSequence: sequence,
+              mainSequence: sequence,
+              phase: "ready",
+              verdict: "healthy",
+            }) + "\n",
+          ),
+        );
+        assert.equal(yield* Queue.take(receipts), sequence);
+      }
+      assert.deepEqual(yield* Ref.get(signals), []);
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+      yield* Fiber.join(run);
+    }),
+  ),
+);
+
+it.effect("six ready-then-exit80 runs pause; Retry explicitly restores the same start path", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ready = yield* Queue.unbounded<void>();
+      const exits = yield* Queue.unbounded<Deferred.Deferred<ChildProcessSpawner.ExitCode>>();
+      const paused =
+        yield* Deferred.make<
+          Parameters<NonNullable<DesktopBackendManager.BackendInstanceSpec["onRecoveryPaused"]>>[0]
+        >();
+      let spawns = 0;
+      const spawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.gen(function* () {
+            spawns++;
+            const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+            yield* Effect.addFinalizer(() =>
+              Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)),
+            );
+            yield* Queue.offer(exits, exit);
+            return makeProcess({ exitCode: Deferred.await(exit) });
+          }),
+        ),
+      );
+      const instance = yield* makeTestInstance({
+        spawnerLayer: spawner,
+        onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
+        onRecoveryPaused: (actions) => Deferred.succeed(paused, actions).pipe(Effect.asVoid),
+      });
+      yield* instance.start;
+      for (let cycle = 0; cycle < 6; cycle++) {
+        yield* Queue.take(ready);
+        yield* Deferred.succeed(yield* Queue.take(exits), ChildProcessSpawner.ExitCode(80));
+        yield* TestClock.adjust("32 seconds");
+      }
+      const actions = yield* Deferred.await(paused);
+      assert.equal(actions.reason, "crash-loop");
+      assert.equal(spawns, 6);
+      assert.isFalse((yield* instance.snapshot).restartScheduled);
+      yield* actions.retry;
+      yield* Queue.take(ready);
+      assert.equal(spawns, 7);
+      yield* instance.stop();
+    }),
+  ),
+);
+
+it.live(
+  "embedded observer force-retires its captured native process with a blocked main loop",
+  () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const moduleUrl = new URL(
+          "../../../server/src/managed/LoopWatchdogWorker.ts",
+          import.meta.url,
+        );
+        const code = `
+        import { Worker } from 'node:worker_threads';
+        import { makeMailbox, publishMailbox, loopWatchdogWorkerSource } from ${JSON.stringify(moduleUrl.href)};
+        const mailbox = makeMailbox();
+        publishMailbox(mailbox, 'ready');
+        const scheduler = \`
+          const gate = new Int32Array(require('node:worker_threads').workerData.mailbox);
+          let now = 0;
+          global.performance = { now: () => now };
+          global.setTimeout = (action) => setImmediate(action);
+          global.setInterval = (sample) => setImmediate(() => {
+            Atomics.wait(gate, 5, 0);
+            for (let tick = 0; tick < 26; tick++) { now += 2000; sample(); }
+          });
+        \`;
+        new Worker(scheduler + loopWatchdogWorkerSource(), {
+          eval: true, execArgv: [], workerData: { mailbox: mailbox.buffer, generation: 'native-A', pid: process.pid }
+        }).once('message', () => {
+          process.send('blocking');
+          Atomics.store(mailbox, 5, 1);
+          Atomics.notify(mailbox, 5);
+          Atomics.wait(mailbox, 5, 1);
+        });
+      `;
+        return NodeChildProcess.spawn(process.execPath, ["--input-type=module", "-e", code], {
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        });
+      }),
+      (child) =>
+        Effect.promise(async () => {
+          let stderr = "";
+          child.stderr?.on("data", (chunk) => {
+            stderr = (stderr + String(chunk)).slice(-2000);
+          });
+          const exited = new Promise<readonly [number | null, NodeJS.Signals | null]>(
+            (resolve, reject) => {
+              child.once("exit", (code, signal) => resolve([code, signal]));
+              child.once("error", reject);
+            },
+          );
+          const blocking = new Promise<unknown>((resolve) => {
+            child.once("message", resolve);
+          });
+          const message = await Promise.race([
+            blocking,
+            exited.then(() => {
+              throw new Error(`Child exited before blocking: ${stderr}`);
+            }),
+          ]);
+          assert.equal(message, "blocking");
+          const [code, signal] = await exited;
+          assert.equal(code, null);
+          assert.equal(signal, "SIGKILL");
+        }),
+      (child) =>
+        Effect.sync(() => {
+          child.kill("SIGKILL");
+        }),
+    ),
 );

@@ -132,3 +132,5 @@ export * from "./goatclawLanes.ts";
 export * from "./decisions.ts";
 
 export * from "./actionOutcomeSafety.ts";
+
+export * from "./desktopBackendHealth.ts";
