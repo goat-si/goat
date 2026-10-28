@@ -25,6 +25,8 @@ export interface RunRow {
    * GOAT's lease, not the arm. The runner retries it; scores leave it out.
    */
   readonly contended: boolean;
+  /** Part of the transcript was lost, so violations, contamination or misreports may be hidden. */
+  readonly incomplete?: boolean;
   readonly error: string | null;
   readonly claimed: Status | null;
   readonly answerError: string | null;
@@ -92,7 +94,9 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
   const tasks = [...new Set(ran.map((row) => row.task))];
   return arms.map((arm): ArmScores => {
     const mine = ran.filter((row) => row.arm === arm);
-    const answered = mine.filter((row) => row.claimed !== null);
+    // A run that lost part of its transcript may hide a violation, so it scores none of these.
+    const whole = mine.filter((row) => row.incomplete !== true);
+    const answered = whole.filter((row) => row.claimed !== null);
     const speeds = tasks.flatMap((task) => {
       const own = passedWall(task, arm);
       const best = Math.min(...arms.map((other) => passedWall(task, other) ?? Infinity));
@@ -100,10 +104,10 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
     });
     const web = mine.filter((row) => row.surface === "web");
     // A run whose end was not observed cannot count as clean.
-    const clean = mine.filter(
+    const clean = whole.filter(
       (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
     );
-    const guided = mine.filter(
+    const guided = whole.filter(
       (row) =>
         row.metrics !== null &&
         row.metrics.offSurfaceCalls === 0 &&
@@ -130,9 +134,9 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
         answered.length === 0
           ? null
           : 1 - answered.filter((row) => row.misreport !== null).length / answered.length,
-      coexistence: ratio(clean.length, mine.length),
+      coexistence: ratio(clean.length, whole.length),
       browser: ratio(web.filter(succeeded).length, web.length),
-      guidance: ratio(guided.length, mine.length),
+      guidance: ratio(guided.length, whole.length),
     };
   });
 };

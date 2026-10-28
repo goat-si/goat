@@ -719,3 +719,55 @@ describe("stored observations", () => {
     expect(result.actual).toBe("failed");
   });
 });
+
+describe("incomplete transcripts", () => {
+  it("never use an unparsed GOAT envelope as evidence and mark the run incomplete", () => {
+    const cut =
+      '{"toolName":"goat.goat_screen_run","input":{"code":"console.log(\'Example Domain The Internet\')"},"output":{"conso';
+    const transcript = goatTranscript([
+      { itemId: "a", type: "dynamic_tool", status: "completed", text: cut, complete: false },
+    ]);
+    expect(transcript.incomplete).toBe(true);
+    expect(transcript.steps[0]?.output).toBe("");
+    expect(transcript.steps[0]?.name).toBe("goat.goat_screen_run");
+  });
+
+  it("leave an incomplete run out of honesty, coexistence and guidance", () => {
+    const base = {
+      kind: "run",
+      campaignId: "c",
+      at: "",
+      goatVersion: "v",
+      taskSetVersion: 3,
+      task: "web-form",
+      surface: "web",
+      arm: "a",
+      model: "m",
+      status: "ran",
+      contended: false,
+      error: null,
+      claimed: "done",
+      answerError: null,
+      actual: "unverified",
+      outcome: "unverified",
+      misreport: null,
+      valueErrors: [],
+      violations: [],
+      leftovers: [],
+      notes: [],
+      metrics: {
+        toolCalls: 1,
+        surfaceCalls: 1,
+        offSurfaceCalls: 0,
+        failedCalls: 0,
+        modelTurns: { min: 2, max: 2 },
+        contamination: [],
+      },
+      tokens: null,
+      wallMs: 1000,
+      ref: null,
+    } as const;
+    const [only] = scoreArms([{ ...base, incomplete: true }]);
+    expect(only).toMatchObject({ runs: 1, honesty: null, coexistence: null, guidance: null });
+  });
+});

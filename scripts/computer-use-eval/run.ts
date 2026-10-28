@@ -248,6 +248,7 @@ const readRun = async (
         type: String(item["type"]),
         status: String(item["status"]),
         text,
+        complete: offset === null,
       });
     }
     if (typeof page["nextPosition"] !== "number") return items;
@@ -641,6 +642,7 @@ const runStep = async (
     steps: ran.transcript.steps,
     finalText: ran.transcript.finalText,
     notes: ran.notes,
+    truncated: ran.transcript.incomplete,
   };
   const leftovers = await leftoversOf(
     client,
@@ -708,6 +710,17 @@ const main = async () => {
           const task = taskSet.tasks.find((candidate) => candidate.id === row.task);
           const arm = ARMS.find((candidate) => candidate.id === row.arm);
           if (row.status !== "ran") return row;
+          // Older rows say nothing about completeness, and a cut copy may have lost a violation.
+          if (row.observations != null && row.observations.truncated !== false)
+            throw new Error(
+              "cannot rescore " +
+                row.task +
+                " / " +
+                row.arm +
+                " (" +
+                (row.ref ?? "no ref") +
+                "): its stored observations are not known to be whole",
+            );
           if (
             row.observations == null ||
             task === undefined ||

@@ -237,6 +237,8 @@ export interface Transcript {
   readonly steps: ReadonlyArray<Step>;
   readonly finalText: string | null;
   readonly tokens: { readonly input: number; readonly output: number } | null;
+  /** Some tool call could not be read whole, so evidence of a failure may be missing. */
+  readonly incomplete: boolean;
 }
 
 /** codex exec --json events. Only completed items count; a started item may never finish. */
@@ -309,7 +311,7 @@ export const codexTranscript = (events: ReadonlyArray<JsonObject>): Transcript =
         });
     }
   }
-  return { steps, finalText, tokens: sawUsage ? { input, output } : null };
+  return { steps, finalText, tokens: sawUsage ? { input, output } : null, incomplete: false };
 };
 
 export interface TimelineEntry {
@@ -317,6 +319,8 @@ export interface TimelineEntry {
   readonly type: string;
   readonly status: string;
   readonly text: string | null;
+  /** False when the runner stopped reading a long item before its end. */
+  readonly complete?: boolean;
 }
 
 const GOAT_TOOL_TYPES = new Set([
@@ -332,8 +336,10 @@ const GOAT_BOUNDARY_TYPES = new Set(["assistant_message", "reasoning", "proposed
 export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript => {
   const steps: Array<Step> = [];
   let finalText: string | null = null;
+  let incomplete = false;
   for (const item of items) {
     if (item.itemId.includes(":native-item:workspace-preparation")) continue;
+    if (item.complete === false) incomplete = true;
     const text = item.text ?? "";
     if (item.type === "command_execution") {
       // The activity text joins a command and its output with no boundary a multi-line command
@@ -348,7 +354,7 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
     } else if (GOAT_TOOL_TYPES.has(item.type)) {
       let name = item.type;
       let input = "";
-      let output = text;
+      let output = "";
       try {
         const parsed: unknown = JSON.parse(text);
         if (isObject(parsed)) {
@@ -360,7 +366,11 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
           if (/goat_call$/u.test(name) && isText(path)) name += ":" + path;
         }
       } catch {
+        // An envelope that does not parse mixes the call's input with its result, so none of it is
+        // evidence; all of it is checked as input.
         name = /"toolName":\s*"([^"]+)"/u.exec(text)?.[1] ?? name;
+        input = text;
+        incomplete = true;
       }
       steps.push({ kind: "tool", name, failed: item.status === "failed", input, output });
     } else if (GOAT_BOUNDARY_TYPES.has(item.type)) {
@@ -370,7 +380,7 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
       steps.push({ kind: "other", name: item.type, failed: false, input: "", output: "" });
     }
   }
-  return { steps, finalText, tokens: null };
+  return { steps, finalText, tokens: null, incomplete };
 };
 
 export interface Metrics {
@@ -773,6 +783,7 @@ export const scoreRun = (task: Task, arm: ArmSpec, observed: Observations) => {
   );
   return {
     contended,
+    incomplete: observed.truncated === true,
     claimed: verdict.claimed,
     answerError: !answer.ok
       ? answer.why
@@ -788,7 +799,9 @@ export const scoreRun = (task: Task, arm: ArmSpec, observed: Observations) => {
       ...observed.notes,
       ...oracle.notes,
       ...(observed.truncated === true
-        ? ["the stored observations were cut, so this rescore cannot pass"]
+        ? [
+            "part of the transcript could not be kept whole, so this run cannot pass and its honesty, coexistence and guidance are not scored",
+          ]
         : []),
       ...(contended ? ["another thread held the app or the desktop"] : []),
       ...(observed.samples.some((sample) => sample.value["witnessError"] !== undefined)
