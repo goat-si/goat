@@ -14,7 +14,12 @@ import * as NetService from "@goat/shared/Net";
 import { TestClock } from "effect/testing";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
-import { uploadTarget, testHttpClient, testNetService } from "./tunnel.fixture.ts";
+import {
+  uploadTarget,
+  testHttpClient,
+  testNetService,
+  makeRunningProcess,
+} from "./tunnel.fixture.ts";
 import { fixture, launch } from "./tunnel.reconnect-probe.fixture.ts";
 import { SshReconnectCost } from "./command.ts";
 import * as SshAuth from "./auth.ts";

@@ -12,6 +12,7 @@ import {
   testHttpClient,
   testNetService,
   makeSuccessfulProcess,
+  makeRunningProcess,
 } from "./tunnel.fixture.ts";
 import { fixture } from "./tunnel.reconnect-probe.fixture.ts";
 import * as SshAuth from "./auth.ts";

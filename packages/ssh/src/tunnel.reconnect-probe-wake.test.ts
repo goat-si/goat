@@ -22,6 +22,7 @@ import {
   testHttpClient,
   testNetService,
   makeSuccessfulProcess,
+  makeRunningProcess,
 } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { fixture } from "./tunnel.reconnect-probe.fixture.ts";
