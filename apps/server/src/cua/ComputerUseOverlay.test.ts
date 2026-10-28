@@ -110,8 +110,59 @@ describe("ComputerUseOverlay", () => {
       op: "hide",
       identity: { ...owner, sequence: 3 },
       phase: "hidden",
-      reason: "ended",
+      reason: "idle",
     });
+  });
+
+  it("a target's own hide never ends the helper's session, even when a capture held it back", () => {
+    // The macOS helper ends its MCP session on these reasons; only a pause or the end may send them.
+    const sessionEnding = new Set(["human_input", "takeover", "private", "ended"]);
+    const owner = {
+      environmentId: EnvironmentId.make("environment"),
+      runId: "run",
+      turnId: "turn",
+      targetId: "target",
+      generation: 1,
+    };
+    for (const reason of ["ended", "private", "takeover"] as const) {
+      const { state, sent } = run([
+        ...snapshot,
+        {
+          type: "cursor",
+          event: { op: "show", identity: { ...owner, sequence: 1 }, phase: "thinking" },
+        },
+        call("capture", "get_window_state", WINDOW),
+        {
+          type: "cursor",
+          event: { op: "hide", identity: { ...owner, sequence: 2 }, phase: "hidden", reason },
+        },
+        reply("capture"),
+      ]);
+      for (const command of sent.flat())
+        if (command !== null && typeof command === "object" && "reason" in command)
+          assert.isFalse(
+            sessionEnding.has(String(command.reason)),
+            `${reason} sent ${String(command.reason)}`,
+          );
+      assert.deepEqual(state.shown, {
+        op: "hide",
+        identity: { ...owner, sequence: 2 },
+        phase: "hidden",
+        reason: "idle",
+      });
+    }
+    const paused = run([
+      ...snapshot,
+      {
+        type: "cursor",
+        event: { op: "show", identity: { ...owner, sequence: 1 }, phase: "thinking" },
+      },
+      { type: "pause", reason: "human_input" },
+    ]);
+    assert.equal(
+      paused.state.shown?.op === "hide" ? paused.state.shown.reason : undefined,
+      "human_input",
+    );
   });
 
   it("keeps direct-call markers separate from a code-mode cursor owner", () => {

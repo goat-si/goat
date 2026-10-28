@@ -378,26 +378,22 @@ it.live("a page's elements join the latest observation, so their numbers and nam
 it.live(
   "page refs never go in a batch, so a read the host did not see fails before anything is sent",
   () => {
+    let clicks = 0;
     const { host, sent } = fixture({
       list_windows: windowsWithBounds,
       get_window_state: activityMonitor(500),
-      run_steps: (args: { steps: ReadonlyArray<unknown> }) => ({
-        ok: true,
-        total: args.steps.length,
-        executed: args.steps.length,
-        failed_step: null,
-        steps: args.steps.map((_, index) => ({
-          index,
-          tool: "click",
-          ok: true,
-          effect: "unverifiable",
-        })),
-      }),
-      // Another reader (a provider-origin call) read the window, so the driver retired the tokens.
-      click: new DriverError({
-        status: "refused",
-        refusal: { code: "stale_element_token", message: "element_token is stale or unknown" },
-      }),
+      // Another reader (a provider-origin call) read the window after the first two clicks, so
+      // the driver retired the tokens before the page refs ran.
+      click: () =>
+        ++clicks <= 2
+          ? { effect: "confirmed", evidence: ["driver:acted"] }
+          : new DriverError({
+              status: "refused",
+              refusal: {
+                code: "stale_element_token",
+                message: "element_token is stale or unknown",
+              },
+            }),
     });
     return Effect.gen(function* () {
       const result = yield* runCell(
@@ -405,12 +401,12 @@ it.live(
       );
       // The first page ref goes alone and is refused; the group's next call is then not sent.
       expect(result.value).toEqual(["stale_reference:true", "not_run:true", "stale_reference"]);
-      // First-page refs still batch; page refs never enter run_steps.
       expect(sent.map((entry) => entry.tool)).toEqual([
         "list_apps",
         "list_windows",
         "get_window_state",
-        "run_steps",
+        "click",
+        "click",
         "click",
       ]);
     }).pipe(Effect.provide(cellService(host)));

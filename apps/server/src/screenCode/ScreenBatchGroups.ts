@@ -62,12 +62,15 @@ const close = (group: BatchGroup) => {
 /** One call at a time, stopping after the first that failed or did not do what was asked. */
 export const dispatchInTurn = Effect.fn("ScreenHostBridge.dispatchInTurn")(function* (
   calls: ReadonlyArray<ScreenHostCall>,
-  dispatch: (call: ScreenHostCall) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
+  dispatch: (
+    call: ScreenHostCall,
+    index: number,
+  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
   failedCategories: ReadonlySet<ScreenHostDispatchResult["category"]>,
 ) {
   const outcomes: Outcome[] = [];
-  for (const call of calls) {
-    const outcome = yield* Effect.exit(dispatch(call));
+  for (const [index, call] of calls.entries()) {
+    const outcome = yield* Effect.exit(dispatch(call, index));
     outcomes.push(outcome);
     if (Exit.isFailure(outcome) || failedCategories.has(outcome.value.category)) break;
   }
@@ -168,6 +171,8 @@ export class BatchGroups {
       readonly blocked: (callId: number) => ScreenRunError | undefined;
       readonly dispatch: (
         calls: ReadonlyArray<ScreenHostCall>,
+        /** Marks a member sent, right before it leaves; members never marked sent nothing. */
+        markDispatched: (index: number) => void,
       ) => Effect.Effect<ReadonlyArray<Outcome>>;
       readonly notRun: NotRun;
     },
@@ -184,10 +189,10 @@ export class BatchGroups {
     const outcomes =
       blocked !== undefined
         ? []
-        : yield* Effect.suspend(() => {
-            for (let index = 0; index < ready; index++) group.slots.get(index)?.markDispatched?.();
-            return deps.dispatch(calls.filter((call) => call !== undefined));
-          });
+        : yield* deps.dispatch(
+            calls.filter((call) => call !== undefined),
+            (index) => group.slots.get(index)?.markDispatched?.(),
+          );
     let failed: number | undefined;
     for (let index = 0; index < group.size; index++) {
       const slot = group.slots.get(index);

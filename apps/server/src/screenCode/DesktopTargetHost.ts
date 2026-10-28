@@ -2,7 +2,6 @@
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type {
@@ -27,17 +26,9 @@ import type {
   ScreenHostDispatcher,
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
-import { FAILED_CATEGORIES, observationReplyBudget } from "./ScreenHostBridge.ts";
-import { dispatchInTurn } from "./ScreenBatchGroups.ts";
-import {
-  BATCH_METHODS,
-  batchOutcomes,
-  driverError,
-  driverResult,
-  driverValue,
-  fail,
-  POINT_KEYS,
-} from "./DesktopDriverReplies.ts";
+import { observationReplyBudget } from "./ScreenHostBridge.ts";
+import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
+import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import {
   aimOf,
@@ -91,6 +82,8 @@ const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 const natural = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
+const RESTARTED_ELEMENTS = "The driver restarted; observe again to get current element numbers.";
 interface BoundWindow {
   readonly ref: ScreenTargetRef;
   readonly pid: number;
@@ -100,14 +93,15 @@ interface BoundWindow {
   readonly bundleId?: string;
   readonly controlId: string;
   readonly epoch: number;
-  readonly connectionGeneration: string;
+  /** The driver generation the window was bound under; a rebind after a replacement moves it. */
+  connectionGeneration: string;
   observationId?: string;
   /** The rest of the read behind observationId, when its budget cut it; see DesktopPages. */
   pages?: DesktopPages;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
-  /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
-  pointsStale?: boolean;
+  /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
+  pointsStale?: "input" | "restart";
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
   /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
@@ -140,7 +134,6 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
   readonly controlIdForTarget: (targetId: string) => string | undefined;
   readonly finishTurn: (runId: string, turnId: string) => void;
-  readonly dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]>;
 }
 
 export const createDesktopTargetHost = (deps: {
@@ -216,6 +209,50 @@ export const createDesktopTargetHost = (deps: {
       ? bound
       : undefined;
   };
+  /**
+   * A call on a bound window. After a driver replacement the channel refuses the old generation
+   * before sending: a call that needs nothing of the old driver rebinds the window once and goes
+   * again, while its points and element numbers are refused with what to do instead.
+   */
+  const boundRequest = Effect.fn("DesktopTargetHost.boundRequest")(function* (
+    bound: BoundWindow,
+    needs: "nothing" | "points" | "element",
+    tool: string,
+    args: Record<string, unknown>,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+    cursor?: Parameters<typeof send>[5],
+  ) {
+    const first = yield* request(
+      tool,
+      args,
+      call,
+      context,
+      bound.connectionGeneration,
+      cursor,
+    ).pipe(Effect.result);
+    if (first._tag === "Success") return first.success;
+    // Only the channel's own generation check fails without the driver's safety label.
+    if (first.failure.code !== "stale_reference" || first.failure.safety !== undefined)
+      return yield* Effect.fail(first.failure);
+    if (needs !== "nothing")
+      return yield* Effect.fail(
+        fail("stale_reference", needs === "points" ? RESTARTED_POINTS : RESTARTED_ELEMENTS),
+      );
+    const listed = yield* request("list_windows", { pid: bound.pid }, call, context);
+    const still = array(object(driverValue(listed))?.windows)
+      .map(object)
+      .some((window) => window?.window_id === bound.windowId && window.pid === bound.pid);
+    if (!still) return yield* Effect.fail(first.failure);
+    bound.connectionGeneration = listed.connectionGeneration;
+    // The new driver holds none of the old one's snapshots or screenshots.
+    observations.evictTarget(bound.ref.id);
+    delete bound.observationId;
+    delete bound.snapshotId;
+    delete bound.pages;
+    bound.pointsStale = "restart";
+    return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
+  });
   /** The driver token behind an element ref of the bound window's latest observation. */
   const tokenOf = (element: Record<string, unknown>, bound: BoundWindow) => {
     const ref = {
@@ -404,7 +441,9 @@ export const createDesktopTargetHost = (deps: {
       // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
       // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
       const read = (limit: number, filter?: string) =>
-        request(
+        boundRequest(
+          bound,
+          "nothing",
           "get_window_state",
           {
             pid: bound.pid,
@@ -417,7 +456,6 @@ export const createDesktopTargetHost = (deps: {
           },
           call,
           context,
-          bound.connectionGeneration,
         );
       // A read that ran retired the driver's earlier tokens, so their refs go even when its
       // answer is unusable; only a driver naming another window makes the binding stale.
@@ -603,7 +641,7 @@ export const createDesktopTargetHost = (deps: {
         pixelHeight: height,
         scale: metadata.scale,
       });
-      bound.pointsStale = false;
+      delete bound.pointsStale;
       const image: ScreenImage = { ...metadata, bytes: imagePart.bytes };
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
@@ -640,13 +678,14 @@ export const createDesktopTargetHost = (deps: {
           return yield* Effect.fail(
             fail("invalid_argument", "Name the menu path, such as ['File', 'Open…']."),
           );
-        bound.pointsStale = true;
-        const reply = yield* request(
+        bound.pointsStale = "input";
+        const reply = yield* boundRequest(
+          bound,
+          "nothing",
           "invoke_menu",
           { pid: bound.pid, window_id: bound.windowId, path },
           call,
           context,
-          bound.connectionGeneration,
           { bound },
         );
         return driverResult("invoke_menu", reply);
@@ -681,17 +720,22 @@ export const createDesktopTargetHost = (deps: {
             : { window: { exists: window === "exists" } };
         const now = yield* Clock.currentTimeMillis;
         const requested = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
-        const reply = yield* request(
+        const reply = yield* boundRequest(
+          bound,
+          "nothing",
           "verify_state",
           {
             pid: bound.pid,
             window_id: bound.windowId,
             expect: [expectation],
-            timeout_ms: Math.max(0, Math.min(requested, 10_000, call.deadlineMillis - now - 250)),
+            // The driver call's own cap is this wait plus 2 s, within the cell's reserve.
+            timeout_ms: Math.max(
+              0,
+              Math.min(requested, 10_000, call.deadlineMillis - now - CELL_RESERVE_MS - 2_000),
+            ),
           },
           call,
           context,
-          bound.connectionGeneration,
         );
         const status = string(object(driverValue(reply))?.status) ?? "unknown";
         return {
@@ -756,18 +800,29 @@ export const createDesktopTargetHost = (deps: {
         delete forwarded.target;
         forwarded.bundle_id = bound.appId;
       }
+      // The driver takes a per-call target only for pointer and key input; these name the window
+      // by pid, and by window_id unless an element token already carries it.
+      if (call.method === "set_value" || call.method === "right_click") {
+        delete forwarded.target;
+        if (call.method === "set_value") delete forwarded.delivery_mode;
+        forwarded.pid = bound.pid;
+        if (elementToken === undefined) forwarded.window_id = bound.windowId;
+      }
       const tool = call.method === "right_click" ? "right_click" : call.method;
       const aimed = ["x", "y", "from_x", "from_y", "to_x", "to_y"].some((key) => key in args);
       if (aimed && bound.pointsStale)
         return yield* Effect.fail(
           fail(
             "stale_reference",
-            "Input reached this window after its latest screenshot; take a new screenshot before using points.",
+            bound.pointsStale === "restart"
+              ? RESTARTED_POINTS
+              : "Input reached this window after its latest screenshot; take a new screenshot before using points.",
           ),
         );
       // Any input, even one that fails, may change what is under a pixel.
-      bound.pointsStale = true;
-      const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration, {
+      bound.pointsStale = "input";
+      const needs = elementToken !== undefined ? "element" : aimed ? "points" : "nothing";
+      const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
         bound,
         point:
           elementToken === undefined
@@ -796,100 +851,11 @@ export const createDesktopTargetHost = (deps: {
               )
             ? observe(call, context)
             : invoke(call, context);
-  /** Driver connections whose run_steps takes no app_scope; their groups go one call at a time. */
-  const unscoped = new Set<string>();
-  /** A group's element input as run_steps steps, or undefined when any of it must go alone. */
-  const batchSteps = (calls: ReadonlyArray<ScreenHostCall>, context: ScreenHostContext) => {
-    const bound = calls[0] && resolve(calls[0], context);
-    const bundleId = bound?.bundleId;
-    if (!bound || !bundleId || unscoped.has(bound.connectionGeneration) || calls.length < 2)
-      return undefined;
-    const steps: Array<{ readonly tool: string; readonly args: Record<string, unknown> }> = [];
-    for (const call of calls) {
-      const args = callArgs(call.args);
-      const element = object(args.elementRef);
-      const token = element && tokenOf(element, bound);
-      // A later page's ref goes alone: a batch would find a retired token again by its label.
-      if (
-        string(element?.observationId) !== bound.observationId ||
-        resolve(call, context) !== bound ||
-        !BATCH_METHODS.has(call.method) ||
-        !token ||
-        POINT_KEYS.some((key) => key in args)
-      )
-        return undefined;
-      const {
-        elementRef: _ref,
-        element_token: _token,
-        pid: _pid,
-        window_id: _window,
-        ...rest
-      } = args;
-      const { target: _target, ...own } = rest;
-      steps.push({
-        tool: call.method,
-        args: {
-          ...own,
-          pid: bound.pid,
-          window_id: bound.windowId,
-          element_token: token,
-          delivery_mode: "background",
-        },
-      });
-    }
-    return { bound, bundleId, steps };
-  };
-  // One run_steps for a group's element input, scoped to its window's app in the background;
-  // anything else, a batch past the channel's args cap, or a driver that refuses the batch
-  // before it runs, goes one call at a time.
-  const dispatchBatch: DesktopTargetHost["dispatchBatch"] = Effect.fn(
-    "DesktopTargetHost.dispatchBatch",
-  )(function* (calls, context) {
-    const inTurn = dispatchInTurn(calls, (call) => dispatch(call, context), FAILED_CATEGORIES);
-    const planned = batchSteps(calls, context);
-    const first = calls[0];
-    if (planned === undefined || first === undefined) return yield* inTurn;
-    const { bound, bundleId, steps } = planned;
-    const args = {
-      pid: bound.pid,
-      window_id: bound.windowId,
-      verify: "checkpoint",
-      app_scope: { apps: [bundleId], delivery: "background" },
-      steps,
-    };
-    if (!withinPrimitiveCap(args)) return yield* inTurn;
-    bound.pointsStale = true;
-    const sent = yield* send(
-      "run_steps",
-      args,
-      { ...first, deadlineMillis: Math.min(...calls.map((call) => call.deadlineMillis)) },
-      context,
-      bound.connectionGeneration,
-      {
-        bound,
-        point: aimOf(bound.frames?.get(String(steps[0]?.args.element_token)), bound.framesBasis),
-      },
-    ).pipe(Effect.result);
-    if (sent._tag === "Failure") {
-      const error = sent.failure;
-      return error.effectStarted ? calls.map(() => Exit.fail(error)) : [Exit.fail(error)];
-    }
-    if (sent.success.status === "not_started") {
-      const refused = object(object(sent.success.result)?.structuredContent);
-      if (refused?.detail === "outside_manifest") unscoped.add(bound.connectionGeneration);
-      return yield* inTurn;
-    }
-    return batchOutcomes(
-      sent.success,
-      steps.map((step) => step.tool),
-    );
-  });
   return {
     discover,
     bindApp,
     observe,
     invoke,
-    dispatchBatch,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);

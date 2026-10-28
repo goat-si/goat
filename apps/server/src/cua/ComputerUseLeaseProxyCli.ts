@@ -61,6 +61,8 @@ const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverM
 const decodeAdmission = Schema.decodeUnknownOption(ComputerUseCallAdmission);
 /** A window report waits this long at most; the call it rides on goes ahead either way. */
 const TARGET_REPORT_TIMEOUT_MS = 2_000;
+/** How long a killed driver may take to close its pipes before the proxy moves on. */
+const DRIVER_CLOSE_LIMIT = "2 seconds";
 const decodeX11Display = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
@@ -462,12 +464,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               Effect.timeoutOption("1 second"),
               Effect.map(Option.getOrUndefined),
             ),
+            // A child whose pipes outlive SIGKILL (a grandchild holding them) cannot hold the
+            // proxy's cutoff, and with it a pause or end, past this bound.
             kill: Effect.promise(() => {
               watch.stopping();
               child.stdin.end();
               killDriverGroup(platform, child, "SIGKILL");
               return closed;
-            }),
+            }).pipe(Effect.timeoutOption(DRIVER_CLOSE_LIMIT), Effect.asVoid),
           };
         }),
       ),

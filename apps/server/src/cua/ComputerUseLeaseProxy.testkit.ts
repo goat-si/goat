@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The fake driver speaks raw JSON-RPC lines.
 /** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
 import {
+  type AgentCursorLeaseUpdate,
   type ComputerUseAgentCursor,
   type ComputerUseHumanInputSource,
   type ComputerUseCallReservation,
@@ -130,9 +131,12 @@ export const harness = Effect.fn(function* (
     readonly onTransportDropReceiver?: (drop: () => void) => void;
     /** The app macOS asks for Automation consent on this host's behalf. */
     readonly automationHolder?: "helper" | "app";
+    /** Feeds the proxy the host's cursor events, offered with `cursor`. */
+    readonly cursorEvents?: boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
+  const cursorEvents = yield* Queue.unbounded<AgentCursorLeaseUpdate>();
   const primitiveInput = yield* Queue.unbounded<ComputerUsePrimitiveRequest, Cause.Done>();
   const primitiveOutput = yield* Queue.unbounded<ComputerUsePrimitiveReply>();
   const driverStarted = yield* Queue.unbounded<{
@@ -194,6 +198,7 @@ export const harness = Effect.fn(function* (
     ...(options.automationHolder === undefined
       ? {}
       : { automationHolder: options.automationHolder }),
+    ...(options.cursorEvents ? { cursorEvents: Stream.fromQueue(cursorEvents) } : {}),
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
@@ -379,6 +384,7 @@ export const harness = Effect.fn(function* (
   const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
   return {
     send: (line: string) => Queue.offer(input, line),
+    cursor: (update: AgentCursorLeaseUpdate) => Queue.offer(cursorEvents, update),
     sendPrimitive: (request: ComputerUsePrimitiveRequest) => Queue.offer(primitiveInput, request),
     primitiveReply: Queue.take(primitiveOutput),
     driverStarted: Queue.take(driverStarted),

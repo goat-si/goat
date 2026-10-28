@@ -62,11 +62,13 @@ export interface ScreenHostDispatcher {
   ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
   /**
    * Calls of one batch group, in order, as one trip where the host can. It returns an outcome for
-   * each call from the first that ran; calls past the end of the list did not run.
+   * each call from the first that ran; calls past the end of the list did not run. It marks each
+   * call dispatched right before that call can reach the driver.
    */
   readonly dispatchBatch?: (
     calls: ReadonlyArray<ScreenHostCall>,
     context: ScreenHostContext,
+    markDispatched: (index: number) => void,
   ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
 }
 
@@ -104,7 +106,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked; a write that answers one fails its call. */
-export const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
+const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
   "refused",
@@ -470,11 +472,15 @@ export class ScreenHostBridge {
                 : state.haltedBy === undefined
                   ? undefined
                   : notRun(callId, state.haltedBy),
-            dispatch: (calls) =>
-              dispatcher.dispatchBatch?.(calls, context) ??
+            dispatch: (calls, mark) =>
+              dispatcher.dispatchBatch?.(calls, context, mark) ??
               dispatchInTurn(
                 calls,
-                (each) => dispatcher.dispatch(each, context),
+                (each, index) =>
+                  Effect.suspend(() => {
+                    mark(index);
+                    return dispatcher.dispatch(each, context);
+                  }),
                 FAILED_CATEGORIES,
               ),
             notRun,
