@@ -40,14 +40,14 @@ export function makeSweepCursor(input: {
   const fs = input.fileSystem ?? nodeSweepFileSystem;
   let directory: Directory | undefined;
   let poisoned = false;
-  const close = Effect.fn("PendingAttachmentSweepCursor.close")(function* () {
+  const close = Effect.gen(function* () {
     const current = directory;
     if (current === undefined) return;
     poisoned = true;
     yield* Effect.tryPromise(() => current.close());
     directory = undefined;
     poisoned = false;
-  }, Effect.uninterruptible)();
+  }).pipe(Effect.uninterruptible, Effect.withSpan("PendingAttachmentSweepCursor.close"));
   const step = Effect.fn("PendingAttachmentSweepCursor.step")(function* (nowMs: number) {
     let visited = 0;
     let deleted = 0;
