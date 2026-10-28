@@ -226,11 +226,6 @@ const requests = [
     result: { targetThreadId: "target" },
   },
   {
-    name: "goat_thread_configure",
-    args: { modelSelection: { instanceId: "codex", model: "gpt-5" } },
-    result: { sequence: 1 },
-  },
-  {
     name: "goat_thread_organize",
     args: { action: "pin" },
     result: { sequence: 1 },

@@ -63,6 +63,7 @@ it("declares the writes whose own store deduplicates clientRequestId, with the a
     "origin.report",
     "review_findings.record",
     "task.create",
+    "thread.configure",
     "thread.create_many",
     "thread.interrupt",
     "thread.retry",

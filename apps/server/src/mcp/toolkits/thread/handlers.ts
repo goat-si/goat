@@ -8,6 +8,7 @@ import {
 } from "@goat/contracts";
 import { modelSelectionCommandType } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
@@ -15,6 +16,10 @@ import * as ThreadResultService from "../../../threadResults/ThreadResultService
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
+import * as HostThreadConfigurationMcpService from "../../HostThreadConfigurationMcpService.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
+import { checkModelSelection } from "../../ModelSelectionValidation.ts";
+import { stableCommandId } from "../../stableCommandId.ts";
 import { dispatchFailure, newCommandId, readThread, unavailable } from "../../threadAccess.ts";
 import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
 import { ThreadToolkit } from "./tools.ts";
@@ -45,10 +50,20 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
   return { sequence: result.sequence };
 });
 
-const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
+const writesThread = <
+  P extends { readonly threadId?: ThreadId | undefined; readonly host?: string | undefined },
+  A,
+  E,
+  R,
+>(
   handle: (params: P) => Effect.Effect<A, E, R>,
   options: { readonly admission?: "handler" } = {},
-) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle, options);
+) =>
+  McpToolAccess.writesThreads(
+    (params: P) => (params.host === undefined ? [params.threadId] : []),
+    handle,
+    options,
+  );
 
 export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   goat_thread_report_result: McpToolAccess.actsAsCaller((input) =>
@@ -168,34 +183,92 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       };
     }),
   ),
-  goat_thread_configuration: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const {
-        projection: { thread },
-      } = yield* readThread(input.threadId);
-      return {
-        threadId: thread.id,
-        modelSelection: thread.modelSelection,
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-      };
-    }),
+  goat_thread_configuration: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined,
+    (input) =>
+      Effect.gen(function* () {
+        if (input.host !== undefined) {
+          if (input.threadId === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "target_required",
+              message: "Pass threadId with host: the destination has no calling thread to infer.",
+            });
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const configuration = yield* Effect.serviceOption(
+            HostThreadConfigurationMcpService.HostThreadConfigurationMcpService,
+          );
+          if (Option.isNone(configuration))
+            return yield* new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: "Remote thread configuration is unavailable.",
+            });
+          return yield* configuration.value.read(scope, {
+            ...input,
+            host: input.host,
+            threadId: input.threadId,
+          });
+        }
+        const {
+          projection: { thread },
+        } = yield* readThread(input.threadId);
+        return {
+          threadId: thread.id,
+          modelSelection: thread.modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+        };
+      }),
   ),
   goat_thread_configure: McpToolAccess.destructive(
     writesThread(
       (input) =>
         Effect.gen(function* () {
+          if (input.host !== undefined) {
+            if (input.threadId === undefined)
+              return yield* new OrchestratorMcpFailure({
+                code: "target_required",
+                message: "Pass threadId with host: the destination has no calling thread to infer.",
+              });
+            const scope = yield* McpInvocationContext.McpInvocationContext;
+            const configuration = yield* Effect.serviceOption(
+              HostThreadConfigurationMcpService.HostThreadConfigurationMcpService,
+            );
+            if (Option.isNone(configuration))
+              return yield* new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: "Remote thread configuration is unavailable.",
+              });
+            return yield* configuration.value.configure(scope, {
+              ...input,
+              host: input.host,
+              threadId: input.threadId,
+            });
+          }
           const {
             threads,
             projection: { thread },
           } = yield* readThread(input.threadId);
           yield* McpToolAccess.admit(input);
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const commandId =
+            input.clientRequestId === undefined
+              ? yield* newCommandId()
+              : stableCommandId({
+                  scope,
+                  requestKey: input.clientRequestId,
+                  operation: "thread-configure",
+                });
+          if (!(yield* threads.hasReceipt(commandId))) {
+            const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+            if (Option.isSome(registry))
+              yield* checkModelSelection(registry.value, input.modelSelection, true);
+          }
           const type = modelSelectionCommandType(thread.providerInstanceId, input.modelSelection);
           const result = yield* threads
             .dispatch({
               type,
               threadId: thread.id,
-              commandId: yield* newCommandId(),
+              commandId,
               modelSelection: input.modelSelection,
             })
             .pipe(Effect.mapError(dispatchFailure));

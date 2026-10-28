@@ -105,6 +105,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import * as HostThreadConfigurationMcpService from "./HostThreadConfigurationMcpService.ts";
 import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
@@ -1034,6 +1035,7 @@ export const layerOrchestratorToolkit = catalogRegistrations.orchestrator.pipe(
 export const layerThreadToolkit = catalogRegistrations.thread.pipe(
   Layer.provide(ThreadSearchMcpService.layer),
   Layer.provide(PendingQuestionsMcpService.layer),
+  Layer.provide(HostThreadConfigurationMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
 );

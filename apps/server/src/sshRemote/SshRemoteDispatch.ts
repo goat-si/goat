@@ -53,7 +53,7 @@ import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
-import { declaredRequest } from "./declaredArguments.ts";
+import { declaredRequest, HostRoutableDeclarationError } from "./declaredArguments.ts";
 import { readRemoteToolResult } from "./remoteToolResult.ts";
 export { readRemoteToolResult } from "./remoteToolResult.ts";
 import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
@@ -233,6 +233,8 @@ export interface SshHostToolCall {
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   /** Added to the arguments only where the remote tool declares them (declaredArguments.ts). */
   readonly optionalArguments?: Readonly<Record<string, unknown>>;
+  /** Refuse before the call unless the exact remote tool declares host routing. */
+  readonly requireHostRoutable?: true;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -1657,6 +1659,18 @@ const make = Effect.gen(function* () {
    * over SSH. It cannot narrow that session to the caller, so a write needs a
    * caller whose ceiling covers the link's access, and approvals are refused.
    */
+  const declaredHostRequest = (
+    call: Parameters<typeof declaredRequest>[0],
+    request: Parameters<typeof declaredRequest>[1],
+  ) =>
+    declaredRequest(call, request).pipe(
+      Effect.mapError((error) =>
+        error instanceof HostRoutableDeclarationError
+          ? failure(error.reason, error.message)
+          : error,
+      ),
+    );
+
   const callLinkedHostTool = <E, R>(
     link: LinkedHosts.LinkedHostCredential,
     call: SshHostToolCall,
@@ -1684,7 +1698,7 @@ const make = Effect.gen(function* () {
               ),
         ),
       );
-      const request = yield* declaredRequest(call, {
+      const request = yield* declaredHostRequest(call, {
         endpoint: new URL("/mcp", link.host.baseUrl).toString(),
         authorization: `Bearer ${link.token}`,
         tool: remoteToolName(call.tool, link.host.serverVersion),
@@ -1821,7 +1835,7 @@ const make = Effect.gen(function* () {
             `GOAT on ${target.alias} is too old to limit what an outside agent may change. Update GOAT there before calling ${call.tool} on it.`,
           );
         }
-        const request = yield* declaredRequest(call, {
+        const request = yield* declaredHostRequest(call, {
           endpoint: new URL("mcp", routeBootstrap.httpBaseUrl).toString(),
           authorization: `Bearer ${session.token}`,
           tool: remoteToolName(call.tool, routeBootstrap.remoteServerVersion),
