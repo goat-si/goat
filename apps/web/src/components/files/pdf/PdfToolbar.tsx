@@ -86,6 +86,7 @@ export function PdfToolbar(props: {
     <div
       role="toolbar"
       aria-label="PDF controls"
+      data-glass-layer
       className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1 text-xs"
     >
       <PdfIconButton
