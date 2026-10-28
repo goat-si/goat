@@ -220,7 +220,7 @@ export class MemoryService extends Context.Service<
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly commitSummary: (
       input: SummaryCommit,
-    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    ) => Effect.Effect<Store.StoredReceipt | undefined, MemoryServiceError>;
     readonly queueSummary: (work: Store.MemoryWork) => Effect.Effect<void, MemoryServiceError>;
     readonly queueResolution: Store.MemoryStore["Service"]["persistResolutionTicket"];
     readonly recoverWork: Store.MemoryStore["Service"]["dueWork"];

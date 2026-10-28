@@ -18,8 +18,108 @@ import {
   seedDerivedSummary,
   incrementalSummary,
 } from "./MemoryWorker.testkit.ts";
+import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+
+const cited = (input: M.GenerateMemorySummaryInput, text: string) => ({
+  text,
+  assertionKind: "fact" as const,
+  evidence: [
+    {
+      origin: "thread" as const,
+      sourceThread: input.sourceThread,
+      watermark: input.sourceWatermark,
+      messageIds: input.messages.map((message) => message.messageId),
+    },
+  ],
+});
+const userPromotionId = M.MemoryId.make(
+  Service.memoryStableUuid(`${environmentId}:${threadId}:promotion:user`),
+);
+// Summarize the seeded run, then let its daily consolidation run.
+const summarizeThenConsolidate = (
+  beforeConsolidation: Effect.Effect<void, unknown, never> = Effect.void,
+) =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(now));
+    yield* seed;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN project_id TEXT`;
+    const worker = yield* Worker.MemoryWorker;
+    yield* worker.sweepDue();
+    yield* beforeConsolidation;
+    yield* TestClock.adjust(86400000 + Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+    yield* worker.sweepDue();
+  });
+const headText = (memoryId: M.MemoryId) =>
+  Effect.gen(function* () {
+    const aggregate = yield* (yield* Store.MemoryStore).loadAggregate(space, memoryId);
+    return aggregate.revisions.find((pair) => pair.revision.revisionId === aggregate.heads[0])
+      ?.payload?.text;
+  });
 
 describe("MemoryWorker summary quality", () => {
+  it.effect("promoted text never keeps a GOAT credential", () => {
+    const raw = `Use curl -H 'Authorization: Bearer ${"f".repeat(51)}' for the synthetic service.`;
+    return Effect.gen(function* () {
+      yield* summarizeThenConsolidate();
+      const stored = yield* headText(userPromotionId);
+      assert.strictEqual(stored, redactGoatCredentials(raw));
+      assert.notStrictEqual(stored, raw);
+    }).pipe(
+      Effect.provide(
+        live(false, undefined, false, 0, false, undefined, (input) => ({
+          project: null,
+          user: cited(input, raw),
+        })),
+      ),
+    );
+  });
+  it.effect("consolidation never overwrites a person's own memory at the promotion id", () =>
+    Effect.gen(function* () {
+      const manual = Effect.gen(function* () {
+        yield* (yield* Service.MemoryService).upsert(
+          {
+            memorySpaceId: space,
+            memoryId: userPromotionId,
+            operationId: M.MemoryOperationId.make(id(9500)),
+            expectedHeads: [],
+            scope: { kind: "user" },
+            assertionKind: "inference",
+            payload: { text: "written by hand", evidence: [], derivedFromMemoryRevisions: [] },
+            baseBoundary: null,
+          },
+          Effect.void,
+        );
+      }).pipe(Effect.orDie);
+      yield* summarizeThenConsolidate(manual);
+      assert.strictEqual(yield* headText(userPromotionId), "written by hand");
+    }).pipe(
+      Effect.provide(
+        live(false, undefined, false, 0, false, undefined, (input) => ({
+          project: null,
+          user: cited(input, "Synthetic user preference"),
+        })),
+      ),
+    ),
+  );
+  it.effect("a consolidation with nothing new to summarize still promotes", () =>
+    Effect.gen(function* () {
+      yield* summarizeThenConsolidate();
+      assert.strictEqual(yield* headText(userPromotionId), "Synthetic user preference");
+    }).pipe(
+      Effect.provide(
+        live(
+          false,
+          undefined,
+          false,
+          0,
+          false,
+          (input) => input.promote === true,
+          (input) => ({ project: null, user: cited(input, "Synthetic user preference") }),
+        ),
+      ),
+    ),
+  );
   it.effect("generation diagnostics keep one row per memory and never fill the report budget", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));

@@ -17,6 +17,7 @@ export interface SummaryPromotions {
   /** The final chunk's input, which the candidates cite. */
   readonly input: M.GenerateMemorySummaryInput;
   readonly candidates: NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>;
+  readonly execution: M.MemoryGenerationExecution;
 }
 
 /**
@@ -75,7 +76,7 @@ export const generateSummaryChunks = Effect.fn("MemoryWorker.generateSummaryChun
         };
       }
       if (output.promotions && scanMemoryValue(output.promotions).kind === "allowed")
-        promotions = { input, candidates: output.promotions };
+        promotions = { input, candidates: output.promotions, execution: output.execution };
     }
     if (final) return { summary, promotions };
     if (!source.messages.length) yield* options.renewClaim;

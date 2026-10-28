@@ -73,7 +73,9 @@ export type MemoryConflictModelOutput = typeof MemoryConflictModelOutput.Type;
 export function isNoDurableMemoryText(text: string) {
   const sentences = text.trim().split(/(?<=[.!?])\s+/);
   return (
-    /^(?:no|nothing) durable\b/i.test(sentences[0] ?? "") &&
+    /^(?:no|nothing) durable\b[^.!?]*\b(?:established|identified|present|retain(?:ed)?|supported|found)\b/i.test(
+      sentences[0] ?? "",
+    ) &&
     !/verified results?\s*:/i.test(text) &&
     sentences
       .slice(1)

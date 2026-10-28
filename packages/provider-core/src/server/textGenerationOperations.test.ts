@@ -267,6 +267,10 @@ describe("memory shared operations", () => {
         const kept =
           "No durable preferences were established. Verified result: the suite has no safe pruning.";
         expect((yield* generate(prose(kept))).result?.text).toBe(kept);
+        // A real constraint that happens to start the same way is not a no-op.
+        const constraint =
+          "No durable storage is available; all state must be committed to the remote database.";
+        expect((yield* generate(prose(constraint))).result?.text).toBe(constraint);
       }),
   );
   it.effect("absent memoryRunner never invokes the legacy runner", () =>

@@ -5,13 +5,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./MemoryStore.ts";
-import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryServiceError } from "./MemoryService.ts";
 
 export type SummaryPromotionCommit = {
   /** The final chunk's input, which the candidates cite. */
   readonly input: M.GenerateMemorySummaryInput;
   readonly candidates: NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>;
+  readonly execution: M.MemoryGenerationExecution;
   /** The thread's project and the key it resolved to before the transaction, or null. */
   readonly project: {
     readonly project: M.ScopedProjectRef;
@@ -20,12 +21,13 @@ export type SummaryPromotionCommit = {
 };
 export type SummaryCommit = {
   readonly work: Store.MemoryWork;
-  readonly generated: M.GenerateMemorySummaryExecutionResult;
+  /** Null when the run found nothing durable: only its promotions, if any, are written. */
+  readonly generated: M.GenerateMemorySummaryExecutionResult | null;
   readonly input: M.GenerateMemorySummaryInput;
   readonly expectedHeads: ReadonlyArray<M.MemoryRevisionId>;
   /** Re-read committed source/exclusions inside the commit transaction. */
   readonly recheckSource: Effect.Effect<void, MemoryServiceError>;
-  readonly promotions?: SummaryPromotionCommit;
+  readonly promotions?: SummaryPromotionCommit | undefined;
 };
 
 const strict = { onExcessProperty: "error" } as const;
@@ -36,6 +38,35 @@ const decodeSummary = Schema.decodeUnknownEffect(M.GenerateMemorySummaryExecutio
 const decodeSummaryPayload = Schema.decodeEffect(M.MemoryPayload);
 const invalid = () => new Store.MemoryStoreConflict({ code: "invalid_output" });
 const decode = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError(invalid));
+
+/** Repository discovery can run here, outside SQL; the commit rechecks the binding it used. */
+export const resolveThreadProject = Effect.fn("MemoryWorker.resolveThreadProject")(function* (
+  deps: {
+    readonly sql: SqlClient.SqlClient;
+    readonly environmentId: M.EnvironmentId;
+    readonly resolveProjectKey: (
+      space: M.MemorySpaceId,
+      project: M.ScopedProjectRef,
+    ) => Effect.Effect<M.MemoryProjectKey | null, MemoryServiceError>;
+  },
+  thread: M.ScopedThreadRef,
+  space: M.MemorySpaceId,
+) {
+  const rows = yield* deps.sql<{
+    project_id: string | null;
+  }>`SELECT project_id FROM orchestration_v2_projection_threads WHERE thread_id=${thread.threadId}`;
+  const projectId = rows[0]?.project_id;
+  if (!projectId) return null;
+  const project = { environmentId: deps.environmentId, projectId: M.ProjectId.make(projectId) };
+  // A project removed since the run leaves only the user-wide promotion.
+  const projectKey = yield* deps.resolveProjectKey(space, project).pipe(
+    Effect.catchTags({
+      MemoryStoreConflict: () => Effect.succeed(null),
+      MemoryAccessError: () => Effect.succeed(null),
+    }),
+  );
+  return projectKey ? { project, projectKey } : null;
+});
 
 export const makeCommitSummary = (deps: {
   readonly store: Store.MemoryStore["Service"];
@@ -70,12 +101,20 @@ export const makeCommitSummary = (deps: {
     const promotions = commit.promotions;
     const meta = commit.work.metadata;
     if (!promotions || meta.kind !== "summary") return;
+    const execution = promotions.execution;
+    if (
+      execution.environmentId !== environmentId ||
+      execution.providerInstanceId !== meta.modelSelection.instanceId ||
+      encodeSelection(execution.requestedModelSelection) !== encodeSelection(meta.modelSelection)
+    )
+      return;
     const space = M.MemorySpaceId.make(commit.work.space);
     for (const destination of ["project", "user"] as const) {
       const candidate = promotions.candidates[destination];
       if (!candidate || !M.validateMemoryGenerationResult(promotions.input, candidate)) continue;
       if (!candidate.evidence.some((evidence) => evidence.origin !== "model")) continue;
       if (scanMemoryValue(candidate).kind !== "allowed") continue;
+      const safe = redactMemoryText(candidate);
       let scope: M.MemoryScope = { kind: "user" };
       let key = "user";
       if (destination === "project") {
@@ -102,20 +141,27 @@ export const makeCommitSummary = (deps: {
         deps.stableUuid(`${commit.work.id}:promotion:${key}:revision`),
       );
       const written = Effect.gen(function* () {
-        const current = yield* store.loadAggregate(space, memoryId, {}, {});
-        if (current.tombstone || current.pendingForget) return;
+        const current = yield* store.loadAggregate(space, memoryId, { heads: true }, {});
+        if (current.tombstone || current.pendingForget || current.heads.length > 1) return;
+        const head = current.revisions.find((p) => p.revision.revisionId === current.heads[0]);
+        const owner = head?.revision.provenance.sourceThread;
+        // Only this thread's own promotion is replaced; an edit, import or resolution stays.
+        if (
+          head &&
+          (owner?.environmentId !== thread.environmentId || owner.threadId !== thread.threadId)
+        )
+          return;
         const payload = yield* decode(
           decodeSummaryPayload(
             {
-              text: candidate.text,
-              evidence: candidate.evidence,
+              text: safe.text,
+              evidence: safe.evidence,
               derivedFromMemoryRevisions: [...new Set([summaryRevision, ...summaryDependencies])],
             },
             strict,
           ),
         );
         yield* deps.validateDependencies(space, payload);
-        const execution = commit.generated.execution;
         yield* apply(
           {
             protocolVersion: 1,
@@ -134,7 +180,7 @@ export const makeCommitSummary = (deps: {
               parents: current.heads,
               scope,
               payloadRef: revisionId,
-              assertionKind: candidate.assertionKind,
+              assertionKind: safe.assertionKind,
               createdAtUtc: yield* now,
               provenance: {
                 environmentId,
@@ -163,21 +209,24 @@ export const makeCommitSummary = (deps: {
     }
   });
   return Effect.fn("MemoryService.commitSummary")(function* (input: SummaryCommit) {
-    const generated = yield* decode(decodeSummary(input.generated, strict));
+    const generated =
+      input.generated === null ? null : yield* decode(decodeSummary(input.generated, strict));
     const work = input.work;
     if (work.metadata.kind !== "summary" || !work.memoryId)
       return yield* new Store.MemoryStoreConflict({ code: "unsupported_operation" });
     const meta = work.metadata;
     const memoryId = work.memoryId;
     if (
-      generated.execution.environmentId !== environmentId ||
-      generated.execution.providerInstanceId !== meta.modelSelection.instanceId ||
-      encodeSelection(generated.execution.requestedModelSelection) !==
-        encodeSelection(meta.modelSelection)
+      generated &&
+      (generated.execution.environmentId !== environmentId ||
+        generated.execution.providerInstanceId !== meta.modelSelection.instanceId ||
+        encodeSelection(generated.execution.requestedModelSelection) !==
+          encodeSelection(meta.modelSelection))
     )
       return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-    if (!M.validateMemoryGenerationResult(input.input, generated.result)) return yield* invalid();
-    if (scanMemoryValue(generated.result).kind !== "allowed")
+    if (generated && !M.validateMemoryGenerationResult(input.input, generated.result))
+      return yield* invalid();
+    if (generated && scanMemoryValue(generated.result).kind !== "allowed")
       return yield* new Store.MemoryStoreConflict({ code: "secret_detected" });
     const space = M.MemorySpaceId.make(work.space);
     return yield* store.transact(
@@ -194,7 +243,12 @@ export const makeCommitSummary = (deps: {
         )
           return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
         yield* input.recheckSource;
-        const current = yield* store.loadAggregate(space, memoryId, {}, {});
+        const current = yield* store.loadAggregate(
+          space,
+          memoryId,
+          generated ? {} : { heads: true },
+          {},
+        );
         if (current.tombstone || current.pendingForget)
           return yield* new Store.MemoryStoreConflict({ code: "forgotten" });
         if (encodeHeads(current.heads) !== encodeHeads(input.expectedHeads))
@@ -202,6 +256,19 @@ export const makeCommitSummary = (deps: {
         const lineage = yield* store.readThreadLineage(meta.sourceThread, space);
         if (lineage.state !== "tracked")
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+        if (!generated) {
+          // Nothing new to summarize, but promotions still hang off the standing summary.
+          const head = current.revisions.find((p) => p.revision.revisionId === current.heads[0]);
+          if (current.heads.length === 1 && head?.payload)
+            yield* promote(
+              input,
+              head.revision.revisionId,
+              head.payload.derivedFromMemoryRevisions,
+            );
+          if (!(yield* store.completeSummaryWork(work)))
+            return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
+          return undefined;
+        }
         // The final input also carries lineage across in-memory generation chunks. Rebuilds
         // without the old summary must not inherit dependencies from the discarded head.
         const payload = yield* decode(

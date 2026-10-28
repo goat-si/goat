@@ -29,7 +29,8 @@ import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
 import { MemoryWorkerError } from "./MemoryWorkerError.ts";
-import { generateSummaryChunks } from "./memorySummaryChunks.ts";
+import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
+import { resolveThreadProject } from "./MemorySummaryCommit.ts";
 
 export { MemoryWorkerError };
 export class MemoryWorker extends Context.Service<
@@ -223,30 +224,20 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(workerError));
   });
-  // Repository discovery can run here, outside SQL; the commit rechecks the binding it used.
-  const threadProject = Effect.fn("MemoryWorker.threadProject")(function* (
+  const promotionsFor = (
+    promotions: SummaryPromotions | undefined,
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
-  ) {
-    const rows = yield* query(
-      sql<{
-        project_id: string | null;
-      }>`SELECT project_id FROM orchestration_v2_projection_threads WHERE thread_id=${thread.threadId}`,
-    );
-    const projectId = rows[0]?.project_id;
-    if (!projectId) return null;
-    const project = { environmentId, projectId: M.ProjectId.make(projectId) };
-    // A project removed since the run leaves only the user-wide promotion.
-    const projectKey = yield* query(
-      service.resolveProjectKey(space, project).pipe(
-        Effect.catchTags({
-          MemoryStoreConflict: () => Effect.succeed(null),
-          MemoryAccessError: () => Effect.succeed(null),
-        }),
-      ),
-    );
-    return projectKey ? { project, projectKey } : null;
-  });
+  ) =>
+    promotions
+      ? query(
+          resolveThreadProject(
+            { sql, environmentId, resolveProjectKey: service.resolveProjectKey },
+            thread,
+            space,
+          ),
+        ).pipe(Effect.map((project) => ({ ...promotions, project })))
+      : Effect.undefined;
   const summaryEvidenceValid = Effect.fn("MemoryWorker.summaryEvidenceValid")(function* (
     work: Store.MemoryWork,
     payload: M.MemoryPayload,
@@ -680,13 +671,21 @@ const make = Effect.gen(function* () {
                     )
                 : Effect.fail(new MemoryWorkerError({ code: "unsupported_operation" })),
             sameExecution: (execution) =>
+              execution.environmentId === environmentId &&
               execution.providerInstanceId === meta.modelSelection.instanceId &&
               encodeSelection(execution.requestedModelSelection) ===
                 encodeSelection(meta.modelSelection),
           });
         }),
       );
-      if (!generated.summary) {
+      const summary = generated.summary;
+      // A run with nothing new to summarize can still promote from the standing hub summary.
+      const commitInput = summary
+        ? summary.input
+        : !work.space.startsWith("_local:") && current?.heads.length === 1
+          ? generated.promotions?.input
+          : undefined;
+      if (!commitInput) {
         yield* store.transact(
           Effect.gen(function* () {
             yield* recheckSource;
@@ -696,8 +695,7 @@ const make = Effect.gen(function* () {
         );
         return;
       }
-      const summary = generated.summary;
-      if (work.space.startsWith("_local:")) {
+      if (summary && work.space.startsWith("_local:")) {
         if (
           summary.output.execution.environmentId !== environmentId ||
           summary.output.execution.providerInstanceId !== meta.modelSelection.instanceId
@@ -747,20 +745,14 @@ const make = Effect.gen(function* () {
       } else
         yield* service.commitSummary({
           work: owned,
-          input: summary.input,
-          generated: summary.output,
+          input: commitInput,
+          generated: summary?.output ?? null,
           expectedHeads: current!.heads,
-          ...(generated.promotions
-            ? {
-                promotions: {
-                  ...generated.promotions,
-                  project: yield* threadProject(
-                    meta.sourceThread,
-                    M.MemorySpaceId.make(work.space),
-                  ),
-                },
-              }
-            : {}),
+          promotions: yield* promotionsFor(
+            generated.promotions,
+            meta.sourceThread,
+            M.MemorySpaceId.make(work.space),
+          ),
           recheckSource: recheckSource.pipe(
             Effect.asVoid,
             Effect.mapError((cause) => new Store.MemoryStoreConflict({ code: safeCode(cause) })),
