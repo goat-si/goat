@@ -81,6 +81,8 @@ you choose a profile for it. To let an agent work in a site as you, add a profil
 **Settings → Integrations → Browser profiles**, open a tab with that profile and sign in
 there, then ask the agent to use the profile by name. GOAT never moves an agent to another
 profile on its own; when more than one profile could be meant, the agent has to ask you which.
+A profile you filled by [importing another browser's sessions](browser-import.md) counts as one
+you chose for agents too, so import only the sessions you want an agent to be able to use.
 
 A profile keeps its sign-ins where an agent first used it: in the desktop app, or in the
 browser of the GOAT environment. Agents can use it only there, and GOAT tells the agent why when

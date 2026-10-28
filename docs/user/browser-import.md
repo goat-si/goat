@@ -10,6 +10,9 @@ unlock prompt if one appears.
 This is a one-time copy. Later login changes stay separate between the two browsers, and some
 sites may still require you to sign in again.
 
+An agent can use an imported profile when you name it, like any other profile. GOAT never imports
+on its own.
+
 On macOS, Safari imports need Full Disk Access. Choose **Allow**, drag GOAT into the
 System Settings permission list, and turn access on. **Continue** becomes available when access
 is detected. macOS may require you to quit and reopen GOAT before the grant applies; reopen
