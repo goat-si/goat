@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - runs the real generated probe script against a temporary home.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
