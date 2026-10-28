@@ -1,5 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { ComputerUsePrimitiveReply, DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
+import {
+  COMPUTER_USE_PRIMITIVE_RESULT_BYTES,
+  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  ComputerUsePrimitiveReply,
+  DEFAULT_SCREEN_RUN_LIMITS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { primitiveReplySink } from "./ComputerUseLeaseProxyOptions.ts";
@@ -79,6 +84,40 @@ it.effect("a window read whose state comes as JSON text beside its image keeps b
     assert.deepInclude(
       (received?.result as { structuredContent?: unknown })?.structuredContent,
       state,
+    );
+  }),
+);
+
+// A Finder window read in full: hundreds of rows, each with its token, frame and actions.
+it.effect("a window read over 64 KiB reaches the server whole; one over the cap says so", () =>
+  Effect.gen(function* () {
+    const received: Array<ComputerUsePrimitiveReply> = [];
+    const sink = primitiveReplySink(request, (reply) =>
+      Effect.sync(() => void received.push(reply)),
+    );
+    const elements = Array.from({ length: 800 }, (_, index) => ({
+      role: "AXRow",
+      label: `Recents item ${index}`,
+      element_index: index,
+      element_token: `s0000000a:${index}`,
+      frame: { x: 0, y: index * 20, w: 400, h: 20 },
+      actions: ["press", "show_menu"],
+    }));
+    const finder = { pid: 878, window_id: 72907, elements };
+    assert.isAbove(Buffer.byteLength(JSON.stringify(finder)), 64 * 1024);
+    yield* sink.answer(JSON.stringify({ result: { structuredContent: finder } }), "settled");
+    const huge = { ...finder, tree_markdown: "x".repeat(COMPUTER_USE_PRIMITIVE_RESULT_BYTES) };
+    yield* sink.answer(JSON.stringify({ result: { structuredContent: huge } }), "settled");
+    const [whole, capped] = received;
+    assert.isTrue(isComputerUsePrimitiveReply(whole));
+    assert.deepInclude((whole?.result as { structuredContent?: object })?.structuredContent, {
+      pid: 878,
+      window_id: 72907,
+    });
+    assert.isTrue(isComputerUsePrimitiveReply(capped));
+    assert.equal(
+      (capped?.result as { code?: unknown })?.code,
+      COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
     );
   }),
 );
