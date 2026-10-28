@@ -544,6 +544,7 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunEdit = useQueuedRunEdit({
     environmentId,
     routeThreadRef,
+    threadDetailRef: routeThreadDetailRef,
     threadDraftTarget: baseComposerDraftTarget,
     activeThreadId: serverThread !== null || draftThread !== null ? threadId : null,
     serverProjection,

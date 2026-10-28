@@ -1,17 +1,35 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
-import { EnvironmentId, MessageId, RunId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
+import type { createEnvironmentThreadDetailAtoms } from "@goat/client-runtime/state/threads";
+import {
+  EnvironmentId,
+  EventId,
+  MessageId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadStreamItem,
+  type ScopedThreadRef,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import { useImperativeHandle, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
+import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { useQueuedRunEdit } from "./useQueuedRunEdit";
 
 interface RunStatus {
   readonly id: RunId;
   readonly status: string;
 }
+
+type ThreadDetails = ReturnType<typeof createEnvironmentThreadDetailAtoms>;
+type ServerSocket = Queue.Queue<OrchestrationV2ThreadStreamItem>;
 
 const mocks = await vi.hoisted(async () => {
   const { Atom } = await import("effect/reactivity");
@@ -21,6 +39,12 @@ const mocks = await vi.hoisted(async () => {
     threadRuns: Atom.family((_key: string) =>
       Atom.make<ReadonlyArray<RunStatus> | null>(null).pipe(Atom.keepAlive),
     ),
+    // Real thread detail atoms over a fake environment: the server's threads and its socket.
+    details: null as ThreadDetails | null,
+    server: {
+      threads: new Map<string, OrchestrationV2ThreadProjection>(),
+      socket: Promise.withResolvers<ServerSocket>(),
+    },
   };
 });
 
@@ -32,7 +56,148 @@ const runsKey = (ref: ScopedThreadRef) => `${ref.environmentId}:${ref.threadId}`
 
 vi.mock("../../state/threads", async () => {
   const { Atom } = await import("effect/reactivity");
+  const Effect = await import("effect/Effect");
+  const Layer = await import("effect/Layer");
+  const Option = await import("effect/Option");
+  const Queue = await import("effect/Queue");
+  const Stream = await import("effect/Stream");
+  const SubscriptionRef = await import("effect/SubscriptionRef");
+  const { EnvironmentId, ORCHESTRATION_V2_WS_METHODS } = await import("@goat/contracts");
+  const {
+    AVAILABLE_CONNECTION_STATE,
+    EnvironmentRegistry,
+    EnvironmentSupervisor,
+    PrimaryConnectionTarget,
+  } = await import("@goat/client-runtime/connection");
+  const { Persistence } = await import("@goat/client-runtime/platform");
+  const threads = await import("@goat/client-runtime/state/threads");
   const key = (ref: ScopedThreadRef) => `${ref.environmentId}:${ref.threadId}`;
+  const environment = Layer.unwrap(
+    Effect.gen(function* () {
+      const target = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("env-1"),
+        label: "Test environment",
+        httpBaseUrl: "https://environment.example.test",
+        wsBaseUrl: "wss://environment.example.test",
+      });
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: () =>
+          Stream.unwrap(
+            Queue.unbounded<OrchestrationV2ThreadStreamItem>().pipe(
+              Effect.tap((socket) => Effect.sync(() => mocks.server.socket.resolve(socket))),
+              Effect.map((socket) => Stream.fromQueue(socket)),
+            ),
+          ),
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(
+          Option.some({
+            client,
+            initialConfig: Effect.succeed({}),
+            subscribeServerConfig: () => Stream.never,
+            ready: Effect.void,
+            probe: Effect.void,
+            inboundFrames: Effect.succeed(0),
+            closed: Effect.never,
+          } as never),
+        ),
+        prepared: yield* SubscriptionRef.make(
+          Option.some({
+            environmentId: target.environmentId,
+            label: target.label,
+            httpBaseUrl: target.httpBaseUrl,
+            socketUrl: target.wsBaseUrl,
+            httpAuthorization: null,
+            target,
+          }),
+        ),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+      const unexpected = () => Effect.die("Unexpected environment registry call");
+      return Layer.mergeAll(
+        Layer.succeed(
+          EnvironmentRegistry.EnvironmentRegistry,
+          EnvironmentRegistry.EnvironmentRegistry.of({
+            entries: yield* SubscriptionRef.make(new Map()),
+            networkStatus: yield* SubscriptionRef.make("online" as const),
+            start: Effect.void,
+            register: unexpected,
+            registerPlatform: unexpected,
+            reconcilePlatform: unexpected,
+            remove: unexpected,
+            removeRoute: unexpected,
+            reorderRoutes: unexpected,
+            removeRelayEnvironments: unexpected,
+            retryNow: () => Effect.void,
+            setEnabled: unexpected,
+            setCompatibility: unexpected,
+            state: () => SubscriptionRef.get(supervisor.state),
+            stateChanges: () => SubscriptionRef.changes(supervisor.state),
+            run: (_id, effect) =>
+              Effect.provideService(
+                effect,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+            runStream: (_id, stream) =>
+              Stream.provideService(
+                stream,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+            followStream: (_id, stream) =>
+              Stream.provideService(
+                stream,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+          }),
+        ),
+        Layer.succeed(
+          Persistence.EnvironmentCacheStore,
+          Persistence.EnvironmentCacheStore.of({
+            loadShellMeta: () => Effect.succeedNone,
+            saveShellMeta: () => Effect.void,
+            loadShell: () => Effect.succeedNone,
+            saveShell: () => Effect.void,
+            loadThread: () => Effect.succeedNone,
+            saveThread: () => Effect.void,
+            removeThread: () => Effect.void,
+            loadServerConfig: () => Effect.succeedNone,
+            saveServerConfig: () => Effect.void,
+            loadVcsRefs: () => Effect.succeedNone,
+            saveVcsRefs: () => Effect.void,
+            removeVcsRefs: () => Effect.void,
+            clearVcsRefs: () => Effect.void,
+            clear: () => Effect.void,
+          }),
+        ),
+        Layer.succeed(
+          threads.ThreadSnapshotLoader,
+          threads.ThreadSnapshotLoader.of({
+            load: (_prepared, threadId) =>
+              Effect.sync(() => {
+                const projection = mocks.server.threads.get(`env-1:${threadId}`);
+                return projection === undefined
+                  ? { _tag: "missing" as const }
+                  : {
+                      _tag: "present" as const,
+                      snapshot: { snapshotSequence: 1, projection },
+                    };
+              }),
+          }),
+        ),
+      );
+    }),
+  );
+  const details = threads.createEnvironmentThreadDetailAtoms(
+    threads.createEnvironmentThreadStateAtoms(Atom.runtime(environment)).stateAtom,
+  );
+  mocks.details = details;
   return {
     threadEnvironment: {
       snapshotAtom: () => Atom.make(null),
@@ -45,6 +210,7 @@ vi.mock("../../state/threads", async () => {
           const runs = get(mocks.threadRuns(key(ref)));
           return runs === null ? null : { projection: { runs } };
         }),
+      pendingRequestsAtom: details.pendingRequestsAtom,
     },
     environmentThreadShells: {
       threadShellAtom: () => Atom.make(null),
@@ -69,15 +235,18 @@ function setRuns(ref: ScopedThreadRef, status: string) {
 
 function Harness(props: {
   readonly threadRef: ScopedThreadRef;
+  readonly threadDetailRef: ScopedThreadRef | null;
   readonly runStatus: string;
   readonly hookRef: RefObject<HookResult | null>;
 }) {
   const result = useQueuedRunEdit({
     environmentId: ENV,
     routeThreadRef: props.threadRef,
+    threadDetailRef: props.threadDetailRef,
     threadDraftTarget: props.threadRef,
     activeThreadId: props.threadRef.threadId,
-    serverProjection: projection([{ id: RUN, status: props.runStatus }]),
+    serverProjection:
+      props.threadDetailRef === null ? null : projection([{ id: RUN, status: props.runStatus }]),
     promptRef: { current: "" },
     composerRef: { current: null },
   });
@@ -85,20 +254,85 @@ function Harness(props: {
   return null;
 }
 
-function view(threadRef: ScopedThreadRef, runStatus: string, hook: { current: HookResult | null }) {
+function requireDetails(): ThreadDetails {
+  if (mocks.details === null) throw new Error("thread details mock did not load");
+  return mocks.details;
+}
+
+/** Reads the thread the way ChatView's timeline does once its detail ref resolves. */
+function ThreadReader(props: { readonly threadRef: ScopedThreadRef }) {
+  const details = requireDetails();
+  const status = useAtomValue(details.statusAtom(props.threadRef));
+  const thread = useAtomValue(details.threadAtom(props.threadRef));
+  return (
+    <section aria-label="thread">
+      <p>{`status ${status}`}</p>
+      {thread?.projection.messages.map((message) => (
+        <p key={message.id}>{message.text}</p>
+      ))}
+    </section>
+  );
+}
+
+function view(
+  threadRef: ScopedThreadRef,
+  runStatus: string,
+  hook: { current: HookResult | null },
+  threadDetailRef: ScopedThreadRef | null = threadRef,
+) {
   return (
     <AppAtomRegistryProvider>
-      <Harness threadRef={threadRef} runStatus={runStatus} hookRef={hook} />
+      <Harness
+        threadRef={threadRef}
+        threadDetailRef={threadDetailRef}
+        runStatus={runStatus}
+        hookRef={hook}
+      />
+      {threadDetailRef === null ? null : <ThreadReader threadRef={threadDetailRef} />}
     </AppAtomRegistryProvider>
   );
 }
 
 function setup() {
   mocks.editQueuedRun.mockReset();
+  mocks.server.threads.clear();
+  mocks.server.socket = Promise.withResolvers<ServerSocket>();
   useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
   setRuns(THREAD_A, "queued");
   setRuns(THREAD_B, "queued");
   return { hook: { current: null as HookResult | null } };
+}
+
+function conversationMessage(
+  threadId: ThreadId,
+  role: "user" | "assistant",
+  text: string,
+): OrchestrationV2ConversationMessage {
+  const now = makeThreadProjectionFixture().updatedAt;
+  return {
+    id: MessageId.make(`message-${role}`),
+    threadId,
+    runId: RUN,
+    nodeId: null,
+    role,
+    text,
+    attachments: [],
+    streaming: false,
+    createdBy: role === "user" ? "user" : "agent",
+    creationSource: role === "user" ? "web" : "provider",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** The server creates the draft's reserved thread with its first message. */
+function createThreadOnServer(ref: ScopedThreadRef, firstMessage: string) {
+  const fixture = makeThreadProjectionFixture();
+  mocks.server.threads.set(runsKey(ref), {
+    ...fixture,
+    thread: { ...fixture.thread, id: ref.threadId },
+    messages: [conversationMessage(ref.threadId, "user", firstMessage)],
+  });
 }
 
 function requireHook(hook: { current: HookResult | null }): HookResult {
@@ -134,6 +368,34 @@ const promptOf = (ref: ScopedThreadRef) =>
   useComposerDraftStore.getState().getComposerDraft(ref)?.prompt ?? "";
 
 describe("useQueuedRunEdit", () => {
+  it("lets a thread started from a draft go live and show its first message and reply without a remount", async () => {
+    const { hook } = setup();
+    const draftRef: ScopedThreadRef = { environmentId: ENV, threadId: ThreadId.make("draft") };
+    // ChatView passes no detail ref while the draft waits for the server's shell.
+    await using screen = await render(view(draftRef, "queued", hook, null));
+
+    createThreadOnServer(draftRef, "Fix the flaky login test");
+    await screen.rerender(view(draftRef, "queued", hook, draftRef));
+
+    await expect.element(screen.getByText("status live")).toBeInTheDocument();
+    await expect.element(screen.getByText("Fix the flaky login test")).toBeInTheDocument();
+    const socket = await mocks.server.socket.promise;
+    await Effect.runPromise(
+      Queue.offer(socket, {
+        kind: "event",
+        sequence: 2,
+        event: {
+          id: EventId.make("event-reply"),
+          type: "message.updated",
+          threadId: draftRef.threadId,
+          occurredAt: makeThreadProjectionFixture().updatedAt,
+          payload: conversationMessage(draftRef.threadId, "assistant", "On it."),
+        },
+      }),
+    );
+    await expect.element(screen.getByText("On it.")).toBeInTheDocument();
+  });
+
   it("keeps an open edit when the user leaves the thread and comes back", async () => {
     const { hook } = setup();
     await using screen = await render(view(THREAD_A, "queued", hook));
