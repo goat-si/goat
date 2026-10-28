@@ -365,12 +365,15 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  // Every origin a run can have: one a person or their agents direct, and each unattended reason (automation, schedule, webhook, Slack, channels).
+  // Every origin a run can have: a person's client, an interactive run no person sent (a task's
+  // completion wake), and each unattended reason (automation, schedule, webhook, Slack, channels).
   const everyOrigin: ReadonlyArray<{
     readonly label: string;
     readonly origin: ComputerUse.ComputerUseAttachmentInput["origin"];
+    readonly personStarted: boolean;
   }> = [
-    { label: "a person or an agent", origin: interactive },
+    { label: "a person", origin: interactive, personStarted: true },
+    { label: "an interactive wake", origin: interactive, personStarted: false },
     ...(
       [
         "goat_bot",
@@ -385,12 +388,13 @@ describe("computerUseAttachment", () => {
     ).map((reason) => ({
       label: `unattended ${reason}`,
       origin: { _tag: "unattended", reason } as const,
+      personStarted: false,
     })),
   ];
 
   it.effect.each(everyOrigin)(
     "D16: a full access run started by $label uses every app without approval, with the host setting off",
-    ({ origin }) =>
+    ({ origin, personStarted }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({});
@@ -398,6 +402,7 @@ describe("computerUseAttachment", () => {
           origin,
           runtimeMode: "full-access",
           runId: RunId.make("run:origin"),
+          personStarted,
           leases: leases.leases,
         }).pipe(Effect.provide(allowFullAccess(false)));
         assert.equal(
@@ -414,7 +419,7 @@ describe("computerUseAttachment", () => {
 
   it.effect.each(everyOrigin)(
     "a run outside full access started by $label still needs approval, with the host setting on",
-    ({ origin }) =>
+    ({ origin, personStarted }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({});
@@ -422,6 +427,7 @@ describe("computerUseAttachment", () => {
           origin,
           runtimeMode: "approval-required",
           runId: RunId.make("run:origin"),
+          personStarted,
           leases: leases.leases,
         }).pipe(Effect.provide(allowFullAccess(true)));
         assert.deepEqual(leases.everyApp, []);
@@ -471,7 +477,7 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  it.effect.each([
+  +it.effect.each([
     {
       label: "Plan",
       overrides: { interactionMode: "plan" },
@@ -530,11 +536,16 @@ describe("computerUseAttachment", () => {
                 id: runId,
                 userMessageId: MessageId.make("message:launch"),
                 requestedAt: at,
-                startedAt: at,
                 completedAt: null,
               },
             ]),
-          message: () => Effect.succeed({ createdAt: at }),
+          message: () =>
+            Effect.succeed({
+              createdAt: at,
+              createdBy: "agent" as const,
+              creationSource: "mcp" as const,
+            }),
+          grantRun: () => Effect.succeed(undefined),
         };
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({
@@ -544,6 +555,7 @@ describe("computerUseAttachment", () => {
           origin: yield* ComputerUseOrigin.computerUseOrigin(reads, { threadId, runId }),
           runtimeMode: "full-access",
           runId,
+          personStarted: yield* ComputerUseOrigin.personStarted(reads, { threadId, runId }),
           leases: leases.leases,
         });
         assert.equal(
