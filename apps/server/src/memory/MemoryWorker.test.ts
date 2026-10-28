@@ -32,13 +32,13 @@ import {
   decodeOperation,
   decodeRun,
   encodeRun,
-  countingTracer,
   seed,
   work,
   seedDerivedSummary,
   incrementalSummary,
   seedRolledBackRegeneration,
 } from "./MemoryWorker.testkit.ts";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 describe("MemoryWorker", () => {
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(

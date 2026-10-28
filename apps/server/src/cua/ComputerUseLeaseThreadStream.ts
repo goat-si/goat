@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { PER_SIGNAL_READ } from "./ComputerUseLeaseQueries.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 export const threadLeaseUpdates = (input: {
@@ -64,7 +65,7 @@ export const threadLeaseUpdates = (input: {
       // inspect, unlike resolve, never renews the credential: watching is not using it.
       const authorized = Effect.map(registry.inspect(input.token), (credential) =>
         credential?.threadId === input.threadId ? credential : undefined,
-      );
+      ).pipe(Effect.withSpan("ComputerUseLeaseThreadStream.authorized", PER_SIGNAL_READ));
       // Credential expiry publishes nothing, so a quiet stream wakes for it on its own.
       const until = (at: number) =>
         Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Effect.sleep(Math.max(0, at - now))));

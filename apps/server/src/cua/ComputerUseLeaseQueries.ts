@@ -8,6 +8,13 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import type { ComputerUseLease } from "./ComputerUseLeases.ts";
 
+/**
+ * Span options for a read every lease listener repeats on each signal; a moving pointer signals
+ * many times a second. Unsampled, the read and its queries stay out of exported traces, and logs
+ * inside keep the caller's trace id.
+ */
+export const PER_SIGNAL_READ = { sampled: false } as const;
+
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
   { cause: Schema.Defect() },
@@ -21,10 +28,10 @@ export const makeLeaseQueries = (
   sql: SqlClient.SqlClient,
   isReleased: (handoffId: string) => boolean,
 ) => {
-  const live = Effect.fn("ComputerUseLeases.live")(function* (
-    threadId?: ThreadId,
-    withReleased = false,
-  ) {
+  const live = Effect.fn(
+    "ComputerUseLeases.live",
+    PER_SIGNAL_READ,
+  )(function* (threadId?: ThreadId, withReleased = false) {
     // SQLite uses a partial index only when the query repeats its predicate. Without the IN
     // clause this read scans every turn item on the writer, and it runs on every lease check.
     const rows = yield* sql<{ handoff_json: string | null }>`
@@ -51,10 +58,10 @@ export const makeLeaseQueries = (
     );
   });
 
-  const state = Effect.fn("ComputerUseLeases.state")(function* (
-    threadId: ThreadId,
-    handoffId: string,
-  ) {
+  const state = Effect.fn(
+    "ComputerUseLeases.state",
+    PER_SIGNAL_READ,
+  )(function* (threadId: ThreadId, handoffId: string) {
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items

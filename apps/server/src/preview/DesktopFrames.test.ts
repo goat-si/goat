@@ -21,6 +21,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as LinuxFrameSource from "../cua/linuxFrames/LinuxFrameSource.ts";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import {
   admitFrame,
@@ -287,6 +288,30 @@ describe("DesktopFrames", () => {
         yield* f.set({ _tag: "ended", reason: "stopped" });
         assert.deepEqual(yield* f.requested, []);
         assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a lease signal while a viewer watches traces one reconcile and no gate read of its own",
+    () =>
+      Effect.gen(function* () {
+        const spans = new Map<string, number>();
+        yield* Effect.gen(function* () {
+          const f = yield* fixture();
+          yield* Effect.asVoid(watch(f.service));
+          assert.deepEqual(yield* f.requested, [target]);
+          // A second of lease signals, each one reconciled before the next.
+          for (let tick = 0; tick < 10; tick++) {
+            yield* TestClock.adjust("50 millis");
+            yield* f.set({ _tag: "paused", reason: "takeover" });
+            assert.deepEqual(yield* f.requested, []);
+            yield* TestClock.adjust("50 millis");
+            yield* f.set(active);
+            assert.deepEqual(yield* f.requested, [target]);
+          }
+        }).pipe(Effect.withTracer(countingTracer(spans)));
+        assert.isAtLeast(spans.get("DesktopFrames.reconcile") ?? 0, 21);
+        assert.equal(spans.get("DesktopFrames.gateOf") ?? 0, 0);
       }).pipe(Effect.scoped),
   );
 

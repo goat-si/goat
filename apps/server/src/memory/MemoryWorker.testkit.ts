@@ -8,7 +8,6 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
-import * as Tracer from "effect/Tracer";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
@@ -165,14 +164,6 @@ export const decodeRun = Schema.decodeUnknownEffect(
   Schema.fromJsonString(M.OrchestrationV2RunJson),
 );
 export const encodeRun = Schema.encodeSync(Schema.fromJsonString(M.OrchestrationV2RunJson));
-// Counts finished spans by name, so a test can tell repeated work from settled work.
-export const countingTracer = (counts: Map<string, number>) =>
-  Tracer.make({
-    span: (options) => {
-      counts.set(options.name, (counts.get(options.name) ?? 0) + 1);
-      return new Tracer.NativeSpan(options);
-    },
-  });
 export const seed = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${threadId},NULL)`;
