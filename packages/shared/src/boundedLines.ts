@@ -1,17 +1,19 @@
+// @effect-diagnostics nodeBuiltinImport:off - frames the Node Readable that child process and socket owners already hold.
 import * as NodeBuffer from "node:buffer";
 import * as NodeEvents from "node:events";
 import type * as NodeStream from "node:stream";
 
 export class BoundedLines extends NodeEvents.EventEmitter {
+  private readonly input: NodeStream.Readable;
+  private readonly maxBytes: number;
   private chunks: NodeBuffer.Buffer[] = [];
   private bytes = 0;
   private closed = false;
 
-  constructor(
-    private readonly input: NodeStream.Readable,
-    private readonly maxBytes: number,
-  ) {
+  constructor(input: NodeStream.Readable, maxBytes: number) {
     super();
+    this.input = input;
+    this.maxBytes = maxBytes;
     input.on("data", this.onData);
     input.once("end", this.onEnd);
   }

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - drives the Node stream adapter with real PassThrough streams.
 import * as NodeBuffer from "node:buffer";
 import * as NodeStream from "node:stream";
 import { expect, it } from "vite-plus/test";
