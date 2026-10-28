@@ -292,8 +292,21 @@ export function buildServerProvider(input: {
   };
 }
 
-export const collectStreamAsString = <E>(
+class ProcessOutputLimitError extends Schema.TaggedError<ProcessOutputLimitError>()(
+  "ProcessOutputLimitError",
+  { maxBytes: Schema.Number },
+) {
+  override get message() {
+    return "Process output exceeded its byte budget.";
+  }
+}
+
+export const collectStreamAsString = Effect.fn("snapshotProbe.collectStreamAsString")(function* <E>(
   stream: Stream.Stream<Uint8Array, E>,
   options?: { readonly maxBytes?: number | undefined },
-): Effect.Effect<string, E> =>
-  collectUint8StreamText({ stream, ...options }).pipe(Effect.map((collected) => collected.text));
+) {
+  const collected = yield* collectUint8StreamText({ stream, ...options });
+  if (collected.truncated)
+    return yield* new ProcessOutputLimitError({ maxBytes: options?.maxBytes ?? 8 * 1024 * 1024 });
+  return collected.text;
+});

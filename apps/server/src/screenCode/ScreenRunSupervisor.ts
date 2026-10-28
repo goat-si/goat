@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off preferSchemaOverJson:off - This module owns one exact child process and its watchdog.
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
-import * as NodeReadline from "node:readline";
+import { BoundedLines } from "@goat/shared/boundedLines";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -64,7 +64,7 @@ const failure = (
 
 interface Session {
   readonly child: NodeChildProcess.ChildProcessWithoutNullStreams;
-  readonly lines: NodeReadline.Interface;
+  readonly lines: BoundedLines;
   readonly key: string;
   readonly runId: string;
   readonly turnId: string;
@@ -124,7 +124,7 @@ export function createScreenRunSupervisor(deps: {
     });
     const session: Session = {
       child,
-      lines: NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+      lines: new BoundedLines(child.stdout, MAX_FRAME_BYTES),
       key: key(runId, turnId),
       runId,
       turnId,
@@ -133,6 +133,10 @@ export function createScreenRunSupervisor(deps: {
       active: undefined,
       abortActive: undefined,
     };
+    session.lines.on("limit", () => {
+      session.abortActive?.("output_limit");
+      close(session);
+    });
     child.stderr.resume();
     sessions.set(session.key, session);
     const onProcessEnd = () => {
