@@ -71,8 +71,10 @@ For a desktop flow that needs computer use on another host, read
 `metrics.computerUse.reason` from `host.status` for that host. A Mac that
 runs only a GOAT server cannot use it; the reason names the installed GOAT apps
 and versions. A person at that Mac or over Screen Sharing updates and opens the
-desktop app, and new threads then run under the app's server. From a GOAT app
-connected directly to that host with permission to change its settings, the
+desktop app. Start the lane in the app's environment: SSH dispatch moves to the
+app's server only once the background server has no running work, and threads
+already there keep running without computer use. From a GOAT app connected
+directly to the app's environment with permission to change its settings, the
 person turns computer use on in **Settings → Computer** and approves the
 thread's `computer_use.request` there. Agents cannot turn it on or approve it
 themselves.

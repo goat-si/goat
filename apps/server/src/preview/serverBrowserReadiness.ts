@@ -10,7 +10,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 
 const NO_DESKTOP = "It runs on this GOAT server and needs no desktop app.";
-const PROVEN_BY_OPEN = "Only preview.open proves it starts.";
+const PROVEN_BY_OPEN = "Only opening a tab proves it starts.";
 
 export interface ServerBrowserReadinessFacts {
   readonly status: PreviewBrowser.PreviewBrowserInstallStatus;

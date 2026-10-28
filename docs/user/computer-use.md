@@ -229,9 +229,12 @@ A GOAT server started from a terminal, a service, or another GOAT over SSH
 (listed as **Headless server**) cannot use computer use on a Mac, because macOS
 would give the permissions to whatever started it. Agents there are told which
 GOAT desktop apps the Mac has and whether they are older than that server. At
-the Mac or over Screen Sharing, update the desktop app if needed and open it.
-New threads then run under the app; threads already on the background server
-keep running there without computer use.
+the Mac or over Screen Sharing, update the desktop app if needed and open it,
+then connect to the app's environment and start new threads there. Other GOATs
+that reach this Mac over SSH move to the app's server only once the background
+server has no running work, and a GOAT app connected straight to the
+background server stays on it. Threads already on the background server keep
+running there without computer use.
 
 ## Windows and Linux
 

@@ -713,7 +713,7 @@ export class PreviewAutomationUnavailableError extends Schema.TaggedError<Previe
   },
 ) {
   override get message(): string {
-    return `MCP credential does not grant the ${this.capability} capability: browser preview tools are off for this thread. Do not retry them. Tell the person: they turn on "Agent browser access" in Settings for this host, and it applies when the agent session next starts. Whether this host's browser is installed says nothing about this thread's access.`;
+    return `MCP credential does not grant the ${this.capability} capability: browser preview tools are off for this thread. Do not retry them. Tell the person: they turn on "Agent browser access" in Settings for this host, and in this project's settings when the project overrides it; it applies when the agent session next starts. Whether this host's browser is installed says nothing about this thread's access.`;
   }
 }
 

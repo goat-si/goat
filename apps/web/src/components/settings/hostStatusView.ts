@@ -67,8 +67,6 @@ export function platformLabel(platform: string | undefined): string | null {
 function hostBrowserText(browser: HostStatusMetrics["browser"]): string | null {
   if (browser === undefined) return null;
   switch (browser.state) {
-    case "installed":
-      return "Ready, no desktop app needed";
     case "installs_on_open":
       return "Installs on first use, no desktop app needed";
     case "installing":
