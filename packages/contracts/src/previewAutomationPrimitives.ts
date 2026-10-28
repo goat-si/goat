@@ -106,6 +106,7 @@ export const PreviewAutomationScrollCollectResult = Schema.Struct({
   rounds: Schema.Int,
   responses: Schema.Int,
   stoppedBecause: Schema.Literals(["minItems", "maxItems", "maxScrolls", "noGrowth"]),
+  note: Schema.optional(Schema.String),
 });
 export type PreviewAutomationScrollCollectResult = typeof PreviewAutomationScrollCollectResult.Type;
 

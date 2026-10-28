@@ -318,3 +318,44 @@ describe.skipIf(!chromiumInstalled)("collectWhileScrolling in a browser", () => 
     expect(result.responses).toBe(3);
   });
 });
+
+describe("what a feed's responses hold", () => {
+  it("finds the item array inside a response object", async () => {
+    const { page } = fakePage((scroll, emit) =>
+      emit(response({ meta: { page: scroll }, data: { items: pageOf(scroll), tags: ["x"] } })),
+    );
+    expect(
+      await collectWhileScrolling(page, new SessionControl("agent"), open, { minItems: 4 }),
+    ).toMatchObject({ items: [0, 1, 2, 3], stoppedBecause: "minItems" });
+  });
+
+  it("reads a JSONP response whose URL names its callback", async () => {
+    const jsonp = (scroll: number): CollectorResponse => {
+      const text = `cb_1(${JSON.stringify({ list: pageOf(scroll) })});`;
+      return {
+        url: () => `https://feed.example/api/items?callback=cb_1&page=${scroll}`,
+        headers: () => ({ "content-type": "application/javascript" }),
+        body: async () => Buffer.from(text),
+        json: async () => Promise.reject(new SyntaxError("not JSON")),
+      };
+    };
+    const { page } = fakePage((scroll, emit) => emit(jsonp(scroll)));
+    expect(
+      await collectWhileScrolling(page, new SessionControl("agent"), open, { minItems: 2 }),
+    ).toMatchObject({ items: [0, 1], stoppedBecause: "minItems" });
+  });
+
+  it("says why it collected nothing", async () => {
+    const quiet = fakePage(() => undefined, { deadlines: "immediate", grow: false });
+    expect(
+      (await collectWhileScrolling(quiet.page, new SessionControl("agent"), open)).note,
+    ).toContain("No response matched");
+    const shapeless = fakePage((_scroll, emit) => emit(response({ ok: true })), {
+      deadlines: "immediate",
+      grow: false,
+    });
+    expect(
+      (await collectWhileScrolling(shapeless.page, new SessionControl("agent"), open)).note,
+    ).toContain("none held an array");
+  });
+});
