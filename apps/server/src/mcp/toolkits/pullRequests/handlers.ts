@@ -324,11 +324,23 @@ const make = Effect.gen(function* () {
     const callerProject = known.find((project) => project.id === callerThread?.projectId);
     // A pull request named by repository builds its URL through the project that holds it, which
     // need not be the caller's. Without a host, that is the one project whose remote matches.
+    // Whether host names the project's repository host, under any spelling the normalizer folds
+    // (an Azure DevOps org.visualstudio.com host carries its organization, dev.azure.com its path).
+    const namesHost = (project: OrchestrationProjectShell, host: string) => {
+      const key = repositoryKeyOf(project);
+      if (key === null) return false;
+      const [, ...withoutOwner] = key.repository.split("/");
+      return [key.repository, withoutOwner.join("/")].some((repository) => {
+        const probe = normalizeThreadPullRequestKey({ host, repository, number: key.number });
+        return probe.host === key.host && probe.repository === key.repository;
+      });
+    };
     const holds = (project: OrchestrationProjectShell, repository: string, host?: string) => {
-      const at = host ?? projectHostAndProvider(project).host;
+      const own = projectHostAndProvider(project).host;
       return (
-        at !== null &&
-        projectForPullRequest([project], { host: at, repository }, undefined) !== undefined
+        own !== null &&
+        (host === undefined || namesHost(project, host)) &&
+        projectForPullRequest([project], { host: own, repository }, undefined) !== undefined
       );
     };
     const routed = Effect.fn("PullRequestsToolkit.routeTarget")(function* (

@@ -848,7 +848,15 @@ describe("pull request reads", () => {
           number: 9,
         });
         expect(named.url).toBe(result.url);
+        // The organization's visualstudio.com host names the same repository.
+        const aliased = yield* lone.call("goat_pull_request_checks", {
+          host: "two.visualstudio.com",
+          repository: "web",
+          number: 9,
+        });
+        expect(aliased.url).toBe(result.url);
         expect((yield* Ref.get(lone.reads)).map((ref) => [ref.projectId, ref.repository])).toEqual([
+          ["project-two-web", result.repository],
           ["project-two-web", result.repository],
           ["project-two-web", result.repository],
         ]);
