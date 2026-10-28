@@ -56,7 +56,9 @@
       box-shadow: none;
     }
 
-    [data-glass-layer] {
+    /* Surface subheaders are in-flow chrome rows; sticky rows and overlays keep their opaque floor. */
+    [data-glass-layer],
+    [data-surface-subheader] {
       background-color: transparent;
     }
     [data-glass-layer].surface-grain,
