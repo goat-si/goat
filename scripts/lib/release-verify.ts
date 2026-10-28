@@ -159,7 +159,8 @@ export function isMachO(bytes: Uint8Array): boolean {
   return count >= 1 && count <= 20;
 }
 
-// D-10 keeps GOAT's own sources private. Third-party code (node_modules, the Electron
+// D-10: release artifacts ship no GOAT source files or source maps, no build-machine paths, and no
+// links into the GOAT source repository. Third-party code (node_modules, the Electron
 // framework) legitimately ships its own TypeScript, source maps and its CI's paths, so
 // source checks and generic path patterns apply to GOAT code only. Paths of this build
 // machine (its home, workspace and checkout) fail anywhere they appear.
@@ -194,7 +195,7 @@ const defaultBuildRoots = localBuildRoots(process.env, process.cwd());
 // and temp roots still do.
 const sharedHostedHomes = new Set(["/home/runner", "/Users/runner", "C:\\Users\\runneradmin"]);
 
-/** D-10: shipped code never links into the GOAT source repository, whatever its visibility. */
+/** D-10: shipped code links to published pages and releases, never the GOAT source repository. */
 export function sourceRepositoryUrlProblems(name: string, content: string): string[] {
   return /(?:github\.com[/:]|repos\/)goat-si\/goat(?!(?:-releases|_))/i.test(content)
     ? [`${name}: source repository URL`]

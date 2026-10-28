@@ -4431,7 +4431,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     description:
       "GOAT is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.",
     license: "MIT",
-    // Required by the .deb control file. Public: the source repository is private (D-10).
+    // Required by the .deb control file. The releases repository: shipped artifacts do not link
+    // the source repository (D-10).
     homepage: `https://github.com/${DESKTOP_UPDATE_REPOSITORY}`,
     // electron-builder reads the name as the Windows CompanyName and the default copyright holder.
     author: "GOAT <jun@lidgeai.com>",
