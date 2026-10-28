@@ -93,6 +93,19 @@ const TASKS = [
 ];
 /** Matrix order: the quick run's test job follows the checks. */
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
+/**
+ * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
+ * hosted ubuntu-24.04 even in trusted runs, so they never queue behind half-hour EPYC server shards.
+ */
+const HOSTED_TASKS = new Set([
+  "check",
+  "typecheck",
+  "test-contracts",
+  "test-client-runtime",
+  "test-mobile",
+  "test-shared",
+  "test-ingest",
+]);
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
 const TASK_ROOTS = {
@@ -382,11 +395,15 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
   }
 }
 
-/** The ci job matrix; test-server expands into its shards. Each entry carries the job title. */
+/**
+ * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
+ * runner pool, hosted or epyc; goat-ci.yml sends only trusted runs' epyc entries to EPYC.
+ */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
+    const runner = HOSTED_TASKS.has(task) ? "hosted" : "epyc";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
@@ -397,10 +414,11 @@ function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
           shard,
           shard_count: count,
           related,
+          runner,
         });
       }
     } else {
-      include.push({ task, title: task });
+      include.push({ task, title: task, runner });
     }
   }
   return { include };
@@ -694,6 +712,7 @@ module.exports = {
   LANES,
   TASKS,
   CHANGED_TESTS_TASK,
+  HOSTED_TASKS,
   MEMORY_GROWTH_TESTS,
   SERVER_RUN_CONFIG,
   SOURCE_SCANNING_TESTS,

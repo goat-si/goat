@@ -24,6 +24,8 @@ const goatCiTrustedRunner =
 // The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
 // the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
 const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
+// The ci matrix picks a pool per entry; only a trusted run's epyc entries reach EPYC.
+const goatCiMatrixRunner = `matrix.runner == 'epyc' && ${goatCiTrustedRunner}`;
 const goatCiGateJobs = new Set([
   "scope",
   "screenshot-gate",
@@ -210,6 +212,7 @@ function validateWorkflow(source, yaml) {
     } else if (
       runners !== goatCiHostedRunner &&
       !isExpression(goatCiTrustedRunner) &&
+      !(name === "ci" && isExpression(goatCiMatrixRunner)) &&
       (!Array.isArray(runners) ||
         runners.length !== 5 ||
         new Set(runners).size !== 5 ||

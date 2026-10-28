@@ -15,6 +15,7 @@ export const baseJob = { "runs-on": runnerLabels, steps: [{ run: "echo ok" }] };
 export const trustedRunner =
   '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
 export const lightRunner = trustedRunner.replace('"epyc"]', '"epyc-light"]');
+export const matrixRunner = trustedRunner.replace("${{ (", "${{ matrix.runner == 'epyc' && (");
 export const gateJob = { ...baseJob, "runs-on": lightRunner };
 export const validWorkflow = `on:
   push:
