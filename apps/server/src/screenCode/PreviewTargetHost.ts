@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import type { BoundPreviewTab } from "./BoundPreviewTabs.ts";
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
   observationReplyBudget,
@@ -63,6 +64,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">,
 ) {
   const observations = new ScreenObservations();
+  const callApps = yield* ComputerUseCallApps;
   const targets = new Map<string, BoundTarget>();
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
@@ -176,6 +178,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       generation: 0,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
+    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url });
     return ref;
   };
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -216,6 +219,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
+    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url });
     if (originOf(current.url) !== bound.origin) {
       observations.evictTarget(bound.ref.id);
       if (!readOnly)

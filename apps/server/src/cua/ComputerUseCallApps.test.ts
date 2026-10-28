@@ -124,4 +124,104 @@ describe("ComputerUseCallApps", () => {
     });
     expect(path.toolIcon).toBeUndefined();
   });
+
+  describe("screen cells", () => {
+    const goatSource = { key: "mcp:goat", name: "goat", kind: "integration" } as const;
+    const screenCall = (toolName: string, output: unknown): DynamicToolItem => {
+      const { toolSurface: _surface, ...item } = driverCall(toolName, { code: "..." });
+      return { ...item, toolSource: goatSource, output };
+    };
+    const receipt = (callId: number, targetId?: string) => ({
+      callId,
+      ...(targetId === undefined ? {} : { targetId }),
+      method: targetId === undefined ? "list_apps" : "click",
+      journalState: "settled",
+      category: "confirmed",
+      dispatched: true,
+      evidence: [],
+    });
+    const completed = (...targetIds: Array<string | undefined>) => ({
+      runId: "run-1",
+      turnId: "turn-1",
+      cellId: "cell-1",
+      status: "completed",
+      console: [],
+      journal: targetIds.map((targetId, index) => ({
+        sequence: index + 1,
+        truncated: false,
+        receipt: receipt(index + 1, targetId),
+      })),
+      truncated: [],
+      availability: [],
+      imageMetadata: [],
+    });
+
+    it("presents a cell as the first desktop app it acted on, in every provider's output shape", () => {
+      const apps = makeCallApps();
+      apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/" });
+      apps.screenTarget("calc-1", {
+        kind: "app",
+        bundleId: "com.apple.calculator",
+        name: "Calculator",
+      });
+      apps.screenTarget("notes-1", { kind: "app", bundleId: "com.apple.Notes", name: "Notes" });
+      const result = completed(undefined, "tab-1", "calc-1", "notes-1");
+      const failure = {
+        code: "unknown_outcome",
+        effectStarted: true,
+        nextStep: "Observe the window again.",
+        receipts: result.journal.map((entry) => entry.receipt),
+      };
+
+      for (const item of [
+        // Codex keeps structured content, beside the content blocks once images come back.
+        screenCall("goat.goat_screen_run", result),
+        screenCall("goat.goat_screen_run", {
+          content: [{ type: "image", data: "", mimeType: "image/png" }],
+          structuredContent: result,
+        }),
+        // Claude keeps the blocks: the cell API's text comes before the result's JSON.
+        screenCall("mcp__goat__goat_screen_run", [
+          { type: "text", text: "Screen target API" },
+          { type: "text", text: JSON.stringify(result) },
+        ]),
+        // OpenCode 2 keeps the answer as text under a per-thread server name.
+        screenCall("goat-thread_1_goat_screen_run", JSON.stringify(result)),
+        // A failed cell's error still lists the receipts of the calls it made.
+        screenCall("mcp__goat__goat_screen_run", [{ type: "text", text: JSON.stringify(failure) }]),
+      ]) {
+        const presented = decodeTurnItem(apps.present(item));
+        expect(presented.toolSurface).toBe("computer");
+        expect(presented.toolSource).toEqual(calculator);
+        expect(presented.toolIcon).toEqual(calculator.icon);
+      }
+    });
+
+    it("gives a cell that drove only tabs the website icon of the page the tab last showed", () => {
+      const apps = makeCallApps();
+      apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/start" });
+      apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/next" });
+      const presented = decodeTurnItem(
+        apps.present(screenCall("mcp__goat__goat_screen_run", completed("tab-1"))),
+      );
+      expect(presented.toolIcon).toEqual({
+        _tag: "website",
+        pageUrl: "https://example.com/next",
+      });
+      expect(presented.toolSurface).toBeUndefined();
+      expect(presented.toolSource).toEqual(goatSource);
+    });
+
+    it("leaves a cell with no target it can name as it came", () => {
+      const apps = makeCallApps();
+      apps.screenTarget("tab-local", { kind: "tab", pageUrl: "file:///etc/hosts" });
+      for (const item of [
+        screenCall("goat.goat_screen_run", completed(undefined)),
+        screenCall("goat.goat_screen_run", completed("never-bound")),
+        screenCall("goat.goat_screen_run", completed("tab-local")),
+        screenCall("goat.goat_screen_run", undefined),
+      ])
+        expect(apps.present(item)).toBe(item);
+    });
+  });
 });

@@ -31,6 +31,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
@@ -145,7 +146,12 @@ export function layerWithTabHost() {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const browser = yield* ServerBrowser.ServerBrowser;
       const cursorPublisher = yield* ScreenCursorPublisher;
-      const desktopHost = createDesktopTargetHost({ primitiveChannel, leases });
+      const callApps = yield* ComputerUseCallApps;
+      const desktopHost = createDesktopTargetHost({
+        primitiveChannel,
+        leases,
+        labelTarget: callApps.screenTarget,
+      });
       const tabHost = yield* makePreviewTargetHost(broker);
       return yield* make({
         primitiveChannel,
