@@ -1,6 +1,9 @@
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { resolveVoiceComposerPresentation } from "./voiceInputPresentation";
+import {
+  resolveVoiceComposerPresentation,
+  voiceTranscriptionDestination,
+} from "./voiceInputPresentation";
 
 describe("voice composer presentation", () => {
   it("names the device that transcribes while recording and transcribing", () => {
@@ -25,5 +28,12 @@ describe("voice composer presentation", () => {
         0,
       ).statusLabel,
     ).toBe("Transcribing · on Mac Studio");
+    expect(
+      resolveVoiceComposerPresentation(
+        { ...base, phase: "recording", location: { kind: "this-device" } },
+        0,
+      ).destination,
+    ).toBe("on this device");
+    expect(voiceTranscriptionDestination({ ...base, phase: "recording" })).toBeNull();
   });
 });

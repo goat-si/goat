@@ -96,7 +96,7 @@ function EdgeDictationPill(props: { readonly collapseRef: RefObject<(() => void)
   const phase = voice.state.phase;
   const isError = phase === "error";
   const openSettings = isError && voice.state.errorAction === "settings";
-  const label = voice.label ?? "Draft";
+  const label = `${voice.label ?? "Draft"}${presentation.destination ? ` · ${presentation.destination}` : ""}`;
 
   return (
     <View pointerEvents="box-none" className="absolute inset-0">

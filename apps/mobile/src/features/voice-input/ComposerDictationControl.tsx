@@ -371,6 +371,11 @@ export function ComposerDictationStatus(props: {
               className="text-foreground-muted"
               seconds={props.elapsedSeconds}
             />
+            {props.presentation.destination ? (
+              <Text className="shrink text-xs text-foreground-muted" numberOfLines={1}>
+                {props.presentation.destination}
+              </Text>
+            ) : null}
           </Animated.View>
           <Animated.View className="absolute inset-0 justify-center px-2" style={labelStyle}>
             <Text className="text-center text-sm text-foreground-muted" numberOfLines={1}>

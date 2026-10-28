@@ -1,11 +1,14 @@
 import type { VoiceInputState } from "@goat/client-runtime/voice-input";
 
 /** Names the device that receives the audio: on-device speech or the connected environment. */
+export function voiceTranscriptionDestination(state: VoiceInputState): string | null {
+  if (!state.location) return null;
+  return state.location.kind === "this-device" ? "on this device" : `on ${state.location.label}`;
+}
+
 function transcribedOn(state: VoiceInputState): string {
-  if (!state.location) return "";
-  return state.location.kind === "this-device"
-    ? " · on this device"
-    : ` · on ${state.location.label}`;
+  const destination = voiceTranscriptionDestination(state);
+  return destination ? ` · ${destination}` : "";
 }
 
 export type VoiceComposerPresentation = {
@@ -15,12 +18,24 @@ export type VoiceComposerPresentation = {
   readonly statusKind: "active" | "error" | null;
   readonly statusLabel: string | null;
   readonly confirmationEnabled: boolean;
+  /** Where the recording is transcribed, while recording or transcribing. */
+  readonly destination: string | null;
 };
 
 export function resolveVoiceComposerPresentation(
   state: VoiceInputState,
   elapsedSeconds: number,
 ): VoiceComposerPresentation {
+  return {
+    ...resolvePhasePresentation(state, elapsedSeconds),
+    destination: voiceTranscriptionDestination(state),
+  };
+}
+
+function resolvePhasePresentation(
+  state: VoiceInputState,
+  elapsedSeconds: number,
+): Omit<VoiceComposerPresentation, "destination"> {
   switch (state.phase) {
     case "idle":
       return {
