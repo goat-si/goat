@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { snapshotRetry, type SnapshotRetryInput } from "./snapshotRetry.ts";
+import { readFailure } from "./pageScope.ts";
+import {
+  pageChanged,
+  snapshotRetry,
+  tooBusy,
+  transientCapture,
+  type SnapshotRetryInput,
+} from "./snapshotRetry.ts";
 
 const changed = new Error("The page changed while capturing its snapshot. Take another snapshot.");
 const busy = new Error("too busy");
@@ -69,4 +76,27 @@ describe("snapshot retry", () => {
     await expect(snapshotRetry({ ...replaced.input, current: () => false })).rejects.toBe(changed);
     expect(replaced.calls.captures).toBe(1);
   });
+});
+
+it("only an interrupted capture is retried; a scope that matches two elements fails as itself", async () => {
+  expect(transientCapture(pageChanged())).toBe(true);
+  expect(transientCapture(tooBusy())).toBe(true);
+  const ambiguous = readFailure("scope_ambiguous");
+  expect(transientCapture(ambiguous)).toBe(false);
+  let captures = 0;
+  const failing = snapshotRetry({
+    capture: async () => {
+      captures += 1;
+      throw ambiguous;
+    },
+    waitForLoad: async () => undefined,
+    sleep: async () => undefined,
+    now: () => 0,
+    deadline: 10_000,
+    current: () => true,
+    retryable: transientCapture,
+    tooBusy,
+  });
+  await expect(failing).rejects.toBe(ambiguous);
+  expect(captures).toBe(1);
 });

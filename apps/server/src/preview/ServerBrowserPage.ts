@@ -36,7 +36,7 @@ import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
-import { runSnapshot } from "./snapshotRetry.ts";
+import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
   narrowTree,
   resetSnapshotDiff,
@@ -366,23 +366,9 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-const pageChanged = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationExecutionError",
-    "The page changed while capturing its snapshot. Take another snapshot.",
-  );
-
-const tooBusy = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationTimeoutError",
-    "The page was too busy to capture a snapshot in time. Wait for it to settle and take another snapshot.",
-  );
-
-const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no snapshot was taken.";
 const FULL_PAGE_TOO_LARGE =
   "The full-page screenshot exceeds the 3840 × 16384 pixel or 8 MiB limit, even at reduced scale. Use a viewport snapshot instead.";
 // A second capture would fail the same way; this one already tried every scale.
-const NOT_RETRIED = new Set([VALUE_TOO_LONG, FULL_PAGE_TOO_LARGE]);
 
 /** Chromium sizes the capture, so the reported size is read from the PNG header. */
 const pngSize = (base64: string) => {
@@ -694,7 +680,7 @@ export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapsho
     page: input.page,
     timeoutMs: input.timeoutMs,
     capture: (deadline) => capture(input, deadline),
-    retryable: (cause) => !(cause instanceof Error && NOT_RETRIED.has(cause.message)),
+    retryable: transientCapture,
     tooBusy,
   });
 
