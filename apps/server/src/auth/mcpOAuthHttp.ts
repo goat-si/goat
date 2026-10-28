@@ -2,6 +2,7 @@ import {
   AuthMcpApprovalError,
   type AuthMcpAuthorizationRequest,
   AuthMcpClientAccess,
+  AuthMcpWorkspaceTerminalScope,
   EnvironmentHttpApi,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -124,6 +125,9 @@ export const layer = HttpApiBuilder.group(
                 ? {}
                 : {
                     csrfToken: session.csrfToken,
+                    oneClickWorkspaceTerminalScopes: AuthMcpWorkspaceTerminalScope.literals.filter(
+                      (scope) => session.scopes.includes(scope),
+                    ),
                     oneClickMemoryScopes: (["memory:read", "memory:write"] as const).filter(
                       (scope) => session.scopes.includes(scope),
                     ),

@@ -13,6 +13,11 @@ import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedC
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import * as AgentSurfaceHandlers from "./toolkits/agentSurface/handlers.ts";
+import { WorkspaceToolkit } from "./toolkits/workspace/tools.ts";
+import * as WorkspaceHandlers from "./toolkits/workspace/handlers.ts";
+import * as AgentWorkspace from "./AgentWorkspaceMcpService.ts";
+import * as AgentWorkspaceAccess from "./AgentWorkspaceTerminalAccess.ts";
+import * as AgentWorkspaceAudit from "./AgentWorkspaceTerminalAudit.ts";
 import {
   listedRegistration,
   registeredToolName,
@@ -984,6 +989,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 /** The registration layers mounted by /mcp, including image and memory tools.
  * Kept separate from domain construction so catalog contracts can be checked without live state. */
 export const catalogRegistrations = {
+  workspace: toolkitRegistration(WorkspaceToolkit, WorkspaceHandlers.layer),
   agentSurface: toolkitRegistration(AgentSurfaceToolkit, AgentSurfaceHandlers.layer).pipe(
     Layer.provide(layerToolDispatch),
   ),
@@ -1197,6 +1203,11 @@ export const layerMcpTransport = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   catalogRegistrations.agentSurface,
   catalogRegistrations.decision,
+  catalogRegistrations.workspace.pipe(
+    Layer.provide(AgentWorkspace.layer),
+    Layer.provide(AgentWorkspaceAccess.layer),
+    Layer.provide(AgentWorkspaceAudit.layer),
+  ),
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

@@ -51,6 +51,7 @@ import {
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
 
 type SettingsPage = "new-threads" | "source-control" | "agent-behavior" | "maintenance";
 
@@ -93,7 +94,13 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "branchNamePrefix",
     "branchNameInstructions",
   ],
-  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess", "standingInstructions"],
+  "agent-behavior": [
+    "responseStreamingMode",
+    "enableAgentBrowserAccess",
+    "standingInstructions",
+    "agentWorkspaceAccess",
+    "agentTerminalAccess",
+  ],
   maintenance: ["continueThreadsAfterServerUpdate"],
 };
 
@@ -530,6 +537,13 @@ function ServerSettingsDetail(props: {
 
               {props.page === "agent-behavior" ? (
                 <>
+                  <AgentWorkspaceTerminalSettings
+                    targets={displayTargets}
+                    projectSelected={projectSelected}
+                    disabled={disabled}
+                    write={write}
+                    writeEach={writeEach}
+                  />
                   {supportedSkills.map((skill) => {
                     const values = skillValues(skill.name);
                     const skillReference = values[0];

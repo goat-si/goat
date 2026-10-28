@@ -15,6 +15,8 @@ export const PermissionCapability = Schema.Literals([
   "settings.write",
   "goals.apply",
   "providers.manage",
+  "workspace.write",
+  "terminal.operate",
 ]);
 export type PermissionCapability = typeof PermissionCapability.Type;
 
@@ -49,7 +51,19 @@ export const BUILTIN_PERMISSION_PROFILES: Readonly<Record<string, PermissionProf
   owner: {
     id: "owner",
     runtimeModeCeiling: "full-access",
-    capabilities: PermissionCapability.literals,
+    capabilities: [
+      "threads.launch",
+      "threads.remote",
+      "worktree.create",
+      "pr.open",
+      "pr.merge",
+      "hub.manage",
+      "cloud.launch",
+      "boat.start",
+      "settings.write",
+      "goals.apply",
+      "providers.manage",
+    ],
     maxLanes: 32,
   },
 };

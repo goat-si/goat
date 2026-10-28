@@ -28,6 +28,8 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 
 import type {
+  AgentWorkspaceReadInput,
+  AgentWorkspaceReadResult,
   FilesystemEntryMetadata,
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -50,6 +52,7 @@ import * as Schema from "effect/Schema";
 import * as KnownWorkspaces from "./KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
+import { readFilePage as readPage } from "./readFilePage.ts";
 import { fileHeaderMimeType } from "./fileHeaderMimeType.ts";
 import {
   atomicWorkspaceWrite,
@@ -162,6 +165,12 @@ export class WorkspaceFileSystem extends Context.Service<
       input: ProjectReadFileInput,
     ) => Effect.Effect<
       ProjectReadFileResult,
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >;
+    readonly readFilePage: (
+      input: AgentWorkspaceReadInput & { readonly cwd: string },
+    ) => Effect.Effect<
+      AgentWorkspaceReadResult,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
     /** Writes inside a known workspace only. */
@@ -654,7 +663,29 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath, version: workspaceFileVersion(bytes) };
   });
 
-  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile });
+  const readFilePage: WorkspaceFileSystem["Service"]["readFilePage"] = Effect.fn(
+    "WorkspaceFileSystem.readFilePage",
+  )(function* (input) {
+    const target = yield* resolveReadTarget({
+      cwd: input.cwd,
+      relativePath: input.path,
+      allowMissing: true,
+    });
+    return yield* Effect.tryPromise({
+      try: () =>
+        readPage({ ...input, path: target.relativePath, absolutePath: target.realTargetPath }),
+      catch: (cause) =>
+        new WorkspaceFileSystemOperationError({
+          workspaceRoot: input.cwd,
+          relativePath: input.path,
+          resolvedPath: target.realTargetPath ?? input.path,
+          operationPath: target.realTargetPath ?? input.path,
+          operation: "read",
+          cause,
+        }),
+    });
+  });
+  return WorkspaceFileSystem.of({ getMetadata, readFile, readFilePage, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

@@ -10,13 +10,25 @@ import * as CursorKeychain from "@goat/provider-cursor/server/CursorKeychain";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 
-import type { ThreadId } from "@goat/contracts";
+import type { AuthEnvironmentScope, ServerSettings, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+
+export const agentWorkspaceTerminalScopes = (
+  settings: Pick<ServerSettings, "agentWorkspaceAccess" | "agentTerminalAccess">,
+  readOnly: boolean,
+): ReadonlyArray<AuthEnvironmentScope> => [
+  ...(settings.agentWorkspaceAccess !== "off" ? ["filesystem:read" as const] : []),
+  ...(settings.agentWorkspaceAccess === "read_write" && !readOnly
+    ? ["filesystem:write" as const]
+    : []),
+  ...(settings.agentTerminalAccess !== "off" ? ["terminal:read" as const] : []),
+  ...(settings.agentTerminalAccess === "operate" && !readOnly ? ["terminal:operate" as const] : []),
+];
 
 /** Breaks the adapter/manager construction cycle; authority remains manager-owned. */
 export class ProviderMemoryAdmission extends Context.Service<

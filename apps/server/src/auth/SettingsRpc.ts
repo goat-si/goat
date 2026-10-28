@@ -1,4 +1,9 @@
-import type { ProviderInstanceMutation, ServerSettingsPatch } from "@goat/contracts";
+import {
+  ServerSettingsError,
+  type AgentTerminalBinding,
+  type ProviderInstanceMutation,
+  type ServerSettingsPatch,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import * as Settings from "../serverSettings.ts";
@@ -12,9 +17,20 @@ export const make = Effect.fn("SettingsRpc.make")(function* (session: Authentica
   return Effect.fn("SettingsRpc.update")(function* (input: {
     readonly patch: ServerSettingsPatch;
     readonly providerInstanceMutation?: ProviderInstanceMutation;
+    readonly agentTerminalBinding?: AgentTerminalBinding;
   }) {
+    if (input.providerInstanceMutation !== undefined && input.agentTerminalBinding !== undefined)
+      return yield* new ServerSettingsError({ settingsPath: "settings", operation: "normalize" });
+    const updatePolicy = settings.updateAgentWorkspaceTerminalPolicy;
     return yield* input.providerInstanceMutation === undefined
-      ? settings.updateSettings(input.patch, authorize(input.patch))
+      ? updatePolicy === undefined
+        ? Effect.fail(new ServerSettingsError({ settingsPath: "settings", operation: "normalize" }))
+        : updatePolicy(
+            input.patch,
+            session.sessionId,
+            input.agentTerminalBinding,
+            authorize(input.patch, undefined, input.agentTerminalBinding),
+          )
       : routes.mutateProviderInstance(
           { mutation: input.providerInstanceMutation, patch: input.patch },
           { kind: "client", sessionId: session.sessionId },

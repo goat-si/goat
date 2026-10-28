@@ -6,6 +6,7 @@ import {
   AssetCreateUrlInput,
   AuthAccessReadScope,
   ServerSettingsPatch,
+  AgentTerminalBinding,
   ProviderInstanceMutation,
   requiredScopesForServerSettingsPatch,
   requiredScopesForProjectMutation,
@@ -350,15 +351,17 @@ export const rpcAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
 
 const SettingsUpdate = Schema.Struct({
   patch: ServerSettingsPatch,
+  agentTerminalBinding: Schema.optionalKey(AgentTerminalBinding),
   providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
 });
 const decodeSettingsUpdate = Schema.decodeUnknownSync(SettingsUpdate);
 
 const requiredScopesForSettingsUpdate = (payload: unknown) => {
   const input = decodeSettingsUpdate(payload);
-  const scopes = requiredScopesForServerSettingsPatch(input.patch);
+  const scopes = requiredScopesForServerSettingsPatch(input.patch, input.agentTerminalBinding);
   if (input.providerInstanceMutation === undefined) return scopes;
-  return Object.values(input.patch).every((value) => value === undefined)
+  return input.agentTerminalBinding === undefined &&
+    Object.values(input.patch).every((value) => value === undefined)
     ? [AuthProvidersManageScope]
     : [...new Set([...scopes, AuthProvidersManageScope])];
 };

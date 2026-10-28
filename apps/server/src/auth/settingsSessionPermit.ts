@@ -2,6 +2,7 @@ import * as Option from "effect/Option";
 import * as HubConnectAccess from "./HubConnectAccess.ts";
 import {
   ServerSettingsError,
+  type AgentTerminalBinding,
   type ProviderInstanceMutation,
   type ServerSettingsPatch,
 } from "@goat/contracts";
@@ -19,6 +20,7 @@ export const make = Effect.fn("SettingsSessionPermit.make")(function* (
   return Effect.fn("SettingsSessionPermit.authorize")(function* (
     patch: ServerSettingsPatch,
     providerInstanceMutation?: ProviderInstanceMutation,
+    agentTerminalBinding?: AgentTerminalBinding,
   ) {
     if (Option.isNone(access))
       return yield* new ServerSettingsError({
@@ -36,6 +38,7 @@ export const make = Effect.fn("SettingsSessionPermit.make")(function* (
       );
     const required = RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverUpdateSettings, {
       patch,
+      ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
       ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
     });
     if (

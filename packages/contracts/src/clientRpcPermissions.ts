@@ -13,12 +13,13 @@ import {
   AuthEnvironmentMaintainScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
+  requiredScopesForServerSettingsPatch,
 } from "./auth.ts";
 import { requiredScopesForServerSettingsPatch, ServerSettingsPatch } from "./settings.ts";
 import { ProviderInstanceMutation } from "./providerInstance.ts";
 import { CHANNEL_GATEWAY_WS_METHODS } from "./channelGateway.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import { WS_METHODS } from "./rpc.ts";
+import { WS_METHODS, ServerSettingsUpdateInput } from "./rpc.ts";
 import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
@@ -183,6 +184,7 @@ const decodeSettingsUpdate = Schema.decodeUnknownSync(
 
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);
+const decodeSettingsUpdate = Schema.decodeUnknownSync(ServerSettingsUpdateInput);
 
 export function clientRpcRequiredScopes(
   method: string,
@@ -190,11 +192,16 @@ export function clientRpcRequiredScopes(
 ): readonly AuthEnvironmentScope[] {
   if (method === WS_METHODS.serverUpdateSettings && input !== undefined) {
     const payload = decodeSettingsUpdate(input);
-    const scopes = requiredScopesForServerSettingsPatch(payload.patch);
-    if (payload.providerInstanceMutation === undefined) return scopes;
-    return Object.values(payload.patch).every((value) => value === undefined)
-      ? [AuthProvidersManageScope]
-      : [...new Set([...scopes, AuthProvidersManageScope])];
+    const scopes = requiredScopesForServerSettingsPatch(
+      payload.patch,
+      payload.agentTerminalBinding,
+    );
+    return payload.providerInstanceMutation === undefined
+      ? scopes
+      : payload.agentTerminalBinding === undefined &&
+          Object.values(payload.patch).every((value) => value === undefined)
+        ? [AuthProvidersManageScope]
+        : [...new Set([...scopes, AuthProvidersManageScope])];
   }
   if (method === WS_METHODS.memoryImportProvider)
     return [AuthMemoryWriteScope, AuthFilesystemReadScope];

@@ -8,9 +8,11 @@ import {
 import * as Predicate from "effect/Predicate";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
 import {
+  requiredScopesForServerSettingsPatch,
+  AgentWorkspaceAccess,
+  AgentTerminalAccess,
+  AgentTerminalClientBinding,
   AuthOrchestrationOperateScope,
-  AuthSettingsWriteScope,
-  AuthProvidersManageScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import * as Effect from "effect/Effect";
@@ -24,6 +26,7 @@ import {
 } from "./desktopWindowMaterial.ts";
 export { GlassOpacity, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY } from "./desktopWindowMaterial.ts";
 import {
+  AuthSessionId,
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
   EnvironmentId,
@@ -83,6 +86,7 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 
 export * from "./settingsFontSizes.ts";
+export { requiredScopesForServerSettingsPatch } from "./auth.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -1090,6 +1094,8 @@ export const WorktreeCleanup = Schema.NullOr(
 export type WorktreeCleanup = typeof WorktreeCleanup.Type;
 
 export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
+  "agentWorkspaceAccess",
+  "agentTerminalAccess",
   "worktreeCleanup",
   "defaultModelSelection",
   "defaultRuntimeMode",
@@ -1139,6 +1145,8 @@ export type ProjectProviderInstanceOverride = typeof ProjectProviderInstanceOver
 /** Absent keys inherit; null is a value for nullable settings.
  * providerInstances overrides fields per instance; other keys replace the whole setting. */
 export const ProjectSettingsOverrides = Schema.Struct({
+  agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),
+  agentTerminalAccess: Schema.optionalKey(AgentTerminalAccess),
   worktreeCleanup: Schema.optionalKey(WorktreeCleanup),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
@@ -1372,6 +1380,13 @@ export function newGoatBotHomeClaim({
 }
 
 export const ServerSettings = Schema.Struct({
+  agentWorkspaceAccess: AgentWorkspaceAccess.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off")),
+  ),
+  agentTerminalAccess: AgentTerminalAccess.pipe(Schema.withDecodingDefault(Effect.succeed("off"))),
+  agentTerminalClientBindings: Schema.Record(AuthSessionId, AgentTerminalClientBinding).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   memoryOwnerSourceReadPolicyVersion: NonNegativeInt.pipe(
     Schema.withDecodingDefault(Effect.succeed(0)),
   ),
@@ -1834,6 +1849,8 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 const ServerSettingsPatchFields = Schema.Struct({
+  agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),
+  agentTerminalAccess: Schema.optionalKey(AgentTerminalAccess),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
@@ -2043,7 +2060,9 @@ const ServerSettingsPatchCodec = Schema.Unknown.check(
   Schema.makeFilter(
     (raw) =>
       !Predicate.isObject(raw) ||
-      (!Object.hasOwn(raw, "memoryHub") &&
+      (!Object.hasOwn(raw, "agentTerminalBinding") &&
+        !Object.hasOwn(raw, "agentTerminalClientBindings") &&
+        !Object.hasOwn(raw, "memoryHub") &&
         !Object.hasOwn(raw, "memoryHubVersion") &&
         !Object.hasOwn(raw, "memoryHubProvenance") &&
         !Object.hasOwn(raw, "memoryOwnerSourceReadPolicy") &&
@@ -2054,25 +2073,6 @@ export const ServerSettingsPatch = Object.assign(ServerSettingsPatchCodec, {
   fields: ServerSettingsPatchFields.fields,
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
-
-export function requiredScopesForServerSettingsPatch(
-  patch: ServerSettingsPatch,
-): ReadonlyArray<AuthEnvironmentScope> {
-  let changesProviders = false;
-  let changesSettings = false;
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) continue;
-    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
-      changesProviders = true;
-    } else {
-      changesSettings = true;
-    }
-  }
-  return [
-    ...(changesSettings || !changesProviders ? [AuthSettingsWriteScope] : []),
-    ...(changesProviders ? [AuthProvidersManageScope] : []),
-  ];
-}
 
 /** Host-executed project scripts require settings-write authority in addition to orchestration:operate. */
 export function requiredScopesForProjectMutation(

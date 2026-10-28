@@ -42,6 +42,7 @@ import { taskEntries } from "./entries/task.ts";
 import { threadEntries } from "./entries/thread.ts";
 import { workflowEntries } from "./entries/workflow.ts";
 import { worktreeEntries } from "./entries/worktree.ts";
+import { workspaceEntries } from "./entries/workspace.ts";
 
 export type {
   AgentSurfaceCapability,
@@ -52,6 +53,7 @@ export type {
 } from "./types.ts";
 
 export const agentSurfaceRegistry = {
+  ...workspaceEntries,
   ...decisionEntries,
   ...permissionProfileEntries,
   ...attachmentEntries,
