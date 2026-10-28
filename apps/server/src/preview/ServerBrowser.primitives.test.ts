@@ -175,6 +175,7 @@ const dependencies = Layer.mergeAll(
   Layer.succeed(PreviewBrowser.PreviewBrowser, {
     executable: Effect.die("unused executable"),
     installed: Effect.die("unused executable"),
+    installStatus: Effect.succeed({ _tag: "installed" as const }),
   }),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
     available: false,

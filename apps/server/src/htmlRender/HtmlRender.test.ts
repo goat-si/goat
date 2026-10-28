@@ -48,6 +48,7 @@ const layerHtmlRender = (
               ? Effect.die("This test has no preview browser.")
               : Effect.succeed(executable),
           installed,
+          installStatus: Effect.die("HtmlRender does not read browser readiness."),
         }),
       ),
     ),

@@ -88,6 +88,7 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewManager from "./Manager.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
@@ -398,6 +399,7 @@ const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
 
   const tabs = new Map<string, ServerTab>();
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
@@ -1281,6 +1283,7 @@ const make = Effect.gen(function* () {
     if (!tab) {
       return {
         available: false,
+        browser: await readReadiness(),
         visible: false,
         tabId: null,
         url: null,

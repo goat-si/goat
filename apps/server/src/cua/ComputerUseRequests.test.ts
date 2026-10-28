@@ -19,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import { MAC_STANDALONE_REASON } from "./CuaDisplayCapability.ts";
 
 import {
   leasesDetecting,
@@ -623,5 +624,65 @@ it.effect("another thread's whole-screen grant still refuses a request for any a
       assert.equal(result.holderThreadId, holder);
       assert.include(result.message, "whole screen");
     }),
+  ),
+);
+
+const offDriver = (computerUse: CuaDriver.CuaDriver["Service"]["computerUse"]) =>
+  Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(false), computerUse });
+
+it.effect(
+  "a host that cannot run computer use says why instead of sending the person to the Settings toggle, and asks nobody",
+  () =>
+    withHarness(({ orchestrator }) =>
+      withRequests(orchestrator, supported, ({ request }) =>
+        Effect.gen(function* () {
+          const result = yield* request().pipe(
+            Effect.provide(
+              offDriver(
+                Effect.succeed({
+                  enabled: false,
+                  running: false,
+                  capability: "unavailable",
+                  reason: MAC_STANDALONE_REASON,
+                  environment: [],
+                }),
+              ),
+            ),
+          );
+          if (result.kind !== "refused") return assert.fail("an unusable host must refuse");
+          assert.equal(result.reason, "disabled");
+          assert.include(result.message, MAC_STANDALONE_REASON);
+          assert.notInclude(result.message, "A person turns it on in Settings.");
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+        }),
+      ),
+    ),
+);
+
+it.effect("a host that can run computer use but has it off names where a person turns it on", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request }) =>
+      Effect.gen(function* () {
+        const result = yield* request().pipe(
+          Effect.provide(
+            offDriver(
+              Effect.succeed({
+                enabled: false,
+                running: false,
+                capability: "partial",
+                reason: "Accessibility and Screen Recording are not checked yet.",
+                environment: [],
+              }),
+            ),
+          ),
+        );
+        if (result.kind !== "refused")
+          return assert.fail("a host with computer use off must refuse");
+        assert.equal(result.reason, "disabled");
+        assert.include(result.message, "Settings → Computer");
+        assert.include(result.message, "connected directly to it");
+      }),
+    ),
   ),
 );

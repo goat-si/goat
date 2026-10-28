@@ -89,12 +89,18 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         "Foreground approval supports whole-desktop access only. Omit apps to ask explicitly for the whole desktop, or omit foreground for background-only access to these apps. No app scope has been broadened.",
     } satisfies ComputerUseRequestResult;
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
-  if (Option.isNone(cua) || !(yield* cua.value.enabled))
+  if (Option.isNone(cua) || !(yield* cua.value.enabled)) {
+    // Turning it on is refused where the driver cannot run, so the refusal names that first.
+    const host = Option.isSome(cua) ? yield* cua.value.computerUse : undefined;
     return {
       kind: "refused",
       reason: "disabled",
-      message: "Computer use is off on this host. A person turns it on in Settings.",
+      message:
+        host?.capability === "unavailable"
+          ? `Computer use cannot run on this host: ${host.reason} Turning it on in Settings is refused until that changes, so do not ask again in this turn; tell the person what is needed.`
+          : "Computer use is off on this host. A person turns it on in Settings → Computer for this host, from a GOAT app connected directly to it with permission to change its settings; they do not need to be at this machine. Then ask again.",
     } satisfies ComputerUseRequestResult;
+  }
   // An approval would not help: the desktop will not start the driver until macOS allows it, or
   // until the Windows helper can use the desktop. A block newer readiness has cleared no longer
   // refuses.

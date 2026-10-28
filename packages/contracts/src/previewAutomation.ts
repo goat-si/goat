@@ -7,7 +7,12 @@ import {
   previewControlMessage,
 } from "./previewAutomationControl.ts";
 
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  ForwardCompatibleOptional,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import {
   PREVIEW_VIEWPORT_MAX_AREA,
   PreviewRenderedViewportSize,
@@ -94,8 +99,30 @@ export const PreviewAutomationProfile = Schema.Struct({
 });
 export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
 
+/**
+ * Whether this server's own headless browser can start, which needs no desktop app. `installed`
+ * means an executable is present; only preview.open proves it launches.
+ */
+export const ServerBrowserReadinessState = Schema.Literals([
+  "installed",
+  "installs_on_open",
+  "installing",
+  "install_failed",
+  "blocked",
+  "unsupported",
+]);
+export type ServerBrowserReadinessState = typeof ServerBrowserReadinessState.Type;
+
+export const ServerBrowserReadiness = Schema.Struct({
+  state: ServerBrowserReadinessState,
+  reason: Schema.String,
+});
+export type ServerBrowserReadiness = typeof ServerBrowserReadiness.Type;
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
+  /** On the server browser's status without a tab; desktop hosts and older servers omit it. */
+  browser: ForwardCompatibleOptional(ServerBrowserReadiness),
   visible: Schema.Boolean,
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
@@ -686,7 +713,7 @@ export class PreviewAutomationUnavailableError extends Schema.TaggedError<Previe
   },
 ) {
   override get message(): string {
-    return `MCP credential does not grant the ${this.capability} capability: browser preview tools are off for this thread. Do not retry them. To check a page, use a headless browser from the shell, such as Playwright, or curl. The user can turn on "Agent browser access" in Settings; it applies when the agent session next starts.`;
+    return `MCP credential does not grant the ${this.capability} capability: browser preview tools are off for this thread. Do not retry them. Tell the person: they turn on "Agent browser access" in Settings for this host, and it applies when the agent session next starts. Whether this host's browser is installed says nothing about this thread's access.`;
   }
 }
 

@@ -36,6 +36,8 @@ export interface HostCardView {
   readonly quotas: ReadonlyArray<HostStatusQuota>;
   /** Null when the host predates reporting computer use. */
   readonly computerUse: string | null;
+  /** The server's own browser; null when the host predates reporting it. */
+  readonly browser: string | null;
   /** Sections the host left out because they were not JSON; null when it sent everything. */
   readonly omitted: OmittedSectionsView | null;
 }
@@ -62,6 +64,20 @@ export function platformLabel(platform: string | undefined): string | null {
 }
 
 /** A host that dropped sections still reports; this says what it left out and why. */
+function hostBrowserText(browser: HostStatusMetrics["browser"]): string | null {
+  if (browser === undefined) return null;
+  switch (browser.state) {
+    case "installed":
+      return "Ready, no desktop app needed";
+    case "installs_on_open":
+      return "Installs on first use, no desktop app needed";
+    case "installing":
+      return "Installing";
+    default:
+      return browser.reason;
+  }
+}
+
 export function omittedSectionsView(entry: HostStatusEntry): OmittedSectionsView | null {
   const omitted = entry.omittedMetrics ?? [];
   if (omitted.length === 0) return null;
@@ -159,6 +175,7 @@ export function hostCards(
       threads: metrics?.threads ?? null,
       quotas: metrics?.quotas ?? [],
       computerUse: hostComputerUseText(metrics?.computerUse),
+      browser: hostBrowserText(metrics?.browser),
       omitted: omittedSectionsView(entry),
     };
   });

@@ -83,6 +83,7 @@ const OPTIONAL_METRIC_SECTIONS = [
   "quotaPool",
   "quotaRouteMarkers",
   "computerUse",
+  "browser",
   "opencodex",
   "storage",
   "strays",

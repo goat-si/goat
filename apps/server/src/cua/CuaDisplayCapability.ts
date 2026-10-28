@@ -10,6 +10,8 @@ import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { A11Y_GET_ADDRESS, dbusProbe } from "./CuaDbusProbe.ts";
+import packageJson from "../../package.json" with { type: "json" };
+import { type InstalledDesktopApps, standaloneMacRemedy } from "./installedDesktopApps.ts";
 
 export interface CuaDisplayVariable {
   readonly name: string;
@@ -274,7 +276,7 @@ export const MAC_GRANTS_REASON =
  * grants would land on the wrong app; the desktop app runs the driver under its own helper.
  */
 export const MAC_STANDALONE_REASON =
-  "On a Mac, computer use runs through the GOAT desktop app. Open GOAT on this Mac to use it.";
+  "This thread runs on a standalone GOAT server (one the GOAT desktop app does not host), and on a Mac computer use runs only through the desktop app's own server, so threads here cannot use it.";
 
 /**
  * The driver needs this user's GUI session, which exists only while they own the console. The
@@ -287,9 +289,29 @@ export function classifyDarwin(input: {
   readonly user: string;
   /** A server without the desktop app, such as `goat serve` started from a terminal. */
   readonly standalone?: boolean;
+  /** What a standalone server found installed, to name the way out; omitted, the reason stays bare. */
+  readonly installedApps?: InstalledDesktopApps;
 }): CuaDisplayProbe {
   if (input.standalone)
-    return { capability: "unavailable", reason: MAC_STANDALONE_REASON, environment: [] };
+    return {
+      capability: "unavailable",
+      reason:
+        input.installedApps === undefined
+          ? MAC_STANDALONE_REASON
+          : `${MAC_STANDALONE_REASON} ${standaloneMacRemedy({
+              installed: input.installedApps,
+              serverVersion: packageJson.version,
+              console:
+                input.consoleUid === null || input.uid === undefined
+                  ? "unknown"
+                  : input.consoleUid === input.uid
+                    ? "self"
+                    : input.consoleUid === 0
+                      ? "none"
+                      : "other",
+            })}`,
+      environment: [],
+    };
   if (input.consoleUid === null || input.uid === undefined)
     return {
       capability: "partial",
@@ -652,7 +674,10 @@ const probeLinux = Effect.fnUntraced(function* () {
   });
 });
 
-const probeDarwin = Effect.fnUntraced(function* (standalone: boolean) {
+const probeDarwin = Effect.fnUntraced(function* (
+  standalone: boolean,
+  installedApps: Effect.Effect<InstalledDesktopApps> | undefined,
+) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat("/dev/console").pipe(Effect.orElseSucceed(() => null));
   return classifyDarwin({
@@ -660,6 +685,7 @@ const probeDarwin = Effect.fnUntraced(function* (standalone: boolean) {
     consoleUid: info?.uid._tag === "Some" ? info.uid.value : null,
     user: (yield* HostProcess.Username) ?? "this user",
     standalone,
+    ...(standalone && installedApps !== undefined ? { installedApps: yield* installedApps } : {}),
   });
 });
 
@@ -685,10 +711,12 @@ const probeWindows = Effect.fnUntraced(function* () {
  */
 export const probeDisplay = Effect.fn("CuaDisplayCapability.probe")(function* (
   server: "desktop" | "standalone",
+  /** A standalone Mac names the GOAT apps it has installed in its reason. */
+  installedApps?: Effect.Effect<InstalledDesktopApps>,
 ) {
   const platform = yield* HostProcess.Platform;
   if (platform === "linux") return yield* probeLinux();
-  if (platform === "darwin") return yield* probeDarwin(server === "standalone");
+  if (platform === "darwin") return yield* probeDarwin(server === "standalone", installedApps);
   if (platform === "win32") return yield* probeWindows();
   return {
     capability: "unavailable",
