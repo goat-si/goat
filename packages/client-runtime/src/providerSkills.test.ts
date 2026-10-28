@@ -139,22 +139,24 @@ describe.each(["codex", "fx"])("built-in skills in the skill menu (%s)", (driver
   const on = { enableCua: true, disabledBuiltInSkills: [] };
   const names = (skills: ReadonlyArray<{ name: string }>) => skills.map((skill) => skill.name);
 
-  it("a local provider with computer use on lists computer-use and screen-code", () => {
+  it("a local provider with computer use on lists computer-use, browser and screen-code", () => {
     const listed = withBuiltInProviderSkills([], localProvider, on);
     expect(listed).toMatchObject([
       { name: "computer-use", scope: "builtin", enabled: true },
+      { name: "browser", scope: "builtin", enabled: true },
       { name: "screen-code", scope: "builtin", enabled: true },
     ]);
     expect(getProviderSkillsForSlashMenu(listed, true).map((skill) => skill.name)).toEqual([
       "computer-use",
+      "browser",
       "screen-code",
     ]);
   });
 
-  it("a local provider with computer use off still lists screen-code", () => {
+  it("a local provider with computer use off still lists browser and screen-code", () => {
     expect(
       names(withBuiltInProviderSkills([], localProvider, { ...on, enableCua: false })),
-    ).toEqual(["screen-code"]);
+    ).toEqual(["browser", "screen-code"]);
   });
 
   it("a cloud provider lists neither screen skill", () => {
@@ -168,7 +170,7 @@ describe.each(["codex", "fx"])("built-in skills in the skill menu (%s)", (driver
       ...on,
       disabledBuiltInSkills: ["computer-use"],
     });
-    expect(names(getProviderSkillsForSlashMenu(listed, true))).toEqual(["screen-code"]);
+    expect(names(getProviderSkillsForSlashMenu(listed, true))).toEqual(["browser", "screen-code"]);
   });
 
   it("lets a skill the person wrote with the same name win", () => {
@@ -181,8 +183,15 @@ describe.each(["codex", "fx"])("built-in skills in the skill menu (%s)", (driver
       withBuiltInProviderSkills([own], localProvider, on),
       true,
     );
-    expect(names(menu)).toEqual(["computer-use", "screen-code"]);
+    expect(names(menu)).toEqual(["computer-use", "browser", "screen-code"]);
     expect(menu[0]?.path).toBe(own.path);
+    // Many people already keep a skill called browser; theirs stays the one the menu offers.
+    const ownBrowser = { name: "browser", path: "/home/me/.agents/skills/browser", enabled: true };
+    const withOwnBrowser = getProviderSkillsForSlashMenu(
+      withBuiltInProviderSkills([ownBrowser], localProvider, on),
+      true,
+    );
+    expect(withOwnBrowser.find((skill) => skill.name === "browser")?.path).toBe(ownBrowser.path);
   });
 });
 
@@ -369,35 +378,53 @@ describe("message-named built-in skills in the skill menu", () => {
     ).map((skill) => skill.name);
 
   it("lists advertised skills for providers that carry GOAT instructions", () => {
-    expect(menu("codex", serving)).toEqual(["screen-code", "goat-discipline", "goat-docs"]);
-    expect(menu("claudeAgent", serving)).toEqual(["screen-code", "goat-discipline", "goat-docs"]);
-    expect(menu("fx", serving)).toEqual(["screen-code", "goat-discipline", "goat-docs"]);
+    expect(menu("codex", serving)).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
+      "goat-docs",
+    ]);
+    expect(menu("claudeAgent", serving)).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
+      "goat-docs",
+    ]);
+    expect(menu("fx", serving)).toEqual(["browser", "screen-code", "goat-discipline", "goat-docs"]);
     expect(menu("muse", serving)).toEqual([]);
   });
 
   it("omits a skill absent from an explicit server list", () => {
     expect(menu("codex", { ...serving, builtInSkills: ["goat-discipline"] })).toEqual([
+      "browser",
       "screen-code",
       "goat-discipline",
     ]);
   });
 
   it("keeps discipline on older servers without offering docs", () => {
-    expect(menu("codex", { devDisciplineSkill: true })).toEqual(["screen-code", "goat-discipline"]);
-    expect(menu("codex", undefined)).toEqual(["screen-code"]);
+    expect(menu("codex", { devDisciplineSkill: true })).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
+    ]);
+    expect(menu("codex", undefined)).toEqual(["browser", "screen-code"]);
   });
 
   it("keeps it out of a project that switched it off and in every other project", () => {
     expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
+      "browser",
       "screen-code",
       "goat-docs",
     ]);
     expect(menu("codex", { ...serving, projectId: null })).toEqual([
+      "browser",
       "screen-code",
       "goat-discipline",
       "goat-docs",
     ]);
     expect(menu("fx", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
+      "browser",
       "screen-code",
       "goat-docs",
     ]);

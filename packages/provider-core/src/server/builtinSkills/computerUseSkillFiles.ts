@@ -30,6 +30,7 @@ const COMPUTER_USE_APP_NOTES: Readonly<
     ].join("\n"),
     KakaoTalk: [
       "KakaoTalk: the chat list is a table whose rows can be selected in the background. Click the chat's cell by its `element_token` (it selects the row), then `press_key` Return to open the chat; a point click on the list is ignored in the background.",
+      "Opening a chat marks its messages read for the sender. When the task only reads, read the chat list's previews and do not open the chat.",
       'In a chat, the message field is the `AXTextArea` labelled "Enter a message" ("Enter public message" in open chats, or a translation). Message bubbles are `AXTextArea` rows too, so pick the field by that label, `type_text` into it by its token and `press_key` Return to send. Older history shows as one "(offscreen rows: N ...)" line; if a read still misses the field, read again with `max_depth: 2`.',
       "After sending, read the chat again: the field is empty and the newest bubble shows your exact text. Otherwise say you could not confirm it was sent instead of sending again.",
       "Sending a message goes to other people: confirm the recipient and the text with the person first.",
@@ -37,7 +38,19 @@ const COMPUTER_USE_APP_NOTES: Readonly<
     Preview: [
       "Preview: toolbar zoom buttons and menu shortcuts work in the background (command+plus, command+minus, command+9 fits the window). Text in a PDF page is drawn, not in the tree; use the screenshot to read it.",
     ].join("\n"),
+    Safari: [
+      "Safari: setting the address field's value does not load the page. Open a URL with File > Open Location (`invoke_menu`), type it and press Return; for web pages GOAT's own browser is usually the better tool.",
+    ].join("\n"),
   },
+};
+
+/** Bundle ids of the apps above, so a note is found from either identity. */
+const COMPUTER_USE_APP_BUNDLE_IDS: Readonly<Record<string, string>> = {
+  "com.apple.finder": "Finder",
+  "com.apple.systempreferences": "System Settings",
+  "com.kakao.kakaotalkmac": "KakaoTalk",
+  "com.apple.preview": "Preview",
+  "com.apple.safari": "Safari",
 };
 
 const frontmatter = [
@@ -73,11 +86,17 @@ export function computerUseSkillFiles(platform: NodeJS.Platform): Readonly<Recor
   };
 }
 
-/** The notes for one app on this platform, if GOAT has any. */
+/** The notes for one app on this platform, by its name or bundle id, if GOAT has any. */
 export function computerUseAppNote(
   platform: NodeJS.Platform,
   appName: string | undefined,
 ): string | undefined {
   if (appName === undefined) return undefined;
-  return COMPUTER_USE_APP_NOTES[platform]?.[appName];
+  const notes = COMPUTER_USE_APP_NOTES[platform];
+  if (notes === undefined) return undefined;
+  const bundle = appName.toLowerCase();
+  const name = Object.hasOwn(COMPUTER_USE_APP_BUNDLE_IDS, bundle)
+    ? COMPUTER_USE_APP_BUNDLE_IDS[bundle]
+    : appName;
+  return name !== undefined && Object.hasOwn(notes, name) ? notes[name] : undefined;
 }

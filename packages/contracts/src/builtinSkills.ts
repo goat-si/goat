@@ -9,6 +9,7 @@ export const BUILTIN_SKILL_SCOPE = "builtin";
 
 export const BuiltInSkillName = Schema.Literals([
   "computer-use",
+  "browser",
   "screen-code",
   "goat-discipline",
   "goat-docs",
@@ -31,6 +32,13 @@ export const BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillListing> = [
     description:
       "Operate app windows on the computer that runs GOAT: observe one window, act in single calls or batches, verify at checkpoints. Loads on every turn that has computer use.",
     anyOf: ["computer-use"],
+  },
+  {
+    name: "browser",
+    displayName: "Browser",
+    description:
+      "Read and operate web pages in GOAT's browser: observe, act, batch in one screen cell, verify. Loads on every turn that has the browser.",
+    anyOf: ["browser"],
   },
   {
     name: "screen-code",

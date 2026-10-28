@@ -1,4 +1,4 @@
-/** Short resident pointer; the full tool contract is available through goat_describe. */
+/** Short resident pointer; a session's first goat_screen_run result carries the whole API. */
 export const SCREEN_CODE_SKILL_CORE = `<screen_code>
-Use goat_screen_run for bounded JavaScript; first read goat_describe {path:"surface.screen_run",detail:"full"}. Discover live targets, bind exact identities and await effects. Browser and desktop access differ. Check receipts; re-observe unknown outcomes.
+goat_screen_run runs one JavaScript cell on screen.tab() and screen.app() targets; its first result or goat_describe lists the API.
 </screen_code>`;

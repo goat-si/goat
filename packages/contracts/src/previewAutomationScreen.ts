@@ -21,4 +21,6 @@ export const PreviewAutomationScreenExpectation = Schema.Struct({
   connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   controlGeneration: Schema.Number,
   origin: Schema.NullOr(Schema.String),
+  /** A pointer action aimed at a screenshot: the main-frame document that screenshot showed. */
+  documentGeneration: Schema.optional(Schema.Number),
 });

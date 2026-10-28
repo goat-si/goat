@@ -67,12 +67,30 @@ export const cellReadInput = (
   return { input: { ...decoded.value, maxBytes } };
 };
 
+/** What a tab observation covered, exactly enough that two reads compare only when it matches. */
+const scopeIdentity = (arg: Record<string, unknown>): string => {
+  const scope =
+    arg.scope && typeof arg.scope === "object" ? (arg.scope as Record<string, unknown>) : undefined;
+  const ref =
+    scope?.ref && typeof scope.ref === "object"
+      ? (scope.ref as Record<string, unknown>)
+      : undefined;
+  const where =
+    typeof scope?.selector === "string"
+      ? `selector ${scope.selector.slice(0, 900)}`
+      : typeof ref?.id === "string"
+        ? `element ${ref.id}`
+        : "page";
+  return arg.interactiveOnly === true ? `${where} interactive` : where;
+};
+
 export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(function* (input: {
   readonly call: ScreenHostCall;
   readonly context: ScreenHostContext;
   readonly targetRef: ScreenTargetRef;
   readonly connectionId: string;
   readonly controlGeneration: number;
+  readonly documentGeneration?: number;
   readonly snapshot: PreviewAutomationSnapshot;
   readonly observations: ScreenObservations;
   readonly arg: Record<string, unknown>;
@@ -84,6 +102,9 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
     targetGeneration: targetRef.generation,
     connectionId,
     controlGeneration,
+    ...(input.documentGeneration === undefined
+      ? {}
+      : { documentGeneration: input.documentGeneration }),
     snapshot,
   });
   const mode = arg.mode === "diff" || arg.mode === "query" ? arg.mode : "full";
@@ -131,6 +152,7 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
         mode,
         ...(baseObservationId ? { baseObservationId } : {}),
         ...(query ? { query } : {}),
+        scope: scopeIdentity(arg),
         limits: { treeBytes: observationReplyBudget(call, context.limits, imageReserve) },
       }),
     catch: (cause) =>

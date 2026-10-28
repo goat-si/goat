@@ -183,4 +183,18 @@ describe("foldLaunchedThreads", () => {
     expect(result.liftByKey.get(key("root"))).toBe("approval");
     expect(result.stateByKey.get(key("lane"))).toBe("attention");
   });
+
+  it("gives coding work its own row and request when the GOAT Bot thread above it has no row", () => {
+    const session = thread("goat-bot-session:s");
+    const observer = thread("observer", { subagentOf: "goat-bot-session:s" });
+    const coding = thread("coding", { launchedBy: "observer", approval: true });
+    const unrelated = thread("unrelated");
+    const hidden = fold([coding, unrelated], [session, observer]);
+    expect(ids(hidden.roots)).toEqual(["coding", "unrelated"]);
+    expect(hidden.stateByKey.get(key("coding"))).toBe("attention");
+    expect(hidden.liftByKey.has(key("unrelated"))).toBe(false);
+    const shown = fold([session, coding, unrelated], [observer]);
+    expect(shown.parentKeyByKey.get(key("coding"))).toBe(key("goat-bot-session:s"));
+    expect(shown.liftByKey.get(key("goat-bot-session:s"))).toBe("approval");
+  });
 });

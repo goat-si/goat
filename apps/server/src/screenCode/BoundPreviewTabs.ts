@@ -20,6 +20,7 @@ export interface ExactPreviewTab {
   readonly tabId: PreviewTabId;
   readonly controlGeneration?: number;
   readonly origin?: string | null;
+  readonly documentGeneration?: number;
 }
 
 export interface BoundPreviewTab {
@@ -87,6 +88,9 @@ export const screenExpectationOf = (exact: ExactPreviewTab | undefined) =>
           connectionId: exact.connectionId,
           controlGeneration: exact.controlGeneration,
           origin: exact.origin,
+          ...(exact.documentGeneration === undefined
+            ? {}
+            : { documentGeneration: exact.documentGeneration }),
         },
       };
 

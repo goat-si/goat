@@ -76,6 +76,7 @@ export const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(f
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">,
   request: { readonly reservationId?: string; readonly connectionId?: string },
   completed: true | undefined,
+  notSent?: boolean,
 ) {
   if (request.reservationId === undefined || request.connectionId === undefined) return;
   yield* options.reservation({
@@ -84,5 +85,6 @@ export const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(f
     connectionId: request.connectionId,
     reservationId: request.reservationId,
     ...(completed && { completed }),
+    ...(notSent === true && { notSent }),
   });
 });

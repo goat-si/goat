@@ -51,12 +51,18 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
       args,
       ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
-  const release = (owner: typeof a, reservationId: string, connectionId = "driver:1") =>
+  const release = (
+    owner: typeof a,
+    reservationId: string,
+    connectionId = "driver:1",
+    outcome: { readonly completed?: true; readonly notSent?: true } = {},
+  ) =>
     leases.callReservation(owner, {
       action: "release",
       controlId: owner === a ? first.controlId : second.controlId,
       connectionId,
       reservationId,
+      ...outcome,
     });
   const close = (owner = a, connectionId = "driver:1") =>
     leases.callReservation(owner, {
@@ -886,5 +892,98 @@ describe("server computer-use call reservations", () => {
           detail: "expired",
         });
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+});
+
+describe("server computer-use app leases of calls that never ran", () => {
+  it.effect("a refused call leaves no app lease, so another thread can use the app at once", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const refused = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("expected ticket");
+      yield* f.release(f.a, refused.reservationId, "driver:1", { completed: true, notSent: true });
+      assert.equal((yield* f.reserve(f.b)).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("a refused call keeps the app lease an earlier call of its thread took", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const acted = yield* f.reserve();
+      if (acted.status !== "admitted" || acted.reservationId === null)
+        return assert.fail("expected first ticket");
+      yield* f.release(f.a, acted.reservationId, "driver:1", { completed: true });
+      const refused = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("expected second ticket");
+      yield* f.release(f.a, refused.reservationId, "driver:1", { completed: true, notSent: true });
+      assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+});
+
+describe("server computer-use app leases when calls overlap", () => {
+  it.effect.each(["first", "second"] as const)(
+    "two refused calls of one thread leave no app lease, the %s released first",
+    (order) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const one = yield* f.reserve();
+        const two = yield* f.reserve();
+        if (one.status !== "admitted" || one.reservationId === null) return assert.fail("one");
+        if (two.status !== "admitted" || two.reservationId === null) return assert.fail("two");
+        const ids =
+          order === "first"
+            ? [one.reservationId, two.reservationId]
+            : [two.reservationId, one.reservationId];
+        for (const id of ids)
+          yield* f.release(f.a, id, "driver:1", { completed: true, notSent: true });
+        assert.equal((yield* f.reserve(f.b)).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("a refused call keeps the lease of an overlapping call that ran", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const refused = yield* f.reserve();
+      const acted = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("refused");
+      if (acted.status !== "admitted" || acted.reservationId === null) return assert.fail("acted");
+      yield* f.release(f.a, acted.reservationId, "driver:1", { completed: true });
+      yield* f.release(f.a, refused.reservationId, "driver:1", { notSent: true });
+      assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("a refused call confirmed before its refusal leaves no app lease", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const refused = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("expected ticket");
+      const confirmed = yield* f.leases.callReservation(f.a, {
+        action: "validate",
+        controlId: f.first.controlId,
+        connectionId: "driver:1",
+        reservationId: refused.reservationId,
+      });
+      assert.equal(confirmed.status, "admitted");
+      yield* f.release(f.a, refused.reservationId, "driver:1", { notSent: true });
+      assert.equal((yield* f.reserve(f.b)).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("a release from another connection cannot take back a call's app lease", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const acted = yield* f.reserve();
+      if (acted.status !== "admitted" || acted.reservationId === null)
+        return assert.fail("expected ticket");
+      yield* f.release(f.a, acted.reservationId, "driver:2", { notSent: true });
+      yield* f.release(f.a, acted.reservationId, "driver:1", { completed: true });
+      assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 });

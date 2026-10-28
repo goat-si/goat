@@ -14,11 +14,12 @@ export function screenRunMcpResult(encoded: unknown): McpSchema.CallToolResult {
       content: [{ type: "text", text: encodeJsonText(encoded) }],
     });
   }
-  const { images, ...summary } = encoded;
+  const { images, api, ...summary } = encoded;
   return new McpSchema.CallToolResult({
     isError: false,
     structuredContent: summary,
     content: [
+      ...(api === undefined ? [] : [{ type: "text" as const, text: api }]),
       { type: "text", text: encodeJsonText(summary) },
       ...images.map((image) => ({
         type: "image" as const,

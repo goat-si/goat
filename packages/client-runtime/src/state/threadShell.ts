@@ -17,6 +17,7 @@ import { Atom } from "effect/reactivity";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
+import { goatBotObservationThreadKeys } from "../goatBot/visibility.ts";
 import {
   arrayElementsEqual,
   parseProjectRefCollectionKey,
@@ -25,6 +26,8 @@ import {
   threadKey,
   threadRefsEqual,
 } from "./entities.ts";
+
+export * from "../goatBot/visibility.ts";
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
@@ -406,6 +409,19 @@ export function createEnvironmentThreadShellAtoms(input: {
     return next;
   }).pipe(Atom.withLabel("environment-quiet-thread-shell-list"));
 
+  // Lists leave GOAT Bot's observation threads out. Reuse the set while its members stay the same.
+  let previousObservationKeys: ReadonlySet<string> = new Set();
+  const goatBotObservationThreadKeysAtom = Atom.make((get) => {
+    const next = goatBotObservationThreadKeys({ threads: get(quietThreadShellsAtom) });
+    if (
+      next.size === previousObservationKeys.size &&
+      [...next].every((key) => previousObservationKeys.has(key))
+    )
+      return previousObservationKeys;
+    previousObservationKeys = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-goat-bot-observation-thread-keys"));
+
   let previousNavigationShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const navigationThreadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
@@ -435,6 +451,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellsAtom,
     quietThreadShellsAtom,
     navigationThreadShellsAtom,
+    goatBotObservationThreadKeysAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),

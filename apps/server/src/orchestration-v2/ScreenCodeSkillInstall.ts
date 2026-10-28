@@ -13,10 +13,16 @@ import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
 
-export function installScreenCodeSkillAt(stateDir: string): string | undefined {
-  const directory = NodePath.join(stateDir, "skills", SCREEN_CODE_SKILL_DIRECTORY);
+/** Writes a built-in skill's files under `<stateDir>/skills/<name>` when they differ; its entry path. */
+export function installSkillFilesAt(
+  stateDir: string,
+  name: string,
+  files: Readonly<Record<string, string>>,
+  entry: string,
+): string | undefined {
+  const directory = NodePath.join(stateDir, "skills", name);
   try {
-    for (const [relative, content] of Object.entries(screenCodeSkillFiles())) {
+    for (const [relative, content] of Object.entries(files)) {
       const target = NodePath.join(directory, relative);
       let current: string | undefined;
       try {
@@ -30,11 +36,19 @@ export function installScreenCodeSkillAt(stateDir: string): string | undefined {
       NodeFS.writeFileSync(temporary, content);
       NodeFS.renameSync(temporary, target);
     }
-    return NodePath.join(directory, SCREEN_CODE_SKILL_FILE);
+    return NodePath.join(directory, entry);
   } catch {
     return undefined;
   }
 }
+
+export const installScreenCodeSkillAt = (stateDir: string): string | undefined =>
+  installSkillFilesAt(
+    stateDir,
+    SCREEN_CODE_SKILL_DIRECTORY,
+    screenCodeSkillFiles(),
+    SCREEN_CODE_SKILL_FILE,
+  );
 
 const installScreenCodeSkill = Effect.gen(function* () {
   const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);

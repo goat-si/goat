@@ -236,7 +236,7 @@ it.effect(
 
 it.effect("desktop actions map only to allowed driver primitives", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture();
+    const { host, sent } = fixture({ get_window_state: goat2WindowState });
     const bound = yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
@@ -246,9 +246,13 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
     const elementRef = (observed.value as { elements: Array<{ ref: ScreenElementRef }> })
       .elements[0]?.ref;
     if (!elementRef) throw new Error("The observed button must have a ref");
+    const shoot = host.observe(call("screenshot", {}, ref), context);
     yield* host.invoke(call("click", { x: 10, y: 20 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("right_click", { x: 10, y: 20 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("scroll", { x: 10, y: 20, direction: "down" }, ref), context);
     yield* host.invoke(call("type_text", { text: "hello" }, ref), context);
     yield* host.invoke(call("press_key", { key: "Return" }, ref), context);
@@ -262,8 +266,11 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
       "list_windows",
       "get_window_state",
       "click",
+      "get_window_state",
       "right_click",
+      "get_window_state",
       "drag",
+      "get_window_state",
       "scroll",
       "type_text",
       "press_key",
@@ -277,6 +284,36 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
       y: 20,
     });
   }),
+);
+
+it.effect(
+  "a point is refused after any input until a new screenshot, whatever call form sent it",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({ get_window_state: goat2WindowState });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      yield* host.observe(call("screenshot", {}, ref), context);
+      yield* host.invoke(call("type_text", { text: "changes the window" }, ref), context);
+      for (const aimed of [
+        call("click", { x: 10, y: 10 }, ref),
+        call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref),
+        call("scroll", { x: 10, y: 10, direction: "down" }, ref),
+      ]) {
+        const refused = yield* host.invoke(aimed, context).pipe(Effect.result);
+        expect(refused._tag === "Failure" && refused.failure).toMatchObject({
+          code: "stale_reference",
+          effectStarted: false,
+        });
+      }
+      expect(sent.map((entry) => entry.tool)).not.toContain("click");
+      yield* host.observe(call("screenshot", {}, ref), context);
+      yield* host.invoke(call("click", { x: 10, y: 10 }, ref), context);
+      expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+    }),
 );
 
 type Observed = {
@@ -801,4 +838,108 @@ it.effect.each(["unknown", "partial", "suspected_noop", "refused", "confirmed"])
       expect(safety?.possibleCommit).toBe(effect !== "refused");
       expect(safety?.retryClass).toBe(effect === "refused" ? "fix_input" : "never");
     }),
+);
+
+// cua-driver 0.38 refuses any argument outside a tool's schema (`press_key: unknown argument ...`).
+const PRESS_KEY_ARGUMENTS = new Set([
+  "delivery_mode",
+  "element_token",
+  "key",
+  "modifiers",
+  "pid",
+  "post_action_wait",
+  "scope",
+  "target",
+  "window_id",
+  "x",
+  "y",
+]);
+const strictPressKey = (args: unknown) => {
+  const unknown = Object.keys(args as object).find((key) => !PRESS_KEY_ARGUMENTS.has(key));
+  if (unknown === undefined) return { effect: "unverifiable" };
+  const message = `press_key: unknown argument ${unknown}`;
+  return new DriverError(
+    { status: "refused", refusal: { code: "invalid_arguments", message } },
+    message,
+  );
+};
+
+it.live("a guest's key press reaches a driver that refuses unknown arguments", () => {
+  const { host, sent } = fixture({ press_key: strictPressKey });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source:
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.pressKey({key: 'escape'});",
+    });
+    expect(result.status).toBe("completed");
+    expect(sent.at(-1)).toMatchObject({ tool: "press_key", args: { key: "escape" } });
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.effect("a driver's argument refusal is an input error that says what the driver refused", () =>
+  Effect.gen(function* () {
+    const message = "press_key: unknown argument shout";
+    const { host } = fixture({
+      press_key: new DriverError(
+        { status: "refused", refusal: { code: "invalid_arguments", message } },
+        message,
+      ),
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const error = yield* host
+      .invoke(call("press_key", { key: "a", shout: true }, bound.value as ScreenTargetRef), context)
+      .pipe(Effect.flip);
+    expect(error).toMatchObject({
+      code: "invalid_argument",
+      effectStarted: false,
+      nextStep: message,
+    });
+  }),
+);
+
+it.effect("GOAT's refusal tells the agent why, what to do, and which thread holds the window", () =>
+  Effect.gen(function* () {
+    const message =
+      "Thread thread:holder is using this target. This call did not run; wait for that thread to finish, then observe again.";
+    const { host } = fixture({
+      click: new NotStarted(
+        {
+          refused: "targetRefused",
+          detail: "target_busy",
+          holderThreadId: "thread:holder",
+        },
+        message,
+      ),
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const error = yield* host
+      .invoke(call("click", { x: 1, y: 2 }, bound.value as ScreenTargetRef), context)
+      .pipe(Effect.flip);
+    expect(error).toMatchObject({
+      refused: "targetRefused",
+      detail: "target_busy",
+      holderThreadId: "thread:holder",
+      nextStep: message,
+      effectStarted: false,
+    });
+  }),
 );

@@ -248,7 +248,13 @@ describe("proxy execution ownership", () => {
             connectionId: validation.connectionId,
             reservationId: "original",
           });
-          assert.deepEqual(released, { ...validation, action: "release" });
+          assert.deepEqual(released, {
+            action: "release",
+            controlId: CONTROL,
+            connectionId: validation.connectionId,
+            reservationId: "original",
+            notSent: true,
+          });
           assert.deepEqual(
             h.reservations.map((request) => request.action),
             ["reserve", "validate", "release"],
@@ -573,6 +579,7 @@ describe("proxy execution ownership", () => {
         controlId: CONTROL,
         connectionId: acquired.connectionId,
         reservationId: "late",
+        notSent: true,
       });
       const answer = (yield* h.nextToProvider).result as { structuredContent: object };
       assert.deepEqual(answer.structuredContent, {
@@ -771,6 +778,67 @@ describe("proxy execution ownership", () => {
       yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "new turn" }));
       yield* h.nextToDriver;
       assert.notEqual((yield* h.nextReservation).connectionId, first.connectionId);
+    }),
+  );
+});
+
+describe("proxy release of a call that never ran", () => {
+  it.effect.each([
+    {
+      name: "refused by the driver",
+      result: {
+        content: [{ type: "text", text: "click: unknown argument targetRef" }],
+        structuredContent: {
+          status: "refused",
+          refusal: { code: "invalid_arguments", message: "click: unknown argument targetRef" },
+        },
+        isError: true,
+      },
+      notSent: true,
+    },
+    {
+      name: "acted on",
+      result: { content: [], structuredContent: { effect: "confirmed" } },
+      notSent: false,
+    },
+  ])("a call $name releases its ticket saying whether it was sent", ({ result, notSent }) =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const sent = yield* h.nextToDriver;
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result }));
+      yield* h.nextToProvider;
+      const released = yield* h.nextReservation;
+      assert.deepInclude(released, { action: "release", completed: true });
+      assert.equal("notSent" in released && released.notSent === true, notSent);
+    }),
+  );
+
+  it.effect("a call refused after its reservation releases its ticket as not sent", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        reservation: (request) =>
+          Effect.succeed(
+            request.action === "reserve"
+              ? { status: "admitted", reservationId: "ticket:shared" }
+              : request.action === "validate"
+                ? { status: "refused", detail: "screen_shared" }
+                : { status: "released" },
+          ),
+        humanInput: true,
+      });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      yield* h.nextToProvider;
+      assert.deepInclude(yield* h.nextReservation, {
+        action: "release",
+        reservationId: "ticket:shared",
+        notSent: true,
+      });
+      assert.equal(yield* h.driverQueued, 0);
     }),
   );
 });

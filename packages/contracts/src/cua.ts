@@ -782,6 +782,8 @@ export const ComputerUseCallReservation = Schema.Union([
      * earlier call of that connection has ended too (D17).
      */
     completed: Schema.optionalKey(Schema.Boolean),
+    /** Nothing of this call reached the app: GOAT or the driver refused it (D17 app lease). */
+    notSent: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
 ]);

@@ -54,6 +54,8 @@ interface BoundTarget {
   readonly tab: BoundPreviewTab;
   readonly origin: string | null;
   readonly observationId?: string;
+  /** The document the latest observation saw, when the host reports one; points belong to it. */
+  readonly documentGeneration?: number;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -229,13 +231,17 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     operation: Parameters<typeof broker.invoke>[0]["operation"],
     input: unknown,
     timeoutMs?: number,
+    documentGeneration?: number,
   ) =>
     broker
       .invoke({
         scope: context.invocation,
         operation,
         input,
-        exact: exact(bound.tab),
+        exact: {
+          ...exact(bound.tab),
+          ...(documentGeneration === undefined ? {} : { documentGeneration }),
+        },
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       })
       .pipe(
@@ -404,6 +410,24 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           .pipe(Effect.mapError((error) => previewTargetFailure(error, "read")));
         return { value: page, category: "confirmed", evidence: ["Rendered page text read"] };
       }
+      if (call.method === "fetch_tab") {
+        const url = stringField(arg, "url");
+        if (!url) return yield* Effect.fail(fail("invalid_argument", "Provide a URL to fetch."));
+        const fetched = yield* broker
+          .invoke({
+            scope: context.invocation,
+            operation: "fetch",
+            input: {
+              url,
+              ...(arg.format === "text" || arg.format === "markdown" ? { format: arg.format } : {}),
+              ...(typeof arg.maxChars === "number" ? { maxChars: arg.maxChars } : {}),
+            },
+            exact: exact(bound.tab, false),
+            updateCurrentTab: false,
+          })
+          .pipe(Effect.mapError((error) => previewTargetFailure(error, "fetch")));
+        return { value: fetched, category: "confirmed", evidence: ["Fetched inside the tab"] };
+      }
       const claimIdentity = identity(bound, context);
       if (call.method === "claim_tab") {
         const claim = yield* claims
@@ -451,11 +475,20 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           targetRef: bound.ref,
           connectionId: bound.tab.connectionId,
           controlGeneration: bound.tab.controlGeneration,
+          ...(current.documentGeneration === undefined
+            ? {}
+            : { documentGeneration: current.documentGeneration }),
           snapshot,
           observations,
           arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
-        targets.set(bound.ref.id, { ...reading, observationId: result.value.observationId });
+        targets.set(bound.ref.id, {
+          ...reading,
+          observationId: result.value.observationId,
+          ...(current.documentGeneration === undefined
+            ? {}
+            : { documentGeneration: current.documentGeneration }),
+        });
         return result;
       }
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
@@ -494,16 +527,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
+      // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
+      const selector = stringField(arg, "selector");
       const locator =
         arg.ref && typeof arg.ref === "object"
           ? observations.index.resolveElement(
               arg.ref as Parameters<typeof observations.index.resolveElement>[0],
             )
-          : undefined;
+          : selector;
       if (arg.ref && !locator)
         return yield* Effect.fail(fail("stale_reference", "Observe the current tab again."));
       if (
         call.method === "set_value" &&
+        selector === undefined &&
         (!arg.ref ||
           !observations.index.isEditable(
             arg.ref as Parameters<typeof observations.index.isEditable>[0],
@@ -520,6 +556,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : undefined;
       if (arg.point && (!point || point.targetId !== bound.ref.id))
         return yield* Effect.fail(fail("stale_reference", "Observe the current screenshot again."));
+      // The page may have moved on by itself (a redirect, a route change, a reload); a pixel from
+      // the earlier document could land on anything.
+      if (point && bound.documentGeneration !== current.documentGeneration)
+        return yield* Effect.fail(
+          fail("stale_reference", "The page changed since that screenshot. Observe it again."),
+        );
       if (point?.kind === "document")
         return yield* Effect.fail(
           fail(
@@ -530,6 +572,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if ((arg.x !== undefined || arg.y !== undefined) && !point)
         return yield* Effect.fail(
           fail("invalid_argument", "Use a point from the current screenshot."),
+        );
+      // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
+      if (point && call.method !== "click" && call.method !== "right_click")
+        return yield* Effect.fail(
+          fail("invalid_argument", "Click the point first, or name an element or selector."),
         );
       if (call.method === "close_tab") {
         const claim = yield* claims
@@ -560,13 +607,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               ? observations.index.resolveElement(
                   arg.sourceRef as Parameters<typeof observations.index.resolveElement>[0],
                 )
-              : undefined;
+              : stringField(arg, "sourceSelector");
           const target =
-            arg.targetRef && typeof arg.targetRef === "object"
+            arg.destinationRef && typeof arg.destinationRef === "object"
               ? observations.index.resolveElement(
-                  arg.targetRef as Parameters<typeof observations.index.resolveElement>[0],
+                  arg.destinationRef as Parameters<typeof observations.index.resolveElement>[0],
                 )
-              : undefined;
+              : stringField(arg, "destinationSelector");
           if (!source || !target)
             return yield* Effect.fail(fail("stale_reference", "Observe both drag elements again."));
           input = { source, target };
@@ -632,24 +679,28 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
+        const requested =
+          typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : Infinity;
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
             operation: "waitFor",
             input,
             exact: exact(bound.tab),
-            timeoutMs: Math.max(1, Math.min(context.limits.cellWallMs, call.deadlineMillis - now)),
+            timeoutMs: Math.max(
+              1,
+              Math.min(requested, context.limits.cellWallMs, call.deadlineMillis - now),
+            ),
           })
           .pipe(Effect.result);
-        const waitStatus =
-          waited._tag === "Success"
-            ? "met"
-            : waited.failure._tag === "PreviewAutomationTimeoutError"
-              ? "timeout"
-              : "interrupted";
+        // A condition that did not come true in time is an answer the cell can branch on; any
+        // other failure (a bad selector, a lost tab) fails the call like an action would.
+        if (waited._tag === "Failure" && waited.failure._tag !== "PreviewAutomationTimeoutError")
+          return yield* Effect.fail(previewTargetFailure(waited.failure, "waitFor"));
+        const waitStatus = waited._tag === "Success" ? "met" : "timeout";
         return {
           value: { status: waitStatus },
-          category: waitStatus === "met" ? "confirmed" : "partial",
+          category: waitStatus === "met" ? "confirmed" : "unverifiable",
           evidence: [`Wait ${waitStatus}`],
         };
       }
@@ -657,11 +708,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
       // Refs outlive completed in-page input, as computer use tokens do: the browser refuses a ref
-      // from a replaced document before any input. A failure or a new document retires them.
+      // from a replaced document before any input. A failure or a new document retires them, and
+      // any input retires screenshot points, which name pixels.
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       else observations.index.invalidatePoints(bound.ref.id);
-      const result = yield* invoke(bound, context, operation, input, cellBudgetMs).pipe(
+      // A point carries its screenshot's document so the browser's input gate can refuse it.
+      const pointDocument = point ? bound.documentGeneration : undefined;
+      const result = yield* invoke(
+        bound,
+        context,
+        operation,
+        input,
+        cellBudgetMs,
+        pointDocument,
+      ).pipe(
         Effect.tapError(() => retire),
         Effect.ensuring(
           Effect.sync(() => {

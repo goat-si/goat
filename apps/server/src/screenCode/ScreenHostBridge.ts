@@ -314,7 +314,7 @@ export class ScreenHostBridge {
       dispatched?: boolean,
       evidence: readonly string[] = [],
       safety?: ActionOutcomeSafety,
-      refusal: Pick<ScreenRunError, "refused" | "detail" | "app"> = {},
+      refusal: Pick<ScreenRunError, "refused" | "detail" | "app" | "holderThreadId"> = {},
     ) => {
       if (admittedIndex === undefined) return;
       const entry = state.journal[admittedIndex];
@@ -333,10 +333,11 @@ export class ScreenHostBridge {
       };
     };
     let ownFailure: ScreenRunError | undefined;
-    const refusalOf = ({ refused: reason, detail, app }: ScreenRunError) => ({
+    const refusalOf = ({ refused: reason, detail, app, holderThreadId }: ScreenRunError) => ({
       ...(reason === undefined ? {} : { refused: reason }),
       ...(detail === undefined ? {} : { detail }),
       ...(app === undefined ? {} : { app }),
+      ...(holderThreadId === undefined ? {} : { holderThreadId }),
     });
     const failCell = (error: ScreenRunError) => {
       const safety = screenFailureSafety(call, error);
@@ -567,6 +568,7 @@ export class ScreenHostBridge {
       cellId: call.cellId,
       callId: call.callId,
       outcome: "ok" as const,
+      category: result.success.category,
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });

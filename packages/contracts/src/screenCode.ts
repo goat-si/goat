@@ -23,6 +23,8 @@ const refusalFields = {
   detail: Schema.optionalKey(text(80)),
   /** The bundle id or app the refusal names, when the proxy knew it. */
   app: Schema.optionalKey(id),
+  /** The thread holding the window or app, for target_busy and app_busy. */
+  holderThreadId: Schema.optionalKey(id),
 };
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 const utf8Text = (max: number) =>
@@ -79,6 +81,8 @@ export const ScreenMethod = Schema.Literals([
   "select",
   "select_text",
   "wait_for",
+  "invoke_menu",
+  "fetch_tab",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;
 
@@ -222,11 +226,32 @@ export const ScreenObservation = Schema.Struct({
       role: text(200),
       name: text(1024),
       text: Schema.optionalKey(text(4096)),
+      /** What the element offers and its state, as the desktop driver reports them. */
+      actions: Schema.optionalKey(Schema.Array(text(80)).check(Schema.isMaxLength(16))),
+      enabled: Schema.optionalKey(Schema.Boolean),
+      selected: Schema.optionalKey(Schema.Boolean),
+      frame: Schema.optionalKey(
+        Schema.Struct({ x: finite, y: finite, width: finite, height: finite }),
+      ),
+      range: Schema.optionalKey(Schema.Struct({ min: finite, max: finite })),
+      /** The index of the element that contains this one, in the same observation. */
+      parent: Schema.optionalKey(natural),
       ref: ScreenElementRef,
     }),
   ).check(Schema.isMaxLength(4096)),
   image: Schema.optionalKey(ScreenImageMetadata),
   resetReason: Schema.optionalKey(text(200)),
+  /** What the observation covered: the whole window or page, interactive controls, or a scope. */
+  scope: Schema.optionalKey(text(1024)),
+  /** Regions the observation could not include, so absence there proves nothing. */
+  omitted: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        kind: Schema.Literals(["frames", "virtualized", "pixels", "budget"]),
+        detail: Schema.optionalKey(text(200)),
+      }),
+    ).check(Schema.isMaxLength(16)),
+  ),
   incompleteSearch: Schema.optionalKey(Schema.Boolean),
 }).check(Schema.makeFilter((value) => jsonBytes(value) <= 128 * 1024));
 export type ScreenObservation = typeof ScreenObservation.Type;
@@ -330,6 +355,8 @@ export const ScreenHostReply = strict(
     outcome: Schema.Literals(["ok", "error"]),
     value: Schema.optionalKey(boundedJson(64 * 1024)),
     error: Schema.optionalKey(ScreenRunError),
+    /** The call's receipt category, so a Target method can report what the host confirmed. */
+    category: Schema.optionalKey(ScreenEffectReceipt.fields.category),
   }),
 );
 export type ScreenHostReply = typeof ScreenHostReply.Type;
@@ -363,6 +390,10 @@ export const ScreenRunResult = Schema.Struct({
   availability: Schema.Array(ScreenSurfaceAvailability).check(Schema.isMaxLength(2)),
   imageMetadata: Schema.Array(ScreenImageMetadata).check(Schema.isMaxLength(64)),
   images: Schema.Array(ScreenImage).check(Schema.isMaxLength(64)),
+  /** The cell API bundle (screenTargetApi), when this thread needs it again. */
+  api: Schema.optionalKey(text(8192)),
+  /** SCREEN_TARGET_CONTRACT_VERSION, on every result, so a stale copy of the API is noticed. */
+  contractVersion: Schema.optionalKey(text(40)),
 }).check(
   Schema.makeFilter(
     (value) =>
@@ -379,7 +410,6 @@ export const ScreenRunResult = Schema.Struct({
   ),
 );
 export type ScreenRunResult = typeof ScreenRunResult.Type;
-
 /** Trusted turn input; it is never serialized into the guest protocol. */
 export type ScreenBindingHints = {
   browserRequested: boolean;
