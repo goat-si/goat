@@ -32,22 +32,28 @@ const invocation = {
   reauthorize: () => Effect.void,
 };
 
-const runCell = (
+/** Runs the cells in order, in one turn. */
+const runCells = (
   broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">,
-  source: string,
+  sources: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
     const tabHost = yield* makePreviewTargetHost(broker);
     return yield* Effect.gen(function* () {
       const service = yield* ScreenRunService;
-      return yield* service.runCell({
-        runId: "r",
-        turnId: "t",
-        threadId: "thread",
-        environmentId: "env",
-        invocation,
-        source,
-      });
+      const results = [];
+      for (const source of sources)
+        results.push(
+          yield* service.runCell({
+            runId: "r",
+            turnId: "t",
+            threadId: "thread",
+            environmentId: "env",
+            invocation,
+            source,
+          }),
+        );
+      return results;
     }).pipe(
       Effect.provide(
         ScreenRunService.layerWithRuntime({
@@ -93,8 +99,8 @@ const savingTab = () => {
             providerInstanceId: actionErrorContext.providerInstanceId,
           }),
         );
-      // The click lands, but its reply is lost: the broker drops the host, which reconnects.
-      if (request.operation === "click") {
+      // The first click lands, but its reply is lost: the broker drops the host, which reconnects.
+      if (request.operation === "click" && connectionId === "connection") {
         connectionId = "connection-2";
         return Effect.fail(new PreviewAutomationTimeoutError(actionErrorContext));
       }
@@ -118,27 +124,31 @@ const savingTab = () => {
 };
 
 it.live(
-  "after a click's reply is lost and its host reconnects, the same cell still observes the page",
+  "after a click's reply is lost and its host reconnects, the cell observes and the next cell acts on its claim",
   () => {
     const { broker, operations } = savingTab();
-    return runCell(
-      broker,
+    return runCells(broker, [
       `const tab = await screen.tab('form');
       await tab.claim();
+      screen.state.tab = tab;
       const page = await tab.observe();
       try { await tab.click(page.elements[0].index); } catch (error) { screen.state.lost = error.code; }
       const after = await tab.observe({ diff: false });
       return { lost: screen.state.lost, elements: after.elements.length };`,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.value).toEqual({ lost: "unknown_outcome", elements: 1 });
+      `const tab = screen.state.tab;
+      const page = await tab.observe({ diff: false });
+      return (await tab.click(page.elements[0].index)).verdict;`,
+    ]).pipe(
+      Effect.map(([lost, next]) => {
+        expect(lost?.value).toEqual({ lost: "unknown_outcome", elements: 1 });
         expect(
-          result.journal.find((entry) => entry.receipt.method === "click")?.receipt,
+          lost?.journal.find((entry) => entry.receipt.method === "click")?.receipt,
         ).toMatchObject({
           category: "unknown_outcome",
           outcome: { dispatch: "unknown", effect: "unknown" },
         });
-        expect(operations.filter((operation) => operation === "click")).toHaveLength(1);
+        expect(next?.status).toBe("completed");
+        expect(operations.filter((operation) => operation === "click")).toHaveLength(2);
       }),
     );
   },

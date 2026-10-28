@@ -341,6 +341,11 @@ export class ScreenHostBridge {
           journalState,
           dispatched: dispatched ?? entry.receipt.dispatched,
           evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)),
+          ...(category === "unknown_outcome"
+            ? axes("unknown")
+            : category === "refused"
+              ? axes("refused")
+              : {}),
           ...refusal,
         },
       };
@@ -361,7 +366,7 @@ export class ScreenHostBridge {
         error.effectStarted,
         notRunEvidence(error),
         safety,
-        { ...refusalOf(error), ...axes(safety.possibleCommit ? "unknown" : "refused") },
+        refusalOf(error),
       );
       halt();
     };

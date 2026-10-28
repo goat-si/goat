@@ -57,6 +57,8 @@ interface BoundTarget {
   readonly observationId?: string;
   /** The document the latest observation saw, when the host reports one; points belong to it. */
   readonly documentGeneration?: number;
+  /** A call timed out, so the broker dropped this route; the next call looks for the tab again. */
+  readonly evicted?: boolean;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -194,14 +196,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   // A host that missed a reply is evicted and reconnects under a new connection (the server
   // browser after a second). Its tabs keep their browser instance and tab id, so a target that
   // lost a reply follows them there, waiting a bounded time for the reconnect.
-  const evicted = new Set<string>();
   const RECONNECT_WAIT_MS = 3_000;
   const reachable = Effect.fn("PreviewTargetHost.reachable")(function* (
     bound: BoundTarget,
     context: ScreenHostContext,
     deadlineMillis: number,
   ) {
-    if (!evicted.has(bound.ref.id)) return bound;
+    if (!bound.evicted) return bound;
     const moved = list(context).pipe(
       Effect.flatMap((tabs) => {
         const found = tabs.find(
@@ -218,9 +219,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       Effect.orElseSucceed(() => Option.none()),
     );
     if (Option.isNone(live)) return bound;
-    evicted.delete(bound.ref.id);
-    const next = { ...bound, tab: { ...bound.tab, connectionId: live.value.connectionId } };
+    const next = {
+      ...bound,
+      evicted: false,
+      tab: { ...bound.tab, connectionId: live.value.connectionId },
+    };
     targets.set(bound.ref.id, next);
+    // The turn's claim on the tab moves with it, keeping what opened it and why it is kept.
+    if (next.tab.connectionId !== bound.tab.connectionId)
+      yield* claims.assertCurrent(identity(bound, context)).pipe(
+        Effect.flatMap(() => claims.recordOpened(identity(next, context))),
+        Effect.ignore,
+      );
     return next;
   });
   const exact = (tab: BoundPreviewTab, expected = true) => ({
@@ -279,7 +289,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       })
       .pipe(
         Effect.mapError((error) => {
-          if (error._tag === "PreviewAutomationTimeoutError") evicted.add(bound.ref.id);
+          const latest = targets.get(bound.ref.id);
+          if (error._tag === "PreviewAutomationTimeoutError" && latest)
+            targets.set(bound.ref.id, { ...latest, evicted: true });
           const safety = classifyBrowserActionOutcome({
             operation,
             status: "failed",
