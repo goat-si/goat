@@ -392,7 +392,8 @@ it.live("Stop cleanup failure appears in the turn journal and next cell result",
         evidence: ["cleanup_failed:close_ephemeral", "tab:temporary"],
       });
       const next = yield* service.runCell({ ...request, source: "return 1;" });
-      expect(next.truncated).toContain("context_reset");
+      // Stop between cells ends the tab's authority; the idle child keeps the thread's values.
+      expect(next.truncated).not.toContain("context_reset");
       expect(
         next.journal.some((entry) =>
           entry.receipt.evidence.includes("cleanup_failed:close_ephemeral"),
