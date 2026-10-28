@@ -157,6 +157,11 @@ export const toReadiness = (
     ]),
   ];
   const usable = state.running || state.confirmed;
+  // A Mac's helper is checked again by GOAT itself before the next agent start (reprove); while a
+  // grant is off, the grant is all a person can act on.
+  const checksItself = platform === "darwin";
+  const grantBlocks = state.desktop !== undefined || off.length > 0;
+  const checkAdvice = !(checksItself && grantBlocks);
   return {
     grants: state.grants,
     helper: usable ? "authenticated" : "unauthenticated",
@@ -178,10 +183,20 @@ export const toReadiness = (
                 ? []
                 : [CUA_STALE_ACCESSIBILITY_ADVICE]),
             ]),
-      ...(usable ? [] : [`${principal} has not been confirmed by a readiness check yet.`]),
+      ...(usable || !checkAdvice
+        ? []
+        : [
+            checksItself
+              ? `GOAT confirms ${principal} by itself the next time it starts it.`
+              : `${principal} has not been confirmed by a readiness check yet.`,
+          ]),
       ...state.details,
-      ...(unproven
-        ? ["Run the readiness check so a real screenshot and accessibility read prove the rest."]
+      ...(unproven && checkAdvice
+        ? [
+            checksItself
+              ? "A real screenshot and accessibility read prove the rest when GOAT starts its helper."
+              : "Run the readiness check so a real screenshot and accessibility read prove the rest.",
+          ]
         : []),
     ],
   };

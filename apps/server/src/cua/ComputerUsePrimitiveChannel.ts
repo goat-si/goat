@@ -10,6 +10,7 @@ import type {
   ScreenRunError,
   ThreadId,
 } from "@goat/contracts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -23,11 +24,18 @@ import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
-const desktopNotReady = (): ScreenRunError => ({
+/**
+ * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
+ * its helper by itself. A control without a bound driver is one GOAT is starting again.
+ */
+const desktopNotReady = (control: "none" | "unbound"): ScreenRunError => ({
   code: "unavailable",
   reason: "desktop_not_ready",
   effectStarted: false,
-  nextStep: "Wait for desktop control to reconnect, then observe again.",
+  nextStep:
+    control === "none"
+      ? `This thread has no live desktop control, so nothing was sent. Unless the person paused or stopped computer use, ask again with ${goatCallText("computer_use.request")}, then observe again; GOAT restarts and checks its helper by itself.`
+      : `Desktop control is starting again. Observe again; if this answer repeats, ask again with ${goatCallText("computer_use.request")}.`,
 });
 
 interface Pending {
@@ -462,7 +470,7 @@ export const make = Effect.gen(function* () {
     request: Effect.fn("ComputerUsePrimitiveChannel.request")(function* (input) {
       const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
       if (current === undefined || !(yield* active(input.threadId, current.controlId)))
-        return yield* Effect.fail(desktopNotReady());
+        return yield* Effect.fail(desktopNotReady("none"));
       const now = yield* Clock.currentTimeMillis;
       const value = attachments.get(input.threadId);
       const registered = value?.registration;
@@ -475,7 +483,7 @@ export const make = Effect.gen(function* () {
         record === undefined ||
         binding === undefined
       )
-        return yield* Effect.fail(desktopNotReady());
+        return yield* Effect.fail(desktopNotReady("unbound"));
       if (
         input.expectedConnectionGeneration !== undefined &&
         input.expectedConnectionGeneration !== binding.connectionId
@@ -504,7 +512,7 @@ export const make = Effect.gen(function* () {
       const offered = yield* Queue.offer(registered.queue, request);
       if (!offered) {
         record.pending.delete(request.requestId);
-        return yield* Effect.fail(desktopNotReady());
+        return yield* Effect.fail(desktopNotReady("unbound"));
       }
       return yield* Deferred.await(answer).pipe(
         Effect.timeoutOrElse({

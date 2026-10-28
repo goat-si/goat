@@ -440,9 +440,43 @@ it("does not call input unsupported while the helper has not confirmed itself ye
   const capture = unconfirmed.steps[2];
   expect(capture?.state).not.toBe("unsupported");
   expect(capture?.detail.join(" ")).not.toContain("Input is unavailable");
-  expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
+  // A Mac confirms its helper itself; elsewhere a person runs the check.
+  expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Rechecks automatically");
+  const windows = view(
+    { ...ready, helper: "unauthenticated", capture: "pending", tree: "unavailable" },
+    "win32",
+  );
+  expect(windows.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
   // A confirmed helper in a session without input still says so.
   expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
+});
+
+it("shows a Mac's dropped proof as an automatic recheck, and a missing grant as the person's step", () => {
+  const dropped: ComputerUseReadiness = {
+    ...ready,
+    helper: "unauthenticated",
+    capture: "pending",
+    tree: "unavailable",
+    input: "unavailable",
+  };
+  const rechecking = view(dropped, "darwin", "unavailable");
+  const lines = rechecking.steps.flatMap((step) => step.detail).join(" ");
+  expect(rechecking.steps[1]?.state).toBe("pending");
+  expect(rechecking.steps[2]?.state).toBe("pending");
+  expect(rechecking.steps[2]?.detail.join(" ")).toContain("Rechecks automatically");
+  expect(lines).not.toMatch(/Run the (readiness )?check/);
+  expect(rechecking.rechecksWithNextTurn).toBe(true);
+
+  // Asked at the Mac and still off: nothing GOAT runs can fix that, so the person is asked.
+  const off = view(
+    { ...dropped, grants: { accessibility: "granted", screenCapture: "pending" } },
+    "darwin",
+    "unavailable",
+  );
+  expect(off.steps[0]?.state).toBe("pending");
+  expect(off.steps[0]?.grants[1]?.detail.join(" ")).toContain("Waiting for your answer");
+  expect(off.steps[1]?.state).toBe("blocked");
+  expect(off.rechecksWithNextTurn).toBe(false);
 });
 
 // The server's readiness after a check the Linux helper did not answer (#1514).

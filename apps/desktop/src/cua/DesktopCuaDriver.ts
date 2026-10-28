@@ -7,11 +7,10 @@ import {
   type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
-import { cuaRequestableApps, isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
+import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   cuaDriverHostOptions,
-  cuaDriverListingEnvironment,
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
@@ -40,13 +39,15 @@ import {
 } from "./helperReadiness.ts";
 import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
+import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
-import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
 import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   captureCheckFailure,
   PROOF_RESET_DETAIL,
+  proofLostDetail,
+  REPROVE_TIMEOUT,
   resetProofOn,
   type ProofResetSource,
 } from "./readinessProof.ts";
@@ -63,6 +64,7 @@ import {
 } from "./driverChecks.ts";
 import { windowsHelperBundle, windowsPermissionsFailure } from "./ComputerUseHelperWindows.ts";
 import {
+  bundledDriverPath,
   dependencies,
   type DesktopCuaDriverDependencies,
   type NativeHost,
@@ -213,7 +215,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return noteHelper((state) =>
         withoutProof(
           state,
-          `${COMPUTER_USE_HELPER_NAME} stopped unexpectedly. Run the readiness check again.`,
+          proofLostDetail(
+            `${COMPUTER_USE_HELPER_NAME} stopped unexpectedly, so capture and the tree are no longer proven.`,
+            environment.platform,
+          ),
         ),
       );
     });
@@ -261,14 +266,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   });
   const restart = mutex.withPermits(1)(restartHost);
 
-  const driverPath = () =>
-    environment.isPackaged
-      ? environment.path.join(
-          environment.resourcesPath,
-          "cua-driver",
-          environment.platform === "win32" ? "cua-driver.exe" : "cua-driver",
-        )
-      : process.env.GOAT_CUA_DRIVER_PATH?.trim();
+  const driverPath = () => bundledDriverPath(environment);
 
   /**
    * Packaged macOS must keep computer use under the helper's TCC identity (ADR-0023), even when
@@ -346,57 +344,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       ? () => native.helperApps(engine.bundle, environment.platform)
       : undefined;
 
-  const handleAppsRequest = Effect.fn("desktop.cua.appsRequest")(function* () {
-    const batch = yield* publisher.takeCuaAppsRequests;
-    if (batch.requestIds.length === 0) return;
-    const apps = yield* Effect.gen(function* () {
-      if (
-        closed ||
-        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
-      )
-        return undefined;
-      const selected = yield* engine();
-      if (typeof selected !== "object") return undefined;
-      const listed = yield* Effect.tryPromise(
-        () =>
-          helperListing(selected)?.() ??
-          native.listApps({
-            binaryPath: enginePath(selected),
-            platform: environment.platform,
-            environment: cuaDriverListingEnvironment(process.env),
-          }),
-      );
-      const hosts = yield* Effect.tryPromise(() =>
-        withResolvedWindowsPaths(hostBundleIds(selected), environment.platform),
-      );
-      if (
-        closed ||
-        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
-      )
-        return undefined;
-      const apps = cuaRequestableApps(listed, hosts);
-      // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
-      if (apps.length > 1000) return undefined;
-      // Names and icons are for people; a catalog that fails leaves the approval list intact.
-      const catalog = yield* Effect.tryPromise(() =>
-        native.appCatalog(listed, hosts, environment.platform),
-      ).pipe(Effect.option);
-      return { apps, catalog: Option.getOrUndefined(catalog) };
-    }).pipe(Effect.orElseSucceed(() => undefined));
-    if (!closed)
-      for (const requestId of batch.requestIds)
-        yield* batch.publish({
-          version: 1,
-          type: "cuaApps",
-          requestId,
-          ...(apps === undefined
-            ? { status: "unavailable" as const }
-            : {
-                status: "listed" as const,
-                apps: apps.apps,
-                ...(apps.catalog === undefined ? {} : { catalog: apps.catalog }),
-              }),
-        });
+  const handleAppsRequest = makeAppsRequestHandler({
+    publisher,
+    native,
+    platform: environment.platform,
+    settingsPath: environment.serverSettingsPath,
+    isClosed: () => closed,
+    engine,
+    enginePath,
+    hostBundleIds,
+    helperListing,
   });
 
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {
@@ -425,7 +382,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       // Another installed generation starts: what the last check proved was about the old one.
       if (provenBundle !== undefined && provenBundle !== engine.bundle.bundlePath) {
         provenBundle = undefined;
-        yield* noteHelper((state) => withoutProof(state, PROOF_RESET_DETAIL.generation));
+        yield* noteHelper((state) =>
+          withoutProof(state, proofLostDetail(PROOF_RESET_DETAIL.generation, environment.platform)),
+        );
       }
       const { environment: driverEnvironment } = cuaDriverHostOptions(
         engine.bundle.driverPath,
@@ -493,8 +452,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   /** The generation the running check spawned; serialized by the mutex. */
   let checkHost: OwnedHost | undefined;
   const checkServicePid = () => checkHost?.host.servicePid?.();
-  const verify = Effect.gen(function* () {
+  /** The grant read an agent's start just made, so its automatic check does not repeat it. */
+  let knownGrants: Grants | undefined;
+  const check = Effect.gen(function* () {
     checkHost = undefined;
+    const known = knownGrants;
+    knownGrants = undefined;
     const steps: CuaVerificationStep[] = [];
     /** Records a step; a defined failure detail fails it. Returns whether it passed. */
     const record = (id: CuaVerificationStepId, failure: string | undefined) => {
@@ -526,9 +489,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }
     const selected = chosen;
     const principal = selected?.kind === "helper" ? COMPUTER_USE_HELPER_NAME : "GOAT";
-    const grants = yield* Effect.tryPromise(() =>
-      selected ? engineGrants(selected, false) : native.checkGrants(),
-    ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
+    const grants =
+      known ??
+      (yield* Effect.tryPromise(() =>
+        selected ? engineGrants(selected, false) : native.checkGrants(),
+      ).pipe(
+        Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })),
+      ));
     if (selected?.kind === "helper") {
       helperSeen = true;
       // A check stands on its own reads: until it proves capture and the tree again, they are not.
@@ -771,9 +738,27 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     Effect.ensuring(
       Effect.suspend(() => (checkHost !== undefined && owned === checkHost ? stop : Effect.void)),
     ),
-    mutex.withPermits(1),
-    Effect.withSpan("desktop.cua.verify"),
   );
+  const verify = check.pipe(mutex.withPermits(1), Effect.withSpan("desktop.cua.verify"));
+  /**
+   * Proves again, with a person's check, what a start, wake, unlock, update or helper exit dropped.
+   * Bounded; the agent's start goes on whatever it finds (missing grants stopped it before this).
+   */
+  const reprove = (request: DesktopCuaDriverRequest, grants: Grants) =>
+    Effect.suspend(() => {
+      knownGrants = grants;
+      return check;
+    }).pipe(
+      Effect.timeoutOption(REPROVE_TIMEOUT),
+      Effect.ensuring(
+        Effect.suspend(() => {
+          currentRequest = request;
+          // A check cut off by the bound may still hold its own helper.
+          return owned ? Effect.asVoid(stop) : Effect.void;
+        }),
+      ),
+      Effect.withSpan("desktop.cua.reprove"),
+    );
 
   const handleRequest = Effect.fn("desktop.cua.request")(function* (
     request: DesktopCuaDriverRequest,
@@ -823,6 +808,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             );
             return;
           }
+          // Unproven, or proven for a generation an update has since replaced.
+          if (
+            selected.kind === "helper" &&
+            (!helperState.confirmed ||
+              (provenBundle !== undefined && provenBundle !== selected.bundle.bundlePath))
+          )
+            yield* reprove(request, grants);
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
           const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
@@ -871,7 +863,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               ? noteHelper((state) =>
                   withoutProof(
                     state,
-                    `${COMPUTER_USE_HELPER_NAME} could not start. Run the readiness check again.`,
+                    proofLostDetail(
+                      `${COMPUTER_USE_HELPER_NAME} could not start, so capture and the tree are no longer proven.`,
+                      environment.platform,
+                    ),
                   ),
                 )
               : Effect.void,
@@ -954,7 +949,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               provenBundle = undefined;
               return noteHelper((state) =>
                 state.confirmed || state.capture !== "pending"
-                  ? withoutProof(state, PROOF_RESET_DETAIL[event])
+                  ? withoutProof(state, proofLostDetail(PROOF_RESET_DETAIL[event], "darwin"))
                   : state,
               );
             }),

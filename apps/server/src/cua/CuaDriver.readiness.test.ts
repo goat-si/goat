@@ -7,10 +7,63 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
-import type { CuaDisplayProbe } from "./CuaDisplayCapability.ts";
+import { classifyDarwin, type CuaDisplayProbe } from "./CuaDisplayCapability.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 type HelperReadiness = Pick<CuaHostStatus, "readiness" | "signals">;
+
+it.effect(
+  "reads a desktop Mac's grants from its helper, naming a missing one and claiming none unchecked",
+  () =>
+    Effect.gen(function* () {
+      const reported = yield* Ref.make(Option.none<HelperReadiness>());
+      const service = yield* CuaDriver.make(
+        () => Effect.die("status never starts the driver"),
+        Effect.succeed(classifyDarwin({ uid: 501, consoleUid: 501, user: "jun" })),
+        { helperReadiness: Ref.get(reported) },
+      );
+      const report = (grants: NonNullable<HelperReadiness["readiness"]>["grants"]) =>
+        Ref.set(
+          reported,
+          Option.some({
+            readiness: {
+              grants,
+              helper: "authenticated",
+              capture: "pending",
+              tree: "unavailable",
+              input: "background",
+              blockers: [],
+              reasons: [],
+            },
+            signals: { privateMode: "supported", humanInput: "supported" },
+          }),
+        );
+      // Nothing has read the grants yet: that is not the same as a grant being off.
+      const unchecked = yield* service.computerUse;
+      expect(unchecked.capability).toBe("partial");
+      expect(unchecked.reason).not.toMatch(/must be granted/);
+      expect(unchecked.reason).toMatch(/not checked/i);
+
+      yield* report({ accessibility: "granted", screenCapture: "granted" });
+      expect(yield* service.computerUse).toMatchObject({
+        capability: "available",
+        reason: "Accessibility and Screen Recording are granted at this Mac.",
+      });
+
+      // Asked at the Mac and still off: the person must allow it.
+      yield* report({ accessibility: "granted", screenCapture: "pending" });
+      expect(yield* service.computerUse).toMatchObject({
+        capability: "partial",
+        reason:
+          "Screen Recording is not granted at this Mac. Someone at the Mac must allow it in System Settings → Privacy & Security.",
+      });
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "darwin"),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.scoped,
+    ),
+);
 
 it.effect("host status carries the helper's last readiness only once the helper has reported", () =>
   Effect.gen(function* () {

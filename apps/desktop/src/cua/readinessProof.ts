@@ -5,10 +5,12 @@
  * A check proves capture and the tree once; that proof used to last until a later check failed.
  * Sleep, a locked screen and a new helper generation each change what macOS will let the helper
  * do without any check failing (ScreenCaptureKit has no shareable display while the panel sleeps,
- * Apple Developer Forums thread 827059), so each now drops the proof and asks for a new check.
+ * Apple Developer Forums thread 827059), so each drops the proof. On macOS GOAT runs the check
+ * again itself before the next agent start; only missing grants still need a person.
  *
  * @module readinessProof
  */
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
@@ -30,12 +32,27 @@ export interface ProofResetSource {
 }
 
 export const PROOF_RESET_DETAIL: Readonly<Record<ProofResetEvent | "generation", string>> = {
-  resume: "This Mac woke from sleep since the last readiness check. Run the readiness check again.",
-  "unlock-screen":
-    "The screen was locked since the last readiness check. Run the readiness check again.",
-  generation:
-    "GOAT Computer Use was updated since the last readiness check. Run the readiness check again.",
+  resume: "This Mac woke from sleep since capture and the tree were last proven.",
+  "unlock-screen": "The screen was locked since capture and the tree were last proven.",
+  generation: "GOAT Computer Use was updated since capture and the tree were last proven.",
 };
+
+/**
+ * Why a proof is gone and what renews it: on macOS GOAT's own check before the next agent start,
+ * elsewhere a person's check.
+ */
+export const proofLostDetail = (why: string, platform: NodeJS.Platform) =>
+  `${why} ${
+    platform === "darwin"
+      ? "GOAT proves them again by itself the next time it starts its helper."
+      : "Run the readiness check again."
+  }`;
+
+/**
+ * The automatic check's bound. A passing check takes about two seconds; the server waits 30
+ * seconds for the whole start, so a hung check still leaves the agent's own start time to run.
+ */
+export const REPROVE_TIMEOUT = Duration.seconds(8);
 
 /**
  * Applies reset to each event, one at a time, for as long as the scope lives. Electron can raise

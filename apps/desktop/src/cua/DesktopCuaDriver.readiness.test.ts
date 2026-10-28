@@ -144,8 +144,13 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
           assert.equal(replacement.requestId, "replacement");
           assert.equal(replacement.status, "ready");
           const after = test.readiness.at(-1)?.readiness;
-          assert.equal(after?.capture, "pending");
-          assert.isFalse(after ? computerUseReady(after) : true);
+          // The crash's lost proof stood until the next start: GOAT proves it again on a Mac.
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            platform === "darwin" ? [true, false, true, false] : [false, false, false],
+          );
+          assert.equal(after?.capture, platform === "darwin" ? "ready" : "pending");
+          assert.equal(after ? computerUseReady(after) : undefined, platform === "darwin");
         }),
       ),
   );
