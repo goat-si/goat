@@ -1,4 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
+import type {
+  ConnectionCatalogEntry,
+  NetworkStatus,
+  PreparedConnection,
+} from "@goat/client-runtime/connection";
+import type { RpcSession } from "@goat/client-runtime/rpc/session";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import type { createEnvironmentThreadDetailAtoms } from "@goat/client-runtime/state/threads";
 import {
@@ -12,7 +18,7 @@ import {
   type OrchestrationV2ThreadStreamItem,
   type ScopedThreadRef,
 } from "@goat/contracts";
-import * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import { useImperativeHandle, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -43,7 +49,9 @@ const mocks = await vi.hoisted(async () => {
     details: null as ThreadDetails | null,
     server: {
       threads: new Map<string, OrchestrationV2ThreadProjection>(),
-      socket: Promise.withResolvers<ServerSocket>(),
+      // Resolves when the thread's live socket subscription opens.
+      socket: new Promise<ServerSocket>(() => {}),
+      openSocket: (_socket: ServerSocket) => {},
     },
   };
 });
@@ -84,7 +92,7 @@ vi.mock("../../state/threads", async () => {
         [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: () =>
           Stream.unwrap(
             Queue.unbounded<OrchestrationV2ThreadStreamItem>().pipe(
-              Effect.tap((socket) => Effect.sync(() => mocks.server.socket.resolve(socket))),
+              Effect.tap((socket) => Effect.sync(() => mocks.server.openSocket(socket))),
               Effect.map((socket) => Stream.fromQueue(socket)),
             ),
           ),
@@ -92,7 +100,7 @@ vi.mock("../../state/threads", async () => {
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target,
         state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
-        session: yield* SubscriptionRef.make(
+        session: yield* SubscriptionRef.make<Option.Option<RpcSession>>(
           Option.some({
             client,
             initialConfig: Effect.succeed({}),
@@ -103,7 +111,7 @@ vi.mock("../../state/threads", async () => {
             closed: Effect.never,
           } as never),
         ),
-        prepared: yield* SubscriptionRef.make(
+        prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
           Option.some({
             environmentId: target.environmentId,
             label: target.label,
@@ -122,8 +130,10 @@ vi.mock("../../state/threads", async () => {
         Layer.succeed(
           EnvironmentRegistry.EnvironmentRegistry,
           EnvironmentRegistry.EnvironmentRegistry.of({
-            entries: yield* SubscriptionRef.make(new Map()),
-            networkStatus: yield* SubscriptionRef.make("online" as const),
+            entries: yield* SubscriptionRef.make<
+              ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
+            >(new Map()),
+            networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
             start: Effect.void,
             register: unexpected,
             registerPlatform: unexpected,
@@ -296,7 +306,9 @@ function view(
 function setup() {
   mocks.editQueuedRun.mockReset();
   mocks.server.threads.clear();
-  mocks.server.socket = Promise.withResolvers<ServerSocket>();
+  mocks.server.socket = new Promise<ServerSocket>((resolve) => {
+    mocks.server.openSocket = resolve;
+  });
   useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
   setRuns(THREAD_A, "queued");
   setRuns(THREAD_B, "queued");
@@ -379,20 +391,17 @@ describe("useQueuedRunEdit", () => {
 
     await expect.element(screen.getByText("status live")).toBeInTheDocument();
     await expect.element(screen.getByText("Fix the flaky login test")).toBeInTheDocument();
-    const socket = await mocks.server.socket.promise;
-    await Effect.runPromise(
-      Queue.offer(socket, {
-        kind: "event",
-        sequence: 2,
-        event: {
-          id: EventId.make("event-reply"),
-          type: "message.updated",
-          threadId: draftRef.threadId,
-          occurredAt: makeThreadProjectionFixture().updatedAt,
-          payload: conversationMessage(draftRef.threadId, "assistant", "On it."),
-        },
-      }),
-    );
+    Queue.offerUnsafe(await mocks.server.socket, {
+      kind: "event",
+      sequence: 2,
+      event: {
+        id: EventId.make("event-reply"),
+        type: "message.updated",
+        threadId: draftRef.threadId,
+        occurredAt: makeThreadProjectionFixture().updatedAt,
+        payload: conversationMessage(draftRef.threadId, "assistant", "On it."),
+      },
+    });
     await expect.element(screen.getByText("On it.")).toBeInTheDocument();
   });
 
