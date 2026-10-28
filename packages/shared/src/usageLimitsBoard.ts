@@ -100,7 +100,7 @@ function groupKey(origin: LimitOrigin, account: LimitAccount | null, environment
 
 /** One time policy for every verdict: stale and passed readings drop out; exhaustion wins. */
 function limitRowStatus(
-  account: Pick<LimitAccount, "limits" | "state">,
+  account: Pick<LimitAccount, "limits" | "state" | "observedAt">,
   now: number,
 ): Pick<LimitBoardRow, "status" | "releaseAt" | "note"> {
   if (account.state === "paused") return { status: "paused", releaseAt: null, note: undefined };
@@ -123,9 +123,37 @@ function limitRowStatus(
     const known = resets.every(Number.isFinite);
     return { status: "blocked", releaseAt: known ? Math.max(...resets) : null, note };
   }
+  // OpenCodex can judge an account exhausted from a window GOAT cannot show (one with no
+  // percentage), so a fresh "exhausted" state blocks on its own; a stale one proves nothing.
+  const observed = Date.parse(account.observedAt ?? account.limits.checkedAt);
+  if (account.state === "exhausted" && now - observed <= STATE_MAX_AGE_MS)
+    return { status: "blocked", releaseAt: null, note };
   if (gates.length === 0)
     return { status: "unknown", releaseAt: null, note: note ?? "No current reading" };
   return { status: "ready", releaseAt: null, note };
+}
+
+/** Matches quotaVerdict's freshness window for readings. */
+const STATE_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** OpenCodex's pool-wide block outranks member readings, but only inside that pool's group. */
+function underPoolBlock(rows: readonly LimitBoardRow[], blocks: ReadonlyArray<VerdictWindow>) {
+  const gate = blocks.filter((block) => block.scopeModel === undefined);
+  if (gate.length === 0) return rows;
+  const resets = gate.map((block) =>
+    block.resetsAt === undefined ? Number.NaN : Date.parse(block.resetsAt),
+  );
+  const releaseAt = resets.every(Number.isFinite) ? Math.max(...resets) : null;
+  return rows.map((row) =>
+    row.status === "ready" || row.status === "unknown"
+      ? {
+          ...row,
+          status: "blocked" as const,
+          releaseAt,
+          note: "OpenCodex reports every account blocked",
+        }
+      : row,
+  );
 }
 
 /** The tightest quota left among the readings that decide the status. */
@@ -418,6 +446,9 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
             )
           : undefined;
       const excluded = line?.accounts.excluded;
+      const poolBlocks = line
+        ? freshWindows(line.availability, line.checkedAt, now).filter((block) => block.exhausted)
+        : [];
       return {
         key,
         kind: origin.kind,
@@ -449,16 +480,12 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
               .map((window) => `${window.label} ${Math.round(100 - window.usedPercent)}% left`)
               .join(" · ") || undefined
           : undefined,
-        blocks: line
-          ? freshWindows(line.availability, line.checkedAt, now)
-              .filter((block) => block.exhausted)
-              .map((block) => availabilityText(block, now))
-          : [],
+        blocks: poolBlocks.map((block) => availabilityText(block, now)),
         windows: groupWindows(
           group.rows.flatMap((row) => (row.account ? [row.account] : [])),
           now,
         ),
-        rows: [...group.rows].sort(compareRows(now)),
+        rows: [...underPoolBlock(group.rows, poolBlocks)].sort(compareRows(now)),
       };
     });
     const missing = unreadable.get(driver);

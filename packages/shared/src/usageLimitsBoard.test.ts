@@ -240,6 +240,60 @@ describe("Usage limits board", () => {
     ]);
   });
 
+  it("blocks an account OpenCodex just judged exhausted, but not one judged long ago", () => {
+    const judged = (ref: string, observedAt: string) =>
+      poolAccount(ref, [window("5h", 30, 100, { observedAt })], {
+        label: ref,
+        state: "exhausted",
+        observedAt,
+      });
+    const { sections } = limitBoard(
+      presentations([], [hub([judged("p00fres", at(-1)), judged("p00stal", at(-30))])]),
+      now,
+    );
+    const rows = sections[0]?.groups[0]?.rows ?? [];
+    expect(rows.map((row) => [row.name, row.status, row.releaseAt])).toEqual([
+      ["Pro account · p00fres", "blocked", null],
+      ["Pro account · p00stal", "unknown", null],
+    ]);
+  });
+
+  it("lets a pool-wide block override its own members but not this machine's login", () => {
+    const routed = provider({
+      instanceId: ProviderInstanceId.make("routed"),
+      usageLimits: {
+        checkedAt: at(-1),
+        windows: [],
+        quotaPool: { provider: "openai", homeId: HOME, accounts: { available: 1, total: 1 } },
+        quotaPoolRoute: { provider: "openai" },
+        availability: [
+          {
+            id: "availability",
+            label: "Availability",
+            exhausted: true,
+            resetsAt: at(50),
+            observedAt: at(-1),
+          },
+        ],
+      },
+    });
+    const { sections } = limitBoard(
+      presentations(
+        [routed, localLogin],
+        [hub([poolAccount("member", [window("5h", 10, 100)], { label: "p0membr" })])],
+      ),
+      now,
+    );
+    const groups = sections[0]?.groups ?? [];
+    expect(
+      groups.map((group) => [group.kind, group.rows.map((row) => [row.status, row.releaseAt])]),
+    ).toEqual([
+      ["pool", [["blocked", now + 50 * 60_000]]],
+      ["login", [["ready", null]]],
+    ]);
+    expect(sections[0]?.verdict.text).toBe("1 of 2 ready");
+  });
+
   it("shows an unreadable hub pool in its own group and keeps unrelated notices", () => {
     const message =
       "OpenCodex pool unavailable (OpenCodex 2.40.0): this OpenCodex has no quota-pool API.";
