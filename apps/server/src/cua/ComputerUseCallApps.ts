@@ -81,9 +81,9 @@ function answerFields(
   const blocks = Array.isArray(output) ? output : object?.content;
   if (!Array.isArray(blocks) || depth > 0) return object;
   for (const block of blocks.slice(0, 8)) {
-    // Cursor nests a text block's text as {text: {text}}.
-    const blockText =
-      record(block)?.type === "text" ? record(block)?.text : record(record(block)?.text)?.text;
+    // Cursor nests a text block's text as {text: {text}}; ACP wraps the block as {type: "content"}.
+    const part = record(block)?.type === "content" ? record(record(block)?.content) : record(block);
+    const blockText = part?.type === "text" ? part.text : record(part?.text)?.text;
     const fields = typeof blockText === "string" ? answerFields(blockText, maxChars, 1) : undefined;
     if (fields !== undefined) return fields;
   }

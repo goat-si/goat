@@ -199,6 +199,10 @@ describe("ComputerUseCallApps", () => {
             { text: { text: JSON.stringify(result) } },
           ],
         }),
+        // ACP without rawOutput keeps its tool content blocks.
+        screenCall("goat.goat_screen_run", [
+          { type: "content", content: { type: "text", text: JSON.stringify(result) } },
+        ]),
         // A failed cell's error still lists the receipts of the calls it made.
         screenCall("mcp__goat__goat_screen_run", [{ type: "text", text: JSON.stringify(failure) }]),
       ]) {
@@ -213,15 +217,20 @@ describe("ComputerUseCallApps", () => {
       const apps = makeCallApps();
       apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/start" });
       apps.screenTarget("tab-1", { kind: "tab", pageUrl: "https://example.com/next" });
-      const presented = decodeTurnItem(
-        apps.present(screenCall("mcp__goat__goat_screen_run", completed("tab-1"))),
-      );
-      expect(presented.toolIcon).toEqual({
-        _tag: "website",
-        pageUrl: "https://example.com/next",
-      });
-      expect(presented.toolSurface).toBeUndefined();
-      expect(presented.toolSource).toEqual(goatSource);
+      for (const output of [
+        completed("tab-1"),
+        [{ type: "content", content: { type: "text", text: JSON.stringify(completed("tab-1")) } }],
+      ]) {
+        const presented = decodeTurnItem(
+          apps.present(screenCall("mcp__goat__goat_screen_run", output)),
+        );
+        expect(presented.toolIcon).toEqual({
+          _tag: "website",
+          pageUrl: "https://example.com/next",
+        });
+        expect(presented.toolSurface).toBeUndefined();
+        expect(presented.toolSource).toEqual(goatSource);
+      }
     });
 
     it("leaves a cell with no target it can name as it came", () => {
