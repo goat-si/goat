@@ -98,8 +98,13 @@ it("never returns data URL payloads or text under hidden ancestors", () =>
 
 it("refuses a page it cannot render whole instead of returning cut text", () =>
   fixture(async (page, read) => {
-    const deep = "<span>".repeat(600) + "fictional-deep-token" + "</span>".repeat(600);
-    await page.setContent(`<main><pre>alpha${deep}</pre><p>after</p></main>`);
+    await page.setContent("<main><pre>alpha</pre><p>after</p></main>");
+    // The HTML parser flattens nesting past 512 levels, so the deep branch is built through the DOM.
+    await page.evaluate(`(() => {
+      let node = document.querySelector("pre");
+      for (let i = 0; i < 600; i++) node = node.appendChild(document.createElement("span"));
+      node.textContent = "fictional-deep-token";
+    })()`);
     await expect(read()).rejects.toMatchObject({ detail: { reason: "render_cut" } });
     expect((await read({ scope: { selector: "p" } })).text).toBe("after");
   }));
