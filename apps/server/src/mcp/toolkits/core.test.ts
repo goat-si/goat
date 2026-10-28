@@ -96,6 +96,7 @@ import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import { RemoteReportToolkit } from "./remoteReport/tools.ts";
 import * as SshHandlers from "./ssh/handlers.ts";
 import { SshToolkit } from "./ssh/tools.ts";
+import { ThreadLifecycleToolkit } from "./threadLifecycle/tools.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 
@@ -148,6 +149,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     PreviewToolkit,
     WorktreeToolkit,
     ThreadToolkit,
+    ThreadLifecycleToolkit,
     AttachmentToolkit,
     ProjectToolkit,
     EnvironmentToolkit,
@@ -328,7 +330,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(194);
+  expect(names.size).toBe(202);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],

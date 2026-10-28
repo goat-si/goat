@@ -40,7 +40,8 @@ export const makeDispatchAdmission = (deps: DispatchAdmissionDeps) => {
     if (
       command.type === "delegated_task.request" ||
       command.type === "prepared-run.retry" ||
-      command.type === "queue.resume"
+      command.type === "queue.resume" ||
+      command.type === "queued-run.start"
     ) {
       return admission.admit(effect);
     }

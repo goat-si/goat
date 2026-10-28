@@ -203,6 +203,7 @@ import {
   isForkableSourceRunStatus,
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
+import { deletionRefusal } from "./goat/McpThreadDeletionPolicy.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { makeQueuedCommandInterruption } from "./goat/QueuedCommandInterruption.ts";
 import { isOwnedDelegatedTask, makeThreadPromotion } from "./goat/ThreadPromotion.ts";
@@ -12530,6 +12531,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
+        const refusal = yield* deletionRefusal(projection);
+        if (refusal !== undefined)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: refusal,
+          });
         return yield* mapDispatchError(command)(
           planThreadDeletion({
             command,
