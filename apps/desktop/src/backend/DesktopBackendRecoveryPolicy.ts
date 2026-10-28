@@ -1,5 +1,5 @@
-export const RECOVERY_WINDOW_MS = 10 * 60_000;
-export const MAX_RESTARTS = 5;
+const RECOVERY_WINDOW_MS = 10 * 60_000;
+const MAX_RESTARTS = 5;
 
 export const restartDelayMs = (attempt: number, randomUnit: number): number => {
   const upper = Math.min(30_000, 1_000 * 2 ** Math.min(Math.max(0, attempt), 5));
