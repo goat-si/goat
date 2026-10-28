@@ -44,6 +44,27 @@ export const renderedViewport = async (cdp: Pick<CDPSession, "send">, fallback: 
     : fallback;
 };
 
+/** Applies a viewport setting and reports the size the page then has, with fill's caveat. */
+export const measuredResize = async (
+  tab: {
+    readonly desktop: object | null;
+    readonly cdp: Pick<CDPSession, "send">;
+    readonly page: { viewportSize(): Size | null };
+  },
+  fallback: Size,
+  apply: () => Promise<void>,
+) => {
+  const before = tab.desktop ? await renderedViewport(tab.cdp, fallback) : undefined;
+  await apply();
+  const viewport = tab.desktop
+    ? await renderedViewport(tab.cdp, fallback)
+    : (tab.page.viewportSize() ?? fallback);
+  return (setting: PreviewViewportSetting) => ({
+    viewport,
+    ...fillNote(setting, before, viewport),
+  });
+};
+
 /** The desktop sizes a filled tab to the panel showing it; with none, the size stays. */
 export const fillNote = (setting: PreviewViewportSetting, before: Size | undefined, after: Size) =>
   setting._tag === "fill" && before?.width === after.width && before.height === after.height
@@ -51,3 +72,33 @@ export const fillNote = (setting: PreviewViewportSetting, before: Size | undefin
         next: `Fill follows the panel that shows this tab; if no panel shows it, it keeps ${after.width}x${after.height}. Show it (goat_preview_open show:true) or set a freeform size.`,
       }
     : {};
+
+/** Refusing an implicit target among several tabs names them, so the switch stays explicit. */
+export const tabChoice = (
+  owned: ReadonlyArray<{ readonly tabId: string; readonly openerTabId: string | undefined }>,
+) =>
+  `This agent session has several tabs: ${owned
+    .map((tab) => (tab.openerTabId ? `${tab.tabId} (popup of ${tab.openerTabId})` : tab.tabId))
+    .join(", ")}. Pass tabId to choose one; the current tab does not change on its own.`;
+
+const keyOf = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
+
+/**
+ * Popups that closed, by thread and tab, so a call aimed at one learns where its opener is.
+ * `live` holds the open tabs under the same thread-and-tab key.
+ */
+export class ClosedPopups {
+  private readonly openers = new Map<string, string>();
+  constructor(private readonly limit = 64) {}
+  record(threadId: string, tabId: string, openerTabId: string) {
+    this.openers.set(keyOf(threadId, tabId), openerTabId);
+    if (this.openers.size > this.limit) this.openers.delete(this.openers.keys().next().value ?? "");
+  }
+  note(threadId: string, tabId: string, live: { has(key: string): boolean }) {
+    const opener = this.openers.get(keyOf(threadId, tabId));
+    if (opener === undefined) return undefined;
+    return live.has(keyOf(threadId, opener))
+      ? `Tab ${tabId}, a popup, has closed. Its opener ${opener} is still open: pass tabId ${opener} to continue there.`
+      : `Tab ${tabId}, a popup, has closed and its opener ${opener} is gone too. Choose a tab from goat_preview_status.`;
+  }
+}

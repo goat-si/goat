@@ -93,7 +93,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { type AgentInput, fillNote, popupOwner, renderedViewport } from "./agentTabState.ts";
+import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
@@ -323,7 +323,7 @@ interface ServerTab {
   readonly control: SessionControl;
   agentOperating: boolean;
   /** The agent whose input last reached this tab; popups it opens are its. */
-  lastAgentInput?: AgentInput;
+  lastAgentInput?: AgentTabState.AgentInput;
   fileChooserIntercepted: boolean;
   readonly onFileChooser: (chooser: FileChooser) => void;
 
@@ -409,6 +409,7 @@ const make = Effect.gen(function* () {
 
   const closedPendingTabs = new Set<string>();
   const adoptedPages = new Map<string, { readonly page: Page; readonly openerTabId: string }>();
+  const closedPopups = new AgentTabState.ClosedPopups();
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
@@ -596,6 +597,7 @@ const make = Effect.gen(function* () {
     if (tabs.get(key) !== tab) return;
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
+    if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
     tab.closing = true;
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
@@ -1106,7 +1108,10 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = popupOwner({ ...opener, ownerId: opener.control.agentId }, Date.now());
+    const agentId = AgentTabState.popupOwner(
+      { ...opener, ownerId: opener.control.agentId },
+      Date.now(),
+    );
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;
@@ -1617,10 +1622,7 @@ const make = Effect.gen(function* () {
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
     );
     if (!request.tabIdExplicit && owned.length > 1)
-      throw new BrowserControlInterrupted(
-        'Multiple tabs belong to this agent session. Pass a tabId from goat_call {path:"preview.open"} or goat_call {path:"preview.status"} tabs.',
-        "tabRequired",
-      );
+      throw new BrowserControlInterrupted(AgentTabState.tabChoice(owned), "tabRequired");
     const tab =
       request.tabId === undefined
         ? latestThreadTab(request.threadId, request.agentSessionId)
@@ -1630,7 +1632,8 @@ const make = Effect.gen(function* () {
     if (!tab) {
       throw new ServerBrowserPage.ServerBrowserOperationError(
         "PreviewAutomationTabNotFoundError",
-        'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
+        (request.tabId && closedPopups.note(request.threadId, request.tabId, tabs)) ||
+          'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
       );
     }
     ServerBrowserScreen.assertScreenExpectation(tab, request);
@@ -1911,13 +1914,10 @@ const make = Effect.gen(function* () {
         await runPromise(
           manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
         );
-        const measure = () => renderedViewport(tab.cdp, UNATTACHED_FILL_VIEWPORT);
-        const before = tab.desktop ? await measure() : undefined;
-        await applySetting(tab, setting);
-        const viewport = tab.desktop
-          ? await measure()
-          : (tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT);
-        return { tabId: tab.tabId, setting, viewport, ...fillNote(setting, before, viewport) };
+        const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
+          applySetting(tab, setting),
+        );
+        return { tabId: tab.tabId, setting, ...sized(setting) };
       }
       case "setColorScheme": {
         const { colorScheme } = input as PreviewAutomationSetColorSchemeInput;
