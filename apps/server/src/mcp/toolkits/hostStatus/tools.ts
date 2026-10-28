@@ -1,3 +1,7 @@
+import { ResourceTelemetryHistoryInput, ServerProcessResourceHistoryInput } from "@goat/contracts";
+import * as Processes from "../../../diagnostics/ProcessResourceMonitor.ts";
+import * as Telemetry from "../../../resourceTelemetry/ResourceTelemetry.ts";
+import * as ReadSchemas from "../../scopedReadSchemas.ts";
 import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
@@ -132,7 +136,26 @@ const DeviceSetupTool = Tool.make(agentSurfaceRegistry["hub.device_setup"].name,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_setup"]));
 
+const ProcessHistoryTool = Tool.make(agentSurfaceRegistry["host.process_history"].name, {
+  description: agentSurfaceRegistry["host.process_history"].description,
+  parameters: ServerProcessResourceHistoryInput,
+  success: ReadSchemas.ProcessHistoryResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [McpInvocationContext.McpInvocationContext, Processes.ProcessResourceMonitor],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host.process_history"]));
+const ResourceHistoryTool = Tool.make(agentSurfaceRegistry["host.resource_history"].name, {
+  description: agentSurfaceRegistry["host.resource_history"].description,
+  parameters: ResourceTelemetryHistoryInput,
+  success: ReadSchemas.ResourceHistoryResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [McpInvocationContext.McpInvocationContext, Telemetry.ResourceTelemetry],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host.resource_history"]));
+
 export const HostStatusToolkit = Toolkit.make(
+  ProcessHistoryTool,
+  ResourceHistoryTool,
   HostStatusTool,
   VerifyTool,
   membershipTool("hub.device_join"),

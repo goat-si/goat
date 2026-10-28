@@ -31,7 +31,19 @@ const thread: McpInvocationScope = {
   issuedAt: 0,
 };
 
-const serve = serveCatalogOverHttp({ thread }, "full");
+const serve = serveCatalogOverHttp(
+  {
+    thread,
+    client: {
+      ...thread,
+      thread: undefined,
+      client: { sessionId: "discovery-client", label: "Discovery", access: "read-only" },
+      grantedScopes: ["diagnostics:read", "filesystem:read"],
+      reauthorize: () => Effect.void,
+    },
+  },
+  "full",
+);
 
 const schemaOf = (tools: ReadonlyArray<ListedTool>, path: string) => {
   const entry = resolveAgentSurfaceEntry(path);
@@ -251,7 +263,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const http = yield* serve;
-      const tools = yield* http.listTools("thread");
+      const tools = [...(yield* http.listTools("thread")), ...(yield* http.listTools("client"))];
       const listed = (tools.find((tool) => tool.name === "goat_call")?.description ?? "")
         .split("\n")
         .flatMap((line) => /^\(([\w.]+)/u.exec(line)?.[1] ?? []);

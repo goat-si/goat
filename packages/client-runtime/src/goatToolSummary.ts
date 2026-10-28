@@ -361,6 +361,21 @@ export function summarizeGoatToolCalls(
         quantity(countEntities(entityIds("cwd")), "repository", "repositories"),
       );
       break;
+    case "environment-usage":
+      label = phrase("Read", "read", `environment usage ${times}`);
+      break;
+    case "host-process-history":
+      label = phrase("Read", "read", `process resource history ${times}`);
+      break;
+    case "host-resource-history":
+      label = phrase("Read", "read", `host resource history ${times}`);
+      break;
+    case "worktree-diff-preview":
+      label = phrase("Read", "read", `worktree diff preview ${times}`);
+      break;
+    case "worktree-diff-file":
+      label = phrase("Read", "read", `worktree file contents ${times}`);
+      break;
     case "environment-read":
       label = phrase("Checked", "check", `environment preferences ${times}`);
       break;
@@ -504,6 +519,12 @@ export function summarizeGoatToolCalls(
       break;
     case "read-pr-checks":
       label = phrase("Checked", "check", `pull request checks ${times}`);
+      break;
+    case "search-prs":
+      label = phrase("Searched", "search", `pull requests ${times}`);
+      break;
+    case "read-diff":
+      label = phrase("Read", "read", quantity(selected.length, "diff"));
       break;
     case "browser":
       label = phrase("Used", "use", `browser ${times}`);

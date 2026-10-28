@@ -272,6 +272,11 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadReadInput,
   ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
+  /** thread.read's caller and visibility check alone, with none of its reads or acknowledgements. */
+  readonly assertReadableThread: (
+    scope: McpInvocationScope,
+    threadId: ThreadId,
+  ) => Effect.Effect<void, OrchestratorMcpFailure>;
   /** A summary or tail read of the caller's finished task child, here or on a host, has seen it. */
   readonly acknowledgeChildRead: (
     scope: McpInvocationScope,
@@ -3802,6 +3807,8 @@ const make = Effect.gen(function* () {
         ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
+    assertReadableThread: (scope, threadId) =>
+      loadReadableThread(scope, threadId).pipe(Effect.asVoid),
     threadStatus: (scope, input) =>
       Effect.gen(function* () {
         yield* requireCapability(scope);

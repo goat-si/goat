@@ -1,6 +1,38 @@
 import { entry } from "../entry.ts";
 
 export const environmentEntries = {
+  "environment.usage": entry({
+    resource: "environment",
+    verb: "usage",
+    name: "goat_environment_usage",
+    toolkit: "environment",
+    summary: "Read bounded provider usage for this environment.",
+    description:
+      "Read bounded provider usage for this environment. Requires an explicit diagnostics:read client grant and live reauthorization.",
+    guide:
+      "Returns usage buckets, source status and pricing for at most 31 inclusive days, with at most 256 buckets and 32 sources within 256 KiB. truncated marks omitted rows or cut metadata. Only outside MCP clients with an explicit diagnostics:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+    parameters: {
+      sinceDay: "First day, YYYY-MM-DD, inclusive.",
+      untilDay: "Last day, YYYY-MM-DD, inclusive; at most 31 days after counting sinceDay.",
+      timeZone: "IANA time zone for usage buckets.",
+      resolution: "day (default) or hour.",
+      sinceTime: "Start instant required for hourly resolution.",
+      untilTime: "End instant required for hourly resolution; at most 24 hours after sinceTime.",
+      awaitRefresh: "Wait for a fresh provider scan when true.",
+    },
+    examples: [
+      {
+        title: "Read bounded provider usage for this environment.",
+        args: { sinceDay: "2026-01-01", untilDay: "2026-01-07", timeZone: "UTC" },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "environment.read": entry({
     resource: "environment",
     verb: "read",

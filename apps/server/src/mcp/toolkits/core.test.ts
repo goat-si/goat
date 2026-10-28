@@ -1,4 +1,3 @@
-import { CORE_GOAT_TOOL_NAMES } from "./coreToolNames.testkit.ts";
 import { layerNoFleetSync } from "../../goatclaw/FleetSync.testkit.ts";
 import * as RepositoryReferenceMcpService from "../RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "../RepositoryLaunchMcpService.ts";
@@ -77,29 +76,13 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { dispatchFailure } from "../threadAccess.ts";
 import * as AttachmentHandlers from "./attachment/handlers.ts";
 import { McpAttachmentInput } from "./attachment/input.ts";
-import { AttachmentToolkit } from "./attachment/tools.ts";
-import { ChannelToolkit } from "./channel/tools.ts";
-import { ConnectionToolkit } from "./connection/tools.ts";
-import { DeviceToolkit } from "./device/tools.ts";
 import * as EnvironmentHandlers from "./environment/handlers.ts";
-import { EnvironmentToolkit } from "./environment/tools.ts";
-import { FleetHealthToolkit } from "./fleet/healthTools.ts";
-import { FleetResourcesToolkit } from "./fleet/resources/tools.ts";
-import { FleetToolkit } from "./fleet/tools.ts";
-import { HostStatusToolkit } from "./hostStatus/tools.ts";
-import { HtmlToolkit } from "./html/tools.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
-import { PreviewToolkit } from "./preview/tools.ts";
-import { PreviewControlsToolkit } from "./previewControls/tools.ts";
 import { ProjectToolkit } from "./project/tools.ts";
-import { ProviderToolkit } from "./provider/tools.ts";
-import { PullRequestsToolkit } from "./pullRequests/tools.ts";
-import { RemoteReportToolkit } from "./remoteReport/tools.ts";
 import * as SshHandlers from "./ssh/handlers.ts";
 import { SshToolkit } from "./ssh/tools.ts";
-import { ThreadLifecycleToolkit } from "./threadLifecycle/tools.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
-import { WorktreeToolkit } from "./worktree/tools.ts";
+import { CORE_GOAT_TOOL_NAMES, PUBLISHED_TOOLKITS } from "./coreToolNames.testkit.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
@@ -145,29 +128,7 @@ const layerThreadToolkit = layerThreadToolkitWithoutProviders.pipe(
 
 it("publishes unique tool names with reference-free object-root inputs", () => {
   const names = new Set<string>();
-  for (const toolkit of [
-    OrchestratorToolkit,
-    PreviewToolkit,
-    WorktreeToolkit,
-    ThreadToolkit,
-    ThreadLifecycleToolkit,
-    AttachmentToolkit,
-    ProjectToolkit,
-    EnvironmentToolkit,
-    HostStatusToolkit,
-    FleetHealthToolkit,
-    FleetToolkit,
-    FleetResourcesToolkit,
-    ProviderToolkit,
-    PreviewControlsToolkit,
-    DeviceToolkit,
-    PullRequestsToolkit,
-    HtmlToolkit,
-    SshToolkit,
-    ConnectionToolkit,
-    RemoteReportToolkit,
-    ChannelToolkit,
-  ]) {
+  for (const toolkit of PUBLISHED_TOOLKITS) {
     for (const tool of Object.values(toolkit.tools)) {
       expect(names.has(tool.name)).toBe(false);
       names.add(tool.name);
@@ -200,7 +161,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(204);
+  expect(names.size).toBe(217);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],

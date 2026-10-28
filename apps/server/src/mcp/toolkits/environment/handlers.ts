@@ -1,3 +1,4 @@
+import * as ScopedReadMcp from "../../ScopedReadMcp.ts";
 import {
   OrchestratorMcpFailure,
   type ProjectId,
@@ -157,6 +158,11 @@ const clientDenied = () =>
   });
 
 export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
+  goat_environment_usage: McpToolAccess.reads((input) =>
+    Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+      ScopedReadMcp.usage(scope, input),
+    ),
+  ),
   goat_environment_read: McpToolAccess.reads(() =>
     Effect.gen(function* () {
       const { descriptor, settings } = yield* access;
