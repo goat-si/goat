@@ -39,7 +39,8 @@ it.effect("does not busy-wake for copied running threads and wakes immediately o
         yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
         yield* Deferred.await(idle);
         yield* TestClock.adjust("1 second");
-        assert.equal(claims, 1);
+        // One claim per lane (general, control, cleanup); a busy-wake would keep claiming.
+        assert.equal(claims, 3);
         assert.equal(yield* Queue.size(executed), 0);
         yield* hold.release;
         assert.equal(yield* Queue.take(executed), "copied-running");
