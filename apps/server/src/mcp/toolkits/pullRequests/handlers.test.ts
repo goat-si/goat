@@ -7,6 +7,7 @@ import {
   PullRequestOperationError,
   type OrchestrationProjectShell,
   type PullRequestRef,
+  type PullRequestChecks,
   type PullRequestReviewGuideResult,
   type ThreadPullRequestLink,
   SourceControlProviderKind,
@@ -26,6 +27,7 @@ import {
   v2PullRequestThread,
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -146,6 +148,9 @@ interface HarnessOptions {
     PullRequestReviewGuideResult & { started: boolean },
     PullRequestOperationError
   >;
+  readonly checks?: (
+    input: PullRequestRef,
+  ) => Effect.Effect<PullRequestChecks | null, PullRequestOperationError>;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -155,6 +160,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   const guideRequests = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
+  const reads = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const thread = options.thread === undefined ? makeThread([]) : options.thread;
   const project = options.project === undefined ? makeProject() : options.project;
   const dispatch: Orchestrator.OrchestratorV2Shape["dispatch"] = (command) =>
@@ -192,6 +198,18 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
           ),
         ),
     }),
+    Layer.mock(PullRequestService.PullRequestService)({
+      detail: (input) =>
+        Ref.update(reads, (recorded) => [...recorded, input]).pipe(
+          Effect.andThen(
+            Effect.fail(new PullRequestOperationError({ operation: "detail", detail: "offline" })),
+          ),
+        ),
+      checks: (input) =>
+        Ref.update(reads, (recorded) => [...recorded, input]).pipe(
+          Effect.andThen(options.checks?.(input) ?? Effect.succeed(null)),
+        ),
+    }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) =>
         Effect.succeed(id === THREAD_ID && thread ? v2PullRequestThread(thread) : null),
@@ -221,7 +239,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(layerDependencies),
     );
-  return { commands, guideRequests, call };
+  return { commands, guideRequests, reads, call };
 });
 
 describe("pull request toolkit handlers", () => {
@@ -707,5 +725,149 @@ describe("pull request guide tools", () => {
         "project-azure",
       ]);
     }),
+  );
+});
+
+describe("pull request reads", () => {
+  it.effect(
+    "reads checks through the project holding the repository and passes on the host's refusal",
+    () =>
+      Effect.gen(function* () {
+        const checks: PullRequestChecks = { state: "open", checks: [] };
+        const harness = yield* makeHarness({
+          checks: (input) =>
+            input.number === 13
+              ? Effect.fail(
+                  new PullRequestOperationError({ operation: "checks", detail: "rate limited" }),
+                )
+              : Effect.succeed(checks),
+        });
+        expect(
+          yield* harness.call("goat_pull_request_checks", {
+            url: "https://github.com/sample-tools/goat/pull/12",
+          }),
+        ).toEqual({
+          host: "github.com",
+          repository: "sample-tools/goat",
+          number: 12,
+          url: "https://github.com/sample-tools/goat/pull/12",
+          checks,
+        });
+        expect(
+          yield* harness
+            .call("goat_pull_request_checks", { repository: "sample-tools/goat", number: 13 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestReadFailedError", detail: "rate limited" });
+        expect(
+          yield* harness
+            .call("goat_pull_request_checks", { url: "https://github.com/someone/else/pull/1" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestProjectNotFoundError" });
+        expect((yield* Ref.get(harness.reads)).map((ref) => [ref.projectId, ref.number])).toEqual([
+          [PROJECT_ID, 12],
+          [PROJECT_ID, 13],
+        ]);
+      }),
+  );
+  it.effect(
+    "reads detail fresh, returns input mistakes as the caller's, and finds the host from the one project holding the repository",
+    () =>
+      Effect.gen(function* () {
+        // No calling project, as for a client outside any thread.
+        const harness = yield* makeHarness({ thread: null });
+        expect(
+          yield* harness
+            .call("goat_pull_request_read", { repository: "sample-tools/goat", number: 4 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestReadFailedError", detail: "offline" });
+        expect(yield* Ref.get(harness.reads)).toMatchObject([
+          { projectId: PROJECT_ID, host: "github.com", number: 4, allowStale: false },
+        ]);
+        expect(yield* harness.call("goat_pull_request_read", {}).pipe(Effect.flip)).toMatchObject({
+          _tag: "PullRequestTargetIncompleteError",
+        });
+        expect(
+          yield* harness.call("goat_pull_request_checks", { url: "not-a-url" }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestUrlInvalidError" });
+      }),
+  );
+  it.effect(
+    "refuses a short repository name several repositories answer to, and reads a lone one at its full path",
+    () =>
+      Effect.gen(function* () {
+        const azure = (
+          org: string,
+          name: string,
+          id = ProjectId.make(`project-${org}-${name}`),
+        ) => ({
+          ...makeProject({
+            canonicalKey: `dev.azure.com/${org}/project/_git/${name}`,
+            locator: {
+              source: "git-remote",
+              remoteName: "origin",
+              remoteUrl: `https://dev.azure.com/${org}/project/_git/${name}`,
+            },
+            provider: SourceControlProviderKind.make("azure-devops"),
+            displayName: `${org}/project/_git/${name}`,
+            owner: org,
+            name,
+          }),
+          id,
+        });
+        // The caller's own project, on the same host, holds neither.
+        const caller = azure("one", "api", PROJECT_ID);
+        const shared = yield* makeHarness({
+          project: caller,
+          projects: [caller, azure("one", "web"), azure("two", "web")],
+        });
+        expect(
+          yield* shared
+            .call("goat_pull_request_checks", { repository: "web", number: 9 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestRepositoryAmbiguousError" });
+        expect(
+          yield* shared
+            .call("goat_pull_request_checks", {
+              host: "dev.azure.com",
+              repository: "web",
+              number: 9,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestRepositoryAmbiguousError" });
+        expect(yield* Ref.get(shared.reads)).toEqual([]);
+
+        const lone = yield* makeHarness({ thread: null, projects: [azure("two", "web")] });
+        const result = yield* lone.call("goat_pull_request_checks", {
+          repository: "web",
+          number: 9,
+        });
+        expect(result.url).toContain("/two/project/_git/web/");
+        const named = yield* lone.call("goat_pull_request_checks", {
+          host: "dev.azure.com",
+          repository: "web",
+          number: 9,
+        });
+        expect(named.url).toBe(result.url);
+        // The organization's visualstudio.com host names the same repository.
+        const aliased = yield* lone.call("goat_pull_request_checks", {
+          host: "two.visualstudio.com",
+          repository: "web",
+          number: 9,
+        });
+        expect(aliased.url).toBe(result.url);
+        // So does that host with the path past the organization, as its own URLs spell it.
+        const aliasedPath = yield* lone.call("goat_pull_request_checks", {
+          host: "two.visualstudio.com",
+          repository: "project/_git/web",
+          number: 9,
+        });
+        expect(aliasedPath.url).toBe(result.url);
+        expect((yield* Ref.get(lone.reads)).map((ref) => [ref.projectId, ref.repository])).toEqual([
+          ["project-two-web", result.repository],
+          ["project-two-web", result.repository],
+          ["project-two-web", result.repository],
+          ["project-two-web", result.repository],
+        ]);
+      }),
   );
 });

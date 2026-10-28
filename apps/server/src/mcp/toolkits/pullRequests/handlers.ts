@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -44,6 +45,8 @@ import {
   PullRequestThreadRequiredError,
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
+  PullRequestReadFailedError,
+  PullRequestRepositoryAmbiguousError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
 } from "./tools.ts";
@@ -160,6 +163,20 @@ export function listThreadPullRequests(
   };
 }
 
+/** A project's own repository as a pull request key: host with its port, the full path. */
+function repositoryKeyOf(project: OrchestrationProjectShell) {
+  return project.repositoryIdentity == null
+    ? null
+    : pullRequestSyncKey(
+        {
+          projectId: project.id,
+          repository: sourceControlDefinitions.repositorySelector(project.repositoryIdentity) ?? "",
+          number: 1,
+        },
+        project.repositoryIdentity,
+      );
+}
+
 function projectForPullRequest(
   projects: ReadonlyArray<OrchestrationProjectShell>,
   target: { readonly host: string; readonly repository: string },
@@ -171,18 +188,7 @@ function projectForPullRequest(
       { projectId: project.id, host: target.host, repository: target.repository, number: 1 },
       project.repositoryIdentity ?? undefined,
     );
-    const projectKey =
-      project.repositoryIdentity == null
-        ? null
-        : pullRequestSyncKey(
-            {
-              projectId: project.id,
-              repository:
-                sourceControlDefinitions.repositorySelector(project.repositoryIdentity) ?? "",
-              number: 1,
-            },
-            project.repositoryIdentity,
-          );
+    const projectKey = repositoryKeyOf(project);
     return (
       own !== null &&
       projectKey !== null &&
@@ -197,6 +203,7 @@ function projectForPullRequest(
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
+  const pullRequests = yield* PullRequestService.PullRequestService;
 
   const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
@@ -315,26 +322,77 @@ const make = Effect.gen(function* () {
       .listShells()
       .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
     const callerProject = known.find((project) => project.id === callerThread?.projectId);
-    // A pull request named by host and repository builds its URL through the project that holds
-    // it, which need not be the caller's.
-    const urlProject = (input: PullRequestTargetInput) =>
-      input.url === undefined && input.host !== undefined && input.repository !== undefined
-        ? (projectForPullRequest(
-            known,
-            { host: input.host, repository: input.repository },
-            callerProject,
-          ) ?? callerProject)
-        : callerProject;
+    // A pull request named by repository builds its URL through the project that holds it, which
+    // need not be the caller's. Without a host, that is the one project whose remote matches.
+    // Whether host names the project's repository host, under any spelling the normalizer folds
+    // (an Azure DevOps org.visualstudio.com host carries its organization, dev.azure.com its path).
+    const namesHost = (project: OrchestrationProjectShell, host: string) => {
+      const key = repositoryKeyOf(project);
+      if (key === null) return false;
+      const [, ...withoutOwner] = key.repository.split("/");
+      return [key.repository, withoutOwner.join("/")].some((repository) => {
+        const probe = normalizeThreadPullRequestKey({ host, repository, number: key.number });
+        return probe.host === key.host && probe.repository === key.repository;
+      });
+    };
+    const holds = (project: OrchestrationProjectShell, repository: string, host?: string) => {
+      const own = projectHostAndProvider(project).host;
+      if (own === null) return false;
+      // A full path names its repository on the host given, so it is normalized there; only a
+      // short name needs the project's own host to expand it.
+      if (repository.includes("/")) {
+        const key = repositoryKeyOf(project);
+        const target = normalizeThreadPullRequestKey({ host: host ?? own, repository, number: 1 });
+        return key !== null && target.host === key.host && target.repository === key.repository;
+      }
+      return (
+        (host === undefined || namesHost(project, host)) &&
+        projectForPullRequest([project], { host: own, repository }, undefined) !== undefined
+      );
+    };
+    const routed = Effect.fn("PullRequestsToolkit.routeTarget")(function* (
+      input: PullRequestTargetInput,
+    ) {
+      if (input.url !== undefined || input.repository === undefined)
+        return { input, project: callerProject };
+      const { repository } = input;
+      // Checkouts of one repository share its pull request key; two repositories that answer to
+      // the same short name are ambiguous whoever calls, with or without host.
+      const holders = known.filter((project) => holds(project, repository, input.host));
+      const keys = new Map(
+        holders.flatMap((project) => {
+          const key = repositoryKeyOf(project);
+          return key === null ? [] : [[`${key.host}/${key.repository}`, key] as const];
+        }),
+      );
+      if (keys.size > 1) return yield* new PullRequestRepositoryAmbiguousError({ repository });
+      const [first] = holders;
+      const [key] = keys.values();
+      if (first === undefined || key === undefined) return { input, project: callerProject };
+      const holder =
+        callerProject !== undefined && holders.includes(callerProject) ? callerProject : first;
+      // The holder's own host and full path, so a short Azure DevOps name builds its
+      // org/project/_git URL.
+      return { input: { ...input, host: key.host, repository: key.repository }, project: holder };
+    });
     return yield* Effect.forEach(targets, (input) =>
-      resolveTarget(input, urlProject(input)).pipe(
+      routed(input).pipe(
+        Effect.flatMap((route) => resolveTarget(route.input, route.project)),
         Effect.map((target) => ({
           input,
           target,
           project: projectForPullRequest(known, target, callerProject),
           failure: null,
+          error: null,
         })),
         Effect.catch((error) =>
-          Effect.succeed({ input, target: null, project: undefined, failure: error.message }),
+          Effect.succeed({
+            input,
+            target: null,
+            project: undefined,
+            failure: error.message,
+            error,
+          }),
         ),
       ),
     );
@@ -356,6 +414,36 @@ const make = Effect.gen(function* () {
   const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
     handle: (params: P) => Effect.Effect<A, E, R>,
   ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
+
+  /** A target the caller named, resolved to the project checkout that can read it. */
+  const locateOne = Effect.fn("PullRequestsToolkit.locateOne")(function* (
+    input: Omit<PullRequestTargetInput, "threadId">,
+  ) {
+    const [entry] = yield* locateAll([input]);
+    // An unreadable target is the caller's input, so its own refusal comes back unchanged.
+    if (entry !== undefined && entry.target === null && entry.error !== null)
+      return yield* entry.error;
+    if (entry === undefined || entry.target === null || entry.project === undefined)
+      return yield* new PullRequestProjectNotFoundError({
+        repository: entry?.target.repository ?? input.repository ?? "",
+      });
+    return { target: entry.target, ref: guideReference(entry.project, entry.target) };
+  });
+
+  const readFailure = (error: { readonly message: string }) =>
+    new PullRequestReadFailedError({ detail: guideFailureDetail(error), cause: error });
+
+  const identityOf = (target: {
+    readonly host: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly url: string;
+  }) => ({
+    host: target.host,
+    repository: target.repository,
+    number: target.number,
+    url: target.url,
+  });
 
   return {
     link_pull_request: writesThread((input) =>
@@ -528,6 +616,23 @@ const make = Effect.gen(function* () {
             result.currentHeadSha !== null &&
             result.guide.headSha !== result.currentHeadSha,
         };
+      }),
+    ),
+    goat_pull_request_read: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        // Fresh like the pull request view, not the held copy a list row may show.
+        const pullRequest = yield* pullRequests
+          .detail({ ...ref, allowStale: false })
+          .pipe(Effect.mapError(readFailure));
+        return { ...identityOf(target), pullRequest };
+      }),
+    ),
+    goat_pull_request_checks: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const checks = yield* pullRequests.checks(ref).pipe(Effect.mapError(readFailure));
+        return { ...identityOf(target), checks };
       }),
     ),
   } satisfies McpToolAccess.Handlers<typeof PullRequestsToolkit.tools>;
