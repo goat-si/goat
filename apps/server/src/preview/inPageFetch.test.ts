@@ -105,16 +105,23 @@ describe("redactSecrets", () => {
 describe("inPageFetch privacy", () => {
   const fakePage = (onEvaluate: () => void = () => undefined) => ({
     url: () => "https://app.example/",
-    evaluate: vi.fn(async () => {
+    evaluateHandle: vi.fn(async () => {
       onEvaluate();
+      const held = {
+        outcome: {
+          url: "https://app.example/me",
+          status: 200,
+          ok: true,
+          contentType: "text/plain",
+          kind: "text",
+          text: "hello",
+          truncated: false,
+        },
+        body: null,
+      };
       return {
-        url: "https://app.example/me",
-        status: 200,
-        ok: true,
-        contentType: "text/plain",
-        kind: "text",
-        text: "hello",
-        truncated: false,
+        evaluate: async (read: (value: typeof held) => unknown) => read(held),
+        dispose: async () => undefined,
       };
     }),
     context: () => ({ cookies: async () => [] }),
@@ -127,7 +134,7 @@ describe("inPageFetch privacy", () => {
     await expect(
       inPageFetch(page as unknown as Page, control, { url: "/me" }),
     ).rejects.toMatchObject({ reason: "privateMode" });
-    expect(page.evaluate).not.toHaveBeenCalled();
+    expect(page.evaluateHandle).not.toHaveBeenCalled();
   });
 
   it("withholds the answer when a secret prompt opened while it ran, even briefly", async () => {
@@ -283,12 +290,13 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(failure).not.toContain("ApiScopedValue456");
   });
 
-  it("returns no content for a body that is not text, and bounds long text", async () => {
-    expect(await inPageFetch(page, control, { url: "/logo.png" })).toMatchObject({
-      format: "raw",
-      text: "",
-      contentType: "image/png",
-    });
+  it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {
+    const image = await inPageFetch(page, control, { url: "/logo.png" });
+    expect(image).toMatchObject({ format: "raw", text: "", contentType: "image/png" });
+    expect([...(image.body ?? [])]).toEqual([137, 80, 78, 71]);
+    const capped = await inPageFetch(page, control, { url: "/logo.png", maxSavedBytes: 3 });
+    expect(capped).toMatchObject({ format: "raw", text: "", truncated: true });
+    expect(capped.body).toBeUndefined();
     expect((await inPageFetch(page, control, { url: "/korean" })).text).toBe("한국어");
     const long = await inPageFetch(page, control, { url: "/long", maxChars: 50 });
     expect(long.truncated).toBe(true);

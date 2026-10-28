@@ -11,6 +11,8 @@ export interface InPageFetchInput {
   readonly format?: "text" | "markdown" | undefined;
   readonly maxChars?: number | undefined;
   readonly timeoutMs?: number | undefined;
+  /** Largest body that is not text kept for a file; larger ones are dropped as truncated. */
+  readonly maxSavedBytes?: number | undefined;
 }
 
 export interface InPageFetchResult {
@@ -18,10 +20,12 @@ export interface InPageFetchResult {
   readonly status: number;
   readonly ok: boolean;
   readonly contentType: string;
-  /** "raw" when the body is not text, such as an image: its content is not returned. */
+  /** "raw" when the body is not text, such as an image: its content is not returned as text. */
   readonly format: "text" | "markdown" | "raw";
   readonly text: string;
   readonly truncated: boolean;
+  /** A raw body's bytes, held in memory until the server saves them; never sent to a caller. */
+  readonly body?: Uint8Array;
 }
 
 type PageOutcome =
@@ -31,9 +35,11 @@ type PageOutcome =
       readonly status: number;
       readonly ok: boolean;
       readonly contentType: string;
-      readonly kind: "html" | "text" | "raw";
+      readonly kind: "html" | "text" | "raw" | "binary";
       readonly text: string;
       readonly truncated: boolean;
+      /** Bytes of a "binary" body held in the page for the server to read in slices. */
+      readonly size?: number;
     };
 
 const DEFAULT_MAX_CHARS = 20_000;
@@ -42,6 +48,9 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 60_000;
 /** Markup outweighs its text many times over, so the body may be larger than the result. */
 const MAX_BODY_BYTES = 5_000_000;
+const MAX_SAVED_BYTES = 25 * 1024 * 1024;
+/** Bytes per read of a held body; base64 makes each reply about a third larger. */
+const SLICE_BYTES = 1024 * 1024;
 
 const bounded = (value: number | undefined, fallback: number, low: number, high: number) =>
   value !== undefined && Number.isFinite(value)
@@ -49,7 +58,7 @@ const bounded = (value: number | undefined, fallback: number, low: number, high:
     : fallback;
 
 /** Runs in the page. DOMParser builds an inert document: no scripts run, nothing loads. */
-const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secretPattern }) => {
+const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, timeoutMs, secretPattern }, held) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -70,8 +79,28 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
       /^application\\/(json|xml|javascript|ecmascript)$/.test(mime) ||
       /\\+(json|xml)$/.test(mime);
     if (!textual) {
-      controller.abort();
-      return { ...head, kind: "raw", text: "", truncated: false };
+      // Kept whole for a file, up to the cap; the length header is not trusted.
+      const parts = [];
+      let saved = 0;
+      const reader = response.body ? response.body.getReader() : null;
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        saved += value.byteLength;
+        if (saved > maxSavedBytes) {
+          controller.abort();
+          return { ...head, kind: "raw", text: "", truncated: true };
+        }
+        parts.push(value);
+      }
+      const body = new Uint8Array(saved);
+      let at = 0;
+      for (const part of parts) {
+        body.set(part, at);
+        at += part.byteLength;
+      }
+      held.body = body;
+      return { ...head, kind: "binary", text: "", truncated: false, size: saved };
     }
     const chunks = [];
     let size = 0;
@@ -226,29 +255,83 @@ export const truncateText = (text: string, maxChars: number) =>
  * prompt that opened while it ran, even briefly, withholds the whole answer.
  */
 export const inPageFetch = (
-  page: Pick<Page, "evaluate" | "url" | "context">,
+  page: Pick<Page, "evaluateHandle" | "url" | "context">,
   control: Pick<SessionControl, "observe">,
   input: InPageFetchInput,
 ) => control.observe(() => fetchInPage(page, input));
 
+type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
+
+/** Copies a held body out of the page in bounded slices, within the fetch's deadline. */
+const readHeldBody = async (
+  held: { evaluate<R, A>(read: (value: Held, arg: A) => R, arg: A): Promise<R> },
+  size: number,
+  deadline: number,
+  url: string,
+) => {
+  const body = new Uint8Array(size);
+  for (let start = 0; start < size; start += SLICE_BYTES) {
+    if (performance.now() >= deadline)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTimeoutError",
+        `Fetching ${url} did not finish within its deadline.`,
+      );
+    const end = Math.min(size, start + SLICE_BYTES);
+    const encoded = await held.evaluate(
+      (value, [from, to]) => {
+        const bytes = (value.body ?? new Uint8Array()).subarray(from, to);
+        let binary = "";
+        for (let at = 0; at < bytes.length; at += 0x8000)
+          binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+        return btoa(binary);
+      },
+      [start, end] as const,
+    );
+    body.set(Buffer.from(encoded, "base64"), start);
+  }
+  return body;
+};
+
 const fetchInPage = async (
-  page: Pick<Page, "evaluate" | "url" | "context">,
+  page: Pick<Page, "evaluateHandle" | "url" | "context">,
   input: InPageFetchInput,
 ): Promise<InPageFetchResult> => {
   const url = resolveFetchUrl(input.url, page.url());
   const format = input.format ?? "markdown";
   const maxChars = bounded(input.maxChars, DEFAULT_MAX_CHARS, 1, MAX_CHARS);
   const timeoutMs = bounded(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS);
+  const deadline = performance.now() + timeoutMs;
   const args = JSON.stringify({
     url,
     format,
     maxChars,
     maxBytes: MAX_BODY_BYTES,
+    maxSavedBytes: bounded(input.maxSavedBytes, MAX_SAVED_BYTES, 1, MAX_SAVED_BYTES),
     timeoutMs,
     secretPattern: SECRET_NAME.source,
   });
-  // Page-side code is passed as source: the server compiles without DOM types.
-  const outcome = (await page.evaluate(`(${FETCH_SCRIPT})(${args})`)) as PageOutcome;
+  // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
+  // binary body in the page, out of reach of page scripts, until it is read and disposed.
+  const held = await page.evaluateHandle<Held>(
+    `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`,
+  );
+  try {
+    return await shapeOutcome(page, held, url, format, maxChars, timeoutMs, deadline);
+  } finally {
+    void held.dispose().catch(() => undefined);
+  }
+};
+
+const shapeOutcome = async (
+  page: Pick<Page, "evaluateHandle" | "url" | "context">,
+  held: { evaluate<R, A>(read: (value: Held, arg: A) => R, arg: A): Promise<R> },
+  url: string,
+  format: "text" | "markdown",
+  maxChars: number,
+  timeoutMs: number,
+  deadline: number,
+): Promise<InPageFetchResult> => {
+  const outcome = await held.evaluate((value) => value.outcome, undefined);
   if ("error" in outcome) {
     // A page's own fetch can fail with any message, the tab's cookie values included.
     const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));
@@ -272,7 +355,12 @@ const fetchInPage = async (
     ok: outcome.ok,
     contentType: redact(outcome.contentType),
   };
-  if (outcome.kind === "raw") return { ...head, format: "raw", text: "", truncated: false };
+  if (outcome.kind === "raw")
+    return { ...head, format: "raw", text: "", truncated: outcome.truncated };
+  if (outcome.kind === "binary") {
+    const body = await readHeldBody(held, outcome.size ?? 0, deadline, url);
+    return { ...head, format: "raw", text: "", truncated: false, body };
+  }
   // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.
   const shown = outcome.kind === "html" ? normalizeText(outcome.text) : outcome.text;
   // A cut in the page can split a credential, and half of one no longer matches; drop the cut word.

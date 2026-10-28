@@ -125,7 +125,10 @@ export const PreviewAutomationStatus = Schema.Struct({
         url: Schema.String,
         completedAt: Schema.String,
       }),
-    ),
+    ).annotate({
+      description:
+        "Saved files. A tab's newest 20 stay on disk after it closes, until storage cleanup.",
+    }),
   ),
   /** Server hosts: all thread tabs are readable; actions require ownedByCaller or an unclaimed tab without human control. */
   tabs: Schema.optional(

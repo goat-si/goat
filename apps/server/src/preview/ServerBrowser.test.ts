@@ -1406,7 +1406,7 @@ it.live.each([false, true])(
           tabId,
           downloadId: offered.id,
         });
-        expect(Option.isSome(file) && file.value.fileName).toBe("report.csv");
+        expect(Option.getOrThrow(file).path).toMatch(/artifacts.browser-download-.+report\.csv$/);
         expect(yield* fs.readFileString(Option.getOrThrow(file).path)).toBe("a,b");
         if ((yield* HostProcess.Platform) !== "win32") {
           expect((yield* fs.stat(Option.getOrThrow(file).path)).mode & 0o777).toBe(0o600);
@@ -1447,6 +1447,9 @@ it.live.each([false, true])(
           while (again._tag !== "download") again = yield* Queue.take(viewer.output);
           expect((yield* fs.stat(folder)).mode & 0o777).toBe(0o700);
         }
+        yield* viewer.input({ type: "releaseControl" });
+        yield* broker.invoke({ scope, tabId, operation: "close", input: {} });
+        expect(yield* fs.readFileString(Option.getOrThrow(file).path)).toBe("a,b");
       }),
     ).pipe(Effect.provide(layer)),
 );

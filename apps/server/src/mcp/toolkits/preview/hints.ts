@@ -25,6 +25,16 @@ export const previewHints = (
     return {
       next: "Narrow with interactiveOnly or scope, or read the text with goat_preview_read.",
     };
+  if (
+    operation === "fetch" &&
+    "format" in result &&
+    result.format === "raw" &&
+    "truncated" in result &&
+    result.truncated === true
+  )
+    return {
+      next: "Over 25 MiB, so not saved: open the URL with goat_preview_navigate to download it.",
+    };
   return actions.has(operation)
     ? { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }
     : {};
