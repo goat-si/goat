@@ -55,7 +55,7 @@ const EXTENSIONS: Record<string, string> = {
 };
 
 /** An extension for a fetched body: from its content type, else its URL, else .bin. */
-export const extensionFor = (contentType: string, rawUrl: string) => {
+const extensionFor = (contentType: string, rawUrl: string) => {
   const known = EXTENSIONS[contentType.split(";")[0]?.trim().toLowerCase() ?? ""];
   if (known) return known;
   try {
