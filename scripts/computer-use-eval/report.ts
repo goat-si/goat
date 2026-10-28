@@ -105,30 +105,31 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
   const tasks = [...new Set(ran.map((row) => row.task))];
   return arms.map((arm): ArmScores => {
     const mine = ran.filter((row) => row.arm === arm);
-    // A run that lost part of its transcript may hide a violation, so it scores none of these.
-    const whole = mine.filter((row) => row.incomplete !== true);
-    const answered = whole.filter((row) => row.claimed !== null);
+    // A row whose evidence is partial (a lost transcript, cleanup that could not be listed) is
+    // scored only where what was seen already decides the score; otherwise it is left out.
+    const known = (row: RunRow, decided: boolean) => row.incomplete !== true || decided;
+    const answered = mine.filter(
+      (row) => row.claimed !== null && known(row, row.misreport !== null),
+    );
     const speeds = tasks.flatMap((task) => {
       const own = passedWall(task, arm);
       const best = Math.min(...arms.map((other) => passedWall(task, other) ?? Infinity));
       return own === null ? [] : [best / own];
     });
     const web = mine.filter((row) => row.surface === "web");
+    const dirty = (row: RunRow) => row.leftovers.length > 0 || row.violations.length > 0;
+    const judged = mine.filter(
+      (row) => known(row, dirty(row)) && (!cleanupUnobserved(row) || dirty(row)),
+    );
     // A run whose end was not observed cannot count as clean.
-    // Unobserved cleanup is scored only when the run is already known not to be clean.
-    const judged = whole.filter(
-      (row) => !cleanupUnobserved(row) || row.leftovers.length > 0 || row.violations.length > 0,
-    );
-    const clean = judged.filter(
-      (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
-    );
-    const guided = whole.filter(
-      (row) =>
-        row.metrics !== null &&
-        row.metrics.offSurfaceCalls === 0 &&
-        row.metrics.contamination.length === 0 &&
-        row.answerError === null,
-    );
+    const clean = judged.filter((row) => row.status === "ran" && !dirty(row));
+    const offSurface = (row: RunRow) =>
+      row.metrics === null ||
+      row.metrics.offSurfaceCalls > 0 ||
+      row.metrics.contamination.length > 0 ||
+      row.answerError !== null;
+    const guidedPool = mine.filter((row) => known(row, offSurface(row)));
+    const guided = guidedPool.filter((row) => !offSurface(row));
     return {
       arm,
       runs: mine.length,
@@ -151,7 +152,7 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
           : 1 - answered.filter((row) => row.misreport !== null).length / answered.length,
       coexistence: ratio(clean.length, judged.length),
       browser: ratio(web.filter(succeeded).length, web.length),
-      guidance: ratio(guided.length, whole.length),
+      guidance: ratio(guided.length, guidedPool.length),
     };
   });
 };
