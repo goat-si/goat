@@ -83,7 +83,7 @@ it("stops a watch that installed after the click stopped waiting for it", async 
 it("sees what a click changes inside an iframe, by locator and by point", () =>
   fixture(async (page) => {
     await page.setContent(
-      `<iframe style="position:absolute;left:40px;top:40px;width:300px;height:200px;border:0" srcdoc="<button id=b onclick=&quot;this.textContent='saved'&quot; style='position:absolute;left:10px;top:10px'>save</button>"></iframe>`,
+      `<iframe style="position:absolute;left:40px;top:40px;width:300px;height:200px;border:0" srcdoc="<button id=b onclick=&quot;this.textContent = 'saved ' + (++window.n || (window.n = 1))&quot; style='position:absolute;left:10px;top:10px'>save</button>"></iframe>`,
     );
     const button = page.frameLocator("iframe").locator("#b");
     await button.waitFor();
@@ -385,4 +385,26 @@ it("confirms a click that starts a download", () =>
       effect: "confirmed",
       evidence: expect.arrayContaining(["download"]),
     });
+  }));
+
+it("does not confirm a click whose handler rewrites what is already there", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="same" aria-expanded="false" onclick="this.setAttribute('aria-expanded', 'false'); this.firstChild.data = 'same'; label.textContent = 'label'">same</p><span id="label">label</span>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#same" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
+
+it("confirms a click outside an open popover that dismisses it", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="outside" style="position:absolute;left:10px;top:200px;margin:0">outside</p><div id="pop" popover>items</div>`,
+    );
+    await page.evaluate("pop.showPopover()");
+    await expect(ServerBrowserPage.click(page, { x: 30, y: 205 })).resolves.toMatchObject({
+      effect: "confirmed",
+    });
+    expect(await page.evaluate("pop.matches(':popover-open')")).toBe(false);
   }));

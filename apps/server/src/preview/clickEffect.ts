@@ -64,8 +64,32 @@ const INSTALL = `(() => {
     for (const event of dispatching) if (event.eventPhase === 0) dispatching.delete(event);
     return dispatching.size > 0;
   };
-  const observer = new MutationObserver((records) => records.length && handled() && note("dom"));
-  const options = { subtree: true, childList: true, attributes: true, characterData: true };
+  // A write that leaves the value as it was, such as the same attribute or text set again, is not a
+  // change; each attribute and text node is judged by its value before the batch and now.
+  const text = (nodes) => Array.from(nodes, (node) => node.nodeType === 3 ? node.data : "\u0000");
+  const changedIn = (records) => {
+    const before = new Map();
+    for (const record of records) {
+      if (record.type === "childList") {
+        const added = text(record.addedNodes), removed = text(record.removedNodes);
+        if (added.join("") !== removed.join("") || added.includes("\u0000") ||
+            removed.includes("\u0000")) return true;
+        continue;
+      }
+      const key = record.target;
+      const name = record.type === "attributes" ? record.attributeName : "";
+      const entries = before.get(key) ?? new Map();
+      if (!entries.has(name)) entries.set(name, record.oldValue);
+      before.set(key, entries);
+    }
+    for (const [node, entries] of before)
+      for (const [name, old] of entries)
+        if ((name === "" ? node.data : node.getAttribute(name)) !== old) return true;
+    return false;
+  };
+  const observer = new MutationObserver((records) => handled() && changedIn(records) && note("dom"));
+  const options = { subtree: true, childList: true, attributes: true, characterData: true,
+    attributeOldValue: true, characterDataOldValue: true };
   const observed = new Set();
   const watch = (root) => {
     if (root && !observed.has(root)) {
@@ -74,8 +98,13 @@ const INSTALL = `(() => {
     }
   };
   watch(document);
+  // The browser closes open auto popovers on a press outside them, after the press's mousedown and
+  // before its pointerup; those it closes then are the click's.
+  let dismissible = new Set();
   const begin = (event) => {
     if (!event.isTrusted) return;
+    if (event.type === "pointerdown") dismissible = new Set(document.querySelectorAll(":popover-open"));
+    if (event.type === "pointerup") dismissible = new Set();
     // Changes pending from before this event are ambient.
     observer.takeRecords();
     dispatching.add(event);
@@ -98,6 +127,7 @@ const INSTALL = `(() => {
   const onToggle = (event) => {
     const toggled = event.composedPath()[0];
     if (target !== null && (within(target, toggled) || controls(toggled))) note("dom");
+    else if (event.newState === "closed" && dismissible.has(toggled)) note("dom");
   };
   const onInput = (event) => related(event) && note("input");
   const onFocus = (event) => related(event) && note("focus");
