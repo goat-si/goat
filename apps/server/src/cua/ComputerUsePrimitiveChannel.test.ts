@@ -623,3 +623,50 @@ describe("ComputerUsePrimitiveChannel", () => {
     }),
   );
 });
+
+describe("ComputerUsePrimitiveChannel while a control is replaced", () => {
+  it.effect("a call waiting for a driver never crosses into a successor control", () =>
+    Effect.gen(function* () {
+      const signals = yield* PubSub.unbounded<void>();
+      let current = "control:a";
+      const leases = ComputerUseLeases.ComputerUseLeases.of({
+        currentControl: () => Effect.sync(() => Option.some({ controlId: current })),
+        controlState: () => Effect.succeed({ _tag: "active" }),
+        subscribe: PubSub.subscribe(signals),
+      } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
+      const channel = yield* PrimitiveChannel.make.pipe(
+        Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+      );
+      yield* channel.issue({ ...authority, expiresAt: 60_000 });
+      const registered = yield* channel.registerStream({
+        ...authority,
+        proxyInstanceId: "proxy:one",
+        kind: "thread",
+      });
+      if (registered.status !== "registered") throw new Error("expected registration");
+      // launch_app names no driver generation, so nothing downstream would refuse it.
+      const waiting = yield* Effect.flip(
+        channel.request({
+          threadId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 1,
+          deadlineMillis: 30_000,
+          tool: "launch_app",
+          args: { bundle_id: "org.example.Editor" },
+        }),
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      current = "control:b";
+      assert.isTrue(
+        yield* channel.reportControlReady({
+          ...authority,
+          registrationId: registered.registrationId,
+          controlId: "control:b",
+          connectionId: "driver:1",
+          driverGeneration: 1,
+        }),
+      );
+      assert.equal((yield* Fiber.join(waiting)).reason, "desktop_not_ready");
+    }),
+  );
+});

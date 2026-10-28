@@ -542,12 +542,16 @@ export const make = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
       const waitUntil = Math.min(input.deadlineMillis, started + DRIVER_BIND_WAIT_MS);
       let now = started;
+      // The call belongs to the control it began under; a successor never inherits it.
+      let began: string | undefined;
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(desktopNotReady("none"));
+        began ??= current.controlId;
+        if (current.controlId !== began) return yield* Effect.fail(desktopNotReady("unbound"));
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
         const record = registered?.controls.get(current.controlId);
