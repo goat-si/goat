@@ -233,7 +233,10 @@ export function render(inventory: Inventory): string {
     (tool) => /_list$|^list_/.test(tool.name) && tool.pagination.length === 0,
   );
   const longest = [...tools].sort((x, y) => y.descriptionLength - x.descriptionLength).slice(0, 6);
-  const withExamples = tools.filter((tool) => tool.descriptionHasExample);
+  const withExamples = tools.filter(
+    (tool) => tool.descriptionHasExample || tool.servedExamples > 0,
+  );
+  const servedExamples = tools.filter((tool) => tool.servedExamples > 0);
   const untitled = tools.filter((tool) => tool.title === null);
   const extraKeys = tools.filter((tool) => tool.acceptsUndeclaredArguments);
   const errorFamilies = groupBy(tools, (tool) => tool.error.tags.join("+"));
@@ -306,6 +309,7 @@ export function render(inventory: Inventory): string {
     leafCli: leafCli.length,
     exampleCli: exampleCli.length,
     withExamples: withExamples.length,
+    servedExamples: servedExamples.length,
     unlimitedLists: unlimitedLists.map((entry) => entry.name),
     longest: longest[0]?.descriptionLength ?? 0,
   });
@@ -368,7 +372,7 @@ export function render(inventory: Inventory): string {
             pct(fields.length - undescribed.length, fields.length) +
             ")",
         ],
-        ["Tool descriptions with an example", withExamples.length + " of " + tools.length],
+        ["Tools with a worked example", withExamples.length + " of " + tools.length],
         [
           "CLI commands, listed / unlisted",
           listedCli.length + " / " + (cli.length - listedCli.length),
@@ -589,7 +593,11 @@ export function render(inventory: Inventory): string {
     withExamples.length +
       " of " +
       tools.length +
-      " tool descriptions include an example. " +
+      " tools show a worked call, in their description or as examples " +
+      code("goat_describe") +
+      " serves (" +
+      servedExamples.length +
+      " tools). " +
       untitled.length +
       " tools have no " +
       code("Tool.Title") +
@@ -837,7 +845,9 @@ export function render(inventory: Inventory): string {
       code("/llms.txt") +
       " lists every registry path with its summary. " +
       code("goat_describe") +
-      " serves input and output schemas from the registered tools; examples are not served yet.",
+      " serves input and output schemas from the registered tools, and examples for " +
+      servedExamples.length +
+      " of them.",
     "",
     "## Fixes ranked by agent impact",
     "",
@@ -864,6 +874,7 @@ function rankedFixes(
     readonly leafCli: number;
     readonly exampleCli: number;
     readonly withExamples: number;
+    readonly servedExamples: number;
     readonly unlimitedLists: ReadonlyArray<string>;
     readonly longest: number;
   },
@@ -893,7 +904,9 @@ function rankedFixes(
         code("/llms.txt") +
         " lists every path for the calling credential, and " +
         code("goat_describe") +
-        " already serves schemas from the registered tools. Add examples and related paths there without committed reference pages (decision D14 in agent-surface.md).",
+        " already serves schemas from the registered tools and examples for " +
+        n.servedExamples +
+        " of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).",
     },
     {
       title: "Describe every parameter.",
@@ -905,11 +918,11 @@ function rankedFixes(
         n.allUndescribed +
         " tools describe none. Extend the catalog test at " +
         at(
-          "apps/server/src/mcp/toolkits/core.test.ts",
-          /publishes unique tool names/,
-          "publishes unique tool names",
+          "apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts",
+          /describes every argument of the paths goat_call lists/,
+          "describes every argument of the paths goat_call lists",
         ) +
-        " to fail on an undescribed field.",
+        ", which fails on an undescribed argument of a path with examples, to every tool.",
     },
     ...(n.extraKeys === 0
       ? []
@@ -964,7 +977,7 @@ function rankedFixes(
         code("Command.withExamples") +
         " and " +
         n.withExamples +
-        " tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.",
+        " tools show a call. Registry examples are data that goat_describe serves and a test decodes against each tool's parameters; render them into CLI help too, and run them in a smoke test.",
     },
     {
       title: "Uniform pagination.",

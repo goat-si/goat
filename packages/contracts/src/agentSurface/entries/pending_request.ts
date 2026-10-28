@@ -11,6 +11,17 @@ export const pendingRequestEntries = {
       "List pending user-input questions for a thread or your launched threads across machines. Reads only. Launched discovery can be partial: check unavailableHosts and truncated. Approvals are excluded unless an outside MCP client token holds orchestration:approve.",
     guide:
       "Omit threadId for this thread. Pass host and threadId for another machine. An approve-scoped MCP client also gets approvalRequestIds when listing one thread.\n\nUse scope='launched' to discover your launched threads' questions locally, on connected hosts, and on hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Launched results cap at 100; if truncated, answer questions or narrow with host and threadId.\n\nLauncher filters are reserved for outside host transport.",
+    parameters: {
+      threadId: "Default: this thread. With host, the id that host returned.",
+      scope:
+        "thread (default) lists one thread's questions; launched lists the questions of threads you launched, here and on connected hosts.",
+      hosts: "With scope launched, up to 16 more SSH hosts to ask.",
+      launcherThreadId: "Reserved for transport between GOAT hosts. Agents omit it.",
+      launcherEnvironmentId: "Reserved for transport between GOAT hosts. Agents omit it.",
+    },
+    examples: [
+      { title: "Find questions waiting in threads you launched", args: { scope: "launched" } },
+    ],
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -32,6 +43,16 @@ export const pendingRequestEntries = {
       "Read a pending or resolved user question, including status, responder, and resolution time when available. Reads only; use goat_pending_request_respond to answer or forward it to the user.",
     guide:
       "Pass host and threadId for another machine. An outside MCP client token holding orchestration:approve can also read an approval's kind and prompt. Older remotes may omit status and provenance.",
+    parameters: {
+      threadId: "Default: this thread. With host, the id that host returned.",
+      requestId: "The question's id, from goat_pending_request_list or a wait's pendingRequestIds.",
+    },
+    examples: [
+      {
+        title: "Read a question a child thread is waiting on",
+        args: { threadId: "<threadId>", requestId: "<requestId>" },
+      },
+    ],
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -53,6 +74,24 @@ export const pendingRequestEntries = {
       "Answer a pending user-input question or, for an approve-scoped outside MCP client, accept or decline an approval. Records the response and reason for the user. Forward humanRequired questions to the user.",
     guide:
       "Use answers keyed by question id from goat_pending_request_read. Send a string for single select or free text, or a string array for multiSelect. Include reason with 1–2000 characters and some non-whitespace text; it is shown to the user. To hand a launched or delegated thread's question to the person instead, use goat_decision_escalate.\n\nPass host and threadId for another machine. Remote writes require default interaction mode.\n\nApprovals require a person, except an MCP client token holding orchestration:approve can answer with decision (accept or decline) instead of answers. Do not send both fields.\n\nrespondedBy is reserved for outside host transport. Thread callers must omit it.",
+    parameters: {
+      threadId: "Default: this thread. With host, the id that host returned.",
+      requestId: "The question's id, from goat_pending_request_list or a wait's pendingRequestIds.",
+      decision:
+        "accept or decline an approval. Only for an outside MCP client token holding orchestration:approve; never with answers.",
+      respondedBy: "Reserved for transport between GOAT hosts. Thread callers omit it.",
+    },
+    examples: [
+      {
+        title: "Answer a child's question for it",
+        args: {
+          threadId: "<threadId>",
+          requestId: "<requestId>",
+          answers: { database: "Postgres" },
+          reason: "The project already runs Postgres in production.",
+        },
+      },
+    ],
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: true,

@@ -11,6 +11,30 @@ export const scheduleEntries = {
       "Create persistent recurring timer or webhook work in the app scheduler; runs continue without an active turn. Runs post into this thread by default; bindToCurrentThread=false gives a fresh thread per run. Webhook data reaches the run only through prompt placeholders; unsigned URLs let anyone trigger work. webhookUrl may be absent, and a returned one does not prove the tunnel runs.",
     guide:
       "notificationPolicy accepts all_runs (default), failed_runs_only, or important_updates (bound threads only). Policies are evaluated at completion. Important updates suppresses only successful no-change runs with an explicit matching run/attempt report.\n\nPass schedule as a structured object, never JSON text. For hourly runs, use {type:'interval', everyMs:3600000}. For weekday mornings, use {type:'fixed_time', timeOfDay:'09:00', weekdays:[1,2,3,4,5]}. Report the returned nextRunAt.\n\nUse {type:'webhook'} for a generated request URL. Accepted requests can trigger runs, subject to filters, replay suppression, coalescing and admission checks. Configure webhook dedupe with replayKey and coalesceKey templates and coalesceWindowSeconds (10–3600, default 120). Replay keys expire after 7 days. Coalescing retains the latest payload in a fixed window measured from its first delivery.\n\nExpose request data through {{body.path}}, such as {{body.action}} or {{body.release.tag_name}}, {{headers.name}}, {{query.name}}, {{body}} or {{request}}. {{request}} includes the method, headers with credentials redacted, and body. Values arrive framed as untrusted request data; $skill, @file and /command mentions inside them do not act.\n\nFor a sender that signs requests, first call goat_handoff_create so the user enters the secret privately. Never ask for the secret in chat or invent one. Set signature with the returned secretRef. For GitHub, use {type:'webhook', signature:{header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secretRef}}.\n\nAdd filters to restrict triggering; all filters must match. For example: filters:[{path:'headers.x-github-event', op:'equals', value:'pull_request'}, {path:'body.action', op:'in', value:['opened','reopened']}]. Supported operators are equals, notEquals, in, startsWith and exists. A path segment ending in [] fans out over an array: {path:'body.issue.labels[].name', op:'equals', value:'needs more info'} matches when any label has that name. With notEquals, no label may equal the value.\n\nGive the user the returned webhookUrl. If absent, report webhookUrlUnavailableReason, which explains why and what to do. Public URLs need GOAT Connect, which is coming soon. A sender that reaches the server directly can use the address in Settings → Scheduled Tasks. Never share a path instead of a URL. A webhookUrl confirms tunnel configuration; it does not confirm the tunnel is running.\n\nOmit projectId for this thread's project. Keeping runs in this thread suits an orchestrator that sees triggers, delegates work and deduplicates against work in flight. Use bindToCurrentThread=false only when the user wants a fresh top-level thread for each run. In another project, each run launches a fresh thread.\n\nProvider and model inherit from this thread, or from the project default when no thread calls. Runtime and interaction modes come from the caller's limits. Bound runs follow the bound thread's current provider.",
+    parameters: {
+      prompt:
+        "What each run is asked to do, up to 120000 characters. Webhook data enters only through placeholders such as {{body.action}}.",
+      notificationPolicy:
+        "all_runs (default), failed_runs_only, or important_updates (runs bound to this thread only).",
+      title: "The task's name in Settings → Scheduled Tasks.",
+    },
+    examples: [
+      {
+        title: "Run every hour in this thread",
+        args: {
+          prompt: "Check the dev branch CI and report failures.",
+          schedule: { type: "interval", everyMs: 3600000 },
+        },
+      },
+      {
+        title: "Run on weekday mornings in a fresh thread each time",
+        args: {
+          prompt: "Summarize yesterday's merged pull requests.",
+          schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5] },
+          bindToCurrentThread: false,
+        },
+      },
+    ],
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

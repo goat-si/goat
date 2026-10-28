@@ -45,6 +45,8 @@ export interface ToolEntry {
   readonly description: string;
   readonly descriptionLength: number;
   readonly descriptionHasExample: boolean;
+  /** Worked calls goat_describe serves from the path's registry entry. */
+  readonly servedExamples: number;
   readonly naming: {
     readonly shape: "goat_resource_verb" | "verb_resource" | "resource_verb" | "other";
     readonly verb: string | null;
@@ -570,6 +572,7 @@ export async function collectTools(): Promise<{
           descriptionHasExample: /e\.g\.|for example|example:|\{type:|\bsuch as\b/i.test(
             description,
           ),
+          servedExamples: resolve.resolveAgentSurfaceEntry(tool.name)?.examples?.length ?? 0,
           naming: guessNaming(tool.name),
           input: {
             fields,

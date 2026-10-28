@@ -15,6 +15,29 @@ export const originEntries = {
     idempotency: "domain",
     idempotencyReason:
       "Stores clientRequestId as a receipt in the same transaction as the origin's report row or the launcher's inbox entry, and derives a launcher wake's command id from it, so a repeat returns the first receipt and sends a recorded wake at most once; another report under the key is refused.",
+    parameters: {
+      status:
+        "progress, completed, failed or needs_input. Only needs_input wakes a local launcher.",
+      summary:
+        "What to tell the origin, up to 4000 characters. completed is a claim and does not stop the run.",
+    },
+    examples: [
+      {
+        title: "Report progress to the thread that launched this one",
+        args: {
+          status: "progress",
+          summary: "Tests pass; opening the pull request next.",
+          clientRequestId: "report-progress-1",
+        },
+      },
+      {
+        title: "Ask the origin for a decision",
+        args: {
+          status: "needs_input",
+          summary: "Should the migration keep the old column? I need a yes or no to continue.",
+        },
+      },
+    ],
     effect: "write",
     capability: "none",
     capabilityReason: "Reports to this thread's own origin.",

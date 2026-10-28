@@ -1,13 +1,21 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MemoryReadInput,
+  MemorySearchInput,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
+import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { toSignature } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
-import type { McpSchema } from "effect/ai";
+import * as Schema from "effect/Schema";
+import { type McpSchema, Tool } from "effect/ai";
 
-import { type ListedTool, serveCatalogOverHttp } from "../../agentSurface.testkit.ts";
+import { type ListedTool, serveCatalogOverHttp, toolkits } from "../../agentSurface.testkit.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 
 const thread: McpInvocationScope = {
@@ -216,4 +224,94 @@ it.effect("goat_call returns the path's signature with arguments it refuses befo
     expect(domain).toMatchObject({ status: "error", error: { code: "invalid_request" } });
     expect(domain.status === "error" && domain.error.details).toBeFalsy();
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+const notesOf = (entry: AgentSurfaceEntry) => entry.parameters;
+
+// Dynamic tools carry JSON Schema; their handlers decode with these contract schemas.
+const dynamicInputs: Readonly<Record<string, Schema.Codec<unknown, unknown>>> = {
+  "memory.search": MemorySearchInput,
+  "memory.read": MemoryReadInput,
+};
+
+const describedProperty = (property: unknown) => {
+  if (typeof property !== "object" || property === null) return false;
+  const { description, anyOf } = property as { description?: unknown; anyOf?: unknown };
+  return (
+    description !== undefined ||
+    (Array.isArray(anyOf) &&
+      anyOf.some(
+        (branch) => typeof branch === "object" && branch !== null && "description" in branch,
+      ))
+  );
+};
+
+it.effect(
+  "describes every argument of the paths goat_call lists and serves examples their tools decode",
+  () =>
+    Effect.gen(function* () {
+      const http = yield* serve;
+      const tools = yield* http.listTools("thread");
+      const listed = (tools.find((tool) => tool.name === "goat_call")?.description ?? "")
+        .split("\n")
+        .flatMap((line) => /^\(([\w.]+)/u.exec(line)?.[1] ?? []);
+      const documented = Object.values(agentSurfaceRegistry).filter(
+        (entry) => listed.includes(entry.path) || entry.examples.length > 0,
+      );
+      expect(documented.length).toBeGreaterThanOrEqual(listed.length);
+      for (const entry of documented) {
+        const schema = schemaOf(tools, entry.path) as
+          | { properties?: Record<string, unknown> }
+          | undefined;
+        const undescribed = Object.entries(schema?.properties ?? {})
+          .filter(([, property]) => !describedProperty(property))
+          .map(([name]) => name);
+        expect(undescribed, entry.path).toEqual([]);
+        expect(entry.examples.length, entry.path).toBeGreaterThan(0);
+
+        // A note the schema already covers would never be served.
+        for (const [key, note] of Object.entries(notesOf(entry) ?? {})) {
+          const property = key.split(".").reduce<unknown>((at, name) => {
+            const object = at as { properties?: Record<string, unknown>; anyOf?: unknown[] };
+            const holder =
+              object?.properties === undefined
+                ? object?.anyOf?.find((branch) => (branch as { properties?: unknown })?.properties)
+                : object;
+            return (holder as { properties?: Record<string, unknown> } | undefined)?.properties?.[
+              name
+            ];
+          }, schema);
+          expect(
+            (property as { description?: string } | undefined)?.description,
+            `${entry.path} ${key}`,
+          ).toBe(note);
+        }
+
+        const tool = (toolkits as Record<string, { tools: Record<string, Tool.Any> }>)[
+          entry.toolkit
+        ]?.tools[entry.name];
+        // Tool inputs need no services to decode.
+        const parameters = (
+          tool !== undefined && Tool.isDynamic(tool)
+            ? dynamicInputs[entry.path]
+            : tool?.parametersSchema
+        ) as Schema.Codec<unknown, unknown> | undefined;
+        expect(parameters, entry.path).toBeDefined();
+        for (const example of entry.examples)
+          expect(
+            Schema.decodeExit(parameters ?? Schema.Never)(example.args)._tag,
+            `${entry.path}: ${example.title}`,
+          ).toBe("Success");
+      }
+
+      const described = structured<{
+        entries: ReadonlyArray<{ path: string; examples?: unknown }>;
+      }>(
+        yield* http.callTool("thread", "goat_describe", { paths: ["thread.read", "task.create"] }),
+      );
+      for (const served of described.entries)
+        expect(served.examples, served.path).toEqual(
+          resolveAgentSurfaceEntry(served.path)?.examples,
+        );
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );

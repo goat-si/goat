@@ -12,6 +12,10 @@ export const providerEntries = {
       "List provider instances, a model shortlist, inherited runtime settings, and orchestration features. A missing model may only be omitted from the shortlist; search before treating it as unavailable. goat_task_create can use catalog models outside this shortlist.",
     guide:
       "The models come from the provider registry also streamed to clients. Without a search, the shortlist includes visible favorite, custom, and caller-selected models, including pinned legacy models. It includes all visible current Codex, Claude, Muse, and Grok models, and the first eight current models of other drivers in the user's model order. Hidden non-custom models are excluded even when pinned. Other visible legacy models are omitted. omittedModels counts visible models excluded from the current response; with a search, it counts unlisted matches. Search matches every term against the model slug, name, and subprovider, keeps exact slug matches above the limit, and otherwise lists up to eight matches. Task creation still checks provider readiness and model options. For a separate top-level thread in a new or existing worktree, call goat_thread_launch with workspaceStrategy.",
+    examples: [
+      { title: "List providers and the short model list", args: {} },
+      { title: "Find a model by name", args: { search: "opus" } },
+    ],
     effect: "read",
     hostRoutable: false,
     requires: "either",

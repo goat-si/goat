@@ -25,5 +25,5 @@ export const entry = <
     output: "successSchema",
     failure: "failureSchema",
   } as const,
-  examples: [] as ReadonlyArray<AgentSurfaceExample>,
+  examples: (value.examples ?? []) as ReadonlyArray<AgentSurfaceExample>,
 });

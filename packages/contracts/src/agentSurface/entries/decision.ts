@@ -47,6 +47,38 @@ export const decisionEntries = {
       'Create a durable decision request and return its item and id. Retry with the same clientRequestId to reuse the result. Silence never approves. Example: goat_decision_request {title: "Pick a database", context: "Both pass tests", options: [{id: "pg", label: "Postgres", consequence: "Needs a server"}, {id: "sqlite", label: "SQLite", consequence: "One file"}], requiredProfile: "worker"}.',
     guide:
       "The caller's profile must allow threads.launch. Use distinct option ids and name a stored required permission profile. Optionally recommend one of those ids and set a future expiry. An unanswered request stays open until it expires; expiry does not approve it.\n\nWhen a thread here launched or delegated you, that agent is woken and asked first; it answers or hands the decision to the person, and the answer comes back to you as a message.",
+    parameters: {
+      title: "The decision, as one short question.",
+      context: "What the person needs to know to decide.",
+      options: "1 to 20 choices: {id, label, consequence}, with distinct ids.",
+      recommended: "The id of the option you recommend.",
+      requiredProfile: "The stored permission profile whose holder may answer, such as owner.",
+      expiresAt: "ISO time when the request closes unanswered. Expiry never approves.",
+    },
+    examples: [
+      {
+        title: "Ask whether to merge with a known failing check",
+        args: {
+          title: "Merge with the flaky e2e check failing?",
+          context: "The same e2e test fails on dev; the change itself passes its own tests.",
+          options: [
+            {
+              id: "merge",
+              label: "Merge now",
+              consequence: "Lands the fix; dev stays red on that test.",
+            },
+            {
+              id: "wait",
+              label: "Wait for the e2e fix",
+              consequence: "Holds the fix until the test is repaired.",
+            },
+          ],
+          recommended: "merge",
+          requiredProfile: "owner",
+          clientRequestId: "merge-decision-1",
+        },
+      },
+    ],
     effect: "write",
     capability: "threads.launch",
     hostRoutable: false,

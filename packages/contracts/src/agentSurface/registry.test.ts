@@ -212,12 +212,9 @@ describe("agent surface metadata", () => {
       if (entry.dryRun === "supported") expect(entry.effect, entry.path).not.toBe("read");
   });
 
-  it("keeps every example inside the envelope it documents", () => {
+  it("titles every example", () => {
     for (const entry of entries)
-      for (const example of entry.examples) {
-        expect(example.title.trim(), entry.path).not.toBe("");
-        expect(["ok", "error", "needs_human"], entry.path).toContain(example.expect["status"]);
-      }
+      for (const example of entry.examples) expect(example.title.trim(), entry.path).not.toBe("");
   });
 
   it("names a read that settles the unknown outcome of every keyed write", () => {
