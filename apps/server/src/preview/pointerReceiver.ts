@@ -36,7 +36,8 @@ const HIT_AT = `([x, y]) => {
 
 const within = async <A>(work: Promise<A>, deadline: number): Promise<A | undefined> => {
   void work.catch(() => undefined);
-  const left = deadline - performance.now();
+  // A timer longer than a signed 32-bit delay fires at once, so a far deadline is clamped.
+  const left = Math.min(deadline - performance.now(), 2_147_483_647);
   if (left <= 0) return undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
