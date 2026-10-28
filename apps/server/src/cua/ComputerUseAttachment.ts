@@ -242,7 +242,11 @@ export const LEASE_PROXY_ENV = {
   skill: "GOAT_CUA_SKILL_PATH",
   x11Display: "GOAT_CUA_X11_DISPLAY",
   proxyChannelToken: "GOAT_CUA_PROXY_CHANNEL_TOKEN",
+  driverTools: "GOAT_CUA_DRIVER_TOOLS",
 } as const;
+
+/** Whether the model sees the driver's own tools, or reaches the desktop only through screen code. */
+export type DriverToolSurface = "listed" | "hidden";
 
 /** The descriptor token identifies exactly one attachment generation during cleanup. */
 const proxyChannelTokenOf = (config: McpProviderSessionConfig | undefined) =>
@@ -275,6 +279,7 @@ function leaseProxyDescriptor(
   config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader">,
   attachment: Extract<ComputerUseAttachment, { readonly _tag: "proxied" }>,
   leaseRoute: string,
+  driverTools: DriverToolSurface,
 ): CuaDriverMcpConfiguration {
   const driver = attachment.mcp;
   const environment = Object.fromEntries(
@@ -322,9 +327,10 @@ function leaseProxyDescriptor(
       ...(attachment.proxyChannelToken === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.proxyChannelToken, value: attachment.proxyChannelToken }]),
-      ...(attachment.skillPath === undefined
+      ...(attachment.skillPath === undefined || driverTools === "hidden"
         ? []
         : [{ name: LEASE_PROXY_ENV.skill, value: attachment.skillPath }]),
+      ...(driverTools === "hidden" ? [{ name: LEASE_PROXY_ENV.driverTools, value: "hidden" }] : []),
       ...(attachment.x11Display === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.x11Display, value: JSON.stringify(attachment.x11Display) }]),
@@ -338,6 +344,7 @@ export function withComputerUse(
   config: McpProviderSessionConfig,
   attachment: ComputerUseAttachment,
   leaseRoute: string,
+  driverTools: DriverToolSurface = "listed",
 ): McpProviderSessionConfig {
   const {
     cuaDriver: _previous,
@@ -353,9 +360,12 @@ export function withComputerUse(
     case "proxied":
       return {
         ...base,
-        cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute),
+        cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute, driverTools),
         ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
-        builtInSkills: [...new Set([...(_previousSkills ?? []), ...attachment.skills])],
+        // The computer use skill teaches the driver's own tools; screen code carries the desktop.
+        builtInSkills: [...new Set([...(_previousSkills ?? []), ...attachment.skills])].filter(
+          (skill) => driverTools === "listed" || skill !== "computer-use",
+        ),
       };
   }
 }
