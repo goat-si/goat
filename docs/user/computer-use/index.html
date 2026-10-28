@@ -70,7 +70,10 @@ you chose for agents too, so import only the sessions you want an agent to be ab
 browser of the GOAT environment. Agents can use it only there, and GOAT tells the agent why when
 that place is not available.</p>
 <p>When an agent fills a password, it hears that the sign-in finished only after you hand the
-tab back. Screenshots and recordings of that site stay off for the rest of the thread.</p>
+tab back. Screenshots and recordings of that site stay off for the rest of the thread, and for
+other threads that use the same profile. GOAT hides the password in what agents read when the
+page shows it as typed or in the usual web encodings; a site that changes it some other way can
+still show it, so give passwords only for sites you trust.</p>
 <h2 id="approving-apps">Approving apps</h2>
 <p>Every thread in full access mode uses every app without asking, whatever
 started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
