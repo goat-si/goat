@@ -618,6 +618,7 @@ export interface OrchestrationEffectWorkerV2Shape {
     Option.Option<DateTime.Utc>,
     OrchestrationEffectWorkerError
   >;
+  // Waits for process-local quiescence unless capped; unresolved cleanup still waits and warns after 15 s.
   readonly drain: (maxEffects?: number) => Effect.Effect<number, OrchestrationEffectWorkerError>;
 }
 
@@ -643,6 +644,7 @@ export const layerWithOptions = (
     OrchestrationEffectWorkerV2,
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const fences = yield* outbox.getExecution();
       if (yield* AutomationHold.isHeld) yield* outbox.captureHeldBacklog.pipe(Effect.orDie);
       const executor = yield* OrchestrationEffectExecutorV2;
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
@@ -767,7 +769,6 @@ export const layerWithOptions = (
                 return false;
               }
               const effect = claimed.value;
-              const fences = yield* outbox.getExecution();
               return yield* restore(
                 Effect.gen(function* () {
                   // Arm cancellation before rereading durable state to close the read-to-registration race.
@@ -912,6 +913,7 @@ export const layerWithOptions = (
           _effectTypes?: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>,
         ) =>
           effect.pipe(
+            fences.withClaim,
             Effect.mapError((cause) =>
               isOrchestrationEffectWorkerError(cause)
                 ? cause
@@ -938,7 +940,6 @@ export const layerWithOptions = (
       });
       return OrchestrationEffectWorkerV2.of({
         configureConcurrency: Effect.fn("EffectWorker.configureConcurrency")(function* (count) {
-          const fences = yield* outbox.getExecution();
           yield* fences.setGeneralCapacity(count);
         }),
         awaitControlWork: awaitLaneWork(outbox.awaitControlAvailable),
@@ -963,8 +964,15 @@ export const layerWithOptions = (
         ),
         drain: Effect.fn("EffectWorker.drain")(function* (maxEffects = Number.MAX_SAFE_INTEGER) {
           let completed = 0;
-          while (completed < maxEffects && (yield* runOnce())) {
-            completed += 1;
+          while (completed < maxEffects) {
+            const revision = yield* fences.revision;
+            if (yield* runOnce()) {
+              completed += 1;
+            } else {
+              const changed = yield* fences.awaitChange(revision);
+              if (Option.isNone(changed)) break;
+              yield* changed.value;
+            }
           }
           return completed;
         }),

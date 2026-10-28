@@ -810,9 +810,11 @@ it.effect(
 );
 
 it.effect("runs independent cleanup while four general effects remain held", () => reservedCleanup);
-it.effect(
-  "drains another worker's admission, finalizers and newly enqueued work",
-  () => drainWaitsForOtherWorker,
+it.effect("drains another worker's admission, finalizers and newly enqueued work", () =>
+  drainWaitsForOtherWorker(),
+);
+it.effect("rechecks work enqueued before an empty claim returns", () =>
+  drainWaitsForOtherWorker(true),
 );
 it.effect("keeps cancelled operations fenced until their finalizers join", () =>
   cancellationFence(),

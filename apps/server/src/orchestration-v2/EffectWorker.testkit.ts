@@ -334,120 +334,142 @@ const pendingCleanup = (
   request: { type: "terminal.cleanup" },
 });
 
-export const drainWaitsForOtherWorker = Effect.gen(function* () {
-  const admitted = yield* Deferred.make<void>();
-  const releaseAdmission = yield* Deferred.make<void>();
-  const entered = yield* Deferred.make<void>();
-  const releaseExecution = yield* Deferred.make<void>();
-  const cleaning = yield* Deferred.make<void>();
-  const releaseCleanup = yield* Deferred.make<void>();
-  const committed = yield* Deferred.make<void>();
-  const releaseSettlement = yield* Deferred.make<void>();
-  const probed = yield* Deferred.make<void>();
-  const drained = yield* Deferred.make<void>();
-  const executed: string[] = [];
-  const target = ThreadId.make("thread:drain-other-worker");
-  yield* Effect.gen(function* () {
-    const outbox = yield* EffectOutbox.EffectOutboxV2;
-    yield* outbox.enqueue([pendingCleanup("drain:first", target)]);
-    const workerLayer = (workerId: string, overrides: Partial<EffectOutbox.EffectOutboxV2Shape>) =>
-      EffectWorker.layerWithOptions({ workerId }).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(EffectOutbox.EffectOutboxV2, { ...outbox, ...overrides }),
-            Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
-              execute: (effect) =>
-                Effect.acquireUseRelease(
-                  Effect.sync(() => executed.push(effect.id)),
-                  () =>
-                    effect.id === "drain:first"
-                      ? Deferred.succeed(entered, undefined).pipe(
-                          Effect.andThen(Deferred.await(releaseExecution)),
-                        )
-                      : Effect.void,
-                  () =>
-                    effect.id === "drain:first"
-                      ? Deferred.succeed(cleaning, undefined).pipe(
-                          Effect.andThen(Deferred.await(releaseCleanup)),
-                        )
-                      : Effect.void,
-                ),
-            }),
-          ),
-        ),
-      );
+export const drainWaitsForOtherWorker = (settleBeforeEmptyReturns = false) =>
+  Effect.gen(function* () {
+    const admitted = yield* Deferred.make<void>();
+    const releaseAdmission = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const releaseExecution = yield* Deferred.make<void>();
+    const cleaning = yield* Deferred.make<void>();
+    const releaseCleanup = yield* Deferred.make<void>();
+    const committed = yield* Deferred.make<void>();
+    const releaseSettlement = yield* Deferred.make<void>();
+    const probed = yield* Deferred.make<void>();
+    const emptyMayReturn = yield* Deferred.make<void>();
+    const drained = yield* Deferred.make<void>();
+    const executed: string[] = [];
+    const target = ThreadId.make("thread:drain-other-worker");
     yield* Effect.gen(function* () {
-      const owner = yield* EffectWorker.OrchestrationEffectWorkerV2;
-      const first = yield* owner.runCleanupOnce.pipe(Effect.forkScoped);
-      yield* Deferred.await(admitted);
-      yield* Effect.gen(function* () {
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const drain = yield* worker.drain().pipe(
-          Effect.tap(() => Deferred.succeed(drained, undefined)),
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(probed);
-        yield* TestClock.adjust(0);
-        assert.isFalse(yield* Deferred.isDone(drained), "drain must await another admission");
-        yield* Deferred.succeed(releaseAdmission, undefined);
-        yield* Deferred.await(entered);
-        yield* TestClock.adjust(0);
-        assert.isFalse(yield* Deferred.isDone(drained), "drain must await another executor");
-        yield* Deferred.succeed(releaseExecution, undefined);
-        yield* Deferred.await(cleaning);
-        yield* TestClock.adjust(0);
-        assert.isFalse(yield* Deferred.isDone(drained), "drain must await executor finalizers");
-        yield* Deferred.succeed(releaseCleanup, undefined);
-        yield* Deferred.await(committed);
-        yield* TestClock.adjust(0);
-        assert.isFalse(yield* Deferred.isDone(drained), "drain must await post-commit settlement");
-        yield* Deferred.succeed(releaseSettlement, undefined);
-        assert.isTrue(yield* Fiber.join(first));
-        assert.equal(yield* Fiber.join(drain), 1);
-        assert.deepEqual(executed, ["drain:first", "drain:followup"]);
-        assert.equal(Option.getOrThrow(yield* outbox.get("drain:followup")).status, "succeeded");
-      }).pipe(
-        Effect.ensuring(
-          Effect.all(
-            [releaseAdmission, releaseExecution, releaseCleanup, releaseSettlement].map((signal) =>
-              Deferred.succeed(signal, undefined),
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      yield* outbox.enqueue([pendingCleanup("drain:first", target)]);
+      const workerLayer = (
+        workerId: string,
+        overrides: Partial<EffectOutbox.EffectOutboxV2Shape>,
+      ) =>
+        EffectWorker.layerWithOptions({ workerId }).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(EffectOutbox.EffectOutboxV2, { ...outbox, ...overrides }),
+              Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+                execute: (effect) =>
+                  Effect.acquireUseRelease(
+                    Effect.sync(() => executed.push(effect.id)),
+                    () =>
+                      effect.id === "drain:first"
+                        ? Deferred.succeed(entered, undefined).pipe(
+                            Effect.andThen(Deferred.await(releaseExecution)),
+                          )
+                        : Effect.void,
+                    () =>
+                      effect.id === "drain:first"
+                        ? Deferred.succeed(cleaning, undefined).pipe(
+                            Effect.andThen(Deferred.await(releaseCleanup)),
+                          )
+                        : Effect.void,
+                  ),
+              }),
             ),
           ),
-        ),
-        Effect.provide(
-          workerLayer("worker:drain", {
-            claimNext: (input) =>
-              outbox
-                .claimNext(input)
-                .pipe(
-                  Effect.tap((claim) =>
-                    Option.isNone(claim) ? Deferred.succeed(probed, undefined) : Effect.void,
+        );
+      yield* Effect.gen(function* () {
+        const owner = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const first = yield* owner.runCleanupOnce.pipe(Effect.forkScoped);
+        yield* Deferred.await(admitted);
+        yield* Effect.gen(function* () {
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const drain = yield* worker.drain().pipe(
+            Effect.tap(() => Deferred.succeed(drained, undefined)),
+            Effect.forkScoped,
+          );
+          yield* Deferred.await(probed);
+          yield* TestClock.adjust(0);
+          assert.isFalse(yield* Deferred.isDone(drained), "drain must await another admission");
+          yield* Deferred.succeed(releaseAdmission, undefined);
+          yield* Deferred.await(entered);
+          yield* TestClock.adjust(0);
+          assert.isFalse(yield* Deferred.isDone(drained), "drain must await another executor");
+          yield* Deferred.succeed(releaseExecution, undefined);
+          yield* Deferred.await(cleaning);
+          yield* TestClock.adjust(0);
+          assert.isFalse(yield* Deferred.isDone(drained), "drain must await executor finalizers");
+          yield* Deferred.succeed(releaseCleanup, undefined);
+          yield* Deferred.await(committed);
+          yield* TestClock.adjust(0);
+          assert.isFalse(
+            yield* Deferred.isDone(drained),
+            "drain must await post-commit settlement",
+          );
+          yield* Deferred.succeed(releaseSettlement, undefined);
+          assert.isTrue(yield* Fiber.join(first));
+          yield* Deferred.succeed(emptyMayReturn, undefined);
+          assert.equal(yield* Fiber.join(drain), 1);
+          assert.deepEqual(executed, ["drain:first", "drain:followup"]);
+          assert.equal(Option.getOrThrow(yield* outbox.get("drain:followup")).status, "succeeded");
+        }).pipe(
+          Effect.ensuring(
+            Effect.forEach(
+              [
+                releaseAdmission,
+                releaseExecution,
+                releaseCleanup,
+                releaseSettlement,
+                emptyMayReturn,
+              ],
+              (signal) => Deferred.succeed(signal, undefined),
+            ),
+          ),
+          Effect.provide(
+            workerLayer("worker:drain", {
+              claimNext: (input) =>
+                outbox
+                  .claimNext(input)
+                  .pipe(
+                    Effect.tap((claim) =>
+                      Option.isNone(claim)
+                        ? Deferred.succeed(probed, undefined).pipe(
+                            Effect.andThen(
+                              settleBeforeEmptyReturns
+                                ? Deferred.await(emptyMayReturn)
+                                : Effect.void,
+                            ),
+                          )
+                        : Effect.void,
+                    ),
                   ),
-                ),
+            }),
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          workerLayer("worker:owner", {
+            get: (id) =>
+              Deferred.succeed(admitted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseAdmission)),
+                Effect.andThen(outbox.get(id)),
+              ),
+            succeed: (input) =>
+              outbox.succeed(input).pipe(
+                Effect.tap(() => Deferred.succeed(committed, undefined)),
+                Effect.tap(() => Deferred.await(releaseSettlement)),
+                Effect.tap(() => outbox.enqueue([pendingCleanup("drain:followup", target)])),
+              ),
           }),
         ),
       );
     }).pipe(
-      Effect.provide(
-        workerLayer("worker:owner", {
-          get: (id) =>
-            Deferred.succeed(admitted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseAdmission)),
-              Effect.andThen(outbox.get(id)),
-            ),
-          succeed: (input) =>
-            outbox.succeed(input).pipe(
-              Effect.tap(() => Deferred.succeed(committed, undefined)),
-              Effect.tap(() => Deferred.await(releaseSettlement)),
-              Effect.tap(() => outbox.enqueue([pendingCleanup("drain:followup", target)])),
-            ),
-        }),
-      ),
+      Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
     );
-  }).pipe(
-    Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
-  );
-}).pipe(Effect.scoped);
+  }).pipe(Effect.scoped);
 
 export const replacementClaimSurvivesOldFinalizer = Effect.gen(function* () {
   const retried = yield* Deferred.make<void>();
@@ -589,6 +611,9 @@ export const cancellationRollbackPreservesClaim = Effect.gen(function* () {
 });
 
 export const mockExecution = () => ({
+  withClaim: <E, R>(effect: Effect.Effect<boolean, E, R>) => effect,
+  revision: Effect.succeed(0),
+  awaitChange: () => Effect.succeedNone,
   admissions: Effect.succeed([]),
   begin: (claim: EffectOutbox.OrchestrationEffectV2) => Effect.succeedSome(claim),
   warnSlowCleanup: () => Effect.void,
