@@ -9,8 +9,9 @@ const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_V
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // unverifiable or any unknown outcome: observe again, never resend. Stop from the person ends the cell at once.`;
 
-const COMMON = `type Target = number | string | [x: number, y: number] | { role?: string; name: string };
+const COMMON = `type Target = number | string | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name.
+// { id }: an app element's accessibility id, the same in every language.
 // [x, y]: pixels of the current screenshot, for click, scroll and drag (both ends); input or a new page ends them. Numbers and refs hold until the next observe,
 // and never move to another element: after navigation or a new document they fail with nothing sent.
 type Done = { verdict: "confirmed" | "unverifiable"; result?: unknown };
@@ -18,16 +19,17 @@ type Done = { verdict: "confirmed" | "unverifiable"; result?: unknown };
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
 // later input, but observe, read, status, waitFor and verify still run.
-interface Observation { text: string; observationId: string; mode: "full" | "diff"; baseObservationId?: string;
+interface Observation { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
   resetReason?: string; // a diff that could not be compared came back full, never as "no change"
+  incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
   elements: Element[]; title?: string; url?: string; image?: object }
 interface Element { index: number; role: string; name: string; text?: string; actions?: string[];
   enabled?: boolean; selected?: boolean; frame?: { x: number; y: number; width: number; height: number };
-  range?: { min: number; max: number }; parent?: number }
+  range?: { min: number; max: number }; parent?: number; id?: string }
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
@@ -53,6 +55,9 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
 // after a failed or unknown one, later steps may already have run: read every result; a step went
 // unsent only when its own result says nothingSent.
+// A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
+// app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
+// searches up to 4,096 elements for ones matching every field, with their ancestors as context.
 interface App extends TargetBase { menu(path: string[]): Promise<Done>; launch(): Promise<Done>;
   screenshot(): Promise<object> }`;
 

@@ -219,23 +219,29 @@ export const isInteractive = (element: {
   (NAMED_BY_TEXT.has(element.role) && element.name !== "");
 
 /**
- * The tree text narrowed to the numbered lines in `keep` and the lines above them, which stay as
- * context without their numbers.
+ * The tree text narrowed to the numbered lines in keep, the unnumbered text under them (which may
+ * name them), and the lines above them, which stay as context without their numbers.
  */
 export const keepTreeLines = (markdown: string, keep: ReadonlySet<number>): string => {
   const raw = markdown.split("\n");
   const included = new Set<number>();
-  const open: Array<{ readonly depth: number; readonly position: number }> = [];
+  const open: Array<{
+    readonly depth: number;
+    readonly position: number;
+    readonly index?: number;
+  }> = [];
   raw.forEach((line, position) => {
     const parsed = LINE.exec(line);
     if (!parsed) return;
     const depth = (parsed[1] ?? "").length;
     while (open.length > 0 && (open.at(-1)?.depth ?? 0) >= depth) open.pop();
-    if (parsed[2] !== undefined && keep.has(Number(parsed[2]))) {
+    const index = parsed[2] === undefined ? undefined : Number(parsed[2]);
+    const owner = [...open].reverse().find((ancestor) => ancestor.index !== undefined)?.index;
+    if (index === undefined ? owner !== undefined && keep.has(owner) : keep.has(index)) {
       included.add(position);
       for (const ancestor of open) included.add(ancestor.position);
     }
-    open.push({ depth, position });
+    open.push({ depth, position, ...(index === undefined ? {} : { index }) });
   });
   return raw
     .filter((_, position) => included.has(position))

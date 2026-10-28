@@ -153,6 +153,8 @@ class ObservationIndex {
     string,
     {
       observationId: string;
+      /** Later pages of the same read; their refs resolve beside the first page's. */
+      pages: Set<string>;
       surfaceGeneration: number;
       tokens: Map<string, string>;
       editable: Set<string>;
@@ -181,6 +183,7 @@ class ObservationIndex {
   ): void {
     this.byTarget.set(targetId, {
       observationId,
+      pages: new Set(),
       surfaceGeneration,
       tokens,
       editable,
@@ -188,23 +191,34 @@ class ObservationIndex {
     });
   }
 
-  resolveElement(ref: ScreenElementRef): string | undefined {
+  /** Adds a later page of the target's current read; false when that read is no longer current. */
+  addPage(
+    targetId: string,
+    baseObservationId: string,
+    observationId: string,
+    tokens: ReadonlyMap<string, string>,
+    editable: ReadonlySet<string>,
+  ): boolean {
+    const entry = this.byTarget.get(targetId);
+    if (!entry || entry.observationId !== baseObservationId) return false;
+    entry.pages.add(observationId);
+    for (const [id, token] of tokens) entry.tokens.set(id, token);
+    for (const id of editable) entry.editable.add(id);
+    return true;
+  }
+  private current(ref: ScreenElementRef) {
     const entry = this.byTarget.get(ref.targetId);
-    if (
-      !entry ||
-      entry.observationId !== ref.observationId ||
-      entry.surfaceGeneration !== ref.surfaceGeneration
-    )
-      return undefined;
-    return entry.tokens.get(ref.id);
+    return entry &&
+      (entry.observationId === ref.observationId || entry.pages.has(ref.observationId)) &&
+      entry.surfaceGeneration === ref.surfaceGeneration
+      ? entry
+      : undefined;
+  }
+  resolveElement(ref: ScreenElementRef): string | undefined {
+    return this.current(ref)?.tokens.get(ref.id);
   }
   isEditable(ref: ScreenElementRef): boolean {
-    const entry = this.byTarget.get(ref.targetId);
-    return (
-      entry?.observationId === ref.observationId &&
-      entry.surfaceGeneration === ref.surfaceGeneration &&
-      entry.editable.has(ref.id)
-    );
+    return this.current(ref)?.editable.has(ref.id) === true;
   }
 
   putRegion(
@@ -372,6 +386,8 @@ export class ScreenObservations {
     resetReason?: string;
     /** What the read covered; omitted means the whole window or page. */
     scope?: string;
+    /** The observation this one continues as a later page of the same read. */
+    page?: string;
     limits: { readonly treeBytes: number };
   }): ScreenObservation {
     const { draft } = input;
@@ -383,7 +399,8 @@ export class ScreenObservations {
     let selected = draft.elements;
     let renderedText = draft.indexedText;
     let queryTruncated = false;
-    if (mode === "query") {
+    // An app query or page arrives already filtered by the host.
+    if (mode === "query" && draft.targetRef.kind === "tab") {
       const query = input.query;
       const lines = currentLines.slice(0, 4096);
       queryTruncated = lines.length < currentLines.length;
@@ -638,8 +655,13 @@ export class ScreenObservations {
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget)
       throw new Error("Screen observation metadata exceeds tree budget");
-    this.index.put(draft.targetRef.id, observationId, draft.surfaceGeneration, tokens, editable);
     const observation = build();
+    if (input.page !== undefined) {
+      if (!this.index.addPage(draft.targetRef.id, input.page, observationId, tokens, editable))
+        throw new Error("Screen observation page outlived its read");
+      return observation;
+    }
+    this.index.put(draft.targetRef.id, observationId, draft.surfaceGeneration, tokens, editable);
     this.previous.set(draft.targetRef.id, { observation, draft });
     return observation;
   }

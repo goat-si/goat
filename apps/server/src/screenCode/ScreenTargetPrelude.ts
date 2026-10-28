@@ -186,12 +186,21 @@ const __target = (binding, note, owner) => {
   const observe = async (arg = {}) => {
     if (__legacy(arg)) return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg));
     const diff = arg.diff !== false && seen.observation !== undefined;
+    const page = !tab && arg.after !== undefined;
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
     const options = tab
       ? { ...base, ...(arg.screenshot ? { screenshot: true } : {}), ...(arg.interactiveOnly ? { interactiveOnly: true } : {}), ...(arg.fullPage ? { fullPage: true } : {}), ...(arg.scope ? { scope: arg.scope } : {}) }
+      : page ? { after: arg.after, ...(seen.observation ? { baseObservationId: seen.observation.observationId } : {}) }
+      : arg.query ? { mode: 'query', query: arg.query }
       : { ...base, ...(arg.interactiveOnly ? { interactiveOnly: true } : {}) };
     let observation;
-    try { observation = remember((await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v); }
+    try {
+      const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v;
+      observation = page ? value : remember(value);
+      // A page's elements join the read it continues, so numbers and names from every page resolve.
+      if (page && seen.observation && value && Array.isArray(value.elements))
+        seen.observation = { ...seen.observation, elements: [...seen.observation.elements, ...value.elements] };
+    }
     catch (raw) { throw __error(raw); }
     if (!tab && arg.screenshot) {
       try { seen.image = (await __reply('screenshot', [{ targetRef: ref }])).v; }

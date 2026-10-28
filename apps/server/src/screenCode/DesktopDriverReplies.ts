@@ -85,7 +85,14 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   ) {
     const code = string(object(structured.refusal)?.code) ?? string(structured.code);
     return {
-      ...fail(code === "invalid_arguments" ? "invalid_argument" : "permission_denied", said),
+      ...fail(
+        code === "invalid_arguments"
+          ? "invalid_argument"
+          : code === "stale_element_token"
+            ? "stale_reference"
+            : "permission_denied",
+        said,
+      ),
       ...refusalOf(structured),
     };
   }

@@ -38,18 +38,21 @@ import {
   fail,
   POINT_KEYS,
 } from "./DesktopDriverReplies.ts";
-import { ScreenObservations, type ScreenElementDetail } from "./ScreenObservations.ts";
+import { ScreenObservations } from "./ScreenObservations.ts";
+import { cleanActionText, isInteractive, keepTreeLines, pairTreeText } from "./DesktopTreeText.ts";
 import {
-  actionName,
-  cleanActionText,
-  idsFromTree,
-  isInteractive,
-  keepTreeLines,
-  labelsFromTree,
-  namesFromTree,
-  pairTreeText,
-  parseTree,
-} from "./DesktopTreeText.ts";
+  boundedReadDetail,
+  desktopQuery,
+  desktopRows,
+  driverQuery,
+  matchesQuery,
+  pageDraft,
+  queryOmission,
+  renderFailure,
+  READ_BOUNDS,
+  viewportOf,
+  type DesktopPages,
+} from "./DesktopObserveRead.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -155,26 +158,6 @@ const WINDOW_ROLES: ReadonlySet<string> = new Set([
   "alert",
   "file chooser",
 ]);
-/** The driver's state and geometry for one element, in the observation's own names. */
-const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
-  const frame = object(entry.frame);
-  const actions = array(entry.actions)
-    .filter((action): action is string => typeof action === "string")
-    .map(actionName);
-  const parent = natural(entry.parent_index);
-  return {
-    ...(actions.length > 0 ? { actions } : {}),
-    ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
-    ...(typeof entry.selected === "boolean" ? { selected: entry.selected } : {}),
-    ...(frame && finite(frame.x) && finite(frame.y) && finite(frame.w) && finite(frame.h)
-      ? { frame: { x: frame.x, y: frame.y, width: frame.w, height: frame.h } }
-      : {}),
-    ...(finite(entry.min) && finite(entry.max)
-      ? { range: { min: entry.min, max: entry.max } }
-      : {}),
-    ...(parent === undefined ? {} : { parent }),
-  };
-};
 interface BoundWindow {
   readonly ref: ScreenTargetRef;
   readonly pid: number;
@@ -186,6 +169,8 @@ interface BoundWindow {
   readonly epoch: number;
   readonly connectionGeneration: string;
   observationId?: string;
+  /** The rest of the read behind observationId, when its budget cut it; see DesktopPages. */
+  pages?: DesktopPages;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
   /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
@@ -306,8 +291,10 @@ export const createDesktopTargetHost = (deps: {
       observationId: string(element.observationId) ?? "",
       surfaceGeneration: element.surfaceGeneration,
     };
+    const page =
+      bound.pages?.base === bound.observationId && bound.pages?.ids.has(ref.observationId);
     return ref.targetId === bound.ref.id &&
-      ref.observationId === bound.observationId &&
+      (ref.observationId === bound.observationId || page === true) &&
       ref.surfaceGeneration === bound.epoch
       ? observations.index.resolveElement(
           ref as Parameters<typeof observations.index.resolveElement>[0],
@@ -419,6 +406,42 @@ export const createDesktopTargetHost = (deps: {
       return { value: ref, category: "unverifiable" };
     },
   );
+  /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
+  const page = Effect.fn("DesktopTargetHost.page")(function* (
+    bound: BoundWindow,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+  ) {
+    const args = callArgs(call.args);
+    const from = natural(args.after);
+    if (from === undefined)
+      return yield* Effect.fail(
+        fail("invalid_argument", "Pass after the number the omission names."),
+      );
+    const pages = bound.pages;
+    const base = string(args.baseObservationId);
+    if (!pages || pages.base !== bound.observationId || (base !== undefined && base !== pages.base))
+      return yield* Effect.fail(
+        fail("stale_reference", "A newer read ended that read's pages; observe again."),
+      );
+    const observation = yield* Effect.try({
+      try: () =>
+        observations.renderObservation({
+          draft: {
+            ...pageDraft(pages, from, bound.ref, bound.epoch),
+            ...viewportOf(bound.windowBounds),
+          },
+          mode: "query",
+          scope: `after [${from}]`,
+          page: pages.base,
+          limits: { treeBytes: observationReplyBudget(call, context.limits) },
+        }),
+      catch: renderFailure,
+    });
+    for (const element of observation.elements) pages.given.add(element.index);
+    pages.ids.add(observation.observationId);
+    return { value: observation, category: "unverifiable" as const };
+  });
   const observe: DesktopTargetHost["observe"] = Effect.fn("DesktopTargetHost.observe")(
     function* (call, context) {
       const bound = resolve(call, context);
@@ -431,22 +454,41 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(fail("unsupported"));
       const capture = call.method === "screenshot";
       const args = callArgs(call.args);
+      if (!capture && args.after !== undefined) return yield* page(bound, call, context);
+      const query = !capture && args.mode === "query" ? desktopQuery(args.query) : undefined;
+      if (!capture && args.mode === "query" && !query)
+        return yield* Effect.fail(
+          fail("invalid_argument", "Query by {role, name, text, id}: name at least one."),
+        );
+      const search = query && driverQuery(query);
       // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
       // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
-      const reply = yield* request(
-        "get_window_state",
-        {
-          pid: bound.pid,
-          window_id: bound.windowId,
-          include_accessibility_tree: !capture,
-          include_screenshot: capture,
-          max_elements: 4096,
-          ...(capture ? {} : { tree_format: "both" }),
-        },
-        call,
-        context,
-        bound.connectionGeneration,
-      );
+      const read = (limit: number) =>
+        request(
+          "get_window_state",
+          {
+            pid: bound.pid,
+            window_id: bound.windowId,
+            include_accessibility_tree: !capture,
+            include_screenshot: capture,
+            max_elements: limit,
+            ...(capture ? {} : { tree_format: "both" }),
+            ...(search === undefined ? {} : { query: search }),
+          },
+          call,
+          context,
+          bound.connectionGeneration,
+        );
+      let limit: number = READ_BOUNDS[0];
+      let reply = yield* read(limit);
+      // A whole tree too large to carry walks fewer elements, within the call's deadline; a
+      // query walks at least the driver's own floor, so a smaller bound would not shrink it.
+      for (const smaller of capture || query ? [] : READ_BOUNDS.slice(1)) {
+        if (object(driverValue(reply))?.code !== COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) break;
+        if ((yield* Clock.currentTimeMillis) >= call.deadlineMillis) break;
+        limit = smaller;
+        reply = yield* read(limit);
+      }
       const state = object(driverValue(reply));
       // The read ran and retired the driver's earlier tokens, so their refs go even when this
       // answer is unusable; only a driver naming another window makes the binding stale.
@@ -462,7 +504,9 @@ export const createDesktopTargetHost = (deps: {
             "tree_limit",
             capture
               ? "This window's capture answer is larger than GOAT carries in one read; nothing changed. Observe again."
-              : "This window's accessibility tree is larger than GOAT carries in one read; nothing changed. Take a screenshot of it, or work in a smaller window.",
+              : query
+                ? "Too many matches to return; use a more specific name or text."
+                : "This window's accessibility tree is larger than GOAT carries even at 256 elements; nothing changed. Take a screenshot of it, or observe({query:{name}}).",
           ),
         );
       }
@@ -484,51 +528,28 @@ export const createDesktopTargetHost = (deps: {
         .map(object)
         .filter((entry) => entry !== undefined);
       const markdown = typeof state.tree_markdown === "string" ? state.tree_markdown : "";
-      const lines = parseTree(markdown);
-      const [names, labels, ids] = [
-        namesFromTree(lines),
-        labelsFromTree(lines),
-        idsFromTree(lines),
-      ];
-      const rows = elements.flatMap((entry) => {
-        const token = string(entry.element_token);
-        if (!token) return [];
-        const index = natural(entry.element_index);
-        const label = string(entry.label) ?? "";
-        // A value element's label line, or the text under an unnamed row or cell, names it.
-        const named =
-          index === undefined
-            ? label
-            : label === ""
-              ? (names.get(index) ?? "")
-              : label === entry.value
-                ? (labels.get(index) ?? label)
-                : label;
-        const id = index === undefined ? undefined : ids.get(index);
-        return [
-          {
-            role: string(entry.role) ?? "unknown",
-            name: named,
-            ...(typeof entry.value === "string" ? { text: entry.value } : {}),
-            ...(index === undefined ? {} : { index }),
-            ...elementDetail(entry),
-            ...(id === undefined ? {} : { id }),
-            driverToken: token,
-          },
-        ];
-      });
+      const rows = desktopRows(elements, markdown);
       // An interactive-only read keeps controls, fields, disabled controls and named rows, and
-      // spends the reply budget on them alone.
+      // spends the reply budget on them alone; a query keeps the elements matching every field.
       const interactive = !capture && args.interactiveOnly === true;
-      const shown = interactive ? rows.filter(isInteractive) : rows;
+      const shown = query
+        ? rows.filter((row) => matchesQuery(row, query))
+        : interactive
+          ? rows.filter(isInteractive)
+          : rows;
       const treeText = cleanActionText(pairTreeText(markdown));
-      const resetReason = capture
-        ? undefined
-        : args.mode === "diff"
-          ? "desktop_reads_full"
-          : args.mode === "query"
-            ? "desktop_query_unsupported"
-            : undefined;
+      const shownText =
+        query || interactive
+          ? keepTreeLines(
+              treeText,
+              new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
+            )
+          : treeText;
+      const omitted = query
+        ? queryOmission(state, shown.length)
+        : limit < READ_BOUNDS[0]
+          ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
+          : [];
       // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
       // tree's observation stays and only gains this region. Any other read has retired them in
       // the driver, so the old refs go now, before a render that may fail.
@@ -556,45 +577,40 @@ export const createDesktopTargetHost = (deps: {
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText: interactive
-                ? keepTreeLines(
-                    treeText,
-                    new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
-                  )
-                : treeText,
+              indexedText: shownText,
               complete: state.elements_complete === true,
-              truncated: state.truncated === true,
+              truncated: state.truncated === true || limit < READ_BOUNDS[0],
               loading: false,
               elements: shown,
-              ...(bound.windowBounds === undefined
-                ? {}
-                : {
-                    viewport: {
-                      x: bound.windowBounds.x,
-                      y: bound.windowBounds.y,
-                      width: bound.windowBounds.w,
-                      height: bound.windowBounds.h,
-                    },
-                  }),
+              ...(omitted.length === 0 ? {} : { omitted }),
+              ...viewportOf(bound.windowBounds),
             }),
-            mode: "full",
-            ...(interactive ? { scope: "window interactive" } : {}),
-            ...(resetReason === undefined ? {} : { resetReason }),
+            mode: query ? "query" : "full",
+            ...(query
+              ? { scope: "window query" }
+              : interactive
+                ? { scope: "window interactive" }
+                : {}),
+            ...(!capture && args.mode === "diff" ? { resetReason: "desktop_reads_full" } : {}),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
-        catch: (cause) =>
-          fail(
-            cause instanceof Error &&
-              cause.message === "Screen observation metadata exceeds tree budget"
-              ? "tree_limit"
-              : "downstream_failure",
-          ),
+        catch: renderFailure,
       });
       if (!capture) {
         const observation = yield* render;
         bound.observationId = observation.observationId;
         const snapshotId = string(state.snapshot_id);
         if (snapshotId !== undefined) bound.snapshotId = snapshotId;
+        // A read its budget cut keeps the rest for observe({after}) until the next read.
+        if (observation.elements.length < shown.length)
+          bound.pages = {
+            base: observation.observationId,
+            rows: shown,
+            text: shownText,
+            given: new Set(observation.elements.map((element) => element.index)),
+            ids: new Set(),
+          };
+        else delete bound.pages;
         return { value: observation, category: "unverifiable" };
       }
       let observationId = kept;
@@ -818,7 +834,14 @@ export const createDesktopTargetHost = (deps: {
           elementToken === undefined
             ? undefined
             : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
-      });
+      }).pipe(
+        // The driver refused a token another read retired: that read also ended the pages.
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (error.code === "stale_reference") delete bound.pages;
+          }),
+        ),
+      );
       return driverResult(tool, reply);
     },
   );
@@ -847,7 +870,9 @@ export const createDesktopTargetHost = (deps: {
       const args = callArgs(call.args);
       const element = object(args.elementRef);
       const token = element && tokenOf(element, bound);
+      // A later page's ref goes alone: a batch would find a retired token again by its label.
       if (
+        string(element?.observationId) !== bound.observationId ||
         resolve(call, context) !== bound ||
         !BATCH_METHODS.has(call.method) ||
         !token ||
