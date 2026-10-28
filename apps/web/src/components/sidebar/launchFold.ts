@@ -24,8 +24,8 @@ export type LaunchFoldThread = Pick<
 };
 
 export type LaunchChildState = "attention" | "working" | "finished";
-/** The most urgent state among a row's folded descendants. */
-export type LaunchLift = SidebarChildAttention | "working";
+/** The most urgent state among a row's folded descendants; "unseen" is finished but unread. */
+export type LaunchLift = SidebarChildAttention | "working" | "unseen";
 
 export interface LaunchFold<T> {
   /** Threads that keep a top-level row, in input order. */
@@ -37,9 +37,11 @@ export interface LaunchFold<T> {
   readonly liftByKey: ReadonlyMap<string, LaunchLift>;
   /** Each thread's state with what is folded under it, as its dot and order show it. */
   readonly stateByKey: ReadonlyMap<string, LaunchChildState>;
+  /** Folded threads whose own lift is "unseen". */
+  readonly unseenKeys: ReadonlySet<string>;
 }
 
-const LIFT_RANK: Record<LaunchLift, number> = { approval: 0, input: 1, working: 2 };
+const LIFT_RANK: Record<LaunchLift, number> = { approval: 0, input: 1, working: 2, unseen: 3 };
 const STATE_RANK: Record<LaunchChildState, number> = { attention: 0, working: 1, finished: 2 };
 
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
@@ -73,17 +75,19 @@ function subagentOwnerKeyOf(thread: LaunchFoldThread): string | null {
 function ownLiftOf(
   thread: LaunchFoldThread,
   delegated: SidebarChildAttention | undefined,
+  unseen: boolean,
 ): LaunchLift | null {
   if (thread.hasPendingApprovals || delegated === "approval") return "approval";
   if (thread.hasPendingUserInput || delegated === "input") return "input";
-  return sidebarDelegatedChildState(thread) === "finished" ? null : "working";
+  if (sidebarDelegatedChildState(thread) !== "finished") return "working";
+  return unseen ? "unseen" : null;
 }
 
 const moreUrgent = (left: LaunchLift | null, right: LaunchLift | null) =>
   left === null ? right : right === null || LIFT_RANK[left] <= LIFT_RANK[right] ? left : right;
 
 const stateOfLift = (lift: LaunchLift | null): LaunchChildState =>
-  lift === null ? "finished" : lift === "working" ? "working" : "attention";
+  lift === null || lift === "unseen" ? "finished" : lift === "working" ? "working" : "attention";
 
 /**
  * Folds launched threads under their launcher's row in `visible` (a subagent launcher: its owner's
@@ -99,6 +103,8 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   readonly sameList?: (child: T, parent: T) => boolean;
   /** Pending requests of each row's task.create subagents, by owner row key. */
   readonly delegatedAttentionByKey?: ReadonlyMap<string, SidebarChildAttention>;
+  /** A finished thread that would sit in Priority on its own row; folded, it lifts its launcher. */
+  readonly unseen?: (thread: T) => boolean;
 }): LaunchFold<T> {
   const visibleByKey = new Map(input.visible.map((thread) => [keyOf(thread), thread] as const));
   const subagentOwnerByKey = new Map<string, string | null>();
@@ -140,6 +146,7 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   const parentKeyByKey = new Map<string, string>();
   const liftByKey = new Map<string, LaunchLift>();
   const subtreeLiftByKey = new Map<string, LaunchLift | null>();
+  const unseenKeys = new Set<string>();
   const decide = (key: string): LaunchLift | null => {
     const thread = visibleByKey.get(key);
     if (thread === undefined) return null;
@@ -149,10 +156,10 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       const childLift = decide(childKey);
       if (child === undefined) continue;
       if (childLift !== null && effectiveSnoozed(thread, { now: input.now })) continue;
-      // Live work lifts a settled launcher into Priority; finished work you have not settled
-      // would sit in the closed settled shelf, so it keeps its row.
+      // Live work lifts a settled launcher into Priority; finished or unread work you have not
+      // settled would sit in the closed settled shelf, so it keeps its row.
       if (
-        childLift === null &&
+        (childLift === null || childLift === "unseen") &&
         thread.settledOverride === "settled" &&
         child.settledOverride !== "settled"
       )
@@ -161,7 +168,14 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       below = moreUrgent(below, childLift);
     }
     if (below !== null) liftByKey.set(key, below);
-    const lift = moreUrgent(ownLiftOf(thread, input.delegatedAttentionByKey?.get(key)), below);
+    // Only a thread that may fold lifts as unread; a row's own unread is its own rank.
+    const own = ownLiftOf(
+      thread,
+      input.delegatedAttentionByKey?.get(key),
+      candidateParent.has(key) && input.unseen?.(thread) === true,
+    );
+    if (own === "unseen") unseenKeys.add(key);
+    const lift = moreUrgent(own, below);
     subtreeLiftByKey.set(key, lift);
     return lift;
   };
@@ -194,7 +208,25 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
     parentKeyByKey,
     liftByKey,
     stateByKey,
+    unseenKeys: new Set([...unseenKeys].filter((key) => parentKeyByKey.has(key))),
   };
+}
+
+/** Unread threads folded anywhere under a row, nearest first. */
+export function foldedUnseenUnder<T extends Pick<LaunchFoldThread, "environmentId" | "id">>(
+  fold: Pick<LaunchFold<T>, "childrenByParentKey" | "unseenKeys">,
+  key: string,
+): readonly T[] {
+  const found: T[] = [];
+  const pending = [key];
+  for (let at = pending.shift(); at !== undefined; at = pending.shift()) {
+    for (const child of fold.childrenByParentKey.get(at) ?? []) {
+      const childKey = keyOf(child);
+      if (fold.unseenKeys.has(childKey)) found.push(child);
+      pending.push(childKey);
+    }
+  }
+  return found;
 }
 
 /** Every ancestor key of a folded thread, nearest first. Empty for a top-level row. */
@@ -225,13 +257,14 @@ export function summarizeLaunchGroup(states: readonly LaunchChildState[]): {
 /** A launcher row carries its folded threads' urgency: a request ranks first, work as working. */
 export function liftedPriorityRank(rank: 0 | 1 | 2 | null, lift: LaunchLift | undefined) {
   if (lift === "approval" || lift === "input") return 0;
-  return lift === "working" && (rank === null || rank === 2) ? 1 : rank;
+  if (lift === "working" && (rank === null || rank === 2)) return 1;
+  return lift === "unseen" ? (rank ?? 2) : rank;
 }
 
 export function liftedChildAttention(
   lift: LaunchLift | undefined,
 ): SidebarChildAttention | undefined {
-  return lift === "working" ? undefined : lift;
+  return lift === "approval" || lift === "input" ? lift : undefined;
 }
 
 /** The top-level row that holds a thread: itself, or its outermost launcher when folded. */

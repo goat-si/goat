@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId } from "@goat/contracts";
 import { BellIcon, SearchIcon } from "~/components/solar";
 import { useSyncExternalStore } from "react";
 
@@ -21,6 +22,7 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { requestSidebarSearchFocus } from "./sidebarSearchFocus";
+import { foldedPriorityMember } from "./foldedPriority";
 import { foldLaunchedThreads } from "./launchFold";
 
 export function useSidebarActivityToggle() {
@@ -54,17 +56,21 @@ export function useSidebarPriorityCount() {
     botRef,
   );
   const now = `${nowMinute}:00.000Z`;
+  const capabilitiesOf = (id: EnvironmentId) => serverConfigs.get(id)?.environment.capabilities;
   // Activity lists a launcher's folded threads under it, so the bell counts the group once.
   const fold = foldLaunchedThreads({
     visible,
     all: threads,
     now,
     delegatedAttentionByKey: index.attentionByOwnerKey,
+    unseen: foldedPriorityMember({ now, localLastVisitedAtByKey, capabilitiesOf }),
   });
   const attentionByOwnerKey = new Map(index.attentionByOwnerKey);
   const childWorkKeys = new Set<string>();
+  const childUnseenKeys = new Set<string>();
   for (const [key, lift] of fold.liftByKey) {
     if (lift === "working") childWorkKeys.add(key);
+    else if (lift === "unseen") childUnseenKeys.add(key);
     else if (!attentionByOwnerKey.has(key)) attentionByOwnerKey.set(key, lift);
   }
   return countVisibleSidebarPriorityThreads({
@@ -73,10 +79,9 @@ export function useSidebarPriorityCount() {
     localLastVisitedAtByKey,
     attentionByOwnerKey,
     childWorkKeys,
-    supportsSnooze: (environmentId) =>
-      serverConfigs.get(environmentId)?.environment.capabilities.threadSnooze === true,
-    supportsSettlement: (environmentId) =>
-      serverConfigs.get(environmentId)?.environment.capabilities.threadSettlement === true,
+    childUnseenKeys,
+    supportsSnooze: (environmentId) => capabilitiesOf(environmentId)?.threadSnooze === true,
+    supportsSettlement: (environmentId) => capabilitiesOf(environmentId)?.threadSettlement === true,
   });
 }
 
