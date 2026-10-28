@@ -41,6 +41,7 @@ const ranSteps = (reports: ReadonlyArray<Record<string, unknown>>, total: number
   ok: reports.every((report) => report.ok !== false),
   total,
   executed: reports.length,
+  failed_step: reports.some((report) => report.ok === false) ? reports.length - 1 : null,
   steps: reports.map((report, index) => ({ index, tool: "click", ...report })),
 });
 
@@ -106,10 +107,15 @@ it.live("a refused step stops the batch, and the cell sees which clicks ran", ()
   }).pipe(Effect.provide(cellService(host)));
 });
 
-it.live("a reply that does not account for its steps leaves every click possibly run", () => {
-  const { host } = fixture({
-    run_steps: { message: "Driver reply exceeded the primitive channel limit." },
-  });
+it.live.each([
+  ["a reply cut to its message", { message: "Driver reply exceeded the primitive channel limit." }],
+  // It ran three steps but reports one, with no failure to say where it stopped.
+  [
+    "fewer step reports than it ran",
+    { ...ranSteps([{ ok: true, effect: "confirmed" }], 3), executed: 3 },
+  ],
+] as const)("%s leaves every click possibly run", ([, answer]) => {
+  const { host } = fixture({ run_steps: answer });
   return Effect.gen(function* () {
     const result = yield* runCell(`${BIND} ${clicks(3)} ${SETTLED}`);
     const value = result.value as ReadonlyArray<string>;

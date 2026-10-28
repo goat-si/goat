@@ -173,9 +173,18 @@ const POINT_KEYS = ["x", "y", "from_x", "from_y", "to_x", "to_y"];
 const batchOutcomes = (reply: ComputerUsePrimitiveReply, tools: ReadonlyArray<string>) => {
   const structured = object(object(reply.result)?.structuredContent);
   const steps = array(structured?.steps).map(object);
+  // The driver stops at its first failed step and reports it last; only that proves the steps
+  // after it never ran. Any other shape leaves them all possibly run.
+  const last = steps.length - 1;
+  const stopped = structured?.failed_step === last && steps[last]?.ok === false;
+  const accounted =
+    structured?.executed === steps.length &&
+    steps.slice(0, stopped ? last : steps.length).every((step) => step?.ok === true) &&
+    (stopped || (steps.length === tools.length && structured.failed_step == null));
   if (
     reply.status !== "settled" ||
     structured?.total !== tools.length ||
+    !accounted ||
     steps.length > tools.length ||
     steps.some((step, index) => step?.index !== index)
   ) {
