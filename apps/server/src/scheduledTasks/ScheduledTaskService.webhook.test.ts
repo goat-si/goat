@@ -796,7 +796,8 @@ it.effect("recovers a persisted coalescing window after restarting the service",
               yield* restartedWorkers.get("webhook-coalescing")!;
               assert.equal(yield* Queue.size(launches), 0);
               yield* TestClock.adjust("6 seconds");
-              yield* restartedWorkers.get("webhook-coalescing")!;
+              // Wait for the dispatch span to finish, not only for the launch it starts.
+              yield* drainPendingDispatch(restartedWorkers);
               yield* Queue.take(launches);
               yield* restartedWorkers.get("webhook-coalescing")!;
               assert.equal(yield* Queue.size(launches), 0);
