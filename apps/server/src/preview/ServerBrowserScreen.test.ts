@@ -102,4 +102,46 @@ describe("the agent's position on a screen tab", () => {
         });
       }),
   );
+
+  it.effect(
+    "a viewer that opens after an unwatched action starts at the agent's pointer once framed",
+    () =>
+      Effect.gen(function* () {
+        const agentTab = {
+          threadId: "thread",
+          tabId: "tab",
+          control: { agentId: "agent", isPrivate: false, controller: null },
+          page: { url: () => "https://example.test/" },
+          desktop: null,
+          viewers: new Set(),
+          documentGeneration: 1,
+        } as unknown as ScreenTab;
+        const surface = makeSurface(
+          (threadId, tabId) => (threadId === "thread" && tabId === "tab" ? agentTab : undefined),
+          () => {},
+        );
+        const cursor = {
+          identity: {
+            environmentId: EnvironmentId.make("environment"),
+            runId: "run",
+            turnId: "turn",
+            targetId: "target",
+            generation: 1,
+            sequence: 1,
+          },
+          phase: "resting" as const,
+        };
+        // The click ran with nobody watching; the cell's state followed.
+        surface.notePointer(agentTab, 140, 50);
+        yield* surface.service.cursorState({ threadId: "thread", tabId: "tab", cursor });
+        const seen: ServerBrowserViewerOutput[] = [];
+        const viewer = { push: (output: ServerBrowserViewerOutput) => void seen.push(output) };
+        // The viewer's first frame brings the replay; later frames do not repeat it.
+        surface.framed(agentTab, viewer);
+        surface.framed(agentTab, viewer);
+        expect(seen).toEqual([
+          expect.objectContaining({ _tag: "pointer", phase: "move", x: 140, y: 50, cursor }),
+        ]);
+      }),
+  );
 });

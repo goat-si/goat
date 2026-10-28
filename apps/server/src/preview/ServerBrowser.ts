@@ -92,7 +92,7 @@ import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
-import { pointAtTarget } from "./ServerBrowserPointer.ts";
+import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1577,10 +1577,13 @@ const make = Effect.gen(function* () {
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop)
-        return tab.control.assertAgentMayDispatch();
+      // Before drawing too: a Stop during a long target lookup must not move the cursor later.
+      tab.control.assertAgentMayDispatch();
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return screen.notePointer(tab, x, y);
       screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
+      // A Stop during the move refuses the input before it goes out, without marking dispatch.
+      tab.control.assertAgentMayDispatch();
       if (phase === "click") {
         screen.showPointer(tab, x, y, "click");
         await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
@@ -1966,8 +1969,9 @@ const make = Effect.gen(function* () {
       case "select":
         return recordAction(tab, "select", async () => {
           const gate = actionGate();
-          await pointAtTarget(tab.page, input as PreviewAutomationSelectInput, pointerFor(tab));
-          return ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gate);
+          const aimed = input as PreviewAutomationSelectInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.select(tab.page, timed, gate);
         });
       case "drag":
         return recordAction(tab, "drag", () =>
@@ -1985,8 +1989,9 @@ const make = Effect.gen(function* () {
       case "type":
         return recordAction(tab, "type", async () => {
           const gate = actionGate();
-          await pointAtTarget(tab.page, input as PreviewAutomationTypeInput, pointerFor(tab));
-          return ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gate);
+          const aimed = input as PreviewAutomationTypeInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.type(tab.page, timed, gate);
         });
       case "press":
         return recordAction(tab, "press", () =>
@@ -2337,6 +2342,7 @@ const make = Effect.gen(function* () {
         ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
       ).catch(() => null);
       if (data) viewer.push({ _tag: "frame", data: Buffer.from(data, "base64"), ack: Effect.void });
+      screen.framed(tab, viewer);
     };
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     yield* Effect.addFinalizer(() =>
@@ -2388,6 +2394,7 @@ const make = Effect.gen(function* () {
           }),
         ),
       });
+      screen.framed(tab, viewer);
     });
     broadcastViewport(tab);
     yield* Effect.promise(() => startScreencast(1));
