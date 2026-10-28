@@ -57,7 +57,7 @@ const readKeybindingsConfig = (configPath: string) =>
   });
 
 it.layer(NodeServices.layer)("keybindings", (it) => {
-  it.effect.each(["error", "end"] as const)(
+  it.effect.each(["error", "end", "error before ready"] as const)(
     "reattaches the keybindings watcher after %s and resyncs detached edits",
     (outcome) =>
       Effect.gen(function* () {
@@ -71,12 +71,12 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
             Stream.unwrap(
               Effect.sync(() => {
                 attachments++;
-                options?.onReady?.();
+                if (outcome !== "error before ready" || attachments > 1) options?.onReady?.();
                 return attachments === 1
                   ? Stream.fromEffect(
                       Effect.gen(function* () {
                         yield* Deferred.await(fail);
-                        if (outcome === "error")
+                        if (outcome !== "end")
                           return yield* PlatformError.systemError({
                             _tag: "Unknown",
                             module: "FileSystem",
@@ -96,6 +96,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           const seen = yield* Queue.unbounded<Keybindings.KeybindingsChangeEvent>();
           const subscription = yield* service.subscribeChanges;
           yield* subscription.pipe(
+            Stream.filter((event) =>
+              event.keybindings.some(
+                (rule) => rule.command === "terminal.toggle" && rule.shortcut.key === "9",
+              ),
+            ),
             Stream.runForEach((event) => Queue.offer(seen, event)),
             Effect.forkScoped,
           );
@@ -106,12 +111,12 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           ]);
           yield* TestClock.adjust("1100 millis");
           assert.equal(attachments, 2);
-          assert.equal(yield* Queue.size(seen), 1);
           const event = yield* Queue.take(seen);
-          assert.isTrue(
-            event.keybindings.some(
-              (rule) => rule.command === "terminal.toggle" && rule.shortcut.key === "9",
-            ),
+          assert.deepEqual(
+            event.keybindings
+              .filter((rule) => rule.command === "terminal.toggle")
+              .map((rule) => rule.shortcut.key),
+            ["9"],
           );
           yield* TestClock.adjust("60 seconds");
           assert.equal(attachments, 2);

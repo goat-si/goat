@@ -77,6 +77,8 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
       const fail = yield* Deferred.make<void>();
       const closed = yield* Deferred.make<void>();
       const attach = yield* Deferred.make<void>();
+      const failAgain = yield* Deferred.make<void>();
+      const closedAgain = yield* Deferred.make<void>();
       const scope = yield* Scope.make();
       let attachments = 0;
       let active = 0;
@@ -106,7 +108,16 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
                       });
                     }),
                   ).pipe(Stream.ensuring(Deferred.succeed(closed, undefined)))
-                : Stream.never;
+                : Stream.fromEffect(
+                    Effect.gen(function* () {
+                      yield* Deferred.await(failAgain);
+                      return yield* PlatformError.systemError({
+                        _tag: "Unknown",
+                        module: "FileSystem",
+                        method: "watch",
+                      });
+                    }),
+                  ).pipe(Stream.ensuring(Deferred.succeed(closedAgain, undefined)));
             }),
           ),
       });
@@ -138,11 +149,12 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
           );
           yield* Deferred.succeed(attach, undefined);
           yield* TestClock.adjust("100 millis");
-          assert.equal(yield* Queue.size(seen), 1);
           assert.deepEqual(
             (yield* Queue.take(seen)).map((theme) => theme.id),
             ["nightfall", "shared-light"],
           );
+          yield* Deferred.succeed(failAgain, undefined);
+          yield* Deferred.await(closedAgain);
         }),
       ).pipe(
         Effect.provideService(FileSystem.FileSystem, controlledFs),

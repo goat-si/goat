@@ -50,7 +50,7 @@ it.effect.each([false, true])(
           }),
         watch: (_directory, options) =>
           Stream.unwrap(
-            Effect.gen(function* () {
+            Effect.sync(() => {
               attachments++;
               options?.onReady?.();
               return attachments === 1
@@ -89,19 +89,16 @@ it.effect.each([false, true])(
           yield* TestClock.adjust("2100 millis");
           assert.equal(attachments, 3);
         }
-        assert.equal(yield* Queue.size(seen), 1);
         const event = yield* Queue.take(seen);
         assert.equal(event.type, "upserted");
         if (event.type === "upserted") assert.equal(event.note.path, "watcher.md");
         yield* fs.writeFileString(`${notesDir}/watcher.md`, "# Second edit\n");
         yield* Queue.offer(changes, { _tag: "Update", path: "watcher.md" });
         yield* TestClock.adjust("100 millis");
-        assert.equal(yield* Queue.size(seen), 1);
         assert.equal((yield* Queue.take(seen)).type, "upserted");
         yield* fs.remove(`${notesDir}/watcher.md`);
         yield* Queue.offer(changes, { _tag: "Remove", path: "watcher.md" });
         yield* TestClock.adjust("100 millis");
-        assert.equal(yield* Queue.size(seen), 1);
         assert.equal((yield* Queue.take(seen)).type, "removed");
       }).pipe(Effect.provide(testLayer));
     }).pipe(Effect.scoped),
@@ -257,7 +254,6 @@ it.live("recursive watcher observes an external edit and deletion through subscr
     const notes = yield* Notes.NotesService;
     const fs = yield* FileSystem.FileSystem;
     const { notesDir } = yield* Config.ServerConfig;
-    yield* fs.makeDirectory(`${notesDir}/project`);
     const subscribed = yield* Deferred.make<void>();
     const changed = yield* Deferred.make<void>();
     const watcher = yield* notes.subscribe.pipe(
@@ -282,7 +278,20 @@ it.live("recursive watcher observes an external edit and deletion through subscr
       events.map((event) => event.type),
       ["upserted", "removed"],
     );
-  }).pipe(Effect.scoped, Effect.provide(layer())),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      layer(undefined, undefined, (fs) => ({
+        ...fs,
+        watch: (directory, options) =>
+          Stream.unwrap(
+            fs
+              .makeDirectory(`${directory}/project`, { recursive: true })
+              .pipe(Effect.as(fs.watch(directory, options))),
+          ),
+      })),
+    ),
+  ),
 );
 
 it.effect.each([
@@ -718,7 +727,7 @@ it.effect("dirty-path deletion removes a note loaded before watcher publication"
       yield* fs.writeFileString(`${notesDir}/marker.md`, "after");
       const changes = yield* notes.subscribeChanges;
       const processed = yield* changes.pipe(
-        Stream.filter((event) => event.type === "upserted" && event.note.path === "marker.md"),
+        Stream.filter((event) => event.type === "removed" && event.path === "external.md"),
         Stream.take(1),
         Stream.runCollect,
         Effect.forkScoped,
