@@ -299,7 +299,7 @@ it.effect("a custom action string shows as its name", () =>
 );
 
 it.effect(
-  "a label line names its value element and a lone label/value pair reads as one line",
+  "a label beside a value does not name it, and a lone label/value pair reads as one line",
   () =>
     Effect.gen(function* () {
       const observation = yield* read(
@@ -323,10 +323,12 @@ it.effect(
           { index: 13, role: "AXStaticText", label: "550 × 332 pixels", value: "550 × 332 pixels" },
         ],
       );
+      // The line before a value may be another element's text, which the driver does not list.
       expect(byIndex(observation)[13]).toMatchObject({
-        name: "Image Size",
+        name: "550 × 332 pixels",
         text: "550 × 332 pixels",
       });
+      expect(observation.indexedText).toContain('- AXStaticText = "Image Size"');
       expect(observation.indexedText).toContain('- AXStaticText "Chip" = "Apple M5 Max"');
       // A sentence, or a group with more than two texts, is not a label/value pair.
       expect(observation.indexedText).toContain('- AXStaticText = "First sentence here."');

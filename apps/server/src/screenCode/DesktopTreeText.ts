@@ -1,7 +1,7 @@
 /**
- * What the desktop driver's indexed tree text says about elements that its element list leaves
- * out: names written as text under unnamed rows and cells, label lines beside values, and the
- * accessibility ids on each line. The driver's own label always wins when it has one.
+ * What the desktop driver's indexed tree text says beyond its element list: names written under
+ * unnamed rows and cells, and which numbered lines verifiably show their element. The driver
+ * writes this text unescaped, so nothing here outranks the element list.
  */
 
 interface TreeLine {
@@ -159,20 +159,6 @@ const isLabel = (line: TreeLine | undefined): line is TreeLine & { readonly word
   line.words.length > 0 &&
   line.words.length <= 60 &&
   !/[.!?]$/.test(line.words);
-
-/**
- * Labels for value elements: a numbered element whose only words are its value takes the
- * display-only text line just before it at the same depth (`Image Size` beside `550 × 332 pixels`).
- */
-export const labelsFromTree = (lines: ReadonlyArray<TreeLine>): ReadonlyMap<number, string> => {
-  const labels = new Map<number, string>();
-  lines.forEach((line, position) => {
-    const previous = lines[position - 1];
-    if (line.index !== undefined && isLabel(previous) && previous.depth === line.depth)
-      labels.set(line.index, previous.words);
-  });
-  return labels;
-};
 
 /**
  * The tree text with each lone label/value pair of display-only texts on one line

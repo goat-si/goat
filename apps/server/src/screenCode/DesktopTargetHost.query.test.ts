@@ -271,29 +271,11 @@ it.effect(
     }),
 );
 
-const preview = [
-  '- [10] AXWindow "Info"',
-  "  - [11] AXGroup",
-  '    - AXStaticText = "Image Size"',
-  '    - [13] AXStaticText = "550 × 332 pixels"',
-];
 const previewElements = [
   { index: 10, role: "AXWindow", label: "Info" },
   { index: 11, role: "AXGroup" },
   { index: 13, role: "AXStaticText", label: "550 × 332 pixels", value: "550 × 332 pixels" },
 ];
-
-it.effect("a query matches a value by the label written beside it", () =>
-  Effect.gen(function* () {
-    const { outcomes } = yield* observeAll(() => read(preview, previewElements), {
-      mode: "query",
-      query: { name: "Image Size", text: "550" },
-    });
-    expect(observed(outcomes[0]).elements.map((each) => [each.index, each.name])).toEqual([
-      [13, "Image Size"],
-    ]);
-  }),
-);
 
 it.effect("a filtered read that misses says names from nearby text were not searched", () =>
   Effect.gen(function* () {

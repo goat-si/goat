@@ -9,7 +9,6 @@ import type { ScreenElementDetail, ScreenObservationDraft } from "./ScreenObserv
 import {
   actionName,
   cleanActionText,
-  labelsFromTree,
   keepTreeLines,
   namesFromTree,
   pairTreeText,
@@ -71,17 +70,16 @@ const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
   };
 };
 
-/** The read's elements with a token, named by their label, a label line, or the text under them. */
+/** The read's elements with a token, named by their label or, when unnamed, the text under them. */
 export const desktopRows = (
   elements: ReadonlyArray<Record<string, unknown>>,
   markdown: string,
 ): DesktopRow[] => {
   const lines = parseTree(markdown);
   const repeated = repeatedIndexes(lines);
-  // Text spanning lines can pose as tree lines, so then no name is taken from text.
-  const trusted = !spansLines(markdown, listedOf(elements));
-  const none = new Map<number, string>();
-  const [names, labels] = trusted ? [namesFromTree(lines), labelsFromTree(lines)] : [none, none];
+  // Text spanning lines can pose as tree lines, so then no name is taken from text. Otherwise an
+  // unnamed element takes text written under it, which only its own content can write.
+  const names = spansLines(markdown, listedOf(elements)) ? new Map() : namesFromTree(lines);
   return elements.flatMap((entry) => {
     const token = string(entry.element_token);
     if (!token) return [];
@@ -92,9 +90,7 @@ export const desktopRows = (
         ? label
         : label === ""
           ? (!repeated.has(index) && names.get(index)) || ""
-          : label === entry.value && !repeated.has(index)
-            ? (labels.get(index) ?? label)
-            : label;
+          : label;
     // Only a structured id: tree text is written unescaped and can pose as metadata.
     const id = string(entry.identifier)?.slice(0, 400);
     return [
