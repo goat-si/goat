@@ -151,6 +151,8 @@ interface HarnessOptions {
   readonly checks?: (
     input: PullRequestRef,
   ) => Effect.Effect<PullRequestChecks | null, PullRequestOperationError>;
+  /** Further service answers a test needs; the doubles above record their refs in reads. */
+  readonly service?: Partial<PullRequestService.PullRequestService["Service"]>;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -199,6 +201,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         ),
     }),
     Layer.mock(PullRequestService.PullRequestService)({
+      ...options.service,
       detail: (input) =>
         Ref.update(reads, (recorded) => [...recorded, input]).pipe(
           Effect.andThen(
@@ -868,6 +871,94 @@ describe("pull request reads", () => {
           ["project-two-web", result.repository],
           ["project-two-web", result.repository],
         ]);
+      }),
+  );
+});
+
+describe("pull request reads within the budget", () => {
+  it.effect(
+    "keeps a search, a file and a conversation within 256 KiB and says what it left out",
+    () =>
+      Effect.gen(function* () {
+        const big = "x".repeat(200 * 1024);
+        const comment = (id: string) => ({
+          id,
+          kind: "issue-comment" as const,
+          author: null,
+          body: big,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          url: null,
+          path: null,
+          reviewState: null,
+        });
+        const entry = (number: number) => ({
+          provider: SourceControlProviderKind.make("github"),
+          host: "github.com",
+          projectId: PROJECT_ID,
+          projectTitle: "Project",
+          repository: "sample-tools/goat",
+          number,
+          title: `PR ${number}`,
+          url: `https://github.com/sample-tools/goat/pull/${number}`,
+          author: null,
+          headBranch: "feature",
+          baseBranch: "main",
+          state: "open" as const,
+          isDraft: false,
+          mergeability: "mergeable" as const,
+          additions: 0,
+          deletions: 0,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+          viewerReviewRequested: false,
+          labels: [],
+        });
+        const harness = yield* makeHarness({
+          service: {
+            activity: () =>
+              Effect.succeed({
+                comments: [comment("c1"), comment("c2")],
+                commentCount: 2,
+                commentsTruncated: false,
+                reviewThreads: [],
+                commits: [],
+              }),
+            diffFileContents: () =>
+              Effect.succeed({ oldContents: "é".repeat(200 * 1024), newContents: "ok" }),
+            list: () =>
+              Effect.succeed({
+                viewers: {},
+                providers: [],
+                entries: [entry(1), entry(2), entry(3)],
+                errors: [],
+                truncated: false,
+                nextCursors: { "github.com/sample-tools/goat": "next" },
+              }),
+          },
+        });
+        const target = { url: "https://github.com/sample-tools/goat/pull/12" };
+        const activity = yield* harness.call("goat_pull_request_activity", target);
+        expect(activity.activity.comments.map((kept) => kept.id)).toEqual(["c1"]);
+        expect(activity.commentsOmitted).toBe(1);
+        const file = yield* harness.call("goat_pull_request_file", {
+          ...target,
+          changeType: "change",
+          oldPath: "a.ts",
+          newPath: "a.ts",
+        });
+        expect(Buffer.byteLength(file.oldContents, "utf8")).toBeLessThanOrEqual(256 * 1024);
+        expect(file.oldContents.endsWith("é")).toBe(true);
+        expect([file.oldTruncated, file.newTruncated]).toEqual([true, false]);
+        // limit caps the whole result; a capped result offers no cursors that would skip rows.
+        expect(
+          yield* harness.call("goat_pull_request_search", { state: "open", limit: 2 }),
+        ).toMatchObject({
+          truncated: true,
+          nextCursors: null,
+        });
+        expect(
+          (yield* harness.call("goat_pull_request_search", { state: "open", limit: 2 })).entries,
+        ).toHaveLength(2);
       }),
   );
 });

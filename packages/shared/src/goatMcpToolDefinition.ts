@@ -78,6 +78,8 @@ export type GoatMcpToolSummaryAction =
   | "read-pr-guide"
   | "read-pr"
   | "read-pr-checks"
+  | "search-prs"
+  | "read-diff"
   | "browser"
   | "device"
   | "html-preview"

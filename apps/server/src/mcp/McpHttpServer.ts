@@ -117,6 +117,7 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as ThreadLaunchMcpService from "./ThreadLaunchMcpService.ts";
+import * as ThreadDiffMcpService from "./ThreadDiffMcpService.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as ThreadSearchMcpService from "./ThreadSearchMcpService.ts";
 import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
@@ -141,6 +142,8 @@ import { FleetResourcesToolkit } from "./toolkits/fleet/resources/tools.ts";
 import { FleetToolkit } from "./toolkits/fleet/tools.ts";
 import * as HostStatusHandlers from "./toolkits/hostStatus/handlers.ts";
 import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
+import * as ThreadDiffHandlers from "./toolkits/threadDiff/handlers.ts";
+import { ThreadDiffToolkit } from "./toolkits/threadDiff/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
@@ -990,6 +993,7 @@ export const catalogRegistrations = {
   previewControls: toolkitRegistration(PreviewControlsToolkit, PreviewControlsHandlers.layer),
   environment: toolkitRegistration(EnvironmentToolkit, EnvironmentHandlers.layer),
   hostStatus: toolkitRegistration(HostStatusToolkit, HostStatusHandlers.layer),
+  threadDiff: toolkitRegistration(ThreadDiffToolkit, ThreadDiffHandlers.layer),
   fleetHealth: toolkitRegistration(FleetHealthToolkit, FleetHealthHandlers.layer),
   fleet: toolkitRegistration(FleetToolkit, FleetHandlers.layer),
   fleetResources: toolkitRegistration(FleetResourcesToolkit, FleetResourcesHandlers.layer),
@@ -1108,6 +1112,10 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
 
 /** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
 const layerHostStatusToolkit = catalogRegistrations.hostStatus;
+const layerThreadDiffToolkit = catalogRegistrations.threadDiff.pipe(
+  Layer.provide(ThreadDiffMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
 export const layerFleetToolkit = catalogRegistrations.fleet.pipe(Layer.provide(Profiles.layer));
@@ -1194,6 +1202,7 @@ export const layer = Layer.mergeAll(
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerHostStatusToolkit,
+  layerThreadDiffToolkit,
   catalogRegistrations.fleetHealth,
   layerFleetResourcesToolkit,
   layerPreviewControlsRegistration,

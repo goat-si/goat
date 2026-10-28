@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import { clipText, fitItems, READ_BUDGET_BYTES } from "./readBudget.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -199,6 +200,9 @@ function projectForPullRequest(
   if (preferred !== undefined && matches(preferred)) return preferred;
   return projects.find(matches);
 }
+
+/** Default rows a search returns in total. */
+const SEARCH_LIMIT = 25;
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -633,6 +637,91 @@ const make = Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const checks = yield* pullRequests.checks(ref).pipe(Effect.mapError(readFailure));
         return { ...identityOf(target), checks };
+      }),
+    ),
+    goat_pull_request_activity: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
+        // Comments first, then review threads in what the budget leaves.
+        const comments = fitItems(activity.comments, READ_BUDGET_BYTES);
+        const reviewThreads = fitItems(activity.reviewThreads, READ_BUDGET_BYTES - comments.used);
+        return {
+          ...identityOf(target),
+          activity: { ...activity, comments: comments.kept, reviewThreads: reviewThreads.kept },
+          commentsOmitted: comments.omitted,
+          reviewThreadsOmitted: reviewThreads.omitted,
+        };
+      }),
+    ),
+    goat_pull_request_review_thread: McpToolAccess.reads(({ threadId, cursor, ...input }) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const page = yield* pullRequests
+          .threadComments({ ...ref, threadId, cursor })
+          .pipe(Effect.mapError(readFailure));
+        const comments = fitItems(page.comments, READ_BUDGET_BYTES);
+        return {
+          ...identityOf(target),
+          comments: comments.kept,
+          nextCursor: page.nextCursor,
+          commentsOmitted: comments.omitted,
+        };
+      }),
+    ),
+    goat_pull_request_file: McpToolAccess.reads(
+      ({ commit, changeType, oldPath, newPath, ...input }) =>
+        Effect.gen(function* () {
+          const { target, ref } = yield* locateOne(input);
+          const file = yield* pullRequests
+            .diffFileContents({
+              ...ref,
+              ...(commit === undefined ? {} : { commit }),
+              changeType,
+              oldPath,
+              newPath,
+            })
+            .pipe(Effect.mapError(readFailure));
+          const before = clipText(file.oldContents, READ_BUDGET_BYTES);
+          const after = clipText(file.newContents, READ_BUDGET_BYTES);
+          return {
+            ...identityOf(target),
+            oldContents: before.text,
+            newContents: after.text,
+            oldTruncated: before.truncated,
+            newTruncated: after.truncated,
+          };
+        }),
+    ),
+    goat_pull_request_search: McpToolAccess.reads(({ limit = SEARCH_LIMIT, ...input }) =>
+      Effect.gen(function* () {
+        yield* McpInvocationContext.requireMcpCapability("pull-requests");
+        const result = yield* pullRequests
+          .list({ ...input, limit })
+          .pipe(Effect.mapError(readFailure));
+        // limit applies per repository in the service; the agent gets at most limit in total.
+        const rows = fitItems(result.entries.slice(0, limit), READ_BUDGET_BYTES);
+        const capped = rows.omitted > 0 || result.entries.length > limit;
+        return {
+          entries: rows.kept,
+          errors: result.errors,
+          truncated: capped || result.truncated,
+          nextCursors: capped ? null : result.nextCursors,
+        };
+      }),
+    ),
+    goat_pull_request_stats: McpToolAccess.reads(({ pullRequests: targets }) =>
+      Effect.gen(function* () {
+        const refs = yield* Effect.forEach(targets, (target) =>
+          locateOne(target).pipe(Effect.map((located) => located.ref)),
+        );
+        return yield* pullRequests.listStats({ refs }).pipe(Effect.mapError(readFailure));
+      }),
+    ),
+    goat_pull_request_filter_options: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        yield* McpInvocationContext.requireMcpCapability("pull-requests");
+        return yield* pullRequests.filterOptions(input).pipe(Effect.mapError(readFailure));
       }),
     ),
   } satisfies McpToolAccess.Handlers<typeof PullRequestsToolkit.tools>;

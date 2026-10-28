@@ -5,11 +5,19 @@ import {
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PositiveInt,
+  PullRequestActivity,
   PullRequestChecks,
   PullRequestDetail,
+  PullRequestDiffFileContentsInput,
+  PullRequestFilterOptions,
+  PullRequestFilterOptionsInput,
+  PullRequestListInput,
+  PullRequestListResult,
+  PullRequestListStatsResult,
   PullRequestReviewGuide,
   PullRequestReviewGuideRun,
   PullRequestState,
+  PullRequestThreadComment,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
   ThreadId,
@@ -412,6 +420,109 @@ const PullRequestChecksTool = Tool.make(agentSurfaceRegistry["pull_request.check
   dependencies: readDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.checks"]));
 
+const Omitted = Schema.Int.annotate({
+  description: "Items left out to keep the response within its byte budget.",
+});
+
+const PullRequestActivityTool = Tool.make(agentSurfaceRegistry["pull_request.activity"].name, {
+  description: agentSurfaceRegistry["pull_request.activity"].description,
+  parameters: GuideTarget,
+  success: Schema.Struct({
+    ...PullRequestIdentity,
+    activity: PullRequestActivity,
+    commentsOmitted: Omitted,
+    reviewThreadsOmitted: Omitted,
+  }),
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.activity"]));
+
+const PullRequestReviewThreadTool = Tool.make(
+  agentSurfaceRegistry["pull_request.review_thread"].name,
+  {
+    description: agentSurfaceRegistry["pull_request.review_thread"].description,
+    parameters: Schema.Struct({
+      ...GuideTarget.fields,
+      threadId: TrimmedNonEmptyString,
+      cursor: TrimmedNonEmptyString,
+    }),
+    success: Schema.Struct({
+      ...PullRequestIdentity,
+      comments: Schema.Array(PullRequestThreadComment),
+      nextCursor: Schema.NullOr(Schema.String),
+      commentsOmitted: Omitted,
+    }),
+    failure: PullRequestToolError,
+    dependencies: readDependencies,
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.review_thread"]));
+
+const PullRequestFileTool = Tool.make(agentSurfaceRegistry["pull_request.file"].name, {
+  description: agentSurfaceRegistry["pull_request.file"].description,
+  parameters: Schema.Struct({
+    ...GuideTarget.fields,
+    commit: Schema.optional(TrimmedNonEmptyString),
+    changeType: PullRequestDiffFileContentsInput.fields.changeType,
+    oldPath: TrimmedNonEmptyString,
+    newPath: TrimmedNonEmptyString,
+  }),
+  success: Schema.Struct({
+    ...PullRequestIdentity,
+    oldContents: Schema.String,
+    newContents: Schema.String,
+    oldTruncated: Schema.Boolean,
+    newTruncated: Schema.Boolean,
+  }),
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.file"]));
+
+const PullRequestSearchTool = Tool.make(agentSurfaceRegistry["pull_request.search"].name, {
+  description: agentSurfaceRegistry["pull_request.search"].description,
+  parameters: Schema.Struct({
+    state: PullRequestListInput.fields.state,
+    involvement: PullRequestListInput.fields.involvement,
+    filters: PullRequestListInput.fields.filters,
+    projectId: PullRequestListInput.fields.projectId,
+    query: PullRequestListInput.fields.query,
+    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+    cursors: PullRequestListInput.fields.cursors,
+  }),
+  success: Schema.Struct({
+    entries: PullRequestListResult.fields.entries,
+    errors: PullRequestListResult.fields.errors,
+    truncated: Schema.Boolean,
+    nextCursors: Schema.NullOr(PullRequestListResult.fields.nextCursors),
+  }),
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.search"]));
+
+const PullRequestStatsTool = Tool.make(agentSurfaceRegistry["pull_request.stats"].name, {
+  description: agentSurfaceRegistry["pull_request.stats"].description,
+  parameters: Schema.Struct({
+    pullRequests: Schema.Array(GuideTarget).check(Schema.isMinLength(1), Schema.isMaxLength(25)),
+  }),
+  success: PullRequestListStatsResult,
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.stats"]));
+
+const PullRequestFilterOptionsTool = Tool.make(
+  agentSurfaceRegistry["pull_request.filter_options"].name,
+  {
+    description: agentSurfaceRegistry["pull_request.filter_options"].description,
+    parameters: Schema.Struct({
+      kind: PullRequestFilterOptionsInput.fields.kind,
+      projectId: PullRequestFilterOptionsInput.fields.projectId,
+      query: PullRequestFilterOptionsInput.fields.query,
+    }),
+    success: PullRequestFilterOptions,
+    failure: PullRequestToolError,
+    dependencies: readDependencies,
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.filter_options"]));
+
 export const PullRequestsToolkit = Toolkit.make(
   LinkPullRequestTool,
   UnlinkPullRequestTool,
@@ -422,4 +533,10 @@ export const PullRequestsToolkit = Toolkit.make(
   ReadPullRequestGuideTool,
   ReadPullRequestTool,
   PullRequestChecksTool,
+  PullRequestActivityTool,
+  PullRequestReviewThreadTool,
+  PullRequestFileTool,
+  PullRequestSearchTool,
+  PullRequestStatsTool,
+  PullRequestFilterOptionsTool,
 );

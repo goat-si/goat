@@ -1,3 +1,25 @@
+import { OrchestratorToolkit } from "./orchestrator/tools.ts";
+import { PreviewToolkit } from "./preview/tools.ts";
+import { WorktreeToolkit } from "./worktree/tools.ts";
+import { ThreadToolkit } from "./thread/tools.ts";
+import { AttachmentToolkit } from "./attachment/tools.ts";
+import { ProjectToolkit } from "./project/tools.ts";
+import { EnvironmentToolkit } from "./environment/tools.ts";
+import { HostStatusToolkit } from "./hostStatus/tools.ts";
+import { FleetHealthToolkit } from "./fleet/healthTools.ts";
+import { FleetToolkit } from "./fleet/tools.ts";
+import { FleetResourcesToolkit } from "./fleet/resources/tools.ts";
+import { ProviderToolkit } from "./provider/tools.ts";
+import { PreviewControlsToolkit } from "./previewControls/tools.ts";
+import { DeviceToolkit } from "./device/tools.ts";
+import { PullRequestsToolkit } from "./pullRequests/tools.ts";
+import { HtmlToolkit } from "./html/tools.ts";
+import { SshToolkit } from "./ssh/tools.ts";
+import { ConnectionToolkit } from "./connection/tools.ts";
+import { RemoteReportToolkit } from "./remoteReport/tools.ts";
+import { ChannelToolkit } from "./channel/tools.ts";
+import { ThreadDiffToolkit } from "./threadDiff/tools.ts";
+
 /** Every shipped tool name with the goat_ prefix, sorted; core.test.ts pins the catalog to it. */
 export const GOAT_PREFIXED_TOOL_NAMES = [
   "goat_attachment_discard",
@@ -74,8 +96,14 @@ export const GOAT_PREFIXED_TOOL_NAMES = [
   "goat_provider_sync_cancel",
   "goat_provider_sync_status",
   "goat_provider_update",
+  "goat_pull_request_activity",
   "goat_pull_request_checks",
+  "goat_pull_request_file",
+  "goat_pull_request_filter_options",
   "goat_pull_request_read",
+  "goat_pull_request_review_thread",
+  "goat_pull_request_search",
+  "goat_pull_request_stats",
   "goat_queue_cancel",
   "goat_queue_edit",
   "goat_queue_list",
@@ -103,6 +131,7 @@ export const GOAT_PREFIXED_TOOL_NAMES = [
   "goat_thread_checkpoint_restore",
   "goat_thread_configuration",
   "goat_thread_configure",
+  "goat_thread_diff",
   "goat_thread_fork",
   "goat_thread_handoff_host",
   "goat_thread_interrupt",
@@ -120,6 +149,7 @@ export const GOAT_PREFIXED_TOOL_NAMES = [
   "goat_thread_send_attachments",
   "goat_thread_status",
   "goat_thread_transfers",
+  "goat_thread_turn_diff",
   "goat_thread_unwatch",
   "goat_thread_update",
   "goat_thread_wait",
@@ -132,4 +162,29 @@ export const GOAT_PREFIXED_TOOL_NAMES = [
   "goat_worktree_list",
   "goat_worktree_remove",
   "goat_worktree_status",
+];
+
+/** The toolkits whose tools core.test.ts checks one by one. */
+export const PUBLISHED_TOOLKITS = [
+  OrchestratorToolkit,
+  PreviewToolkit,
+  WorktreeToolkit,
+  ThreadToolkit,
+  AttachmentToolkit,
+  ProjectToolkit,
+  EnvironmentToolkit,
+  HostStatusToolkit,
+  FleetHealthToolkit,
+  FleetToolkit,
+  FleetResourcesToolkit,
+  ProviderToolkit,
+  PreviewControlsToolkit,
+  DeviceToolkit,
+  PullRequestsToolkit,
+  HtmlToolkit,
+  SshToolkit,
+  ConnectionToolkit,
+  RemoteReportToolkit,
+  ChannelToolkit,
+  ThreadDiffToolkit,
 ];

@@ -138,6 +138,197 @@ export const pullRequestEntries = {
       openWorldHint: true,
     },
   }),
+  "pull_request.activity": entry({
+    resource: "pull_request",
+    verb: "activity",
+    name: "goat_pull_request_activity",
+    toolkit: "pullRequests",
+    summary: "Read a pull request's comments, review threads and commits from its host",
+    description:
+      "Read a pull request's conversation from its host: comments, review threads with their first comments, commits and reactions. Responses stay within 256 KiB; commentsOmitted and reviewThreadsOmitted count what was left out.",
+    guide:
+      "Pass url, or repository and number (host defaults to the one project holding the repository). The host may already cut long conversations (commentsTruncated, reviewThreadsTruncated); this read then keeps the leading items that fit 256 KiB. Continue one review thread with goat_pull_request_review_thread and its nextCommentsCursor.",
+    parameters: { url: "The pull request's URL, such as https://github.com/owner/repo/pull/12." },
+    examples: [
+      {
+        title: "Read the conversation on a pull request",
+        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read pull request activity", idempotentHint: true, openWorldHint: true },
+  }),
+  "pull_request.review_thread": entry({
+    resource: "pull_request",
+    verb: "review_thread",
+    name: "goat_pull_request_review_thread",
+    toolkit: "pullRequests",
+    summary: "Read more comments of one pull request review thread",
+    description:
+      "Read the next page of comments in one review thread, from the nextCommentsCursor goat_pull_request_activity returned for it. Responses stay within 256 KiB; commentsOmitted counts comments left out of this page.",
+    guide:
+      "Pass url, or repository and number (host defaults to the one project holding the repository). Pass the thread's id and the cursor from goat_pull_request_activity, then nextCursor for the page after. When commentsOmitted is above zero, those comments of this page are not returned by any later page.",
+    parameters: {
+      url: "The pull request's URL, such as https://github.com/owner/repo/pull/12.",
+      threadId: "The review thread's id from goat_pull_request_activity.",
+      cursor:
+        "nextCommentsCursor from goat_pull_request_activity, or nextCursor from the previous page.",
+    },
+    examples: [
+      {
+        title: "Read the rest of a review thread",
+        args: {
+          url: "https://github.com/goat-si/goat/pull/2028",
+          threadId: "<reviewThreadId>",
+          cursor: "<nextCommentsCursor>",
+        },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Read pull request review thread",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "pull_request.file": entry({
+    resource: "pull_request",
+    verb: "file",
+    name: "goat_pull_request_file",
+    toolkit: "pullRequests",
+    summary: "Read one changed file of a pull request before and after",
+    description:
+      "Read one changed file's contents before and after a pull request, or one of its commits. Each side is cut at 256 KiB; oldTruncated and newTruncated say when.",
+    guide:
+      "Pass url, or repository and number (host defaults to the one project holding the repository). Name the file as the pull request's diff does: changeType, oldPath and newPath (the same path unless renamed). Files outside the pull request's changes are refused.",
+    parameters: {
+      url: "The pull request's URL, such as https://github.com/owner/repo/pull/12.",
+      commit: "A commit of the pull request to read instead of its whole change.",
+      changeType:
+        "change, new, deleted, rename-pure or rename-changed, as the diff lists the file.",
+      oldPath: "The path before the change; the same as newPath unless renamed.",
+      newPath: "The path after the change.",
+    },
+    examples: [
+      {
+        title: "Read a changed file",
+        args: {
+          url: "https://github.com/goat-si/goat/pull/2028",
+          changeType: "change",
+          oldPath: "apps/server/src/mcp/ToolAdmission.ts",
+          newPath: "apps/server/src/mcp/ToolAdmission.ts",
+        },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read pull request file", idempotentHint: true, openWorldHint: true },
+  }),
+  "pull_request.search": entry({
+    resource: "pull_request",
+    verb: "search",
+    name: "goat_pull_request_search",
+    toolkit: "pullRequests",
+    summary: "Search pull requests across this environment's projects",
+    description:
+      "Search pull requests in this environment's project repositories by state, involvement, filters or text, as the Pull requests view does. Returns at most limit rows in total (default 25, at most 100).",
+    guide:
+      "Omit projectId to search every project. limit caps the whole result; when more matched, truncated is true and nextCursors is null, so narrow with projectId, query or filters. When every repository's matches fit, nextCursors pages on with the same arguments. errors lists repositories that could not be read.",
+    parameters: {
+      state: "open, closed, merged or all.",
+      involvement: "all (default), reviewing or authored, for the signed-in account.",
+      filters:
+        "{draft?, review?, checks?, labels?, excludedLabels?, author?} as the Pull requests view filters.",
+      projectId: "One project to search. Default: every project.",
+      query: "Text to match in titles.",
+      limit: "Rows in the whole result, 1 to 100. Default 25.",
+      cursors: "nextCursors from the previous result, with the same arguments.",
+    },
+    examples: [
+      {
+        title: "Find open pull requests that need my review",
+        args: { state: "open", involvement: "reviewing" },
+      },
+      {
+        title: "Search one project's pull requests by title",
+        args: { state: "all", projectId: "<projectId>", query: "migration" },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Search pull requests", idempotentHint: true, openWorldHint: true },
+  }),
+  "pull_request.stats": entry({
+    resource: "pull_request",
+    verb: "stats",
+    name: "goat_pull_request_stats",
+    toolkit: "pullRequests",
+    summary: "Read line counts for pull requests",
+    description:
+      "Read additions, deletions and changed files for up to 25 pull requests in one call.",
+    guide:
+      "Each entry takes url, or repository and number, like goat_pull_request_read. Repositories that are not a project here are refused.",
+    parameters: {
+      pullRequests: "1 to 25 pull requests, each {url} or {repository, number, host?}.",
+    },
+    examples: [
+      {
+        title: "Read line counts for two pull requests",
+        args: {
+          pullRequests: [
+            { url: "https://github.com/goat-si/goat/pull/2028" },
+            { url: "https://github.com/goat-si/goat/pull/2055" },
+          ],
+        },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read pull request stats", idempotentHint: true, openWorldHint: true },
+  }),
+  "pull_request.filter_options": entry({
+    resource: "pull_request",
+    verb: "filter_options",
+    name: "goat_pull_request_filter_options",
+    toolkit: "pullRequests",
+    summary: "List the labels or authors pull request search can filter by",
+    description:
+      "List the labels or authors found in this environment's project repositories, for goat_pull_request_search filters. At most 100; truncated says when more exist.",
+    guide: "Omit projectId for every project. query narrows by name.",
+    parameters: {
+      kind: "labels or authors.",
+      projectId: "One project. Default: every project.",
+      query: "Text the names must contain.",
+    },
+    examples: [{ title: "List label names to filter by", args: { kind: "labels" } }],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "List pull request filter options",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
   "pull_request.watch": entry({
     resource: "pull_request",
     verb: "watch",

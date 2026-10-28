@@ -48,6 +48,63 @@ export const threadEntries = {
       openWorldHint: true,
     },
   }),
+  "thread.turn_diff": entry({
+    resource: "thread",
+    verb: "turn_diff",
+    name: "goat_thread_turn_diff",
+    toolkit: "threadDiff",
+    summary: "Read the code changes between two turns of a thread",
+    description:
+      "Read the unified diff of a thread's workspace between two turn checkpoints, as the app's diff panel does. Cut at 256 KiB; truncated says when.",
+    guide:
+      "Turn counts number completed turns: fromTurnCount 2, toTurnCount 3 is what the third turn changed. Read a narrower range when truncated is true. Only threads on this machine; the same caller check as goat_thread_read applies.",
+    parameters: {
+      threadId: "The thread whose checkpoints to compare; a thread on this machine.",
+      ignoreWhitespace: "Leave out changes that only touch whitespace.",
+      fromTurnCount: "Checkpoint to compare from: the number of turns completed before it.",
+      toTurnCount: "Checkpoint to compare to; at least fromTurnCount.",
+    },
+    examples: [
+      {
+        title: "Read what a thread's third turn changed",
+        args: { threadId: "<threadId>", fromTurnCount: 2, toTurnCount: 3 },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read thread turn diff", idempotentHint: true, openWorldHint: false },
+  }),
+  "thread.diff": entry({
+    resource: "thread",
+    verb: "diff",
+    name: "goat_thread_diff",
+    toolkit: "threadDiff",
+    summary: "Read everything a thread changed up to a turn",
+    description:
+      "Read the unified diff of a thread's workspace from before its first turn to a turn checkpoint. Cut at 256 KiB; truncated says when.",
+    guide:
+      "toTurnCount is the number of completed turns to include; pass the thread's latest turn count for everything so far. Read goat_thread_turn_diff for one turn when truncated is true. Only threads on this machine; the same caller check as goat_thread_read applies.",
+    parameters: {
+      threadId: "The thread whose checkpoints to compare; a thread on this machine.",
+      ignoreWhitespace: "Leave out changes that only touch whitespace.",
+      toTurnCount: "Include the changes of this many completed turns.",
+    },
+    examples: [
+      {
+        title: "Read everything a thread changed in its first five turns",
+        args: { threadId: "<threadId>", toTurnCount: 5 },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read thread diff", idempotentHint: true, openWorldHint: false },
+  }),
   "thread.create_many": entry({
     resource: "thread",
     verb: "create_many",

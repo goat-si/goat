@@ -505,6 +505,12 @@ export function summarizeGoatToolCalls(
     case "read-pr-checks":
       label = phrase("Checked", "check", `pull request checks ${times}`);
       break;
+    case "search-prs":
+      label = phrase("Searched", "search", `pull requests ${times}`);
+      break;
+    case "read-diff":
+      label = phrase("Read", "read", quantity(selected.length, "diff"));
+      break;
     case "browser":
       label = phrase("Used", "use", `browser ${times}`);
       break;

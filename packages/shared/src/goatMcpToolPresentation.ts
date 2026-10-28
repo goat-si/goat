@@ -62,6 +62,38 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "read-pr-checks",
     "pull-request",
   ),
+  goat_pull_request_activity: tool(
+    ["Read", "Reading", "Read", "pull request activity"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_review_thread: tool(
+    ["Read", "Reading", "Read", "a review thread"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_file: tool(
+    ["Read", "Reading", "Read", "a pull request file"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_stats: tool(
+    ["Read", "Reading", "Read", "pull request line counts"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_search: tool(
+    ["Search", "Searching", "Searched", "pull requests"],
+    "search-prs",
+    "pull-request",
+  ),
+  goat_pull_request_filter_options: tool(
+    ["List", "Listing", "Listed", "pull request filters"],
+    "search-prs",
+    "pull-request",
+  ),
+  goat_thread_turn_diff: tool(["Read", "Reading", "Read", "a turn's diff"], "read-diff"),
+  goat_thread_diff: tool(["Read", "Reading", "Read", "a thread's diff"], "read-diff"),
   orchestrator_capabilities: tool(
     ["Get", "Getting", "Got", "orchestration capabilities"],
     "capabilities",
