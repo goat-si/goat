@@ -5,13 +5,13 @@ import {
 import { createContext, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
-import { Button } from "~/components/ui/button";
+import { PinIcon } from "~/components/solar";
 import { toastManager } from "~/components/ui/toast";
 import { TooltipContainerContext } from "~/components/ui/tooltip";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { observeResize } from "~/lib/observeResize";
 
+import { CardHeaderButton } from "./BrowserCardActions";
 import { useDocumentVisible } from "./PreviewSessionThumbnail";
 
 const captureNotice = (state: DesktopPreviewSessionStackState | null) => {
@@ -176,12 +176,11 @@ export function PreviewSessionStackSurface(props: {
   };
   const toggle =
     bridge && native ? (
-      <Button
-        variant="ghost-muted"
-        size="icon-xs"
-        // An icon keeps the header on one line beside Stop all; the label names it.
-        aria-label={floating ? "Dock" : "Pop out"}
-        title={floating ? "Dock into GOAT" : "Pop out over other apps"}
+      // A pin, filled in while floating; picture-in-picture is a browser tab's own window.
+      <CardHeaderButton
+        variant={floating ? "secondary" : "ghost-muted"}
+        label={floating ? "Dock" : "Pop out"}
+        tooltip={floating ? "Dock cards back into GOAT" : "Keep cards above other apps"}
         onClick={() => {
           if (floating) void bridge.request({ type: "dock" }).catch(failure);
           else {
@@ -193,8 +192,8 @@ export function PreviewSessionStackSurface(props: {
           }
         }}
       >
-        {floating ? <MinimizeIcon /> : <PictureInPictureIcon />}
-      </Button>
+        <PinIcon />
+      </CardHeaderButton>
     ) : null;
   const notice = captureNotice(native);
   const stack = shown
