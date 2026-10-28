@@ -71,7 +71,7 @@ interface CellState {
   retainedBytes: number;
   // Counted apart from the journal so a full journal cannot hide an input whose effect may have started.
   effectsStarted: number;
-  /** The first call that failed; the cell's later calls do not run. */
+  /** The first call that failed after its write may have landed; the cell's later input does not run. */
   haltedBy?: number;
 }
 
@@ -89,7 +89,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   outcome: "error",
   error,
 });
-/** Results that did not do what was asked stop the rest of the cell, as errors do. */
+/** Results that did not do what was asked; a write that answers one fails its call. */
 const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
@@ -219,9 +219,10 @@ export class ScreenHostBridge {
       });
       return index;
     };
-    // The first failure stops the cell's later calls; calls already dispatched keep their outcome.
-    const halt = () => {
-      if (state.haltedBy === undefined) state.haltedBy = call.callId;
+    // A failed write that may have changed the page stops the cell's later input, since the cell
+    // has not seen that change; a refusal that sent nothing, or a failed read, leaves the cell free.
+    const halt = (safety: ActionOutcomeSafety) => {
+      if (safety.possibleCommit && state.haltedBy === undefined) state.haltedBy = call.callId;
     };
     const notRunEvidence = (error: ScreenRunError) =>
       error.code === "not_run" && state.haltedBy !== undefined
@@ -236,7 +237,6 @@ export class ScreenHostBridge {
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
       record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
-      halt();
       return refused(call, { ...error, safety, receipts });
     };
     if (
@@ -376,7 +376,7 @@ export class ScreenHostBridge {
         safety,
         refusalOf(error),
       );
-      halt();
+      halt(safety);
     };
     const bridge = this;
     const dispatch = Effect.gen(function* () {
@@ -513,7 +513,7 @@ export class ScreenHostBridge {
         safety,
         refusalOf(result.failure),
       );
-      halt();
+      halt(safety);
       return refused(call, { ...result.failure, safety, callId: call.callId });
     }
     let value = result.success.value;
@@ -594,7 +594,6 @@ export class ScreenHostBridge {
       result.success.safety,
       result.success.outcome ? { outcome: result.success.outcome } : {},
     );
-    if (FAILED_CATEGORIES.has(result.success.category)) halt();
     return {
       t: "reply" as const,
       runId: call.runId,

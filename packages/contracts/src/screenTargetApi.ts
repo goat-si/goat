@@ -16,7 +16,8 @@ const COMMON = `type Target = number | string | [x: number, y: number] | { role?
 type Done = { verdict: "confirmed" | "unverifiable"; result?: unknown };
 // confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
-// the cell's later input is then refused, but observe, read, status, waitFor and verify still run.
+// after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
+// later input, but observe, read, status, waitFor and verify still run.
 interface Observation { text: string; observationId: string; mode: "full" | "diff"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
@@ -37,10 +38,11 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target): Promise<Done>;
-  waitFor(c: Condition, o?: { timeoutMs?: number }): Promise<{ met: boolean }>;
+  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // default 15 s; answers before the cell ends
   verify(c: Condition): Promise<{ met: boolean }> }`;
 
 const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target }.
+// text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
 interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<object>; // tabs you opened need no claim
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;

@@ -213,8 +213,12 @@ collected. When the agent did not ask for the reset itself, its next cell's resu
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
 observe again before deciding what to do. The cell never replays that input. The first call that
-fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
-their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+fails after its write may have landed (an unknown outcome or a partial write) stops the cell's later
+input: calls already dispatched keep their outcome, and each later write gets its own `not_run`
+error and receipt without dispatching, while reads still run. The macOS driver's suspected no-op
+counts as an unknown outcome, because it does not prove nothing landed. A call refused before
+anything was sent, a write refused before it could land, or a failed read leaves the cell free,
+because the page is as the cell last saw it and the guest has caught or will see that error. An
 unverifiable write is a success whose receipt says it may have committed, because the macOS
 driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with

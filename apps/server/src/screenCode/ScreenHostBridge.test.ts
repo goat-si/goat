@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
+import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import type {
   EnvironmentId,
   ThreadId,
@@ -306,22 +307,62 @@ it.effect("cell stop distinguishes in-flight writes from undispatched and future
   }),
 );
 
+it.effect("a call refused before anything was sent leaves the cell's later calls free to run", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    let sent = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (request) =>
+        request.callId === 1
+          ? Effect.fail({
+              code: "stale_reference" as const,
+              effectStarted: false,
+              nextStep: "Observe the current tab again.",
+            })
+          : Effect.sync(() => {
+              sent++;
+              return { category: "confirmed" as const, evidence: ["clicked"] };
+            }),
+    });
+    const authorized = context(() => Effect.void);
+    const waited = yield* bridge.handle({ ...call(1), method: "wait_for" }, authorized);
+    expect(waited?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    // The bridge's own refusal sends nothing either.
+    const foreign = { ...call(2), targetRef: { ...tab, environmentId: "elsewhere" } };
+    expect((yield* bridge.handle(foreign, authorized))?.error?.code).toBe("stale_reference");
+    expect((yield* bridge.handle(call(3), authorized))?.outcome).toBe("ok");
+    expect(sent).toBe(1);
+  }),
+);
+
 it.effect.each(["partial", "suspected_noop", "refused"] as const)(
-  "a %s write stops its cell's later writes, and the cell can still observe what it did",
+  "a %s write stops its cell's later writes only when it may have landed, and the cell can still observe",
   (category) =>
     Effect.gen(function* () {
       const bridge = new ScreenHostBridge();
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      // The macOS driver's suspected no-op does not prove nothing landed, so it reads as unknown.
+      const driverSafety =
+        category === "suspected_noop"
+          ? {
+              safety: classifyActionOutcome({
+                effect: "write",
+                status: "indeterminate",
+                dispatched: true,
+              }),
+            }
+          : {};
       let sent = 0;
       bridge.setDispatcher({
         availability: () => Effect.succeed([]),
-        dispatch: () =>
+        dispatch: (request) =>
           Effect.gen(function* () {
             sent++;
             yield* Deferred.succeed(started, undefined);
             yield* Deferred.await(release);
-            return { category };
+            return { category, ...(request.method === "click" ? driverSafety : {}) };
           }),
       });
       const active = yield* bridge
@@ -340,9 +381,11 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
       yield* Deferred.succeed(release, undefined);
       const first = yield* Fiber.join(active);
       const second = yield* Fiber.join(queued);
+      const landed = category !== "refused";
       expect(first?.outcome).toBe("error");
-      expect(first?.error?.safety?.possibleCommit).toBe(category === "partial");
-      // The guest caught the failure and went on: it may observe, but sends no more input.
+      expect(first?.error?.safety?.possibleCommit).toBe(landed);
+      // The guest caught the failure and went on: it may observe, and sends more input only when
+      // the failed write cannot have changed the page.
       const observed = yield* bridge.handle(
         { ...call(3), method: "observe" },
         context(() => Effect.void),
@@ -353,18 +396,21 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
         context(() => Effect.void),
       );
       for (const reply of [second, third])
-        expect(reply?.error).toMatchObject({
-          code: "not_run",
-          effectStarted: false,
-          safety: { possibleCommit: false, retryClass: "new_key" },
-        });
-      expect(sent).toBe(2);
+        if (landed)
+          expect(reply?.error).toMatchObject({
+            code: "not_run",
+            effectStarted: false,
+            safety: { possibleCommit: false, retryClass: "new_key" },
+          });
+        else expect(reply?.error?.code).not.toBe("not_run");
+      expect(sent).toBe(landed ? 2 : 4);
       const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+      const skipped = landed ? ["not_run:after_call:1"] : [];
       expect(journal.map((entry) => [entry.receipt.method, entry.receipt.evidence])).toEqual([
         [call(1).method, []],
-        [call(2).method, ["not_run:after_call:1"]],
+        [call(2).method, skipped],
         ["observe", []],
-        [call(4).method, ["not_run:after_call:1"]],
+        [call(4).method, skipped],
       ]);
     }),
 );
@@ -400,12 +446,6 @@ it.effect("a failure on one target keeps another target's in-flight call and its
     yield* Deferred.succeed(release, undefined);
     expect(failed?.outcome).toBe("error");
     expect(yield* Fiber.join(slow)).toMatchObject({ outcome: "ok", value: "typed" });
-    expect(
-      (yield* bridge.handle(
-        call(3),
-        context(() => Effect.void),
-      ))?.error?.code,
-    ).toBe("not_run");
   }),
 );
 
