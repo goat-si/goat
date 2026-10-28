@@ -606,6 +606,7 @@ const make = Effect.gen(function* () {
 
     yield* supervise("Keybindings.watch", () =>
       fileWatchResync(keybindingsConfigDir).pipe(
+        Stream.provideService(FileSystem.FileSystem, fs),
         Stream.filter(
           (event) =>
             event === undefined ||

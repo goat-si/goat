@@ -20,15 +20,11 @@ export const make = Effect.gen(function* () {
     const message = interrupted
       ? `SSH setup on ${host} was interrupted. Try again.`
       : `SSH setup on ${host} ended without a complete response. Try again.`;
-    const failure: SshHostResult = {
-      kind: "error",
-      code: "operation_failed",
-      message,
-      fix: {
-        actor: "agent",
-        instruction: `Call goat_call {path:"ssh.host_prepare"} for ${host} to retry.`,
-      },
-    };
+    const fix = {
+      actor: "agent",
+      instruction: `Call goat_call {path:"ssh.host_prepare"} for ${host} to retry.`,
+    } as const;
+    const failure: SshHostResult = { kind: "error", code: "operation_failed", message, fix };
     yield* Deferred.succeed(first, failure);
     if (interrupted) return;
     yield* dispatch
@@ -36,7 +32,7 @@ export const make = Effect.gen(function* () {
         kind: "error",
         reason: "operation_failed",
         message,
-        fix: failure.fix,
+        fix,
       })
       .pipe(
         Effect.catchCause(() =>
