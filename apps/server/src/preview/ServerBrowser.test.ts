@@ -14,6 +14,7 @@ import {
   ThreadId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
+  type PreviewAutomationResizeResult,
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -1234,6 +1235,33 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         input: {},
       });
       expect(resolved.dialog).toBeNull();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a desktop tab no panel shows reports its real size and why fill kept it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      desktopRendersNext = true;
+      const { broker, tabId } = yield* ready;
+      const cdp = desktopConnections[0]!.context.sessions[0]!;
+      const original = cdp.send.getMockImplementation()!;
+      cdp.send.mockImplementation(async (method, input) =>
+        method === "Page.getLayoutMetrics"
+          ? {
+              ...(await original(method, input)),
+              cssLayoutViewport: { clientWidth: 430, clientHeight: 932 },
+            }
+          : original(method, input),
+      );
+      const resized = yield* broker.invoke<PreviewAutomationResizeResult & { next?: string }>({
+        scope,
+        tabId,
+        operation: "resize",
+        input: { mode: "fill" },
+      });
+      expect(resized.viewport).toEqual({ width: 430, height: 932 });
+      expect(resized.next).toContain("no panel");
     }),
   ).pipe(Effect.provide(layer)),
 );

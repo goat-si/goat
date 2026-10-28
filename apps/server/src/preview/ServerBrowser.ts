@@ -560,6 +560,14 @@ const make = Effect.gen(function* () {
     for (const viewer of tab.viewers) viewer.push({ _tag: "viewport", ...size });
   };
 
+  /** A desktop page's CSS layout viewport, which Playwright's viewportSize() does not know. */
+  const renderedViewport = async (tab: ServerTab) => {
+    const { cssLayoutViewport } = await tab.cdp.send("Page.getLayoutMetrics");
+    return cssLayoutViewport
+      ? { width: cssLayoutViewport.clientWidth, height: cssLayoutViewport.clientHeight }
+      : (tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT);
+  };
+
   const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
     tab.setting = setting;
 
@@ -1918,11 +1926,25 @@ const make = Effect.gen(function* () {
         await runPromise(
           manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
         );
+        const before = tab.desktop ? await renderedViewport(tab) : undefined;
         await applySetting(tab, setting);
+        const viewport = tab.desktop
+          ? await renderedViewport(tab)
+          : (tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT);
+        // The desktop sizes a filled tab to the panel showing it; with none, the size stays.
+        const kept =
+          setting._tag === "fill" &&
+          before?.width === viewport.width &&
+          before.height === viewport.height;
         return {
           tabId: tab.tabId,
           setting,
-          viewport: tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT,
+          viewport,
+          ...(kept
+            ? {
+                next: `Fill follows the panel that shows this tab; if no panel shows it, it keeps ${viewport.width}x${viewport.height}. Show it (goat_preview_open show:true) or set a freeform size.`,
+              }
+            : {}),
         };
       }
       case "setColorScheme": {
