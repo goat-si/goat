@@ -659,11 +659,9 @@ it("a press that only restyles the button or focuses it is not a confirmed click
         effect: "confirmed",
         evidence: expect.arrayContaining(["dom"]),
       });
-    for (const id of ["label", "reveal"])
-      await expect(
-        ServerBrowserPage.click(page, { selector: `#${id}` }),
-        id,
-      ).resolves.toMatchObject({
-        effect: "confirmed",
-      });
+    // A field the click's handler reveals and focuses is the click's; a label handing focus to its
+    // control after the dispatch is not attributable to the click and stays unconfirmed.
+    await expect(ServerBrowserPage.click(page, { selector: "#reveal" })).resolves.toMatchObject({
+      effect: "confirmed",
+    });
   }));
