@@ -119,5 +119,14 @@ it.effect("a window read over 64 KiB reaches the server whole; one over the cap 
       (capped?.result as { code?: unknown })?.code,
       COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
     );
+    // A driver failure over the cap still reads as a failure.
+    yield* sink.answer(
+      JSON.stringify({ result: { isError: true, structuredContent: huge } }),
+      "settled",
+    );
+    assert.deepInclude(received[2]?.result as object, {
+      code: COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+      isError: true,
+    });
   }),
 );

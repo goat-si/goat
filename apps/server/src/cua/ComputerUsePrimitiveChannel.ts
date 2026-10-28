@@ -160,8 +160,14 @@ export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
   const threadTokens = new Map<ThreadId, string>();
-  // Completed and replaced on every driver binding, so a call waiting for one re-checks.
-  let bound = Deferred.makeUnsafe<void>();
+  // Completed and replaced whenever a binding, a registration or a control changes, so a call
+  // waiting for a driver re-checks at once, including when its proxy goes away.
+  let changed = Deferred.makeUnsafe<void>();
+  const wake = () => {
+    const waiting = changed;
+    changed = Deferred.makeUnsafe<void>();
+    Deferred.doneUnsafe(waiting, Exit.void);
+  };
   const settle = (pending: Pending) =>
     Deferred.doneUnsafe(
       pending.answer,
@@ -189,6 +195,7 @@ export const make = Effect.gen(function* () {
     const registration = attachment.registration;
     if (registration === undefined) return;
     attachment.registration = undefined;
+    wake();
     for (const control of registration.controls.values()) {
       control.binding = undefined;
       for (const pending of control.pending.values()) {
@@ -253,6 +260,7 @@ export const make = Effect.gen(function* () {
     state.reason === "stopped_all";
   const revokeEndedControls = Effect.fn("ComputerUsePrimitiveChannel.revokeEndedControls")(
     function* () {
+      wake();
       for (const [threadId, attachment] of attachments) {
         const current = Option.getOrUndefined(yield* leases.currentControl(threadId));
         const registered = attachment.registration;
@@ -502,9 +510,7 @@ export const make = Effect.gen(function* () {
         clear(registered, record);
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
-        const waiting = bound;
-        bound = Deferred.makeUnsafe<void>();
-        Deferred.doneUnsafe(waiting, Exit.void);
+        wake();
         return true;
       },
     ),
@@ -536,21 +542,31 @@ export const make = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
       const waitUntil = Math.min(input.deadlineMillis, started + DRIVER_BIND_WAIT_MS);
       let now = started;
+      // The call belongs to the control it began under; a successor never inherits it.
+      let began: string | undefined;
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(desktopNotReady("none"));
+        began ??= current.controlId;
+        if (current.controlId !== began) return yield* Effect.fail(desktopNotReady("unbound"));
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
         const record = registered?.controls.get(current.controlId);
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined)
           return yield* send(input, current.controlId, registered, record, binding, now);
-        if (value === undefined || !live(value, now) || now >= waitUntil)
+        // Only a registered proxy starts drivers; without one nothing will bind.
+        if (
+          value === undefined ||
+          !live(value, now) ||
+          registered === undefined ||
+          now >= waitUntil
+        )
           return yield* Effect.fail(desktopNotReady("unbound"));
-        yield* Deferred.await(bound).pipe(Effect.timeoutOption(waitUntil - now));
+        yield* Deferred.await(changed).pipe(Effect.timeoutOption(waitUntil - now));
         now = yield* Clock.currentTimeMillis;
       }
     }),

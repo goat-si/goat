@@ -138,6 +138,8 @@ export const primitiveReplySink = (
               message: "Driver reply exceeded the primitive channel limit.",
               ...(Number.isFinite(bytes) ? { bytes } : {}),
               maxBytes,
+              // A driver failure stays one when only its size is lost.
+              ...(record(value)?.isError === true ? { isError: true } : {}),
             };
       };
       const result = imageError

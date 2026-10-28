@@ -530,7 +530,12 @@ describe("ComputerUsePrimitiveChannel", () => {
         const f = yield* fixture();
         assert.isTrue(yield* f.channel.reportControlCutoff(f.report(0)));
         assert.isFalse(yield* f.channel.reportControlReady(f.report(0)));
-        assert.equal((yield* Effect.flip(f.request())).reason, "desktop_not_ready");
+        // The control is active and its driver was cut off: the call waits for a restart.
+        const unbound = yield* Effect.flip(f.request()).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust(PrimitiveChannel.DRIVER_BIND_WAIT_MS);
+        assert.equal((yield* Fiber.join(unbound)).reason, "desktop_not_ready");
         assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
         const waiter = yield* f.request().pipe(Effect.forkChild);
         const delivered = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
@@ -564,7 +569,12 @@ describe("ComputerUsePrimitiveChannel", () => {
       yield* Stream.runHead(f.registered.requests);
       assert.isTrue(yield* f.channel.reportControlCutoff(f.report(1)));
       assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
-      assert.equal((yield* Effect.flip(f.request())).reason, "desktop_not_ready");
+      // The control is active and its driver was cut off: the call waits for a restart.
+      const unbound = yield* Effect.flip(f.request()).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(PrimitiveChannel.DRIVER_BIND_WAIT_MS);
+      assert.equal((yield* Fiber.join(unbound)).reason, "desktop_not_ready");
       assert.isFalse(yield* f.channel.reportControlReady(f.report(1)));
     }),
   );
@@ -610,6 +620,53 @@ describe("ComputerUsePrimitiveChannel", () => {
       assert.equal((yield* Fiber.join(waiter)).status, "settled");
       yield* f.channel.closeStream({ threadId, registrationId: f.registered.registrationId });
       assert.isFalse(yield* f.channel.reportControlReady(f.report(1)));
+    }),
+  );
+});
+
+describe("ComputerUsePrimitiveChannel while a control is replaced", () => {
+  it.effect("a call waiting for a driver never crosses into a successor control", () =>
+    Effect.gen(function* () {
+      const signals = yield* PubSub.unbounded<void>();
+      let current = "control:a";
+      const leases = ComputerUseLeases.ComputerUseLeases.of({
+        currentControl: () => Effect.sync(() => Option.some({ controlId: current })),
+        controlState: () => Effect.succeed({ _tag: "active" }),
+        subscribe: PubSub.subscribe(signals),
+      } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
+      const channel = yield* PrimitiveChannel.make.pipe(
+        Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+      );
+      yield* channel.issue({ ...authority, expiresAt: 60_000 });
+      const registered = yield* channel.registerStream({
+        ...authority,
+        proxyInstanceId: "proxy:one",
+        kind: "thread",
+      });
+      if (registered.status !== "registered") throw new Error("expected registration");
+      // launch_app names no driver generation, so nothing downstream would refuse it.
+      const waiting = yield* Effect.flip(
+        channel.request({
+          threadId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 1,
+          deadlineMillis: 30_000,
+          tool: "launch_app",
+          args: { bundle_id: "org.example.Editor" },
+        }),
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      current = "control:b";
+      assert.isTrue(
+        yield* channel.reportControlReady({
+          ...authority,
+          registrationId: registered.registrationId,
+          controlId: "control:b",
+          connectionId: "driver:1",
+          driverGeneration: 1,
+        }),
+      );
+      assert.equal((yield* Fiber.join(waiting)).reason, "desktop_not_ready");
     }),
   );
 });
