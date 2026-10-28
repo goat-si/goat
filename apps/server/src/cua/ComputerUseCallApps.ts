@@ -41,10 +41,20 @@ function driverCall(item: OrchestrationV2TurnItem) {
 
 export const makeCallApps = () => {
   const byPid = new Map<number, ComputerUseCallAppLabel>();
-  const labelOf = (tool: string, args: Readonly<Record<string, unknown>> | undefined) => {
+  const labelOf = (
+    tool: string,
+    args: Readonly<Record<string, unknown>> | undefined,
+    output: unknown,
+  ) => {
     if (tool === "launch_app") {
       const bundleId = text(args?.bundle_id, 255);
-      const name = text(args?.name, 160);
+      // A launch by bundle id learns the app's name from its own answer.
+      const launched = record(record(output)?.structuredContent) ?? record(output);
+      const name =
+        text(args?.name, 160) ??
+        (bundleId !== undefined && text(launched?.bundle_id, 255) === bundleId
+          ? text(launched?.name, 160)
+          : undefined);
       if (bundleId !== undefined || name !== undefined)
         return {
           ...(bundleId === undefined ? {} : { bundleId }),
@@ -77,7 +87,11 @@ export const makeCallApps = () => {
         item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
       )
         return item;
-      const label = labelOf(call.tool, call.args);
+      const label = labelOf(
+        call.tool,
+        call.args,
+        item.type === "dynamic_tool" ? item.output : undefined,
+      );
       const appId =
         label?.bundleId !== undefined && APP_ID.test(label.bundleId) ? label.bundleId : undefined;
       const name = label?.name ?? appId;

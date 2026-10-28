@@ -69,6 +69,12 @@ describe("ComputerUseCallApps", () => {
       key: "native-app:com.apple.textedit",
       name: "TextEdit",
     });
+    // A launch by bundle id alone takes the app's name from its answer once it settles.
+    const byId = apps.present({
+      ...driverCall("cua-driver.launch_app", { bundle_id: "com.apple.calculator" }),
+      output: { bundle_id: "com.apple.calculator", name: "Calculator", pid: 42 },
+    });
+    expect(byId.toolSource).toEqual(calculator);
 
     const unknown = driverCall("cua-driver.click", { pid: 7, window_id: 1 });
     expect(apps.present(unknown)).toBe(unknown);
