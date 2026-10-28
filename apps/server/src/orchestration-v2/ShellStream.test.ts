@@ -23,6 +23,7 @@ import {
   dedupeShellEnrichment,
   omitIdleSubagentShells,
   omitOlderSettledShells,
+  shellSnapshotForSubscriber,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemsFromInitialSnapshot,
   shouldPublishShellApplicationEvent,
@@ -762,4 +763,85 @@ describe("skipUnchangedThreadShells", () => {
       expect(sent).toEqual([1, 2, 3]);
     }),
   );
+});
+
+describe("launch relations in omitted shells", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = DateTime.makeUnsafe(100 * DAY);
+  const row = (
+    id: string,
+    overrides: {
+      readonly parent?: string;
+      readonly root?: string;
+      readonly settledDaysAgo?: number;
+      readonly launcher?: { readonly id: string; readonly env?: string; readonly via?: string };
+      readonly shell?: Partial<OrchestrationV2ThreadShell>;
+    } = {},
+  ) =>
+    shellFixture({
+      id: ThreadId.make(id),
+      projectId: ProjectId.make("project-a"),
+      lineage: {
+        parentThreadId: overrides.parent === undefined ? null : ThreadId.make(overrides.parent),
+        relationshipToParent: overrides.parent === undefined ? null : "subagent",
+        rootThreadId: ThreadId.make(overrides.root ?? id),
+      },
+      status: "completed",
+      activityRunStatus: null,
+      pendingRuntimeRequest: null,
+      pendingBackgroundTasks: [],
+      settledOverride: overrides.settledDaysAgo === undefined ? null : "settled",
+      settledAt:
+        overrides.settledDaysAgo === undefined
+          ? null
+          : DateTime.makeUnsafe(100 * DAY - overrides.settledDaysAgo * DAY),
+      ...(overrides.launcher === undefined
+        ? {}
+        : {
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make(overrides.launcher.id),
+              environmentId: (overrides.launcher.env ?? null) as never,
+              environmentLabel: null,
+              threadTitle: null,
+              via: (overrides.launcher.via ?? "thread_launch") as never,
+            },
+          }),
+      ...overrides.shell,
+    });
+  const coldConnect = (threads: ReadonlyArray<OrchestrationV2ThreadShell>) =>
+    shellSnapshotForSubscriber(
+      { ...emptyShellSnapshot, threads },
+      { omitIdleSubagents: true, omitOlderSettled: true, now },
+    ).snapshot.threads.map((thread) => thread.id);
+
+  it("keeps an idle subagent that launched a thread here, so the launch still folds under its owner", () => {
+    expect(
+      coldConnect([
+        row("owner"),
+        row("lane", { parent: "owner", root: "owner" }),
+        row("launched", { launcher: { id: "lane" } }),
+        row("plain", { parent: "owner", root: "owner" }),
+        // A launch recorded on another machine names that machine's thread, not this one's.
+        row("remote", { launcher: { id: "plain", env: "environment-b" } }),
+        row("delegated", { launcher: { id: "plain", via: "delegate_task" } }),
+      ]),
+    ).toEqual(["owner", "lane", "launched", "remote", "delegated"]);
+  });
+
+  it("keeps an older settled launcher, and its own launcher, while a thread it launched stays", () => {
+    const newest = Array.from({ length: 25 }, (_, index) =>
+      row(`new-${index}`, { settledDaysAgo: index / 10 }),
+    );
+    expect(
+      coldConnect([
+        ...newest,
+        row("first", { settledDaysAgo: 40 }),
+        row("launcher", { settledDaysAgo: 30, launcher: { id: "first" } }),
+        row("launched", { launcher: { id: "launcher" }, shell: { activityRunStatus: "running" } }),
+        row("old-launcher", { settledDaysAgo: 30 }),
+        row("old-launched", { settledDaysAgo: 30, launcher: { id: "old-launcher" } }),
+      ]).slice(25),
+    ).toEqual(["first", "launcher", "launched"]);
+  });
 });

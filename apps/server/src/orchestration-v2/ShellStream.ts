@@ -31,6 +31,7 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
+import { keepLocalLaunchers } from "./goat/shellLaunchKeep.ts";
 import { bufferLatestLiveStream } from "./LiveStreamBudget.ts";
 
 type ShellDelta = Extract<OrchestrationV2ShellStreamItem, { readonly sequence: number }>;
@@ -73,8 +74,8 @@ export function buildActiveShellSnapshot(input: {
 
 /**
  * Idle subagent children have no sidebar row, so clients that opt in read them from their thread
- * family instead. A child stays while it is live or the parent of another child, so the request
- * and working walks over shell rows never meet a gap in a nested chain.
+ * family instead. A child stays while it is live, the parent of another child, or the launcher of
+ * a kept thread, so request, working and launch walks over shell rows never meet a gap.
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
@@ -85,11 +86,14 @@ export function omitIdleSubagentShells(
       parentIds.add(thread.lineage.parentThreadId);
     }
   }
-  return threads.filter(
-    (thread) =>
-      thread.lineage.relationshipToParent !== "subagent" ||
-      isLiveSubagentShell(thread) ||
-      parentIds.has(thread.id),
+  return keepLocalLaunchers(
+    threads,
+    threads.filter(
+      (thread) =>
+        thread.lineage.relationshipToParent !== "subagent" ||
+        isLiveSubagentShell(thread) ||
+        parentIds.has(thread.id),
+    ),
   );
 }
 
@@ -119,7 +123,8 @@ const NEWEST_SETTLED_KEPT = 25;
 /**
  * Opted-in snapshots keep the 25 newest settled top-level threads (and ties) and count the rest per
  * project in `olderSettled`; clients page them with `getOlderSettledThreads`. Older rows stay while
- * pinned, snoozed, live, or above a kept subagent, so walks over shell rows still find them.
+ * pinned, snoozed, live, above a kept subagent, or the launcher of a kept thread, so walks over
+ * shell rows still find them.
  */
 export function omitOlderSettledShells(input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
@@ -159,7 +164,7 @@ export function omitOlderSettledShells(input: {
     );
   });
   return {
-    threads,
+    threads: keepLocalLaunchers(input.threads, threads),
     olderSettled: {
       before: DateTime.formatIso(DateTime.makeUnsafe(beforeMs)),
       asOfSequence: input.snapshotSequence,
