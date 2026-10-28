@@ -39,8 +39,11 @@ const SCREEN_RUN_TOOL =
 export type ScreenTargetLabel =
   | {
       readonly kind: "app";
+      /** Reported by the driver. */
       readonly bundleId?: string | undefined;
       readonly name?: string | undefined;
+      /** The call's own id, which found the window: good for an icon, never shown as text. */
+      readonly iconBundleId?: string | undefined;
     }
   | { readonly kind: "tab"; readonly pageUrl: string | null | undefined };
 
@@ -158,11 +161,17 @@ const screenRunCellId = (item: OrchestrationV2TurnItem) => {
   return typeof cellId === "string" && cellId.length <= 200 ? cellId : undefined;
 };
 
-const subjectOf = (
-  target:
-    | { readonly kind: "app"; readonly label: ComputerUseCallAppLabel }
-    | { readonly kind: "tab"; readonly pageUrl: string },
-) => (target.kind === "app" ? appSubject(target.label) : siteSubject(target.pageUrl));
+type ScreenTarget =
+  | {
+      readonly kind: "app";
+      readonly label: ComputerUseCallAppLabel;
+      /** The app as a row title names it, from what the driver reported only. */
+      readonly subject: string | undefined;
+    }
+  | { readonly kind: "tab"; readonly pageUrl: string };
+
+const subjectOf = (target: ScreenTarget) =>
+  target.kind === "app" ? target.subject : siteSubject(target.pageUrl);
 
 function websiteUrl(value: unknown) {
   const raw = text(value, 4096);
@@ -210,11 +219,7 @@ function asApp(
 
 export const makeCallApps = () => {
   const byPid = new Map<number, ComputerUseCallAppLabel>();
-  const screenTargets = new Map<
-    string,
-    | { readonly kind: "app"; readonly label: ComputerUseCallAppLabel }
-    | { readonly kind: "tab"; readonly pageUrl: string }
-  >();
+  const screenTargets = new Map<string, ScreenTarget>();
   // The targets each cell acted on, in order, kept by the server: providers may hand back a
   // summary or a truncated tail in place of the cell's receipts, and receipts keep only 16 calls.
   const screenCells = new Map<string, readonly string[]>();
@@ -271,7 +276,8 @@ export const makeCallApps = () => {
     screenTarget: (targetId: string, label: ScreenTargetLabel, cell?: ScreenCellRef) => {
       screenTargets.delete(targetId);
       if (label.kind === "app") {
-        const bundleId = text(label.bundleId, 255);
+        const reported = text(label.bundleId, 255);
+        const bundleId = reported ?? text(label.iconBundleId, 255);
         const name = text(label.name, 160);
         if (bundleId === undefined && name === undefined) return;
         screenTargets.set(targetId, {
@@ -280,6 +286,10 @@ export const makeCallApps = () => {
             ...(bundleId === undefined ? {} : { bundleId }),
             ...(name === undefined ? {} : { name }),
           },
+          subject:
+            name === undefined && reported === undefined
+              ? undefined
+              : appSubject({ name, bundleId: reported }),
         });
       } else {
         const pageUrl = websiteUrl(label.pageUrl);
@@ -301,6 +311,7 @@ export const makeCallApps = () => {
       }
       const subjects = byTarget.get(targetId) ?? [];
       const subject = subjectOf(target);
+      if (subject === undefined) return;
       if (!subjects.includes(subject) && subjects.length < MAX_CELL_SUBJECTS_PER_TARGET)
         subjects.push(subject);
       byTarget.set(targetId, subjects);
@@ -316,7 +327,8 @@ export const makeCallApps = () => {
       const subjects: string[] = [];
       for (const targetId of targetIds) {
         const target = screenTargets.get(targetId);
-        const seen = byTarget?.get(targetId) ?? (target === undefined ? [] : [subjectOf(target)]);
+        const current = target === undefined ? undefined : subjectOf(target);
+        const seen = byTarget?.get(targetId) ?? (current === undefined ? [] : [current]);
         for (const subject of seen) if (!subjects.includes(subject)) subjects.push(subject);
       }
       return subjects;
@@ -414,7 +426,9 @@ export const makeCallApps = () => {
           : receipts;
     const targets = targetIds.flatMap((id) => screenTargets.get(id) ?? []);
     const app = targets.find((target) => target.kind === "app");
-    if (app !== undefined) return asApp(item, app.label);
+    // An app the driver never named shows its icon under a generic name, never the call's id.
+    if (app !== undefined)
+      return asApp(item, app.subject === undefined ? { ...app.label, name: "app" } : app.label);
     const tab = targets.find((target) => target.kind === "tab");
     if (tab !== undefined) return { ...item, toolIcon: { _tag: "website", pageUrl: tab.pageUrl } };
     const call = driverCall(item);

@@ -392,14 +392,15 @@ export const createDesktopTargetHost = (deps: {
         ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
       };
       targets.set(ref.id, bound);
-      // The bundle id found the window, so it names the app's icon; only a name the driver reported
-      // (an app it listed, the window it matched) ever reaches the row, never the call's own name.
+      // Only what the driver reported names the app on its row. The call's bundle id found the
+      // window, so it may pick the icon, but the driver's app filter also matches names, so never text.
       deps.labelTarget?.(
         ref.id,
         {
           kind: "app",
-          bundleId: string(app?.bundle_id) ?? bundleId,
+          bundleId: string(app?.bundle_id),
           name: string(app?.name) ?? string(named[0]?.app_name),
+          iconBundleId: bundleId,
         },
         context,
       );

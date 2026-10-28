@@ -103,7 +103,10 @@ export function siteSubject(pageUrl: string): string {
 }
 
 /** An app as its row names it: its display name on one line, or "app". */
-export function appSubject(label: { readonly bundleId?: string; readonly name?: string }): string {
+export function appSubject(label: {
+  readonly bundleId?: string | undefined;
+  readonly name?: string | undefined;
+}): string {
   const name = (label.name ?? label.bundleId ?? "").replace(/\s+/gu, " ").trim();
   if (name.length === 0 || /[\u0000-\u001f\u007f-\u009f\\/]/u.test(name)) return "app";
   return name.length > APP_NAME_MAX ? `${name.slice(0, APP_NAME_MAX - 1)}…` : name;
