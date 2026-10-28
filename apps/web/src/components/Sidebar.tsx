@@ -137,6 +137,7 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
+import { projectSettledLaunchShelf } from "./sidebar/settledLaunchShelf";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
@@ -530,24 +531,21 @@ function useSidebarThreads(input: {
     expanded: settledShelfExpanded,
     visibleCount: settledVisibleCount,
   });
-  const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
+  const settledProjection = projectSettledLaunchShelf({
+    roots: settledThreads,
+    fold: partition.launchFold,
+    all: partition.visibleThreads,
+    isListed: olderSettledShelf.isListed,
+    unloadedCount: olderSettledShelf.unloadedCount,
+    visibleCount: settledVisibleCount,
+    routeKey: routeShelfKey,
+    expanded: settledShelfExpanded,
+  });
+  const listedSettledThreads = settledProjection.listed;
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
-  const settledCount =
-    settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
-  const visibleSettledThreads = (() => {
-    const visible = listedSettledThreads.slice(0, settledVisibleCount);
-    if (
-      routeShelfKey !== null &&
-      !visible.some((thread) => threadShellKey(thread) === routeShelfKey)
-    ) {
-      const routeThread = settledThreads.find((thread) => threadShellKey(thread) === routeShelfKey);
-      if (routeThread !== undefined) visible.push(routeThread);
-    }
-    return visible.length === settledThreads.length ? settledThreads : visible;
-  })();
-  const renderedSettledThreads = settledShelfExpanded
-    ? visibleSettledThreads
-    : routeThreadOnly(visibleSettledThreads, routeShelfKey);
+  const settledCount = settledProjection.count;
+  const visibleSettledThreads = settledProjection.visible;
+  const renderedSettledThreads = settledProjection.rendered;
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
     : routeThreadOnly(snoozedThreads, routeShelfKey);
@@ -598,8 +596,7 @@ function useSidebarThreads(input: {
       ...activeThreads,
       ...workingThreads,
       ...snoozedThreads,
-      ...settledThreads,
-      ...partition.launchFold.folded,
+      ...settledProjection.searchable,
     ],
     settledVisibleCount,
     settledCount,
