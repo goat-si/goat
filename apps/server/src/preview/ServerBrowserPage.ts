@@ -21,6 +21,7 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { pointerInterception } from "./pointerInterception.ts";
+import { describeReceiver } from "./pointerReceiver.ts";
 import {
   actionDeadline,
   pinTarget,
@@ -95,6 +96,27 @@ export const toOperationError = (
 };
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
+
+/** An intercepted click also names what now covers its target; other failures pass unchanged. */
+const withReceiver = async (
+  page: Page,
+  locator: Locator | null,
+  cause: unknown,
+  deadline: number,
+) => {
+  const intercepted =
+    cause instanceof Error && cause.name === "TimeoutError"
+      ? pointerInterception(cause.message)
+      : undefined;
+  if (locator === null || intercepted === undefined) return cause;
+  const error = toOperationError(cause);
+  const receiver = await describeReceiver(page, locator, deadline);
+  if (receiver === undefined) return error;
+  return new ServerBrowserOperationError(error.tag, error.message, {
+    ...(typeof error.detail === "object" ? error.detail : {}),
+    interceptedBy: `${intercepted} Now at the target: ${receiver}.`.slice(0, 300),
+  });
+};
 
 /** Real Chromium history, including same-document entries whose response is null. */
 export const navigateHistory = async (
@@ -243,17 +265,17 @@ const targetPoint = async (
   page: Page,
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
-  timeout: number,
+  deadline: number,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  const target = await elementOf(locator, timeout);
+  const target = await elementOf(locator, remaining(deadline));
   try {
-    await revealFramesOf(target, timeout);
+    await revealFramesOf(target, deadline);
   } finally {
     void target.dispose().catch(constVoid);
   }
-  await locator.scrollIntoViewIfNeeded({ timeout });
-  const box = await locator.boundingBox({ timeout });
+  await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+  const box = await locator.boundingBox({ timeout: remaining(deadline) });
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const viewport = page.viewportSize();
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
@@ -667,11 +689,12 @@ export const click = async (
   gate: DispatchGate = open,
 ): Promise<{ readonly x: number; readonly y: number }> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  const point = await targetPoint(page, locator, input, timeout);
+  const point = await targetPoint(page, locator, input, deadline);
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, timeout);
+  if (locator !== null) await settled(locator, remaining(deadline));
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -680,6 +703,7 @@ export const click = async (
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
+    if (count === 1) remaining(deadline);
     gate();
     if (count === 1)
       return locator === null
@@ -699,6 +723,8 @@ export const click = async (
         break;
       }
     }
+  } catch (cause) {
+    throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
@@ -795,14 +821,16 @@ export const hover = async (
   gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  await pointer(await targetPoint(page, locator, input, timeout), "move");
+  await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
     gate();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await settled(locator, timeout, false);
+  await settled(locator, remaining(deadline), false);
+  remaining(deadline);
   gate();
   await locator.hover(dispatched);
 };
@@ -894,13 +922,15 @@ export const drag = async (
   gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = actionDeadline(timeout, gate.deadline);
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
-  await pointer(await targetPoint(page, source, {}, timeout), "move");
-  await settled(source, timeout, false);
-  await settled(target, timeout, false);
-  const end = await target.boundingBox({ timeout }).catch(() => null);
+  await pointer(await targetPoint(page, source, {}, deadline), "move");
+  await settled(source, remaining(deadline), false);
+  await settled(target, remaining(deadline), false);
+  const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
+  remaining(deadline);
   gate();
   await source.dragTo(target, dispatched);
 };
