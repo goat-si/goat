@@ -130,8 +130,20 @@ describe("buildImportGraph", () => {
     write("apps/server/src/esm.test.ts", 'import "./esm.js";');
     write("apps/server/src/opaque.test.ts", 'import { deep } from "@goat/opaque/not-exported";');
     write("apps/server/src/spawn.test.ts", 'spawn("node", [path.join(dir, "cli/helper.ts")]);');
-    write("apps/server/src/cli/helper.ts");
-    write("apps/server/src/loaded.ts");
+    write("apps/server/src/cli/helper.ts", 'import "../helperDep.ts";');
+    write("apps/server/src/helperDep.ts");
+    write("apps/server/src/loaded.ts", 'import "./loadedDep.ts";');
+    write("apps/server/src/loadedDep.ts");
+    write("apps/server/src/main.ts", 'import "./core/deep.ts";');
+    write("apps/server/src/core/deep.ts");
+    write(
+      "apps/server/src/provider/extract.ts",
+      'const entry = new URL(dev ? "../main.ts" : "./main.mjs", import.meta.url);',
+    );
+    write("apps/server/src/upload.ts", 'import "./provider/extract.ts";');
+    write("apps/server/src/app.ts", 'import "./upload.ts";');
+    write("apps/server/src/upload.test.ts", 'import "./upload.ts";');
+    write("apps/server/src/main.test.ts", 'spawn("node", ["src/main.ts"]);');
     write("apps/server/src/ws.ts");
     write("apps/server/src/nested/deep.ts");
     write(
@@ -199,6 +211,20 @@ describe("buildImportGraph", () => {
     assert.ok(reaches("apps/server/src/loaded.ts", "apps/server/src/loader.test.ts"));
     assert.ok(reaches("apps/server/src/ws.ts", "apps/server/src/loader.test.ts"));
     assert.ok(reaches("apps/server/src/nested/deep.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/loadedDep.ts", "apps/server/src/loader.test.ts"));
+  });
+
+  it("follows a change through the imports of a file a test spawns", () => {
+    assert.ok(reaches("apps/server/src/helperDep.ts", "apps/server/src/spawn.test.ts"));
+    assert.ok(reaches("apps/server/src/core/deep.ts", "apps/server/src/main.test.ts"));
+  });
+
+  it("does not spread a change through a production module that names the server entry", () => {
+    assert.ok(!reaches("apps/server/src/core/deep.ts", "apps/server/src/upload.test.ts"));
+    assert.deepEqual(mentionsOf(graph, "apps/server/src/main.ts").sort(), [
+      "apps/server/src/main.test.ts",
+      "apps/server/src/provider/extract.ts",
+    ]);
   });
 
   it("ignores file names in comments", () => {
