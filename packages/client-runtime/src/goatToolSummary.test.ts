@@ -7,6 +7,11 @@ function completed(input: unknown, output?: unknown): GoatToolSummaryCall {
 }
 
 describe("summarizeGoatToolCalls", () => {
+  it("describes an accepted merge request without claiming it merged", () => {
+    expect(
+      summarizeGoatToolCalls("write-pr", [completed({ auto: true }, { status: "accepted" })]),
+    ).toEqual({ label: "Accepted 1 pull request change", failedCount: 0 });
+  });
   it("says GOAT Bot moved only when the claim won", () => {
     const claim = (claimed: boolean) =>
       completed({}, { claimed, home: { environmentId: "env", claimedAt: 1, claimId: "c" } });

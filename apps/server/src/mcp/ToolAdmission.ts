@@ -215,7 +215,7 @@ const reservationRefusal = (
           reason,
           mayHaveStarted: true,
           reconcile,
-          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)}${where} to see whether it happened. Only if it did not, call again with a new clientRequestId.`,
+          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)}${where} to see whether it happened. ${entry.keyRequired ? "Absence from truncated activity is not proof it was not posted. Never resend with a new key; do not treat a partial review as complete. Tell the user if the outcome cannot be confirmed." : "Only if it did not, call again with a new clientRequestId."}`,
         }),
       );
     case "storage_failed":
@@ -603,7 +603,17 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
     // Handlers never see the key, so a routed call never forwards it to an older remote.
     const { clientRequestId, ...args } = payload as Readonly<Record<string, unknown>>;
     // The advertised JSON codec offers null for an omitted optional key.
-    if (clientRequestId === undefined || clientRequestId === null) return unkeyed(handle(args));
+    if (clientRequestId === undefined || clientRequestId === null)
+      return entry.keyRequired
+        ? Effect.succeed<Outcome>(
+            refusalResult(
+              new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: `clientRequestId is required for ${tool}, so it did not run.`,
+              }),
+            ),
+          )
+        : unkeyed(handle(args));
     return decodeKey(clientRequestId).pipe(
       Effect.matchEffect({
         onFailure: () =>

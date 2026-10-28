@@ -75,6 +75,7 @@ export type GoatMcpToolSummaryAction =
   | "attachment-discard"
   | "attachment-send"
   | "link-pr"
+  | "write-pr"
   | "unlink-pr"
   | "list-prs"
   | "watch-pr"

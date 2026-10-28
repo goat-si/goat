@@ -131,8 +131,14 @@ it.effect("preserves nullable input paths across the entire registered catalog",
       const advertised = server.tools.find(({ tool }) => tool.name === listedToolName(entry));
       expect(advertised, entry.path).toBeDefined();
       const retained = nullablePaths(advertised!.tool.inputSchema);
+      // A path that requires a key advertises it non-null on purpose; ToolAdmission refuses null.
+      const requiredKey = "keyRequired" in entry && entry.keyRequired === true;
       for (const nullable of nullablePaths(Tool.getJsonSchema(original!)))
-        if (!retained.has(nullable)) lost.push({ path: entry.path, nullable });
+        if (
+          !retained.has(nullable) &&
+          !(requiredKey && nullable === "$.properties.clientRequestId")
+        )
+          lost.push({ path: entry.path, nullable });
     }
     expect(lost).toEqual([]);
   }).pipe(Effect.provide(registered)),

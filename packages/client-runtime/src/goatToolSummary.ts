@@ -464,6 +464,9 @@ export function summarizeGoatToolCalls(
     case "link-pr":
       label = phrase("Linked", "link", quantity(selected.length, "pull request"));
       break;
+    case "write-pr":
+      label = phrase("Accepted", "request", quantity(selected.length, "pull request change"));
+      break;
     case "unlink-pr":
       label = phrase("Unlinked", "unlink", quantity(selected.length, "pull request"));
       break;
