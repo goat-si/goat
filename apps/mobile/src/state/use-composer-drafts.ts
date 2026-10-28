@@ -1650,8 +1650,7 @@ export async function mergeComposerDraftContent(
   options?: { readonly onMerge: (before: ComposerDraft, merged: ComposerDraft) => void },
 ): Promise<{ readonly skippedAttachmentCount: number }> {
   ensureComposerDraftsLoaded();
-  // Once loaded, merge in the caller's tick so a draft moved here is never in neither place.
-  if (loadPromise !== null && !appAtomRegistry.get(composerDraftsLoadedAtom)) {
+  if (loadPromise !== null) {
     await loadPromise;
   }
   if (persistTimer !== null) {
