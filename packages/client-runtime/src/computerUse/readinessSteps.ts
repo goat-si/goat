@@ -139,8 +139,14 @@ const windowsCaptureUnchecked = (machine: string) =>
   `Not checked yet. Turning computer use on in the GOAT desktop app on ${machine} restarts the helper and proves a real window capture.`;
 // A Mac's helper proves capture only through a check, and loses that proof whenever GOAT, its
 // helper or the Mac restarts, updates or wakes, so pending there means unproven, not consent.
+// The desktop runs that check itself before the next agent start, so no one has to.
 const macCaptureUnchecked = (machine: string) =>
-  `Not checked since GOAT, its helper or this Mac last restarted, updated or woke. Run the check in the GOAT desktop app's computer use settings on ${machine} to prove a real window capture.`;
+  `Rechecks automatically. GOAT, its helper or this Mac restarted, updated or woke since the last proof, so GOAT proves a real window capture again by itself before an agent next uses computer use on ${machine}.`;
+const MAC_HELPER_UNCONFIRMED = {
+  state: "pending",
+  detail:
+    "Rechecks automatically. GOAT confirms its helper by itself before an agent next uses it.",
+} as const;
 const TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {
@@ -251,7 +257,15 @@ export function computerUseReadinessSteps({
     ...blockerRemedies[id],
     ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
   }));
-  const helper = readiness ? helperCopy[readiness.helper] : unavailable;
+  const macGrantsOn =
+    platform === "darwin" &&
+    readiness?.grants.accessibility === "granted" &&
+    readiness.grants.screenCapture === "granted";
+  const helper = !readiness
+    ? unavailable
+    : macGrantsOn && readiness.helper === "unauthenticated"
+      ? MAC_HELPER_UNCONFIRMED
+      : helperCopy[readiness.helper];
   // Capture, the tree and input are read through a confirmed helper; before that, or while it
   // does not answer (#1514), they are unchecked, not unsupported.
   const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
@@ -276,7 +290,7 @@ export function computerUseReadinessSteps({
               : captureCopy[readiness.capture],
         unconfirmed && readiness.tree === "unavailable"
           ? ({
-              state: "unknown",
+              state: macGrantsOn ? "pending" : "unknown",
               detail: "The accessibility tree is read once the helper is confirmed.",
             } as const)
           : desktopUnchecked && readiness.tree === "unavailable"
@@ -294,7 +308,7 @@ export function computerUseReadinessSteps({
               : treeCopy[readiness.tree],
         unconfirmed && readiness.input === "unavailable"
           ? ({
-              state: "unknown",
+              state: macGrantsOn ? "pending" : "unknown",
               detail: "Input is checked once the helper is confirmed.",
             } as const)
           : inputCopy[readiness.input],
