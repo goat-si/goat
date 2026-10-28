@@ -5,6 +5,7 @@ import type {
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import { movesPointer } from "./computerUseTarget.ts";
 
 const READS = new Set([
@@ -170,7 +171,7 @@ export const makeCallReservations = () => {
         const sameApp =
           call.app !== undefined &&
           ticket.call.app !== undefined &&
-          call.app.toLowerCase() === ticket.call.app.toLowerCase();
+          cuaAppKey(call.app) === cuaAppKey(ticket.call.app);
         if (ticket.resource.pid !== resource.pid && !sameApp) continue;
         // Marked per call, never per control: a later call of a reused control starts unmarked.
         if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
@@ -183,7 +184,7 @@ export const makeCallReservations = () => {
       }
       return undefined;
     },
-    /** The control's proxy went away: the calls it has out now may only be stopping. */
+    /** The control stopped, idled, was replaced or lost its proxy: its calls out are stopping. */
     markStopped(threadId: ThreadId, controlId: string, now: number) {
       for (const ticket of tickets.values())
         if (ticket.threadId === threadId && ticket.call.controlId === controlId)

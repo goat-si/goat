@@ -456,6 +456,12 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           className={cn("size-2 shrink-0 rounded-full", tone.dot)}
         />
       </div>
+      {session.handoffReason ? (
+        // What the agent asked the person to do, until they hand the screen back.
+        <p className="line-clamp-2 px-1.5 pb-1.5 text-muted-foreground text-xs">
+          {session.handoffReason}
+        </p>
+      ) : null}
       <div
         className={cn(
           "relative aspect-[16/10] overflow-hidden rounded-xl bg-muted ring-1 ring-inset",

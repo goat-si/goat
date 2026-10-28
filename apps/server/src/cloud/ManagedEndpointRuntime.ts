@@ -148,16 +148,6 @@ export function isRejectedRelayClientTunnelOutput(line: string): boolean {
   );
 }
 
-export function isRetryableManagedEndpointRuntimeStatus(status: unknown): boolean {
-  if (typeof status !== "object" || status === null || !("status" in status)) {
-    return false;
-  }
-  if (status.status !== "failed" || !("failure" in status)) {
-    return false;
-  }
-  return status.failure === "not-installed" || status.failure === "spawn-failed";
-}
-
 function runtimeConfigKey(config: RelayManagedEndpointRuntimeConfig): string {
   return JSON.stringify({
     providerKind: config.providerKind,
@@ -465,7 +455,7 @@ export const make = Effect.gen(function* () {
         tunnelId: connector.config.tunnelId,
         tunnelName: connector.config.tunnelName,
       });
-      yield* connector.child.kill().pipe(Effect.ignore);
+      yield* connector.child.kill({ forceKillAfter: "2 seconds" }).pipe(Effect.ignore);
     }
   });
 

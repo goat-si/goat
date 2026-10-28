@@ -9,7 +9,6 @@ import {
   bigint,
   check,
   timestamp,
-  uuid,
   boolean,
   index,
   integer,
@@ -18,6 +17,7 @@ import {
   primaryKey,
   text,
   uniqueIndex,
+  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -84,6 +84,7 @@ export const relayEnvironmentLinks = pgTable(
     accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    connectAuthPolicyVersion: integer("connect_auth_policy_version"),
     environmentLabel: text("environment_label").notNull().default("GOAT Environment"),
     environmentPublicKey: text("environment_public_key").notNull(),
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
@@ -268,3 +269,32 @@ export const relayDpopProofs = pgTable(
 );
 
 export * from "./accountSchema.ts";
+
+export const relayClientKeys = pgTable(
+  "relay_client_keys",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    clientId: varchar("client_id", { length: 64 }).notNull(),
+    thumbprint: varchar("thumbprint", { length: 191 }).notNull(),
+    admittedAt: integer("admitted_at").notNull(),
+    admissionId: varchar("admission_id", { length: 64 }),
+    policyVersion: integer("policy_version").notNull(),
+    authGeneration: integer("auth_generation").notNull(),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.clientId, table.thumbprint] })],
+);
+
+export const relayConnectLinkReservations = pgTable(
+  "relay_connect_link_reservations",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    challengeId: varchar("challenge_id", { length: 255 }).notNull(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    proof: text("proof").notNull(),
+    attemptId: varchar("attempt_id", { length: 64 }),
+    status: varchar("status", { length: 32 }).notNull(),
+    outcome: text("outcome"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.challengeId] })],
+);

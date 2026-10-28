@@ -166,6 +166,7 @@ export async function run(input: {
         registerLiveActivity: unused,
         getAgentActivitySnapshot: unused,
         resetTokenCache: Effect.void,
+        requestKeyReadmission: () => Effect.void,
       }),
       Layer.succeed(Capabilities.SshEnvironmentGateway, {
         prepare: (request) =>

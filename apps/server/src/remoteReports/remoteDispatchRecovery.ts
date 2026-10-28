@@ -10,6 +10,7 @@
  * @module remoteDispatchRecovery
  */
 import { RemoteResolveBindingResult } from "@goat/contracts";
+import { retryDelayMs } from "../retryJitter.ts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -113,7 +114,7 @@ export const resolveLostThreadLaunches = Effect.fn("remoteReports.resolveLostThr
       const id = row.correlation_id;
       if (Date.parse(row.updated_at) > nowMs - LOST_RESOLVE_AFTER_MS) continue;
       if ((input.retryAt.get(id) ?? 0) > nowMs) continue;
-      input.retryAt.set(id, nowMs + LOST_RESOLVE_RETRY_MS);
+      input.retryAt.set(id, nowMs + (yield* retryDelayMs(LOST_RESOLVE_RETRY_MS)));
       yield* resolveLostThreadLaunch(row).pipe(
         Effect.tap((outcome) => {
           if (outcome._tag !== "pending") input.retryAt.delete(id);

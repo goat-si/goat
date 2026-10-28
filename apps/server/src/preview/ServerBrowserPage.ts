@@ -22,6 +22,7 @@ import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwrigh
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
 import { maskSnapshotRecords } from "./pageSecrets.ts";
+import { playwrightQuoted } from "./secretForms.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
@@ -53,7 +54,7 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.reason,
+      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -452,12 +453,7 @@ const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
-      // Playwright writes control characters like JSON does, with \xNN for the unnamed ones.
-      const quoted = value.replace(/[\\"\p{Cc}]/gu, (char) =>
-        '\\"\b\f\n\r\t'.includes(char)
-          ? JSON.stringify(char).slice(1, -1)
-          : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-      );
+      const quoted = playwrightQuoted(value);
       const forms = [value, json, quoted].flatMap((form) => [form, form.replaceAll("'", "''")]);
       return [...new Set(forms)].map((form) => ({ form, word: value.length < 4 }));
     })
@@ -633,6 +629,8 @@ type SnapshotInput = {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** The tab's filled-secret mask, run before the text limits cut a value into a start. */
+  readonly diagnostics?: { readonly mask: (text: string, limit?: number) => string };
   /** What remains of the request's deadline, the one its timeout error names. */
   readonly timeoutMs: number;
 };
@@ -725,12 +723,14 @@ const capture = async (
   }
   const [page, layersLine, screenshot, cookies] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
-  const mask = maskSecrets(dotted, cookies);
+  const filled = input.diagnostics?.mask ?? ((text: string) => text);
+  const secrets = maskSecrets(dotted, cookies);
+  const mask = (text: string, limit?: number) => filled(secrets(text), limit).slice(0, limit);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
   const { accessibilityTree, ...treeFields } = screenTree(
-    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
+    `${mask(layersLine)}\n${filled(maskTree(redacted, dotted, cookies), MAX_VISIBLE_TEXT_LENGTH)}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
   return {
@@ -738,7 +738,7 @@ const capture = async (
     url: mask(page.url),
     title: mask(page.title),
     // Mask text before truncating so a value crossing the cut cannot leak its prefix.
-    visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
+    visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
     accessibilityTree,
     ...treeFields,
     ...maskSnapshotRecords(mask, input),

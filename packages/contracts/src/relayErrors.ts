@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import { DpopFailureReason, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ConnectAuthenticationErrors } from "./connectAssurance.ts";
 
 export const RelayRateLimitOperation = Schema.Literals([
   "link_challenge",
@@ -395,6 +396,7 @@ export class RelayInternalError extends Schema.TaggedError<RelayInternalError>()
 
 export const RelayProtectedError = Schema.Union([
   ...RelayAccountPolicyErrors,
+  ...ConnectAuthenticationErrors,
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,

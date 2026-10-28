@@ -148,9 +148,12 @@ export class ServerBrowserDiagnostics {
   private sequence = 0;
   private disposed = false;
   private readonly page: Page;
+  /** Masks filled secrets before a limit cuts one into a start that no longer matches it. */
+  readonly mask: (text: string, limit?: number) => string;
 
-  constructor(page: Page) {
+  constructor(page: Page, mask: (text: string, limit?: number) => string = (text) => text) {
     this.page = page;
+    this.mask = mask;
     page.on("console", this.onConsole);
     page.on("pageerror", this.onError);
     page.on("request", this.onRequest);
@@ -159,6 +162,12 @@ export class ServerBrowserDiagnostics {
     page.on("requestfinished", this.onFinished);
     page.on("close", this.dispose);
     page.on("crash", this.dispose);
+  }
+
+  /** A failure's first line, cut only after masking, so a filled value spanning lines stays hidden. */
+  firstLine(cause: unknown) {
+    const text = cause instanceof Error ? cause.message : String(cause);
+    return this.mask(text, INPUT_LIMIT).split("\n")[0] ?? "";
   }
 
   private push<A>(stream: keyof typeof this.dropped, entries: A[], entry: A) {
@@ -173,15 +182,17 @@ export class ServerBrowserDiagnostics {
   private readonly onConsole = (message: ConsoleMessage) => {
     this.push("console", this.consoleEntries, {
       level: message.type().slice(0, 32),
-      text: redactText(consoleText(message), TEXT_LIMIT),
+      text: redactText(this.mask(consoleText(message), INPUT_LIMIT), TEXT_LIMIT),
       timestamp: new Date().toISOString(),
     });
   };
 
   private readonly onError = (error: Error) => {
     this.push("errors", this.errors, {
-      message: redactText(error.message, TEXT_LIMIT),
-      ...(error.stack === undefined ? {} : { stack: redactText(error.stack, STACK_LIMIT) }),
+      message: redactText(this.mask(error.message, INPUT_LIMIT), TEXT_LIMIT),
+      ...(error.stack === undefined
+        ? {}
+        : { stack: redactText(this.mask(error.stack, INPUT_LIMIT), STACK_LIMIT) }),
       timestamp: new Date().toISOString(),
     });
   };
@@ -206,12 +217,17 @@ export class ServerBrowserDiagnostics {
     const entry: PreviewAutomationNetworkEntry = {
       requestId: tracked.id,
       phase,
-      url: redactUrl(url),
-      method: request.method().slice(0, 32),
+      url: redactUrl(this.mask(url, INPUT_LIMIT)),
+      method: this.mask(request.method(), 32).slice(0, 32),
       status: status ?? previous?.status ?? null,
       failed: phase === "failed",
       ...(phase === "failed"
-        ? { errorText: redactText(request.failure()?.errorText ?? "", TEXT_LIMIT) }
+        ? {
+            errorText: redactText(
+              this.mask(request.failure()?.errorText ?? "", INPUT_LIMIT),
+              TEXT_LIMIT,
+            ),
+          }
         : {}),
       ...(tracked.startedAt === undefined
         ? {}

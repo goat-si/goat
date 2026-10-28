@@ -239,11 +239,7 @@ import {
   pickWorkspaceBasenameMatch,
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "@goat/client-runtime/workspace-basename-lookup";
-import {
-  useLiveThreadLinkLabels,
-  useQuietThreadShell,
-  useThreadChipIcons,
-} from "../../state/entities";
+import { useLiveThreadLinkLabels, useThreadChipIcons } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -265,6 +261,11 @@ import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
 import { useFileChipShare } from "./useFileChipShare";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
+import {
+  AgentMessageFoldHeader,
+  AgentMessageSentByLabel,
+  OpenSenderThreadButton,
+} from "./AgentMessageFold";
 import {
   MarkdownImageAvailableWidthContext,
   ThreadMarkdownImage,
@@ -1042,78 +1043,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
 }
 
 /** Messages from other agents fold to one line so the user's own messages stay easy to find. */
-function AgentMessageFoldHeader(props: {
-  readonly environmentId: EnvironmentId;
-  readonly senderThreadId?: ThreadId;
-  readonly summary: string;
-  readonly expanded: boolean;
-  readonly onToggle: () => void;
-  readonly iconSubtleColor: ColorValue;
-}) {
-  const senderShell = useQuietThreadShell(
-    props.senderThreadId ? scopeThreadRef(props.environmentId, props.senderThreadId) : null,
-  );
-  const label = senderShell?.title.trim() || "Agent";
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${label}: ${props.summary}`}
-      accessibilityHint={`Double tap to ${props.expanded ? "hide" : "show"} the message.`}
-      accessibilityState={{ expanded: props.expanded }}
-      hitSlop={4}
-      className="min-h-10 flex-row items-center gap-1.5 px-3.5 py-2"
-      onPress={() => {
-        void Haptics.selectionAsync();
-        props.onToggle();
-      }}
-    >
-      <SymbolView
-        name="bubble.left.and.bubble.right"
-        size={14}
-        weight="medium"
-        tintColorClassName="accent-user-bubble-foreground-muted"
-        type="monochrome"
-      />
-      <Text
-        numberOfLines={1}
-        className="max-w-[50%] shrink-0 font-goat-medium text-sm text-user-bubble-foreground-muted"
-      >
-        {label}
-      </Text>
-      <Text numberOfLines={1} className="min-w-0 shrink text-sm text-user-bubble-foreground">
-        {props.summary}
-      </Text>
-      <ThreadDisclosureChevron
-        expanded={props.expanded}
-        collapsedDirection="down"
-        size={11}
-        tintColor={props.iconSubtleColor}
-      />
-    </Pressable>
-  );
-}
-
-function OpenSenderThreadButton(props: {
-  readonly environmentId: EnvironmentId;
-  readonly senderThreadId: ThreadId;
-}) {
-  const openLinkedThread = useOpenLinkedThread();
-  return (
-    <Pressable
-      accessibilityRole="link"
-      hitSlop={6}
-      onPress={() =>
-        openLinkedThread({
-          environmentId: String(props.environmentId),
-          threadId: String(props.senderThreadId),
-        })
-      }
-    >
-      <Text className="font-goat-medium text-xs text-foreground-secondary">Open thread</Text>
-    </Pressable>
-  );
-}
-
 /** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
 function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
   const [open, setOpen] = useState(false);
@@ -1571,7 +1500,9 @@ function renderFeedEntry(
       const foldRowId = presentation.attribution === "agent" ? `agent:${message.id}` : null;
       const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
-      const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
+      // A message from another thread names its sender; how it arrived adds nothing.
+      const intentBadge =
+        foldRowId === null ? resolveUserMessageIntentBadge(message.inputIntent) : null;
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -1590,6 +1521,13 @@ function renderFeedEntry(
           className="mb-5 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
+          {foldRowId !== null ? (
+            <AgentMessageSentByLabel
+              environmentId={props.environmentId}
+              senderThreadId={message.senderThreadId}
+              remoteSender={message.context?.remoteSender}
+            />
+          ) : null}
           {presentation.attribution === "t3code" ? (
             <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60">
               Sent by GOAT
@@ -1615,8 +1553,6 @@ function renderFeedEntry(
             {presentation.attribution === "guest" ? <GuestBubbleTint /> : null}
             {foldRowId !== null ? (
               <AgentMessageFoldHeader
-                environmentId={props.environmentId}
-                senderThreadId={message.senderThreadId}
                 summary={
                   replaceComposerContextReferences(presentation.text, (ref) => ref.label)
                     .split(/\r?\n/)
@@ -1720,10 +1656,11 @@ function renderFeedEntry(
           </View>
           {bubbleBodyVisible ? (
             <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-              {foldRowId !== null && message.senderThreadId ? (
+              {foldRowId !== null ? (
                 <OpenSenderThreadButton
                   environmentId={props.environmentId}
                   senderThreadId={message.senderThreadId}
+                  remoteSender={message.context?.remoteSender}
                 />
               ) : null}
               {intentBadge ? (

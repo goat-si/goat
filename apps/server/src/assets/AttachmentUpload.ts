@@ -24,7 +24,6 @@ import {
   createPendingAttachmentId,
   parseThreadSegmentFromAttachmentId,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
-  sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import {
@@ -38,11 +37,12 @@ import * as ServerConfig from "../config.ts";
 import { inferImageExtension } from "../imageMime.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 
+import * as PendingAttachmentSweep from "./PendingAttachmentSweep.ts";
+import * as AttachmentFileLeases from "./AttachmentFileLeases.ts";
+
 export const ATTACHMENT_UPLOAD_ROUTE_PREFIX = "/api/attachments/upload";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
-const PENDING_ATTACHMENT_SWEEP_INTERVAL_MS = 15 * 60_000;
-const lastPendingSweepByDirectory = new Map<string, number>();
 
 const AttachmentUploadClaims = Schema.Struct({
   version: Schema.Literal(1),
@@ -81,22 +81,8 @@ export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(f
   const secret = yield* loadSigningSecret.pipe(
     Effect.mapError((cause) => new AttachmentUploadSigningKeyError({ cause })),
   );
-  const config = yield* ServerConfig.ServerConfig;
   const nowMs = yield* Clock.currentTimeMillis;
-  const previousSweep = lastPendingSweepByDirectory.get(config.attachmentsDir);
-  if (
-    previousSweep === undefined ||
-    nowMs - previousSweep >= PENDING_ATTACHMENT_SWEEP_INTERVAL_MS
-  ) {
-    lastPendingSweepByDirectory.set(config.attachmentsDir, nowMs);
-    const swept = sweepStalePendingAttachments({
-      attachmentsDir: config.attachmentsDir,
-      nowMs,
-    });
-    if (swept.deleted > 0) {
-      yield* Effect.logInfo("Removed expired attachment uploads.", { deleted: swept.deleted });
-    }
-  }
+  yield* (yield* PendingAttachmentSweep.PendingAttachmentSweep).request;
 
   const attachmentType = input.type ?? "image";
   const name =
@@ -188,90 +174,101 @@ export const storeAttachmentUpload = Effect.fn("AttachmentUpload.store")(functio
     return { ok: false, status: 500, detail: "Failed to resolve attachment path." };
   }
 
+  const leases = yield* AttachmentFileLeases.AttachmentFileLeases;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   let receivedBytes = 0;
   const bodyStream = body instanceof Uint8Array ? Stream.make(body) : body;
-  return yield* Effect.gen(function* () {
-    yield* fileSystem.makeDirectory(path.dirname(finalPath), { recursive: true });
-    yield* Stream.run(
-      bodyStream.pipe(
-        Stream.takeWhile((chunk) => {
-          receivedBytes += chunk.byteLength;
-          return receivedBytes <= claims.sizeBytes;
+  return yield* leases.withAttachment(
+    claims.attachmentId,
+    Effect.gen(function* () {
+      yield* fileSystem.makeDirectory(path.dirname(finalPath), { recursive: true });
+      yield* Stream.run(
+        bodyStream.pipe(
+          Stream.takeWhile((chunk) => {
+            receivedBytes += chunk.byteLength;
+            return receivedBytes <= claims.sizeBytes;
+          }),
+        ),
+        fileSystem.sink(partPath),
+      );
+      if (receivedBytes !== claims.sizeBytes) {
+        return {
+          ok: false,
+          status: 400,
+          detail: `Body was ${receivedBytes} bytes, expected ${claims.sizeBytes}.`,
+        } satisfies StoreAttachmentUploadResult;
+      }
+      // Publishing without replacement keeps an upload and its cached text immutable.
+      const published = yield* fileSystem.link(partPath, finalPath).pipe(
+        Effect.map(() => true),
+        Effect.catch((error) => {
+          if (error.reason._tag === "AlreadyExists") return Effect.succeed(false);
+          return Effect.tryPromise({
+            try: () => NodeFSP.copyFile(partPath, finalPath, NodeFSP.constants.COPYFILE_EXCL),
+            catch: (cause) =>
+              PlatformError.systemError({
+                _tag:
+                  cause instanceof Error && "code" in cause && cause.code === "EEXIST"
+                    ? "AlreadyExists"
+                    : "Unknown",
+                module: "FileSystem",
+                method: "copyFile",
+                pathOrDescriptor: finalPath,
+                cause,
+              }),
+          }).pipe(
+            Effect.as(true),
+            Effect.catchIf(
+              (error) => error.reason._tag === "AlreadyExists",
+              () => Effect.succeed(false),
+            ),
+          );
         }),
-      ),
-      fileSystem.sink(partPath),
-    );
-    if (receivedBytes !== claims.sizeBytes) {
-      return {
-        ok: false,
-        status: 400,
-        detail: `Body was ${receivedBytes} bytes, expected ${claims.sizeBytes}.`,
-      } satisfies StoreAttachmentUploadResult;
-    }
-    // Publishing without replacement keeps an upload and its cached text immutable.
-    const published = yield* fileSystem.link(partPath, finalPath).pipe(
-      Effect.map(() => true),
-      Effect.catch((error) => {
-        if (error.reason._tag === "AlreadyExists") return Effect.succeed(false);
-        return Effect.tryPromise({
-          try: () => NodeFSP.copyFile(partPath, finalPath, NodeFSP.constants.COPYFILE_EXCL),
-          catch: (cause) =>
-            PlatformError.systemError({
-              _tag:
-                cause instanceof Error && "code" in cause && cause.code === "EEXIST"
-                  ? "AlreadyExists"
-                  : "Unknown",
-              module: "FileSystem",
-              method: "copyFile",
-              pathOrDescriptor: finalPath,
-              cause,
-            }),
-        }).pipe(
-          Effect.as(true),
-          Effect.catchIf(
-            (error) => error.reason._tag === "AlreadyExists",
-            () => Effect.succeed(false),
+        Effect.uninterruptible,
+      );
+      if (!published) {
+        if (
+          Number((yield* fileSystem.stat(finalPath).pipe(Effect.uninterruptible)).size) !==
+          receivedBytes
+        ) {
+          return { ok: false, status: 409, detail: "Attachment already uploaded." };
+        }
+        const hashes = yield* Effect.forEach([partPath, finalPath], (file) =>
+          fileSystem.stream(file).pipe(
+            Stream.runFold(
+              () => NodeCrypto.createHash("sha256"),
+              (hash, chunk) => hash.update(chunk),
+            ),
+            Effect.map((hash) => hash.digest("hex")),
           ),
         );
-      }),
-    );
-    if (!published) {
-      if (Number((yield* fileSystem.stat(finalPath)).size) !== receivedBytes) {
-        return { ok: false, status: 409, detail: "Attachment already uploaded." };
+        if (hashes[0] !== hashes[1]) {
+          return { ok: false, status: 409, detail: "Attachment already uploaded." };
+        }
       }
-      const hashes = yield* Effect.forEach([partPath, finalPath], (file) =>
-        fileSystem.stream(file).pipe(
-          Stream.runFold(
-            () => NodeCrypto.createHash("sha256"),
-            (hash, chunk) => hash.update(chunk),
-          ),
-          Effect.map((hash) => hash.digest("hex")),
+      const documents = yield* DocumentText.DocumentText;
+      yield* documents.ensure(finalPath).pipe(Effect.uninterruptible);
+      return { ok: true } satisfies StoreAttachmentUploadResult;
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logError("Failed to persist attachment upload.", {
+          attachmentId: claims.attachmentId,
+          cause,
+        }).pipe(
+          Effect.as({
+            ok: false,
+            status: 500,
+            detail: "Failed to persist upload.",
+          } satisfies StoreAttachmentUploadResult),
         ),
-      );
-      if (hashes[0] !== hashes[1]) {
-        return { ok: false, status: 409, detail: "Attachment already uploaded." };
-      }
-    }
-    const documents = yield* DocumentText.DocumentText;
-    yield* documents.ensure(finalPath);
-    return { ok: true } satisfies StoreAttachmentUploadResult;
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logError("Failed to persist attachment upload.", {
-        attachmentId: claims.attachmentId,
-        cause,
-      }).pipe(
-        Effect.as({
-          ok: false,
-          status: 500,
-          detail: "Failed to persist upload.",
-        } satisfies StoreAttachmentUploadResult),
       ),
-    ),
-    Effect.ensuring(
-      fileSystem.remove(partPath, { force: true }).pipe(Effect.orElseSucceed(() => undefined)),
+      Effect.ensuring(
+        fileSystem.remove(partPath, { force: true }).pipe(
+          Effect.uninterruptible,
+          Effect.orElseSucceed(() => undefined),
+        ),
+      ),
     ),
   );
 });
@@ -286,15 +283,19 @@ export const discardPendingAttachment = Effect.fn("AttachmentUpload.discardPendi
 
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
+  const leases = yield* AttachmentFileLeases.AttachmentFileLeases;
   // No existence check first: it reads a lookup error as a missing file.
   // force ignores only a missing path, so every other failure is reported.
-  yield* Effect.forEach(
-    attachmentPathCandidatesById({ attachmentsDir: config.attachmentsDir, attachmentId }),
-    (candidate) =>
-      fileSystem
-        .remove(candidate, { force: true })
-        .pipe(Effect.andThen(fileSystem.remove(`${candidate}.txt`, { force: true }))),
-    { discard: true },
+  yield* leases.withAttachment(
+    attachmentId,
+    Effect.forEach(
+      attachmentPathCandidatesById({ attachmentsDir: config.attachmentsDir, attachmentId }),
+      (candidate) =>
+        fileSystem
+          .remove(candidate, { force: true })
+          .pipe(Effect.andThen(fileSystem.remove(`${candidate}.txt`, { force: true }))),
+      { discard: true },
+    ).pipe(Effect.uninterruptible),
   );
 });
 
@@ -302,7 +303,7 @@ export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending
   attachmentId: string,
 ) {
   // The client's delete has no failure to report, and the pending upload
-  // sweep removes a leftover file within a day.
+  // sweep can reclaim a leftover after expiry.
   yield* discardPendingAttachment(attachmentId).pipe(
     Effect.catch((cause) =>
       Effect.logWarning("Failed to delete pending attachment.", { attachmentId, cause }),

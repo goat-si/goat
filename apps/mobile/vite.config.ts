@@ -4,9 +4,16 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/files/useFileTreeEntries.test.tsx",
+  "src/lib/clock.test.ts",
+  "src/lib/useNotificationPermissionStatus.test.tsx",
+  "src/components/VideoPreviewModal.ios.test.tsx",
+  "src/widgets/useSubscriptionUsage.test.tsx",
+  "src/features/threads/use-visible-second-clock.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
   "src/features/goat-bot/GoatBotBubble.test.tsx",
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
@@ -20,9 +27,11 @@ const reactTests = [
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
   "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
+  "src/features/threads/AgentMessageFold.test.tsx",
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",
   "src/features/threads/ThreadHeader.memory.test.tsx",
+  "src/features/threads/thread-settings-sheet-state.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/lib/visible-animations.test.tsx",
 
@@ -114,7 +123,8 @@ export default defineConfig({
                   name: "metro",
                   bundler: "metro",
                   platform: "ios",
-                  isDev: false,
+                  // Permission tests vary Platform.OS; production inlining would erase that branch.
+                  isDev: normalizePath(id).endsWith("/lib/useNotificationPermissionStatus.ts"),
                   isServer: false,
                   isNodeModule: false,
                   supportsStaticESM: true,

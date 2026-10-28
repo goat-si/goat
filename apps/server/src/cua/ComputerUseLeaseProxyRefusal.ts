@@ -8,7 +8,14 @@ import * as Scheduler from "effect/Scheduler";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
-import { takesScreen, scopeVerdict, type ListedApp } from "./ComputerUseScope.ts";
+import {
+  appKey,
+  takesScreen,
+  scopeVerdict,
+  type ListedApp,
+  type ScopeVerdict,
+} from "./ComputerUseScope.ts";
+import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { type Envelope, replyPlacement } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import type { WindowPlacement, NamedWindow } from "./x11WindowPlacement.ts";
@@ -76,7 +83,8 @@ interface ProxyCallCheck {
   readonly idle: () => boolean;
   readonly apps: () => ReadonlySet<string> | undefined;
   readonly listed: ReadonlyMap<number, ListedApp>;
-  readonly bundleIds: boolean;
+  /** What this host can tell about an app: bundle ids (macOS), a pid's executable (Linux). */
+  readonly host: Pick<LeaseProxyOptions<never, never>, "bundleIds" | "executableOf">;
   readonly shared: () => boolean;
   /** Refuses arguments that would write a capture to a file. */
   readonly toFile: () => string | undefined;
@@ -97,16 +105,36 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       args: input.message.params?.arguments,
       apps: input.apps(),
       appOf: (pid) => input.listed.get(pid),
-      bundleIds: input.bundleIds,
+      bundleIds: input.host.bundleIds,
     });
+  // A pid allowed only by the binary it ran when last listed may run another one of the same name
+  // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
+  // only a listing taken for this call confirms it.
+  const confirmed = (verdict: ScopeVerdict, relisted: (pid: number) => boolean) => {
+    if (verdict._tag !== "allow" || verdict.byExecutable === undefined) return true;
+    const { pid, executable } = verdict.byExecutable;
+    const read = input.host.executableOf;
+    if (read === undefined) return relisted(pid);
+    const running = read(pid);
+    return running !== undefined && appKey(running) === appKey(executable);
+  };
   let verdict = judge();
   if (
-    verdict._tag === "resolve" &&
+    (verdict._tag === "resolve" || !confirmed(verdict, () => false)) &&
     input.finished() === undefined &&
     input.paused() === undefined
   ) {
+    const before = new Map(input.listed);
     yield* input.listApps;
     verdict = judge();
+    // A listing that left the pid's entry as it was did not see the pid again.
+    const relisted = (pid: number) => input.listed.get(pid) !== before.get(pid);
+    if (
+      verdict._tag === "allow" &&
+      verdict.byExecutable !== undefined &&
+      !confirmed(verdict, relisted)
+    )
+      verdict = { _tag: "resolve", pid: verdict.byExecutable.pid };
   }
   const finished = input.finished();
   const paused = input.paused();

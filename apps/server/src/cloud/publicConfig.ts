@@ -1,5 +1,9 @@
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import { connectLoopbackRedirectUri, CONNECT_OAUTH_SCOPES } from "@goat/shared/connectAuth";
+import {
+  connectLoopbackRedirectUri,
+  CONNECT_OAUTH_SCOPES,
+  normalizeConnectHostedOrigin,
+} from "@goat/shared/connectAuth";
 import { clerkFrontendApiUrlFromPublishableKey } from "@goat/shared/relayAuth";
 import { isRelayTracingEnabled } from "@goat/shared/otelEnvironment";
 import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
@@ -9,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
+declare const __GOAT_BUILD_HOSTED_APP_URL__: string | undefined;
 declare const __GOAT_BUILD_RELAY_URL__: string | undefined;
 declare const __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 declare const __GOAT_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: string | undefined;
@@ -105,26 +110,16 @@ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
 
 export const relayUrlConfig = makeRelayUrlConfig();
 
-// GOAT has no hosted web app; GOAT Connect sign-in needs one configured.
-export const hostedAppUrlConfig = makePublicValueConfig("GOAT_HOSTED_APP_URL", "").pipe(
-  Config.mapEffect(validateHostedAppUrl),
-);
+export const hostedAppUrlConfig = makePublicValueConfig(
+  "GOAT_HOSTED_APP_URL",
+  typeof __GOAT_BUILD_HOSTED_APP_URL__ === "undefined" ? "" : __GOAT_BUILD_HOSTED_APP_URL__,
+).pipe(Config.mapEffect(validateHostedAppUrl));
 
 function validateHostedAppUrl(value: string) {
   try {
-    const url = new URL(value);
-    const isLoopbackHttp =
-      url.protocol === "http:" &&
-      (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
-    if (
-      (url.protocol !== "https:" && !isLoopbackHttp) ||
-      url.pathname !== "/" ||
-      url.search !== "" ||
-      url.hash !== ""
-    ) {
-      throw new Error("invalid hosted app origin");
-    }
-    return Effect.succeed(url.origin);
+    const origin = normalizeConnectHostedOrigin(value);
+    if (!origin) throw new Error("invalid hosted app origin");
+    return Effect.succeed(origin);
   } catch {
     return Effect.fail(
       new Config.ConfigError(

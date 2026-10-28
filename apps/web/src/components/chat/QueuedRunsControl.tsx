@@ -74,6 +74,7 @@ export function QueuedRunsControl({
     Pick<ChatMessage, "id" | "inputIntent" | "text" | "attachments">
   >;
   readonly editingRunId: RunId | null;
+  readonly editBlockedReason: string | null;
   readonly onEditQueuedRun: (request: EditQueuedRunRequest) => void;
   readonly onCancelEdit: () => void;
 }) {
@@ -207,6 +208,7 @@ export function QueuedRunsControl({
         !latest ||
         latest.context?.guest !== undefined ||
         props.editingRunId !== null ||
+        props.editBlockedReason !== null ||
         busyRunId !== null
       ) {
         return false;
@@ -420,10 +422,17 @@ export function QueuedRunsControl({
                                 variant="ghost-muted"
                                 aria-label="Edit queued message"
                                 disabled={
-                                  item.runId === null || !item.editable || busyRunId !== null
+                                  item.runId === null ||
+                                  !item.editable ||
+                                  busyRunId !== null ||
+                                  props.editBlockedReason !== null
                                 }
                                 onClick={() => {
-                                  if (item.runId !== null && item.messageId !== null) {
+                                  if (
+                                    item.runId !== null &&
+                                    item.messageId !== null &&
+                                    props.editBlockedReason === null
+                                  ) {
                                     props.onEditQueuedRun({
                                       runId: item.runId,
                                       messageId: item.messageId,
@@ -438,7 +447,8 @@ export function QueuedRunsControl({
                             <PencilIcon />
                           </TooltipTrigger>
                           <TooltipPopup>
-                            {`Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
+                            {props.editBlockedReason ??
+                              `Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
                         <Tooltip>

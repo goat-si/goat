@@ -256,7 +256,6 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
-    readonly onAuthorityChange?: (listener: ServerBrowserScreen.AuthorityListener) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -265,8 +264,7 @@ export class ServerBrowser extends Context.Service<
       readonly tabId: string;
       readonly control: "stop" | "handBack";
     }) => Effect.Effect<boolean>;
-    readonly cursorState?: ServerBrowserScreen.CursorStateSink;
-  }
+  } & ServerBrowserScreen.SurfaceService
 >()("goat/preview/ServerBrowser") {}
 
 interface ViewerState {
@@ -701,7 +699,7 @@ const make = Effect.gen(function* () {
       ServerBrowserPage.invalidateRefs(page),
     );
     control.onDispatchCut(inputFence(cdp));
-    const diagnostics = new ServerBrowserDiagnostics(page);
+    const diagnostics = new ServerBrowserDiagnostics(page, secretFill.maskText(snapshot.threadId));
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
       tabId: snapshot.tabId,
@@ -1227,6 +1225,7 @@ const make = Effect.gen(function* () {
         tab.control.agentId !== null &&
         tab.desktop === null &&
         tab.viewers.size === 0 &&
+        tab.control.handoffReason === null &&
         tab.usedAt < cutoff
       )
         dropTab(tab, true);
@@ -1329,6 +1328,7 @@ const make = Effect.gen(function* () {
         owner: tabOwner(tab),
         ownedByCaller: tab.control.agentId === agentSessionId,
         generation: tab.control.generation,
+        ...(tab.control.handoffReason === null ? {} : { waitingForPerson: true as const }),
       },
       dialog: dialogStatus(tab),
       fileChooser: tab.fileChooser
@@ -1629,7 +1629,7 @@ const make = Effect.gen(function* () {
       (cause: unknown) => {
         event.status = "failed";
         event.completedAt = new Date().toISOString();
-        event.error = cause instanceof Error ? cause.message.split("\n")[0] : String(cause);
+        event.error = tab.diagnostics.firstLine(cause);
         throw cause;
       },
     );

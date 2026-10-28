@@ -41,8 +41,19 @@ export function buildConnectCliClerkAuthorizeUrl(request: ConnectAuthorizeReques
 
 /** Force a new document: fragment revisits do not reload, and Clerk suppresses post-sign-in session updates. */
 export function connectCliSignInRedirectUrl(
-  request: ConnectAuthorizeRequest,
+  _request: ConnectAuthorizeRequest,
   currentHref: string,
 ): string {
-  return buildConnectCliClerkAuthorizeUrl(request) ?? currentHref;
+  const url = new URL(currentHref);
+  url.searchParams.set(
+    "connect-sign-in",
+    url.searchParams.get("connect-sign-in") === "1" ? "2" : "1",
+  );
+  return url.toString();
+}
+
+export function navigateConnectCliToOAuth(request: ConnectAuthorizeRequest): void {
+  const url = buildConnectCliClerkAuthorizeUrl(request);
+  if (!url) throw new Error("CLI authorization is not configured.");
+  window.location.assign(url);
 }

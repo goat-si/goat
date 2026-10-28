@@ -35,6 +35,13 @@ const isConnectCopySurface = (path: string): boolean =>
 // and attribution before a chase merges the renamed upstream tree.
 export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "visible-fx-status",
+    category: "visible-copy",
+    find: /T3 Code(?= settings\.)/g,
+    replace: "GOAT",
+    scope: (path) => path === "packages/provider-fx/src/server/status.ts",
+  },
+  {
     id: "visible-agent-answer-delivery-error",
     category: "visible-copy",
     find: /T3 Code(?= could not confirm)/g,

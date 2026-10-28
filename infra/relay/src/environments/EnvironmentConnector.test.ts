@@ -97,6 +97,7 @@ function signMintResponse(
 ): RelayEnvironmentMintResponse {
   const requestProof = decodeRequestProof<RelayCloudMintCredentialProofPayload>(request.proof);
   const payload = {
+    connectAuthPolicyVersion: 1,
     iss: `goat-env:${requestProof.environmentId}`,
     aud: "https://relay.example.test",
     sub: requestProof.environmentId,
@@ -232,6 +233,7 @@ function makeLinks(
         },
         linkedAt: "2026-05-25T00:00:00.000Z",
         environmentPublicKey: environmentKeyPair.publicKey,
+        connectAuthPolicyVersion: 1,
         ...overrides,
       }),
     findActiveManagedForEnvironment: () => Effect.succeed([]),
@@ -635,10 +637,30 @@ describe("EnvironmentConnector", () => {
         environmentId: "env-connector-test",
         clientProofKeyThumbprint: "client-proof-key-thumbprint",
         deviceId: "device-123",
+        assurance: {
+          policyVersion: 1,
+          source: "clerk-session",
+          userId: "user_123",
+          sessionId: "session",
+          firstVerifiedAtFloor: 1,
+          secondVerifiedAtFloor: 2,
+          checkedAt: 3,
+          authGeneration: 1,
+        },
       });
 
       expect(seenUrls).toEqual(["https://env.example.test/api/goat-connect/mint-credential"]);
       expect(seenProofs[0]).toMatchObject({
+        assurance: {
+          policyVersion: 1,
+          source: "clerk-session",
+          userId: "user_123",
+          sessionId: "session",
+          firstVerifiedAtFloor: 1,
+          secondVerifiedAtFloor: 2,
+          checkedAt: 3,
+          authGeneration: 1,
+        },
         iss: "https://relay.example.test",
         aud: "goat-env:env-connector-test",
         sub: "user_123",

@@ -48,6 +48,7 @@ describe("goat-discipline delivery to the provider", () => {
           "codex",
           "claudeAgent",
           "cursor",
+          "fx",
           "grok",
           "antigravity",
           "acpRegistry",
@@ -65,11 +66,26 @@ describe("goat-discipline delivery to the provider", () => {
       }),
   );
 
-  it.effect("leaves a project that switched it off without the guidance", () =>
-    Effect.gen(function* () {
-      expect(blocks(yield* send("Plan $goat-discipline", { project: optedOut }))).toBe(0);
-      expect(blocks(yield* send("Plan $goat-discipline", { project: null }))).toBe(1);
-    }),
+  it.effect.each(["codex", "fx"])(
+    "leaves a project that switched it off without the guidance (%s)",
+    (driver) =>
+      Effect.gen(function* () {
+        expect(blocks(yield* send("Plan $goat-discipline", { driver, project: optedOut }))).toBe(0);
+        expect(blocks(yield* send("Plan $goat-discipline", { driver, project: null }))).toBe(1);
+        expect(
+          blocks(
+            yield* send("Plan $goat-discipline", {
+              driver,
+              settings: Option.some({
+                getSettings: Effect.succeed({
+                  ...settings,
+                  disabledBuiltInSkills: ["goat-discipline"],
+                }),
+              }),
+            }),
+          ),
+        ).toBe(0);
+      }),
   );
 
   it.effect(

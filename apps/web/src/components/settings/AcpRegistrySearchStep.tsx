@@ -23,7 +23,12 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
 import { ProviderDriverKind } from "@goat/contracts";
+import { providerClients } from "./providerDriverMeta";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+
+const FIRST_CLASS_REGISTRY_AGENT_IDS = new Set(
+  providerClients.definitions.flatMap((definition) => definition.acpRegistryAgentIds ?? []),
+);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
@@ -132,7 +137,8 @@ export function AcpRegistrySearchStep({
     }
   };
 
-  const results = search.data?.agents ?? null;
+  const results =
+    search.data?.agents.filter((agent) => !FIRST_CLASS_REGISTRY_AGENT_IDS.has(agent.id)) ?? null;
   const isInitialSearch = search.isPending && results === null;
   const isRefreshing = search.isPending && results !== null;
   const resultCount = results?.length ?? 0;

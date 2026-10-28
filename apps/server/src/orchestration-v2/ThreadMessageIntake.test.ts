@@ -26,6 +26,7 @@ import {
   createPendingAttachmentId,
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
+import * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -36,9 +37,8 @@ import {
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { dispatchCommand } from "./ThreadMessageIntake.ts";
 
-const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
-  prefix: "goat-question-intake-",
-}).pipe(
+const layerIntakeTest = AttachmentFileLeases.layer.pipe(
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-question-intake-" })),
   Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   Layer.provideMerge(ServerSettings.layerTest()),
 );

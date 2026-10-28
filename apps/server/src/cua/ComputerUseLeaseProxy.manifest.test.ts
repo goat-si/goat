@@ -331,6 +331,32 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
       }),
   );
 
+  it.effect("a window that shows the stall marker as text keeps its driver", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ manifestStamp: () => "v1" });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            content: [{ type: "text", text: "- [2] AXStaticText capture_backend_stalled" }],
+          },
+        }),
+      );
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+      const next = yield* Effect.raceFirst(
+        h.nextToDriver.pipe(Effect.map((sent) => sent.id)),
+        h.killed.pipe(Effect.as("killed")),
+      );
+      assert.equal(next, 2);
+      assert.equal(yield* h.startedQueued, 0);
+    }),
+  );
+
   it.effect("a driver whose screen capture stalled is replaced before the next call", () =>
     Effect.gen(function* () {
       const h = yield* harness({ manifestStamp: () => "v1" });
@@ -343,7 +369,13 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
           id: 1,
           result: {
             isError: true,
-            content: [{ type: "text", text: "capture_backend_stalled: restart the driver" }],
+            content: [
+              {
+                type: "text",
+                // The driver's message (cua-driver platform-macos capture.rs).
+                text: "capture_backend_stalled: 2 earlier native captures never completed, so native capture is off for this driver process; restart the driver",
+              },
+            ],
           },
         }),
       );

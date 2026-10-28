@@ -1,8 +1,6 @@
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   parseThreadSegmentFromAttachmentId,
@@ -10,10 +8,11 @@ import {
 } from "../attachmentStore.ts";
 import { ThreadHistoryArchive } from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { lstatOf, type FileIdentity } from "./fileState.ts";
+import { survivorMentions } from "./survivorMentions.ts";
 
 /** Files younger than this may belong to a deletion GOAT is still finishing. */
 const ATTACHMENT_MIN_AGE_MS = 24 * 60 * 60_000;
-/** Deleted threads checked per scan; each check reads the thread tables once. */
+/** Deleted thread groups considered in one survivor scan. */
 const THREADS_CHECKED_PER_SCAN = 40;
 /** Archived history read per scan; beyond it no deleted thread's files are offered. */
 const ARCHIVE_BYTES_READ_PER_SCAN = 512 * 1024 * 1024;
@@ -23,42 +22,6 @@ export interface AttachmentFile {
   readonly identity: FileIdentity;
   readonly size: number;
 }
-
-/**
- * Whether anything that survives still mentions a deleted thread: a thread forked from it or
- * handed its context, a message or tool result quoting one of its files, unfinished work or a
- * scheduled prompt. A thread's attachment ids start with its id, so any copy of one of its files'
- * ids mentions it too. Archived threads whose history moved out of the database still name their
- * source in their own record; their archived tool history is read separately. Null when the
- * tables cannot be read.
- */
-const mentionedBySurvivors = Effect.fn("storage.mentionedBySurvivors")(function* (needle: string) {
-  const sql = yield* SqlClient.SqlClient;
-  return yield* sql<{ readonly one: number }>`
-    SELECT 1 AS "one" WHERE
-      EXISTS (SELECT 1 FROM orchestration_v2_projection_threads
-        WHERE deleted_at IS NULL AND instr(payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_messages AS item
-        JOIN orchestration_v2_projection_threads AS thread ON thread.thread_id = item.thread_id
-        WHERE thread.deleted_at IS NULL AND instr(item.payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items AS item
-        JOIN orchestration_v2_projection_threads AS thread ON thread.thread_id = item.thread_id
-        WHERE thread.deleted_at IS NULL AND instr(item.payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_context_transfers
-        WHERE source_thread_id = ${needle} OR target_thread_id = ${needle}
-          OR instr(payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_context_handoffs
-        WHERE instr(payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM orchestration_v2_effect_outbox
-        WHERE status IN ('pending', 'running') AND instr(payload_json, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM mcp_app_model_context WHERE instr(text, ${needle}) > 0)
-      OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE instr(prompt, ${needle}) > 0)
-  `.pipe(
-    NodeSqliteClient.readOnly,
-    Effect.map((rows) => rows.length > 0),
-    Effect.orElseSucceed(() => null),
-  );
-});
 
 /**
  * Files deleted threads left in this server's attachments folder, split into those nothing
@@ -129,15 +92,25 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
               .flatMap(([segment]) => [...needlesOf(segment)]),
             ARCHIVE_BYTES_READ_PER_SCAN,
           );
+    const databaseMentions =
+      archived === null || largestFirst.length === 0
+        ? null
+        : yield* survivorMentions(
+            largestFirst
+              .slice(0, THREADS_CHECKED_PER_SCAN)
+              .flatMap(([segment]) => [...needlesOf(segment)]),
+          );
     const unmentioned: Array<ReadonlyArray<AttachmentFile>> = [];
     for (const [index, [segment, files]] of largestFirst.entries()) {
       let mentioned: boolean | null =
         index >= THREADS_CHECKED_PER_SCAN || archived === null
           ? null
           : [...needlesOf(segment)].some((needle) => archived.has(needle));
-      for (const needle of needlesOf(segment)) {
-        if (mentioned !== false) break;
-        mentioned = yield* mentionedBySurvivors(needle);
+      if (mentioned === false) {
+        mentioned =
+          databaseMentions === null
+            ? null
+            : [...needlesOf(segment)].some((needle) => databaseMentions.has(needle));
       }
       if (mentioned === false) unmentioned.push(files);
       else {

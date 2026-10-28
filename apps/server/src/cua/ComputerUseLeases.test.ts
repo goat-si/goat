@@ -357,6 +357,30 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
       }),
   );
+
+  it.effect(
+    "holds only the control whose agent asked a person, while others keep acting (#1218)",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.stopAll;
+        const mine = yield* leases.control(thread, Option.none());
+        const bots = yield* leases.control(other, Option.none());
+        yield* leases.hold(mine.controlId, true);
+        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+          _tag: "paused",
+          reason: "takeover",
+        });
+        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
+        // A person's own takeover and its hand back leave the request's hold in place.
+        yield* leases.pause("takeover");
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "paused");
+        yield* leases.hold(mine.controlId, false);
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
+      }),
+  );
 });
 
 it.effect(
@@ -619,26 +643,76 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
   }),
 );
 
+/** A standalone server's leases whose driver records each manifest refresh it is asked for. */
+const standaloneLeases = (
+  refreshed: Queue.Queue<ReadonlyArray<string>>,
+  watched: Queue.Queue<boolean>,
+) =>
+  ComputerUseLeases.layer.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        database,
+        NodeServices.layer,
+        Layer.effect(
+          CuaDriver.CuaDriver,
+          Effect.gen(function* () {
+            const service = yield* CuaDriver.make(
+              () => Effect.die("watching approvals must not start a driver"),
+              Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+            );
+            return CuaDriver.CuaDriver.of({
+              ...service,
+              refreshManifest: (apps) =>
+                Queue.offer(refreshed, apps).pipe(Effect.andThen(Effect.never)),
+            });
+          }),
+        ).pipe(Layer.provide(ServerSettings.layerTest())),
+        // A standalone server still assembles the desktop receiver, with no desktop on it.
+        Layer.mock(DesktopTelemetryReceiver.DesktopTelemetryReceiver)({
+          cuaReadiness: Effect.succeedNone,
+          cuaSafety: Stream.empty,
+          setCuaWatch: () => Effect.void,
+        }),
+        Layer.succeed(
+          LinuxHelperHost.LinuxHelperHost,
+          LinuxHelperHost.LinuxHelperHost.of({
+            readiness: Effect.succeedNone,
+            liveReadiness: Effect.succeedNone,
+            safety: Stream.empty,
+            setWatch: (active) => Queue.offer(watched, active).pipe(Effect.asVoid),
+          }),
+        ),
+      ),
+    ),
+  );
+
+it.effect(
+  "an app approved between turns reaches the standalone driver's manifest before the next turn",
+  () =>
+    Effect.gen(function* () {
+      const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
+      const watched = yield* Queue.unbounded<boolean>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        assert.isFalse(yield* Queue.take(watched));
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(watched));
+        assert.isTrue(yield* leases.turnEnded(thread));
+        assert.isFalse(yield* Queue.take(watched));
+        yield* grant(thread, "handoff:between-turns", ["editor"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+      }).pipe(Effect.provide(standaloneLeases(refreshed, watched)));
+    }),
+);
+
 it.effect(
   "refreshes a standalone driver for changed approvals without blocking the lease watcher",
   () =>
     Effect.gen(function* () {
       const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
       const watched = yield* Queue.unbounded<boolean>();
-      const driver = Layer.effect(
-        CuaDriver.CuaDriver,
-        Effect.gen(function* () {
-          const service = yield* CuaDriver.make(
-            () => Effect.die("watching approvals must not start a driver"),
-            Effect.succeed({ capability: "available", reason: "test", environment: [] }),
-          );
-          return CuaDriver.CuaDriver.of({
-            ...service,
-            refreshManifest: (apps) =>
-              Queue.offer(refreshed, apps).pipe(Effect.andThen(Effect.never)),
-          });
-        }),
-      ).pipe(Layer.provide(ServerSettings.layerTest()));
       yield* Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -657,33 +731,6 @@ it.effect(
         assert.deepEqual(yield* Queue.take(refreshed), ["browser", "editor"]);
         yield* leases.stop(thread);
         assert.deepEqual(yield* Queue.take(refreshed), []);
-      }).pipe(
-        Effect.provide(
-          ComputerUseLeases.layer.pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                database,
-                NodeServices.layer,
-                driver,
-                // A standalone server still assembles the desktop receiver, with no desktop on it.
-                Layer.mock(DesktopTelemetryReceiver.DesktopTelemetryReceiver)({
-                  cuaReadiness: Effect.succeedNone,
-                  cuaSafety: Stream.empty,
-                  setCuaWatch: () => Effect.void,
-                }),
-                Layer.succeed(
-                  LinuxHelperHost.LinuxHelperHost,
-                  LinuxHelperHost.LinuxHelperHost.of({
-                    readiness: Effect.succeedNone,
-                    liveReadiness: Effect.succeedNone,
-                    safety: Stream.empty,
-                    setWatch: (active) => Queue.offer(watched, active).pipe(Effect.asVoid),
-                  }),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
+      }).pipe(Effect.provide(standaloneLeases(refreshed, watched)));
     }),
 );

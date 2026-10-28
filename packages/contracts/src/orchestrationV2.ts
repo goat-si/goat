@@ -15,7 +15,14 @@ import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import { RuntimeRequestRespondCommand } from "./orchestrationV2RuntimeRequest.ts";
 export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import {
+  OrchestrationV2LimitRecovery,
+  OrchestrationV2LimitRecoveryUpdate,
+  OrchestrationV2LatestAnswerExcerpt,
+} from "./orchestrationV2ThreadFields.ts";
+export * from "./orchestrationV2ThreadFields.ts";
 
 import {
   CheckpointId,
@@ -84,7 +91,6 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
-  UserInputAttachments,
   UserInputAttachmentAnswerPayload,
   UserInputRespondedBy,
   RuntimeMode,
@@ -158,6 +164,8 @@ export const OrchestrationV2ThreadLauncher = Schema.Struct({
   via: Schema.optional(
     Schema.Literals(["thread_launch", "create_threads", "ssh_thread_launch", "delegate_task"]),
   ),
+  /** The launcher's run that launched it, recorded by this server at creation. */
+  runId: Schema.optional(RunId),
 });
 export type OrchestrationV2ThreadLauncher = typeof OrchestrationV2ThreadLauncher.Type;
 /** Model-facing question delivery seam, also usable by a remote reverse channel. */
@@ -435,30 +443,6 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
-export const OrchestrationV2LimitRecovery = Schema.Struct({
-  requestId: Schema.optional(CommandId),
-  runId: RunId,
-  resetAt: IsoDateTime,
-  autoResume: Schema.Boolean,
-  snooze: Schema.optional(Schema.Boolean),
-});
-export type OrchestrationV2LimitRecovery = typeof OrchestrationV2LimitRecovery.Type;
-
-export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
-  runId: RunId,
-  resetAt: IsoDateTime,
-  autoResume: Schema.optional(Schema.Boolean),
-  snooze: Schema.optional(Schema.Boolean),
-}).check(
-  Schema.makeFilter(
-    (update) =>
-      update.autoResume !== undefined ||
-      update.snooze !== undefined ||
-      "A recovery update must include autoResume or snooze.",
-  ),
-);
-export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
-
 /**
  * A side chat (`/side`) is a hidden thread that answers questions about its parent
  * without adding to the parent's history. Clients keep it out of thread lists and show it
@@ -516,6 +500,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  latestAnswerExcerpt: OrchestrationV2LatestAnswerExcerpt,
   /**
    * Where the thread's tool history lives when not in the database: `archived` restores when the
    * thread is opened, `deleted` is gone. Absent while the history is in the database.
@@ -1389,6 +1374,7 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
   senderThreadId: Schema.optional(ThreadId),
+  senderRunId: Schema.optional(RunId),
   /** Channel metadata on GOAT bot messages; absent on every other thread. */
   channel: ForwardCompatibleOptional(ChannelMessageMeta),
   idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
@@ -1705,6 +1691,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    senderRunId: Schema.optional(RunId),
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
@@ -2210,6 +2197,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  latestAnswerExcerpt: OrchestrationV2LatestAnswerExcerpt,
   /**
    * Where the thread's tool history lives when not in the database: `archived` restores when the
    * thread is opened, `deleted` is gone. Absent while the history is in the database.
@@ -2584,6 +2572,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    senderRunId: Schema.optional(RunId),
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
@@ -3322,6 +3311,8 @@ export const OrchestrationV2Command = Schema.Union([
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    /** The sender's executing run, recorded by the server; a value sent with the command is replaced. */
+    senderRunId: Schema.optional(RunId),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3461,17 +3452,7 @@ export const OrchestrationV2Command = Schema.Union([
     // Replaces all attachments; absent preserves them for older clients editing text.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
   }),
-  Schema.Struct({
-    type: Schema.Literal("runtime-request.respond"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: RuntimeRequestId,
-    decision: Schema.optional(ProviderApprovalDecision),
-    feedback: Schema.optional(Schema.String),
-    answers: Schema.optional(ProviderUserInputAnswers),
-    attachmentsByQuestionId: Schema.optional(UserInputAttachments),
-    respondedBy: Schema.optional(UserInputRespondedBy),
-  }),
+  RuntimeRequestRespondCommand,
   Schema.Struct({
     type: Schema.Literal("thread.user-input.dismiss"),
     commandId: CommandId,

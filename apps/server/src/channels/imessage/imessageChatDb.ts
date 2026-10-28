@@ -1,4 +1,5 @@
-import * as NodeSqlite from "node:sqlite";
+import * as Effect from "effect/Effect";
+import * as AuxiliarySqlite from "../../storage/AuxiliarySqlite.ts";
 
 export interface ImessageRow {
   readonly rowid: number;
@@ -23,22 +24,14 @@ export interface ImessageRow {
 }
 
 export interface ImessageChatDb {
-  readonly maxRowId: () => number;
-  readonly rowsAfter: (cursor: number, limit: number) => ReadonlyArray<ImessageRow>;
-  readonly rowById: (rowId: number) => ImessageRow | undefined;
-  readonly close: () => void;
+  readonly maxRowId: () => Effect.Effect<number, ImessageDbError>;
+  readonly rowsAfter: (
+    cursor: number,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<ImessageRow>, ImessageDbError>;
+  readonly rowById: (rowId: number) => Effect.Effect<ImessageRow | undefined, ImessageDbError>;
+  readonly close: () => Effect.Effect<void>;
 }
-
-const select = `SELECT m.ROWID AS rowid, m.guid, m.text, m.attributedBody, m.handle_id,
-  m.is_from_me, m.date, m.date_read, m.cache_roomnames, m.associated_message_type,
-  m.item_type, m.balloon_bundle_id, h.id AS sender_handle, h.service AS sender_service,
-  c.ROWID AS chat_rowid, c.guid AS chat_guid, c.chat_identifier, c.style,
-  (SELECT COUNT(*) FROM chat_message_join AS j WHERE j.message_id = m.ROWID) AS chat_join_count
-  FROM message AS m
-  LEFT JOIN handle AS h ON h.ROWID = m.handle_id
-  LEFT JOIN chat AS c ON c.ROWID = (
-    SELECT MIN(j.chat_id) FROM chat_message_join AS j WHERE j.message_id = m.ROWID
-  )`;
 
 export class ImessageDbError extends Error {
   readonly category: "database_unavailable" | "schema_unsupported" | "query_failed";
@@ -61,48 +54,22 @@ export function classifyImessageDbError(cause: unknown): ImessageDbError["catego
   return "query_failed";
 }
 
-export function openImessageChatDb(path: string): ImessageChatDb {
-  let db: NodeSqlite.DatabaseSync | undefined;
-  try {
-    db = new NodeSqlite.DatabaseSync(path, { readOnly: true });
-    db.prepare("SELECT MAX(ROWID) AS max FROM message").get();
-  } catch (cause) {
-    db?.close();
-    throw new ImessageDbError(classifyImessageDbError(cause));
-  }
-  const connection = db;
-  const query = <T>(run: () => T): T => {
-    try {
-      return run();
-    } catch (cause) {
-      throw new ImessageDbError(classifyImessageDbError(cause));
-    }
-  };
+export const openImessageChatDb = Effect.fn("ImessageChatDb.open")(function* (file: string) {
+  const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
+  const read = Effect.fn("ImessageChatDb.read")(function* (input: AuxiliarySqlite.AuxiliaryRead) {
+    return yield* reader
+      .read(input)
+      .pipe(Effect.mapError((cause) => new ImessageDbError(cause.category)));
+  });
+  yield* read({ kind: "imessage-max", file });
   return {
-    maxRowId: () =>
-      query(() =>
-        Number(
-          (
-            connection.prepare("SELECT MAX(ROWID) AS max FROM message").get() as {
-              max: number | null;
-            }
-          ).max ?? 0,
-        ),
+    maxRowId: () => read({ kind: "imessage-max", file }).pipe(Effect.map((result) => result.max)),
+    rowsAfter: (cursor: number, limit: number) =>
+      read({ kind: "imessage-rows", file, cursor, limit }).pipe(
+        Effect.map((result) => result.rows),
       ),
-    rowsAfter: (cursor, limit) =>
-      query(
-        () =>
-          connection
-            .prepare(select + " WHERE m.ROWID > ? ORDER BY m.ROWID ASC LIMIT ?")
-            .all(cursor, limit) as unknown as ImessageRow[],
-      ),
-    rowById: (rowId) =>
-      query(
-        () =>
-          connection.prepare(select + " WHERE m.ROWID = ?").get(rowId) as unknown as
-            | ImessageRow
-            | undefined,
-      ),
-    close: () => connection.close(),
-  };
-}
+    rowById: (rowId: number) =>
+      read({ kind: "imessage-row", file, rowId }).pipe(Effect.map((result) => result.rows[0])),
+    close: () => Effect.void,
+  } satisfies ImessageChatDb;
+});

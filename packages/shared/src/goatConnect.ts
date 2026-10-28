@@ -23,3 +23,11 @@ export const GOAT_CONNECT_COMING_SOON = {
 
 export const GOAT_CONNECT_CLI_COMING_SOON_MESSAGE =
   "GOAT Connect is coming soon. Use `goat pair --tailscale` to connect a device over Tailscale.";
+
+export function isGoatConnectPushEnabled(): boolean {
+  return false;
+}
+
+export function isGoatConnectPushAvailable(): boolean {
+  return isGoatConnectEnabled() && isGoatConnectPushEnabled();
+}

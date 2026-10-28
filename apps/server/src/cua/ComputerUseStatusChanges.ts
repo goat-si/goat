@@ -16,7 +16,7 @@ export const statusChanges = (
     ? Stream.succeed({ revision: 0 })
     : Stream.unwrap(
         Effect.gen(function* () {
-          const changes = yield* Queue.unbounded<void>();
+          const changes = yield* Queue.sliding<void>(1);
           // Agent connections failing on this host, or working again, change the status too.
           if (Option.isSome(connections))
             yield* Stream.fromSubscription(yield* connections.value.changes).pipe(

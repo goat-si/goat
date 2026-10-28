@@ -27,6 +27,8 @@ it.effect("rejects malformed or insecure hosted app URLs", () =>
       "http://app.exa.test",
       "https://app.exa.test/nested",
       "https://app.exa.test?alias=true",
+      "https://app.exa.test:444",
+      "https://user:secret@app.exa.test",
     ]) {
       const result = yield* hostedAppUrlConfig.pipe(
         provideEnv({ GOAT_HOSTED_APP_URL: value }),

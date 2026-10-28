@@ -287,6 +287,13 @@ jobs:
       - name: Build JS bundle
         run: vp run build:desktop
 
+      - name: Boot built web client
+        env:
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
+        run: |
+          node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+          node apps/web/scripts/verify-built-boot.ts
+
       # The hand-off tool comes from this workflow's commit, so a run can build any
       # dev commit, including one older than the tool.
       - name: Fetch hand-off tool
@@ -596,6 +603,32 @@ jobs:
             --team U9ATA49N28 --require-signing --key "desktop-mac-${{ matrix.arch }}" \
             --report "reports/verify-mac-${{ matrix.arch }}.json"
 
+      - name: Open packaged macOS app and seeded thread
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=(release/*.dmg)
+          test "${#images[@]}" -eq 1 && test -f "${images[0]}"
+          mount=$(mktemp -d "$RUNNER_TEMP/goat-launch-dmg.XXXXXX")
+          trap 'hdiutil detach "$mount" -force >/dev/null || true; rmdir "$mount" 2>/dev/null || true' EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "${images[0]}"
+          apps=("$mount"/*.app)
+          test "${#apps[@]}" -eq 1 && test -d "${apps[0]}"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${apps[0]}/Contents/Info.plist")
+          node scripts/smoke-desktop-app.ts --executable "${apps[0]}/Contents/MacOS/$executable" \
+            --artifacts-dir "$RUNNER_TEMP/desktop-launch-check"
+
+      - name: Stage failed macOS launch diagnostics
+        if: failure()
+        env:
+          GOAT_RELEASES_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          if [ -d "$RUNNER_TEMP/desktop-launch-check" ]; then
+            node scripts/.staging/nightly-staging.ts put --repo goat-si/goat --tag "$STAGING_TAG" \
+              --target "$SHA" --name "launch-check-mac-${{ matrix.arch }}" --dir "$RUNNER_TEMP/desktop-launch-check"
+          fi
+
       - name: Collect release assets
         run: |
           set -euo pipefail
@@ -767,6 +800,32 @@ jobs:
             args+=(--wsl-runtime "$GITHUB_WORKSPACE"/ssh-runtime-archives/goat-*-linux-${{ matrix.arch }}.tar.gz)
           fi
           node scripts/build-desktop-artifact.ts "${args[@]}"
+
+      - name: Open packaged Linux app and seeded thread
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libgbm1 libnss3 libasound2t64
+          images=("$GITHUB_WORKSPACE"/release/*.AppImage)
+          test "${#images[@]}" -eq 1 && test -f "${images[0]}"
+          scratch=$(mktemp -d "$RUNNER_TEMP/goat-launch-appimage.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          chmod +x "${images[0]}"
+          (cd "$scratch" && "${images[0]}" --appimage-extract >/dev/null)
+          xvfb-run -a node scripts/smoke-desktop-app.ts --executable "$scratch/squashfs-root/goat-desktop" \
+            --artifacts-dir "$RUNNER_TEMP/desktop-launch-check"
+
+      - name: Stage failed Linux launch diagnostics
+        if: failure() && matrix.platform == 'linux'
+        env:
+          GOAT_RELEASES_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          if [ -d "$RUNNER_TEMP/desktop-launch-check" ]; then
+            node scripts/.staging/nightly-staging.ts put --repo goat-si/goat --tag "$STAGING_TAG" \
+              --target "$SHA" --name "launch-check-linux-${{ matrix.arch }}" --dir "$RUNNER_TEMP/desktop-launch-check"
+          fi
 
       - name: Collect release assets
         run: |

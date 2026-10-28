@@ -4,6 +4,7 @@ import { RunId, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Random from "effect/Random";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
@@ -69,6 +70,54 @@ const fixture = Effect.gen(function* () {
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const LONG_AGO = "1969-12-31T23:00:00.000Z";
+
+it.effect("lost launch jitter preserves the age fence and varies retry eligibility", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    let draws = 0;
+    yield* f.seedLost("1970-01-01T00:00:00.000Z");
+    f.answer(
+      Effect.fail(
+        new Ssh.SshRemoteDispatchError({
+          reason: "host_unavailable",
+          message: "fixture",
+        }),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const coordinator = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* TestClock.adjust("599999 millis");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 0);
+      assert.equal(draws, 0);
+      yield* TestClock.adjust("1 milli");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 1);
+      yield* TestClock.adjust("149999 millis");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 1);
+      yield* TestClock.adjust("1 milli");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 2);
+      yield* TestClock.adjust("224999 millis");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 2);
+      yield* TestClock.adjust("1 milli");
+      yield* coordinator.resolveLostLaunches;
+      assert.lengthOf(f.asked, 3);
+      assert.equal(draws, 3);
+      assert.equal((yield* coordinator.get(id))?.state, "lost");
+      assert.isNull((yield* coordinator.get(id))?.remoteThreadId);
+    }).pipe(
+      Effect.provide(f.layer),
+      Effect.provideService(Random.Random, {
+        nextIntUnsafe: () => 0,
+        nextDoubleUnsafe: () => (draws++ === 0 ? 0 : 0.5),
+      }),
+    );
+  }).pipe(Effect.provide(database)),
+);
+
 const test = <E>(
   name: string,
   body: (

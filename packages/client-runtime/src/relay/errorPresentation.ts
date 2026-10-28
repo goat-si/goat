@@ -47,6 +47,12 @@ export function relayProtectedErrorMessage(error: RelayProtectedError): string {
       return `GOAT Connect request budget exhausted. Try again in ${error.retryAfterSeconds} seconds.`;
     case "RelayAuthorizationUnavailableError":
       return "GOAT Connect authorization is temporarily unavailable. Try again later.";
+    case "RelayAuthenticationStrengthError":
+      return "Verify both factors again, then retry this action. If your client cannot reverify, sign out and sign in with MFA.";
+    case "RelayAuthenticationUnavailableError":
+      return "The authentication provider is temporarily unavailable. Try again.";
+    case "RelayConnectUpgradeRequiredError":
+      return "Update GOAT to a release with Connect policy 1, then re-link this environment.";
     case "RelayAuthInvalidError":
       switch (error.reason) {
         case "missing_bearer":

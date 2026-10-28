@@ -1,11 +1,16 @@
 import * as AccountAccess from "../accounts/AccountAccess.ts";
 import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import {
+  ConnectSessionAssurance,
+  ConnectLinkIntent,
+  connectAssuranceFreshnessDeadline,
+  isConnectAssuranceFresh,
+} from "@goat/contracts/connectAssurance";
+import {
   RelayDpopAccessTokenScope,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
   RelayMobileClientId,
-  RelayMobileRegistrationScope,
   RelayWebClientId,
   type RelayPublicClientId,
   type RelayEnvironmentLinkChallengeRequest,
@@ -32,6 +37,9 @@ export const RELAY_DPOP_ACCESS_TOKEN_TTL = "30 minutes";
 
 const LinkChallengeClaims = Schema.Struct({
   kind: Schema.Literal(LINK_CHALLENGE_KIND),
+  assurance: ConnectSessionAssurance,
+  intent: ConnectLinkIntent,
+  cliKeyThumbprint: Schema.optionalKey(Schema.String),
   iss: Schema.String,
   aud: Schema.String,
   sub: Schema.String,
@@ -46,6 +54,9 @@ const LinkChallengeClaims = Schema.Struct({
 export type LinkChallengeClaims = typeof LinkChallengeClaims.Type;
 
 const RelayDpopAccessTokenClaims = Schema.Struct({
+  assurance: ConnectSessionAssurance,
+  clientKeyAuthorizedAt: Schema.Int,
+  clientKeyAdmissionId: Schema.String,
   iss: Schema.String,
   aud: Schema.String,
   sub: Schema.String,
@@ -68,11 +79,7 @@ const allowedScopesByClientId: Record<
   RelayPublicClientId,
   ReadonlySet<RelayDpopAccessTokenScope>
 > = {
-  [RelayMobileClientId]: new Set([
-    RelayEnvironmentConnectScope,
-    RelayEnvironmentStatusScope,
-    RelayMobileRegistrationScope,
-  ]),
+  [RelayMobileClientId]: new Set([RelayEnvironmentConnectScope, RelayEnvironmentStatusScope]),
   [RelayWebClientId]: new Set([RelayEnvironmentConnectScope, RelayEnvironmentStatusScope]),
 };
 
@@ -93,6 +100,9 @@ export class RelayTokens extends Context.Service<
     readonly issueLinkChallenge: (input: {
       readonly userId: string;
       readonly request: RelayEnvironmentLinkChallengeRequest;
+      readonly assurance: ConnectSessionAssurance;
+      readonly cliKeyThumbprint?: string;
+      readonly intent: ConnectLinkIntent;
       readonly jti: string;
       readonly issuedAtEpochSeconds: number;
       readonly expiresAtEpochSeconds: number;
@@ -113,6 +123,9 @@ export class RelayTokens extends Context.Service<
       readonly issuedAtEpochSeconds: number;
       readonly expiresAtEpochSeconds: number;
       readonly clientId: RelayPublicClientId;
+      readonly assurance: ConnectSessionAssurance;
+      readonly clientKeyAuthorizedAt: number;
+      readonly clientKeyAdmissionId: string;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
     }) => Effect.Effect<
       string,
@@ -148,8 +161,16 @@ const make = Effect.gen(function* () {
         account_epoch: admitted.accountEpoch,
         jti: input.jti,
         iat: input.issuedAtEpochSeconds,
-        exp: input.expiresAtEpochSeconds,
-        ...input.request,
+        exp: Math.min(
+          input.expiresAtEpochSeconds,
+          connectAssuranceFreshnessDeadline(input.assurance),
+        ),
+        assurance: input.assurance,
+        intent: input.intent,
+        ...(input.cliKeyThumbprint ? { cliKeyThumbprint: input.cliKeyThumbprint } : {}),
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
+        managedTunnelsEnabled: input.request.managedTunnelsEnabled,
       },
     });
   });
@@ -168,7 +189,11 @@ const make = Effect.gen(function* () {
       Effect.flatMap(decodeLinkChallengeClaims),
       Effect.map((claims) => {
         if (
+          claims.exp <= input.nowEpochSeconds ||
+          claims.iat > input.nowEpochSeconds ||
           claims.sub !== input.userId ||
+          claims.assurance.userId !== input.userId ||
+          !isConnectAssuranceFresh(claims.assurance, input.nowEpochSeconds) ||
           (input.request.notificationsEnabled && claims.notificationsEnabled !== true) ||
           (input.request.liveActivitiesEnabled && claims.liveActivitiesEnabled !== true) ||
           (input.request.managedTunnelsEnabled && claims.managedTunnelsEnabled !== true)
@@ -198,6 +223,9 @@ const make = Effect.gen(function* () {
         jti: input.jti,
         iat: input.issuedAtEpochSeconds,
         exp: input.expiresAtEpochSeconds,
+        assurance: input.assurance,
+        clientKeyAuthorizedAt: input.clientKeyAuthorizedAt,
+        clientKeyAdmissionId: input.clientKeyAdmissionId,
         client_id: input.clientId,
         scope: encodeOAuthScope(input.scopes),
         cnf: { jkt: input.proofKeyThumbprint },
@@ -229,7 +257,11 @@ const make = Effect.gen(function* () {
           clientId: claims.client_id,
           scope: claims.scope,
         });
-        return scopes === null ? null : { ...claims, scope: scopes };
+        return scopes === null ||
+          claims.assurance.userId !== claims.sub ||
+          claims.assurance.checkedAt > input.nowEpochSeconds
+          ? null
+          : { ...claims, scope: scopes };
       }),
       Effect.orElseSucceed(() => null),
     ),

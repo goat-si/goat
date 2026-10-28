@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, fixInputRefusalSafety, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const appsResult = {
   content: [{ type: "text", text: "2 apps" }],
@@ -62,6 +62,13 @@ const renameRefused = (id: number, cause: string, pid = 43) =>
       isError: true,
     },
   });
+
+/** The driver's refusal as the agent gets it: unchanged, with GOAT's outcome safety. */
+const asSaid = (line: string) => {
+  const reply = JSON.parse(line);
+  reply.result.structuredContent.safety = fixInputRefusalSafety;
+  return reply;
+};
 
 interface Reply {
   readonly result: {
@@ -186,7 +193,7 @@ describe("lease proxy macOS Automation refusals", () => {
         yield* failed.reply(renameRefused(2, "automation_failed"));
         assert.deepEqual(
           yield* failed.nextToProvider,
-          JSON.parse(renameRefused(2, "automation_failed")),
+          asSaid(renameRefused(2, "automation_failed")),
         );
         // A document path inside another cause's reason does not pass for a consent code.
         const tricky = saveRefused(
@@ -199,7 +206,7 @@ describe("lease proxy macOS Automation refusals", () => {
         );
         yield* failed.nextToDriver;
         yield* failed.reply(tricky);
-        assert.deepEqual(yield* failed.nextToProvider, JSON.parse(tricky));
+        assert.deepEqual(yield* failed.nextToProvider, asSaid(tricky));
 
         const elsewhere = yield* harness();
         yield* listApps(elsewhere);
@@ -208,7 +215,7 @@ describe("lease proxy macOS Automation refusals", () => {
         yield* elsewhere.reply(saveRefused(2, "automation_denied"));
         assert.deepEqual(
           yield* elsewhere.nextToProvider,
-          JSON.parse(saveRefused(2, "automation_denied")),
+          asSaid(saveRefused(2, "automation_denied")),
         );
       }),
   );

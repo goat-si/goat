@@ -15,6 +15,8 @@ import { movesPointer, targetOf } from "./computerUseTarget.ts";
 
 export interface HelperCursor {
   readonly view: () => { readonly enabled: boolean; readonly visible: boolean };
+  /** Whether the cursor stands at a point; without a screenshot of the window it cannot. */
+  readonly placed: () => boolean;
   readonly setEnabled: (enabled: boolean) => Effect.Effect<void>;
 }
 
@@ -135,7 +137,7 @@ const finite = (value: unknown): value is number =>
  * overlay under the helper and refuses it (facility_unavailable), so the proxy moves GOAT's cursor
  * instead. A desktop move, which moves the person's pointer, still goes to the driver.
  */
-function isWindowCursorMove(name: unknown, args: unknown): boolean {
+export function isWindowCursorMove(name: unknown, args: unknown): boolean {
   const input = record(args);
   return (
     name === "move_cursor" &&
@@ -152,9 +154,32 @@ function windowCursorMoveAnswer(
   id: JsonRpcId,
   args: unknown,
   view: { readonly enabled: boolean; readonly visible: boolean },
+  placed: boolean,
 ): string {
   const input = record(args);
   const target = targetOf(args);
+  if (!placed)
+    return JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: `GOAT has no screenshot of window ${String(target?.windowId)} to place its agent cursor at (${String(input?.x)}, ${String(input?.y)}), so it did not move. Take get_window_state with a screenshot of that window, then move it again. The person's pointer did not move.`,
+          },
+        ],
+        structuredContent: {
+          code: "screenshot_context_missing",
+          effect: "refused",
+          drawn_by: "goat_helper",
+          pointer_moved: false,
+          pid: target?.pid,
+          window_id: target?.windowId,
+        },
+        isError: true,
+      },
+    });
   const shown = view.enabled
     ? "It is on screen there."
     : "It is disabled, so nothing is drawn until set_agent_cursor_enabled turns it on.";
@@ -175,21 +200,33 @@ function windowCursorMoveAnswer(
   );
 }
 
-/** Whether the proxy answers this call from the helper's cursor instead of the driver. */
-export const answeredByHelperCursor = (name: unknown, args: unknown): boolean =>
-  (typeof name === "string" && AGENT_CURSOR_TOOLS.has(name)) || isWindowCursorMove(name, args);
+/** Whether the proxy answers this session cursor tool from the helper's cursor at once. */
+export const answeredByHelperCursor = (name: unknown, _args?: unknown): boolean =>
+  typeof name === "string" && AGENT_CURSOR_TOOLS.has(name);
 
-/** Answers a cursor tool or a window move_cursor from the helper's cursor. */
+/** Answers a session cursor tool from the helper's cursor. */
 export const answerHelperCursorCall = Effect.fn("ComputerUseCursorTools.answerCall")(function* (
   id: JsonRpcId,
   name: string,
   args: unknown,
   cursor: HelperCursor,
-  draw: (event: OverlayEvent) => Effect.Effect<unknown>,
 ) {
-  if (!isWindowCursorMove(name, args)) return yield* answerCursorTool(id, name, args, cursor);
-  const key = JSON.stringify(id);
-  yield* draw({ type: "call", id: key, name, args });
-  yield* draw({ type: "reply", id: key });
-  return windowCursorMoveAnswer(id, args, cursor.view());
+  return yield* answerCursorTool(id, name, args, cursor);
 });
+
+/**
+ * Finishes a window move_cursor whose call the proxy already drew, reported and reserved like any
+ * other input: the helper's cursor stands there only when a screenshot placed it.
+ */
+export const answerWindowCursorMove = Effect.fn("ComputerUseCursorTools.answerWindowMove")(
+  function* (
+    id: JsonRpcId,
+    args: unknown,
+    cursor: HelperCursor,
+    draw: (event: OverlayEvent) => Effect.Effect<unknown>,
+  ) {
+    const placed = cursor.placed();
+    yield* draw({ type: "reply", id: JSON.stringify(id), ...(placed ? {} : { failed: true }) });
+    return windowCursorMoveAnswer(id, args, cursor.view(), placed);
+  },
+);

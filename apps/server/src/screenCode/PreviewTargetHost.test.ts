@@ -1,5 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import {
+  PreviewAutomationExecutionError,
+  PreviewAutomationConnectionId,
+  PreviewAutomationControlInterruptedError,
   DEFAULT_SCREEN_RUN_LIMITS,
   EnvironmentId,
   ProviderInstanceId,
@@ -446,6 +449,57 @@ it.effect("Stop still closes the agent's own temporary tab after its generation 
   }),
 );
 
+it.effect(
+  "keeps a tab its agent handed to a person open at turn end, without a cleanup failure (#1218)",
+  () =>
+    Effect.gen(function* () {
+      let generation = 1;
+      let waitingForPerson = false;
+      const closes: Array<string> = [];
+      const tab = {
+        environmentId: "env",
+        browserInstanceId: "server-browser",
+        connectionId: "connection",
+        threadId: "thread",
+        tabId: PreviewTabId.make("sign-in"),
+        title: "Sign in",
+        url: "https://login.example.test/",
+        owner: "agent" as const,
+        ownedByCaller: true,
+        controlGeneration: 1,
+      };
+      const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+        listBoundTabs: () => Effect.succeed([{ ...tab, controlGeneration: generation }]),
+        invoke: <A>(request: { operation: string }) =>
+          Effect.sync(() => {
+            if (request.operation === "close") closes.push(tab.tabId);
+            return {
+              available: true,
+              visible: true,
+              tabId: tab.tabId,
+              url: tab.url,
+              title: tab.title,
+              loading: false,
+              control: {
+                owner: "agent",
+                ownedByCaller: true,
+                generation,
+                ...(waitingForPerson ? { waitingForPerson: true } : {}),
+              },
+            } as A;
+          }),
+      };
+      const host = yield* makePreviewTargetHost(broker);
+      yield* host.dispatch(call("open_tab", 1, { url: tab.url }), context);
+      // The request moves the tab's generation, as a takeover does.
+      generation = 2;
+      waitingForPerson = true;
+      const outcomes = yield* host.finishTurn({ runId: "run", turnId: "turn" });
+      expect(outcomes).toEqual([{ tabId: "sign-in", status: "kept" }]);
+      expect(closes).toEqual([]);
+    }),
+);
+
 it.effect("a tab that opens after its turn was fenced is closed instead of escaping cleanup", () =>
   Effect.gen(function* () {
     const opening = yield* Deferred.make<void>();
@@ -485,5 +539,123 @@ it.effect("a tab that opens after its turn was fenced is closed instead of escap
     const result = yield* Fiber.join(running);
     expect(result._tag).toBe("Failure");
     expect(operations).toEqual(["open", "close"]);
+  }),
+);
+
+it.effect("preview host preserves possible commit before converting a typed execution error", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "type")
+          return Effect.fail(
+            new PreviewAutomationExecutionError({
+              ...scope.thread,
+              environmentId: scope.environmentId,
+              operation: "type",
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              requestId: "request",
+              timeoutMs: 1000,
+              remoteTag: "Error",
+              remoteMessageLength: 0,
+              cause: undefined,
+            }),
+          );
+        return Effect.succeed({
+          tabId: tab.tabId,
+          url: tab.url,
+          control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+        } as A);
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    const result = yield* host
+      .dispatch(
+        { ...call("click", 3, {}, ref), method: "type_text", args: [{ text: "hello" }] },
+        context,
+      )
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure).toMatchObject({
+        effectStarted: true,
+        safety: { possibleCommit: true, retryClass: "never" },
+      });
+  }),
+);
+
+it.effect("preview host keeps a refusal before input as nothing started", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "type")
+          return Effect.fail(
+            new PreviewAutomationControlInterruptedError({
+              ...scope.thread,
+              environmentId: scope.environmentId,
+              operation: "type",
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              requestId: "request",
+              timeoutMs: 1000,
+              remoteTag: "PreviewAutomationControlInterruptedError",
+              remoteMessageLength: 0,
+              cause: undefined,
+              reason: "stopped",
+              dispatched: false,
+            }),
+          );
+        return Effect.succeed({
+          tabId: tab.tabId,
+          url: tab.url,
+          control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+        } as A);
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    const result = yield* host
+      .dispatch(
+        { ...call("click", 3, {}, ref), method: "type_text", args: [{ text: "hello" }] },
+        context,
+      )
+      .pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure).toMatchObject({
+        effectStarted: false,
+        safety: { possibleCommit: false },
+      });
   }),
 );

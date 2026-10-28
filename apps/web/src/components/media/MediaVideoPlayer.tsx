@@ -3,6 +3,7 @@ import { AsyncResult } from "effect/reactivity";
 import { PlayIcon, RotateCwIcon, TriangleAlertIcon } from "~/components/solar";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { observeIntersection } from "../../lib/observeIntersection";
 import { cn } from "../../lib/utils";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 import { Button } from "../ui/button";
@@ -70,7 +71,6 @@ export function MediaVideoPlayer({
   const latestSrcRef = useRef(latestSrc);
   const src = playbackSource?.src ?? latestSrc;
   const failed = src !== null ? failure?.src === src : sourceFailed;
-  const videoVisible = src !== null && !failed;
   // Without IntersectionObserver there is no visibility signal, so preload right away.
   const preloadReady = preloadedSrc === src || typeof IntersectionObserver === "undefined";
 
@@ -116,28 +116,20 @@ export function MediaVideoPlayer({
   };
   useEffect(refreshPausedRevision, [refreshPausedRevision]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!videoVisible || !video || preload === "metadata" || preloadReady) return;
-    let active = true;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!active || !entries.some((entry) => entry.isIntersecting)) return;
-        setPreloadedSrc(src);
-        observer.disconnect();
+  const observePreload = (player: HTMLSpanElement | null) => {
+    if (!player || src === null || failed || preload === "metadata" || preloadReady) return;
+    return observeIntersection(
+      player,
+      (entry) => {
+        if (entry.isIntersecting) setPreloadedSrc(src);
       },
       { rootMargin: "200px" },
     );
-    observer.observe(video);
-    return () => {
-      active = false;
-      observer.disconnect();
-    };
-  }, [src, preload, preloadReady, videoVisible]);
+  };
 
-  useEffect(() => {
-    if (!videoVisible) return;
-    const video = videoRef.current;
+  // Keep this ref stable (the compiler memoizes it): detaching it pauses playback, including on retry unmounts.
+  const attachVideo = (video: HTMLVideoElement | null) => {
+    videoRef.current = video;
     if (!video) return;
     const pauseWhenHidden = () => {
       // Native fullscreen can hide the inline page while this video is still visible.
@@ -150,12 +142,13 @@ export function MediaVideoPlayer({
     document.addEventListener("fullscreenchange", pauseWhenHidden);
     video.addEventListener("webkitendfullscreen", pauseWhenHidden);
     return () => {
+      videoRef.current = null;
       document.removeEventListener("visibilitychange", pauseWhenHidden);
       document.removeEventListener("fullscreenchange", pauseWhenHidden);
       video.removeEventListener("webkitendfullscreen", pauseWhenHidden);
       video.pause();
     };
-  }, [videoVisible]);
+  };
 
   const retry = async () => {
     if (retrying) return;
@@ -181,6 +174,7 @@ export function MediaVideoPlayer({
 
   const player = (
     <span
+      ref={observePreload}
       className={cn("relative inline-block align-middle", className)}
       style={style}
       data-markdown-copy={copyMarkdown}
@@ -219,7 +213,7 @@ export function MediaVideoPlayer({
         </span>
       ) : src !== null && !failed ? (
         <video
-          ref={videoRef}
+          ref={attachVideo}
           src={src}
           aria-label={label || "Video preview"}
           aria-hidden={onOpen ? true : undefined}

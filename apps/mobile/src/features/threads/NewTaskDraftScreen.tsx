@@ -1,3 +1,4 @@
+import { scopedProjectKey } from "../../lib/scopedEntities";
 import { DraftEnvironmentControl } from "./DraftEnvironmentControl";
 import { NativeScrollEdgeEffectsContext } from "../../native/NativeScrollViewMarker";
 import { DraftThreadHeader } from "./DraftThreadHeader";
@@ -57,11 +58,9 @@ import {
   clearComposerDraftContent,
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
-  restoreComposerDraftSnapshot,
-  updateComposerDraftSettings,
+  undoComposerDraftMerge,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
-  waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
@@ -85,11 +84,12 @@ import {
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
-import { resolveDraftProjectSelection } from "./new-task-project-selection";
+import { useInitialNewTaskProject } from "./use-initial-new-task-project";
+import { resolveDraftShareTransfer } from "./new-task-project-selection";
+import { useRememberThreadProject } from "./useRememberThreadProject";
 import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
-  resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
@@ -147,6 +147,7 @@ function NewTaskWorkspaceIcon(props: {
 const DRAFT_CLOUD_STATE = deriveCloudTaskState(null);
 
 export function NewTaskDraftScreen(props: {
+  readonly flowKey?: string;
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
@@ -161,6 +162,7 @@ export function NewTaskDraftScreen(props: {
   const [creationMetadata] = useState(makeTurnCommandMetadata);
   const projects = useProjects();
   const flow = useNewTaskFlow();
+  const servesRoute = props.flowKey === flow.flowKey;
   const navigation = useNavigation();
   const goBack = useWorkspaceBackNavigation("threads");
   const {
@@ -170,7 +172,14 @@ export function NewTaskDraftScreen(props: {
     releaseShareReservation,
     reserveShare,
   } = useIncomingShare();
-  const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
+  const { projectScopes, selectedProject, selectedProjectKey } = flow;
+  useRememberThreadProject(
+    servesRoute &&
+      selectedProject &&
+      selectedProjectKey === scopedProjectKey(selectedProject.environmentId, selectedProject.id)
+      ? selectedProject
+      : null,
+  );
   const selectedProjectLabel = (() => {
     if (!selectedProject) return null;
     const scope = projectScopes.find((candidate) =>
@@ -224,10 +233,6 @@ export function NewTaskDraftScreen(props: {
     }
   };
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
-  const selectedProjectRef = useRef(selectedProject);
-  useEffect(() => {
-    selectedProjectRef.current = selectedProject;
-  }, [selectedProject]);
   const removeClonedProject = async () => {
     if (!selectedProject) return;
     const removed = selectedProject;
@@ -243,8 +248,7 @@ export function NewTaskDraftScreen(props: {
       );
       return;
     }
-    const current = selectedProjectRef.current;
-    if (current?.id === removed.id && current.environmentId === removed.environmentId) {
+    if (flow.getSelectedProjectKey() === scopedProjectKey(removed.environmentId, removed.id)) {
       navigation.dispatch(StackActions.replace("Home"));
     }
   };
@@ -277,14 +281,16 @@ export function NewTaskDraftScreen(props: {
   const [shareImportAttempt, setShareImportAttempt] = useState(0);
   const startedShareImportKeyRef = useRef<string | null>(null);
   const cancellingShareImportKeyRef = useRef<string | null>(null);
-  const shareImportDraftBackupRef = useRef(new Map<string, ComposerDraft>());
+  const shareImportDraftMergeRef = useRef(
+    new Map<string, { before: ComposerDraft; merged: ComposerDraft }>(),
+  );
   const activeShareImportTokenRef = useRef<symbol | null>(null);
   const shareImportMountedRef = useRef(true);
   // The share import resumes after awaits; this reads the screen's current
   // draft and share at that point without re-running the import effect.
   const isCurrentShareImport = useEffectEvent(
     (draftKey: string, shareId: string) =>
-      flow.draftKey === draftKey && props.incomingShareId === shareId,
+      servesRoute && flow.draftKey === draftKey && props.incomingShareId === shareId,
   );
   const isImportingShare = importingShareKey !== null;
   const alertedUnavailableIncomingShareIdRef = useRef<string | null>(null);
@@ -301,16 +307,22 @@ export function NewTaskDraftScreen(props: {
     ),
   );
   const isProjectPickerReturnActive =
-    isReturningToProjectPicker && !requestedInitialProjectAvailable;
+    servesRoute &&
+    ((isReturningToProjectPicker && !requestedInitialProjectAvailable) ||
+      (props.draftId !== undefined && flow.missingRouteDraftId === props.draftId));
   const isIncomingShareAwaitingServerConfig = Boolean(
     incomingShare?.attachments.some((attachment) => attachment.type === "file") &&
     selectedEnvironmentServerConfig === null,
   );
-  const isIncomingShareTransferPending = Boolean(
-    incomingShare &&
-    cancelledIncomingShareId !== props.incomingShareId &&
-    !isIncomingShareAwaitingServerConfig,
-  );
+  const { project: incomingShareProject, isPending: isIncomingShareTransferPending } =
+    resolveDraftShareTransfer({
+      selectedProjectKey,
+      selectedProject,
+      initialProjectRef: props.initialProjectRef,
+      hasPendingShare: Boolean(incomingShare && cancelledIncomingShareId !== props.incomingShareId),
+      awaitingServerConfig: isIncomingShareAwaitingServerConfig,
+      isImportingShare,
+    });
   const contextImports = useAtomValue(composerContextImportsAtom);
   const isImportingContext = flow.draftKey ? contextImports[flow.draftKey] === true : false;
   const isComposerInteractionLocked =
@@ -349,17 +361,16 @@ export function NewTaskDraftScreen(props: {
     !props.incomingShareId ||
     (hasImportedIncomingShare && !incomingShare) ||
     isIncomingShareUnavailable;
-  const appliedInitialProjectKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (cancelledIncomingShareId === props.incomingShareId) {
       navigation.goBack();
     }
   }, [cancelledIncomingShareId, navigation, props.incomingShareId]);
   useEffect(() => {
-    if (!isReturningToProjectPicker) {
+    if (!isProjectPickerReturnActive) {
       return;
     }
-    if (requestedInitialProjectAvailable) {
+    if (requestedInitialProjectAvailable && flow.missingRouteDraftId === null) {
       // oxlint-disable-next-line react/set-state-in-effect -- Ends the return-to-picker flow once the requested project arrives from the catalog.
       setIsReturningToProjectPicker(false);
       return;
@@ -372,7 +383,8 @@ export function NewTaskDraftScreen(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [
-    isReturningToProjectPicker,
+    isProjectPickerReturnActive,
+    flow.missingRouteDraftId,
     navigation,
     props.incomingShareId,
     requestedInitialProjectAvailable,
@@ -383,47 +395,20 @@ export function NewTaskDraftScreen(props: {
     }
     shareImportMountedRef.current = true;
     return () => {
-      appliedInitialProjectKeyRef.current = null;
       shareImportMountedRef.current = false;
       activeShareImportTokenRef.current = null;
       cancellingShareImportKeyRef.current = null;
     };
   }, []);
 
-  const { beginEditingPendingTask, cancelEditingPendingTask, editingPendingTask, openDraft } = flow;
-  // Cold launches load drafts and projects separately; wait for hydration and retry while shells load.
-  const attemptedDraftIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!props.draftId || props.pendingTaskId) {
-      return;
-    }
-    const draftId = props.draftId;
-    if (attemptedDraftIdRef.current === draftId) {
-      return;
-    }
-    let cancelled = false;
-    void waitForComposerDraftsLoaded().then(() => {
-      if (cancelled || attemptedDraftIdRef.current === draftId) {
-        return;
-      }
-      if (openDraft(draftId)) {
-        attemptedDraftIdRef.current = draftId;
-        return;
-      }
-      if (getComposerDraftSnapshot(draftId).project !== undefined && projects.length === 0) {
-        return;
-      }
-      attemptedDraftIdRef.current = draftId;
-      navigation.dispatch(CommonActions.navigate("NewTaskProject"));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [navigation, openDraft, projects, props.draftId, props.pendingTaskId]);
-
+  const { beginEditingPendingTask, cancelEditingPendingTask, editingPendingTask } = flow;
   const attemptedPendingTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!props.pendingTaskId || editingPendingTask?.messageId === props.pendingTaskId) {
+    if (
+      !servesRoute ||
+      !props.pendingTaskId ||
+      editingPendingTask?.messageId === props.pendingTaskId
+    ) {
       return;
     }
     if (attemptedPendingTaskIdRef.current === props.pendingTaskId) {
@@ -433,102 +418,29 @@ export function NewTaskDraftScreen(props: {
     if (!beginEditingPendingTask(props.pendingTaskId)) {
       navigation.dispatch(CommonActions.navigate("NewTaskProject"));
     }
-  }, [beginEditingPendingTask, editingPendingTask?.messageId, navigation, props.pendingTaskId]);
+  }, [
+    servesRoute,
+    beginEditingPendingTask,
+    editingPendingTask?.messageId,
+    navigation,
+    props.pendingTaskId,
+  ]);
 
   useEffect(() => {
-    if (!props.pendingTaskId) return;
+    if (!servesRoute || !props.pendingTaskId) return;
     return () => {
       attemptedPendingTaskIdRef.current = null;
       cancelEditingPendingTask();
     };
-  }, [props.pendingTaskId, cancelEditingPendingTask]);
+  }, [props.pendingTaskId, servesRoute, cancelEditingPendingTask]);
 
-  const lastInitialProjectRefRef = useRef(props.initialProjectRef);
-
-  useEffect(() => {
-    if (props.pendingTaskId || props.draftId) {
-      return;
-    }
-    if (lastInitialProjectRefRef.current !== props.initialProjectRef) {
-      lastInitialProjectRefRef.current = props.initialProjectRef;
-      appliedInitialProjectKeyRef.current = null;
-    }
-    const initialEnvironmentId = props.initialProjectRef?.environmentId;
-    const initialProjectId = props.initialProjectRef?.projectId;
-    if (initialEnvironmentId && initialProjectId) {
-      const directProject =
-        projects.find(
-          (project) =>
-            project.environmentId === initialEnvironmentId && project.id === initialProjectId,
-        ) ?? null;
-
-      if (directProject) {
-        // Apply the route project once or picker changes would immediately revert.
-        const directProjectKey = `${directProject.environmentId}:${directProject.id}`;
-        if (appliedInitialProjectKeyRef.current === directProjectKey) {
-          return;
-        }
-        if (props.initialProjectRef?.branch) {
-          if (
-            selectedProject?.environmentId !== directProject.environmentId ||
-            selectedProject.id !== directProject.id
-          ) {
-            setProject(directProject);
-            return;
-          }
-          if (!flow.draftKey) return;
-          // Checkout completed before mount; local mode reuses it while worktree mode would create another.
-          updateComposerDraftSettings(flow.draftKey, {
-            workspaceSelection: {
-              mode: "local",
-              branch: props.initialProjectRef.branch,
-              worktreePath: props.initialProjectRef.worktreePath ?? null,
-              startFromOrigin: false,
-            },
-          });
-        }
-        appliedInitialProjectKeyRef.current = directProjectKey;
-        if (
-          selectedProject?.environmentId === directProject.environmentId &&
-          selectedProject.id === directProject.id
-        ) {
-          return;
-        }
-        setProject(directProject);
-        return;
-      }
-
-      if (projects.length > 0) {
-        // oxlint-disable-next-line react/set-state-in-effect -- Route-driven project resolution starts the return-to-picker flow when no project matches.
-        setIsReturningToProjectPicker(true);
-      }
-      return;
-    }
-
-    const selection = resolveDraftProjectSelection(selectedProjectKey, projects, projectScopes);
-    if (selection.kind === "preserve") {
-      return;
-    }
-    if (selection.kind === "select") {
-      setProject(selection.project);
-      return;
-    }
-
-    navigation.dispatch(CommonActions.navigate("NewTaskProject"));
-  }, [
-    projectScopes,
+  useInitialNewTaskProject({
+    ...props,
+    flow,
+    servesRoute,
     projects,
-    flow.draftKey,
-    props.initialProjectRef,
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening a draft from a share, pending task, or draft id re-resolves its project.
-    props.incomingShareId,
-    props.pendingTaskId,
-    props.draftId,
-    navigation,
-    selectedProject,
-    selectedProjectKey,
-    setProject,
-  ]);
+    onMissingProject: setIsReturningToProjectPicker,
+  });
 
   const { loadBranches } = flow;
   useEffect(() => {
@@ -545,23 +457,11 @@ export function NewTaskDraftScreen(props: {
   }, [loadBranches, selectedProject]);
 
   useEffect(() => {
+    if (!servesRoute) return;
     const shareId = props.incomingShareId;
     const draftKey = flow.draftKey;
-    const destinationProject = selectedProject;
-    const initialEnvironmentId = props.initialProjectRef?.environmentId;
-    const initialProjectId = props.initialProjectRef?.projectId;
-    const selectedProjectMatchesRoute =
-      !initialEnvironmentId ||
-      !initialProjectId ||
-      (destinationProject?.environmentId === initialEnvironmentId &&
-        destinationProject.id === initialProjectId);
-    if (
-      !shareId ||
-      !draftKey ||
-      !destinationProject ||
-      !selectedProjectMatchesRoute ||
-      cancelledIncomingShareId === shareId
-    ) {
+    const destinationProject = incomingShareProject;
+    if (!shareId || !draftKey || !destinationProject || cancelledIncomingShareId === shareId) {
       return;
     }
     const importKey = `${shareId}:${draftKey}`;
@@ -594,13 +494,9 @@ export function NewTaskDraftScreen(props: {
       alertedUnavailableIncomingShareIdRef.current = null;
     }
     startedShareImportKeyRef.current = importKey;
-    const draftBackup =
-      shareImportDraftBackupRef.current.get(importKey) ?? getComposerDraftSnapshot(draftKey);
-    shareImportDraftBackupRef.current.set(importKey, draftBackup);
     const importToken = Symbol(importKey);
     let didReserveShare = false;
     let didConsumeShare = false;
-    let needsDraftRestore = false;
     activeShareImportTokenRef.current = importToken;
     // oxlint-disable-next-line react/set-state-in-effect -- Publishes the share import started by this effect before its async work runs.
     setImportingShareKey(importKey);
@@ -626,12 +522,21 @@ export function NewTaskDraftScreen(props: {
       if (selectedAttachments.status === "pending") {
         throw new Error("Server attachment support is still loading.");
       }
-      needsDraftRestore = true;
-      const { skippedAttachmentCount } = await mergeComposerDraftContent(draftKey, {
-        text: incomingShare.text,
-        attachments: selectedAttachments.attachments,
-        sourceShareId: shareId,
-      });
+      const { skippedAttachmentCount } = await mergeComposerDraftContent(
+        draftKey,
+        {
+          text: incomingShare.text,
+          attachments: selectedAttachments.attachments,
+          sourceShareId: shareId,
+        },
+        {
+          onMerge: (before, merged) => {
+            if (!shareImportDraftMergeRef.current.has(importKey)) {
+              shareImportDraftMergeRef.current.set(importKey, { before, merged });
+            }
+          },
+        },
+      );
       if (
         !shareImportMountedRef.current ||
         activeShareImportTokenRef.current !== importToken ||
@@ -662,7 +567,7 @@ export function NewTaskDraftScreen(props: {
       if (warnings.length > 0) {
         Dialog.alert("Some shared content was skipped", warnings.join("\n"));
       }
-      shareImportDraftBackupRef.current.delete(importKey);
+      shareImportDraftMergeRef.current.delete(importKey);
     })()
       .catch((error) => {
         if (!shareImportMountedRef.current || activeShareImportTokenRef.current !== importToken) {
@@ -684,11 +589,11 @@ export function NewTaskDraftScreen(props: {
                   cancellingShareImportKeyRef.current = importKey;
                   setIsCancellingShareImport(true);
                   try {
-                    if (needsDraftRestore) {
+                    const merge = shareImportDraftMergeRef.current.get(importKey);
+                    if (merge) {
                       // Sweep restored attachments only after inbox consumption; unconsumed inbox entries still own them.
-                      const mergedAttachments = getComposerDraftSnapshot(draftKey).attachments;
-                      await restoreComposerDraftSnapshot(draftKey, draftBackup);
-                      needsDraftRestore = false;
+                      const mergedAttachments = merge.merged.attachments;
+                      await undoComposerDraftMerge(draftKey, merge.before, merge.merged);
                       if (didConsumeShare) {
                         scheduleUnusedComposerAttachmentCleanup(mergedAttachments);
                       }
@@ -699,7 +604,7 @@ export function NewTaskDraftScreen(props: {
                         projectId: String(destinationProject.id),
                       });
                     }
-                    shareImportDraftBackupRef.current.delete(importKey);
+                    shareImportDraftMergeRef.current.delete(importKey);
                     if (shareImportMountedRef.current) {
                       setIsCancellingShareImport(false);
                       setCancelledIncomingShareId(shareId);
@@ -752,6 +657,8 @@ export function NewTaskDraftScreen(props: {
         }
       });
   }, [
+    servesRoute,
+    incomingShareProject,
     consumeShare,
     cancelledIncomingShareId,
     flow.draftKey,
@@ -761,12 +668,9 @@ export function NewTaskDraftScreen(props: {
     isIncomingShareInboxLoading,
     isIncomingShareUnavailable,
     props.incomingShareId,
-    props.initialProjectRef?.environmentId,
-    props.initialProjectRef?.projectId,
     releaseShareReservation,
     reserveShare,
     selectedEnvironmentServerConfig,
-    selectedProject,
     shareImportAttempt,
   ]);
 
@@ -836,15 +740,7 @@ export function NewTaskDraftScreen(props: {
         draft.modelSelection ?? null,
         selectedProject.id,
       ) ?? flow.selectedModel;
-    const workspaceSelection = resolveNewTaskWorkspaceSelection({
-      selection: draft.workspaceSelection,
-      fallback: {
-        mode: flow.workspaceMode,
-        branch: flow.selectedBranchName,
-        worktreePath: flow.selectedWorktreePath,
-      },
-      isGitRepo: flow.isGitRepo,
-    });
+    const workspaceSelection = flow.resolveWorkspaceSelection(draft.workspaceSelection);
     const workspaceMode = workspaceSelection.mode;
     const selectedBranchName = workspaceSelection.branch;
     const initialMessageText = draft.text.trim();

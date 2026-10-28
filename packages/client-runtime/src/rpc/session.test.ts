@@ -1,7 +1,7 @@
+import { TARGET, PREPARED, SERVER_CONFIG } from "./sessionTestFixtures.ts";
 import * as TestClock from "effect/testing/TestClock";
 import {
   DEFAULT_SERVER_SETTINGS,
-  EnvironmentId,
   ServerConfig,
   type ServerConfig as ServerConfigType,
   ServerConfigStreamEvent,
@@ -28,8 +28,6 @@ import {
   AVAILABLE_CONNECTION_STATE,
   ConnectionBlockedError,
   ConnectionTransientError,
-  PrimaryConnectionTarget,
-  type PreparedConnection,
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
@@ -102,58 +100,6 @@ class TestWebSocket {
     }
   }
 }
-
-const TARGET = new PrimaryConnectionTarget({
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Test environment",
-  httpBaseUrl: "https://environment.example.test",
-  wsBaseUrl: "wss://environment.example.test",
-});
-
-const PREPARED: PreparedConnection = {
-  environmentId: TARGET.environmentId,
-  label: TARGET.label,
-  httpBaseUrl: TARGET.httpBaseUrl,
-  socketUrl: "wss://environment.example.test/ws?wsTicket=test",
-  httpAuthorization: null,
-  target: TARGET,
-};
-
-const SERVER_CONFIG: ServerConfigType = {
-  environment: {
-    environmentId: TARGET.environmentId,
-    label: TARGET.label,
-    platform: {
-      os: "darwin",
-      arch: "arm64",
-    },
-    serverVersion: "0.0.0-test",
-    capabilities: {
-      repositoryIdentity: true,
-      connectionProbe: true,
-    },
-  },
-  auth: {
-    policy: "loopback-browser",
-    bootstrapMethods: ["one-time-token"],
-    sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-    sessionCookieName: "t3_session",
-  },
-  cwd: "/tmp/workspace",
-  keybindingsConfigPath: "/tmp/workspace/keybindings.json",
-  keybindings: [],
-  issues: [],
-  providers: [],
-  availableEditors: [],
-  observability: {
-    logsDirectoryPath: "/tmp/logs",
-    localTracingEnabled: false,
-    otlpTracesEnabled: false,
-    otlpMetricsEnabled: false,
-    otlpLogsEnabled: false,
-  },
-  settings: DEFAULT_SERVER_SETTINGS,
-};
 
 const RpcRequest = Schema.TaggedStruct("Request", {
   id: Schema.Union([Schema.String, Schema.Number]),
@@ -346,6 +292,23 @@ describe("RpcSessionFactory", () => {
       expect(configStreamError).toMatchObject({ _tag: "RpcClientError" });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
+    }),
+  );
+
+  it.effect("counts every inbound frame, including ones that answer no request", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+      const before = yield* session.inboundFrames;
+
+      socket.serverMessage(encodeJson({ _tag: "Pong" }));
+
+      expect(yield* session.inboundFrames).toBe(before + 1);
     }),
   );
 

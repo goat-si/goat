@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  isHostedStaticApp,
   buildHostedPairingUrl,
   hasHostedPairingRequest,
   readHostedPairingRequest,
@@ -10,6 +11,23 @@ describe("hostedPairing", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each(["https://staging.app.trygoat.ai", "https://app.trygoat.ai"])(
+    "recognizes root and approval only for the artifact’s configured origin %s",
+    (origin) => {
+      vi.stubEnv("VITE_HOSTED_APP_URL", origin);
+      vi.stubEnv("VITE_HTTP_URL", "");
+      vi.stubEnv("VITE_WS_URL", "");
+      for (const path of ["/", "/connect", "/settings/connections"]) {
+        expect(isHostedStaticApp(new URL(`${origin}${path}`))).toBe(true);
+      }
+      const other = origin.includes("staging")
+        ? "https://app.trygoat.ai"
+        : "https://staging.app.trygoat.ai";
+      expect(isHostedStaticApp(new URL(other))).toBe(false);
+      expect(isHostedStaticApp(new URL("https://preview.workers.dev"))).toBe(false);
+    },
+  );
 
   it("reads hosted pairing host and query token parameters", () => {
     const url = new URL("https://app.exa.test/pair?host=100.64.1.2:3773&token=ABCD1234");

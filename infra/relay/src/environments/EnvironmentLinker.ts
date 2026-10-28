@@ -3,6 +3,8 @@ import * as AccountTransactions from "../accounts/AccountTransactions.ts";
 import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
 import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
+import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
+import { strengthRequired } from "../auth/ConnectAuthentication.ts";
 import {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkProofInvalidReason,
@@ -14,6 +16,10 @@ import {
   RELAY_LINK_PROOF_TYP,
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
+import { isConnectAssuranceFresh } from "@goat/contracts/connectAssurance";
+import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
+import * as ConnectLinkReservations from "./ConnectLinkReservations.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -71,18 +77,22 @@ export type EnvironmentLinkError =
   | EnvironmentOwnership.OwnershipError
   | RelayRateLimits.RateLimitError
   | EnvironmentLinkProofExpired
+  | import("@goat/contracts/relay").RelayInternalError
+  | import("@goat/contracts/connectAssurance").RelayAuthenticationStrengthError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
   | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
-  | ManagedEndpointProvider.ManagedEndpointProviderError;
+  | ManagedEndpointProvider.ManagedEndpointProviderError
+  | ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed;
 
 export class EnvironmentLinker extends Context.Service<
   EnvironmentLinker,
   {
     readonly link: (input: {
       readonly userId: string;
+      readonly cliKeyThumbprint?: string;
       readonly request: RelayEnvironmentLinkRequest;
     }) => Effect.Effect<
       {
@@ -149,10 +159,13 @@ const make = Effect.gen(function* () {
   const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
   const rates = yield* RelayRateLimits.RelayRateLimits;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
+  const crypto = yield* Crypto.Crypto;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
   const proofReplay = yield* DpopProofs.DpopProofReplay;
   const relayTokens = yield* RelayTokens.RelayTokens;
+  const accounts = yield* ConnectAccounts.ConnectAccounts;
   const config = yield* RelayConfiguration.RelayConfiguration;
 
   return EnvironmentLinker.of({
@@ -247,7 +260,24 @@ const make = Effect.gen(function* () {
         },
         nowEpochSeconds: nowSeconds,
       });
-      if (challenge === null) {
+      if (
+        input.cliKeyThumbprint !== undefined &&
+        (challenge === null || challenge.cliKeyThumbprint !== input.cliKeyThumbprint)
+      ) {
+        return yield* strengthRequired("unsupported_authentication_flow");
+      }
+      if (
+        challenge === null ||
+        verified.descriptor.connectAuthPolicyVersion !== 1 ||
+        input.request.notificationsEnabled ||
+        input.request.liveActivitiesEnabled ||
+        challenge.intent.environmentId !== verified.environmentId ||
+        challenge.intent.environmentPublicKey !== verified.environmentPublicKey ||
+        challenge.intent.origin.localHttpHost !== verified.origin.localHttpHost ||
+        challenge.intent.origin.localHttpPort !== verified.origin.localHttpPort ||
+        challenge.intent.managedTunnelsEnabled !== input.request.managedTunnelsEnabled ||
+        challenge.cliKeyThumbprint !== input.cliKeyThumbprint
+      ) {
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
           environmentId: verified.environmentId,
@@ -260,6 +290,13 @@ const make = Effect.gen(function* () {
         accountEpoch: challenge.account_epoch,
         credentialKind: "link_challenge",
       });
+      if (!(yield* accounts.check(input.userId, challenge.assurance.authGeneration)))
+        return yield* new EnvironmentLinkProofInvalid({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+          reason: "challenge_invalid",
+          stage: "verify_challenge",
+        });
       const expiresAt = DateTime.make(verified.exp * 1_000);
       if (expiresAt._tag === "None") {
         return yield* new EnvironmentLinkProofInvalid({
@@ -267,34 +304,6 @@ const make = Effect.gen(function* () {
           environmentId: verified.environmentId,
           reason: "invalid_signature_or_scope",
           stage: "validate_expiration",
-        });
-      }
-      const consumedNonce = yield* proofReplay.consume({
-        thumbprint: verified.environmentPublicKey,
-        jti: verified.jti,
-        iat: verified.iat,
-        expiresAt: expiresAt.value,
-      });
-      if (!consumedNonce) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "replayed_nonce",
-          stage: "consume_proof_nonce",
-        });
-      }
-      const consumedChallenge = yield* proofReplay.consume({
-        thumbprint: "relay-environment-link-challenge",
-        jti: challenge.jti,
-        iat: challenge.iat,
-        expiresAt: expiresAt.value,
-      });
-      if (!consumedChallenge) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "challenge_invalid",
-          stage: "consume_challenge_nonce",
         });
       }
       if (input.request.managedTunnelsEnabled && !isLoopbackManagedTunnelOrigin(verified.origin)) {
@@ -305,143 +314,228 @@ const make = Effect.gen(function* () {
           stage: "validate_origin",
         });
       }
-      yield* ownership.claim({
-        ...admitted,
-        environmentId: verified.environmentId,
-        environmentPublicKey: verified.environmentPublicKey,
-      });
-      if (!input.request.managedTunnelsEnabled)
-        yield* rates.charge({ userId: input.userId, operation: "link" });
-      // Non-tunnel links must release provisioned tunnel/DNS resources; best-effort deprovision is idempotent.
-      if (!input.request.managedTunnelsEnabled) {
-        yield* managedEndpointProvider
-          .deprovision({
-            userId: input.userId,
-            environmentId: verified.environmentId,
-          })
-          .pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("managed endpoint deprovision on publish-only link failed", {
-                environmentId: verified.environmentId,
-                errorTag: error._tag,
-              }),
-            ),
-            Effect.ignore,
-          );
-      }
-      const previousLink = yield* links.getForUser({
+      const reservation = {
         userId: input.userId,
+        challengeId: challenge.jti,
+        attemptId: yield* crypto.randomUUIDv4().pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkProofInvalid({
+                userId: input.userId,
+                environmentId: verified.environmentId,
+                reason: "invalid_signature_or_scope",
+                stage: "verify_proof",
+                cause,
+              }),
+          ),
+        ),
         environmentId: verified.environmentId,
-      });
-      const provisioned = input.request.managedTunnelsEnabled
-        ? yield* managedEndpointProvider.provision({
-            userId: input.userId,
-            environmentId: verified.environmentId,
-            origin: verified.origin,
-          })
-        : null;
-      const endpoint = provisioned?.endpoint ?? verified.endpoint;
-      // Only advertised managed endpoints need secure URLs; publish-only links route out of band.
-      if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "endpoint_not_secure",
-          stage: "validate_endpoint",
-        });
-      }
-      const environmentCredential = yield* transactions
-        .run(
-          { userIds: [input.userId], environmentPublicKey: verified.environmentPublicKey },
-          Effect.gen(function* () {
-            yield* access.requireAllowed(admitted);
+        proof: Hex.encode(
+          yield* crypto.digest("SHA-256", new TextEncoder().encode(input.request.proof)).pipe(
+            Effect.mapError(
+              () =>
+                new EnvironmentLinkProofInvalid({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  reason: "invalid_signature_or_scope",
+                  stage: "verify_proof",
+                }),
+            ),
+          ),
+        ),
+        assurance: challenge.assurance,
+        managedTunnelsEnabled: input.request.managedTunnelsEnabled,
+      };
+      return yield* reservations.exclusive(input.userId, (assertOwner) =>
+        Effect.gen(function* () {
+          const cleanup = Effect.fn("EnvironmentLinker.cleanup")(function* (
+            environmentId: string,
+            target?: ManagedEndpointProvider.ManagedEndpointDeprovisionTarget | null,
+          ) {
+            yield* assertOwner;
+            const key = { userId: input.userId, environmentId };
+            const captured =
+              target === undefined
+                ? yield* managedEndpointProvider.prepareDeprovision(key)
+                : target;
+            yield* assertOwner;
+            if (!(yield* managedEndpointProvider.deprovision({ ...key, target: captured }))) {
+              return yield* new ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed({
+                ...key,
+                stage: "claim-deprovision",
+                cause: "claim lost",
+              });
+            }
+          });
+          yield* assertOwner;
+          yield* reservations.recover(input.userId, assertOwner, (environmentId) =>
+            cleanup(environmentId),
+          );
+          const releaseOwnership = (environmentId: string) =>
+            Effect.gen(function* () {
+              const key = { userId: input.userId, environmentId };
+              const claims = yield* ownership.beginRelease(key);
+              yield* ownership.finishRelease({ ...key, claims });
+            }).pipe(
+              Effect.tapError(() =>
+                Effect.logWarning("Failed link retains its ownership claim for retry", {
+                  environmentId,
+                }),
+              ),
+              Effect.ignore,
+            );
+          let cleanupTarget:
+            | ManagedEndpointProvider.ManagedEndpointDeprovisionTarget
+            | null
+            | undefined;
+          let previousLink: EnvironmentLinks.RelayLinkedEnvironmentRecord | null | undefined;
+          yield* assertOwner;
+          const prior = yield* reservations.reserve(
+            reservation,
+            Effect.gen(function* () {
+              const consumeNow = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
+              if (
+                verified.exp <= consumeNow ||
+                challenge.exp <= consumeNow ||
+                !isConnectAssuranceFresh(challenge.assurance, consumeNow)
+              )
+                return yield* new EnvironmentLinkProofInvalid({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  reason: "challenge_invalid",
+                  stage: "consume_challenge_nonce",
+                });
+              const consumedNonce = yield* proofReplay.consume({
+                thumbprint: verified.environmentPublicKey,
+                jti: verified.jti,
+                iat: verified.iat,
+                expiresAt: expiresAt.value,
+              });
+              if (!consumedNonce) {
+                return yield* new EnvironmentLinkProofInvalid({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  reason: "replayed_nonce",
+                  stage: "consume_proof_nonce",
+                });
+              }
+              const consumedChallenge = yield* proofReplay.consume({
+                thumbprint: "relay-environment-link-challenge",
+                jti: challenge.jti,
+                iat: challenge.iat,
+                expiresAt: expiresAt.value,
+              });
+              if (!consumedChallenge) {
+                return yield* new EnvironmentLinkProofInvalid({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  reason: "challenge_invalid",
+                  stage: "consume_challenge_nonce",
+                });
+              }
+            }),
+          );
+          if (prior) return prior;
+          return yield* Effect.gen(function* () {
+            yield* assertOwner;
+            previousLink = yield* links.getForUser({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+            });
             yield* ownership.claim({
               ...admitted,
               environmentId: verified.environmentId,
               environmentPublicKey: verified.environmentPublicKey,
             });
-            yield* links.upsert({ ...input, proof: verified, endpoint });
-            return yield* credentials.create({
-              ...admitted,
-              environmentId: verified.environmentId,
-              environmentPublicKey: verified.environmentPublicKey,
-            });
-          }),
-        )
-        .pipe(
-          Effect.tapError(() =>
-            Effect.gen(function* () {
-              const claim = provisioned?.allocationClaim;
-              if (previousLink !== null || !claim) return;
-              yield* Effect.gen(function* () {
-                const captured = yield* transactions.run(
+            if (!input.request.managedTunnelsEnabled) {
+              yield* rates.charge({ userId: input.userId, operation: "link" });
+              yield* cleanup(verified.environmentId);
+            }
+            const provisioned = input.request.managedTunnelsEnabled
+              ? yield* managedEndpointProvider.provision({
+                  userId: input.userId,
+                  environmentId: verified.environmentId,
+                  origin: verified.origin,
+                })
+              : null;
+            yield* assertOwner;
+            const captured = input.request.managedTunnelsEnabled
+              ? yield* managedEndpointProvider.prepareDeprovision(reservation)
+              : null;
+            const claim = provisioned?.allocationClaim;
+            // Compensate only the allocation this attempt provisioned, never a concurrent replacement.
+            cleanupTarget =
+              captured &&
+              (!claim ||
+                (captured.incarnationId === claim.incarnationId &&
+                  captured.generation === claim.generation &&
+                  captured.accountEpoch === claim.accountEpoch &&
+                  captured.endpointGeneration === claim.endpointGeneration &&
+                  captured.tunnelId === claim.tunnelId))
+                ? captured
+                : null;
+            const endpoint = provisioned?.endpoint ?? verified.endpoint;
+            // Only advertised managed endpoints need secure URLs; publish-only links route out of band.
+            if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
+              return yield* new EnvironmentLinkProofInvalid({
+                userId: input.userId,
+                environmentId: verified.environmentId,
+                reason: "endpoint_not_secure",
+                stage: "validate_endpoint",
+              });
+            }
+            yield* assertOwner;
+            return yield* reservations.complete(
+              reservation,
+              transactions
+                .run(
                   { userIds: [input.userId], environmentPublicKey: verified.environmentPublicKey },
                   Effect.gen(function* () {
-                    if (
-                      (yield* links.getForUser({
-                        userId: input.userId,
-                        environmentId: verified.environmentId,
-                      })) !== null
-                    )
-                      return null;
-                    const target = yield* managedEndpointProvider.prepareDeprovision({
-                      userId: input.userId,
+                    yield* access.requireAllowed(admitted);
+                    yield* ownership.claim({
+                      ...admitted,
                       environmentId: verified.environmentId,
+                      environmentPublicKey: verified.environmentPublicKey,
                     });
-                    if (
-                      !target ||
-                      target.incarnationId !== claim.incarnationId ||
-                      target.generation !== claim.generation ||
-                      target.accountEpoch !== claim.accountEpoch ||
-                      target.endpointGeneration !== claim.endpointGeneration ||
-                      target.tunnelId !== claim.tunnelId
-                    )
-                      return null;
-                    const claims = yield* ownership.beginRelease({
-                      userId: input.userId,
+                    yield* links.upsert({ ...input, proof: verified, endpoint });
+                    const environmentCredential = yield* credentials.create({
+                      ...admitted,
                       environmentId: verified.environmentId,
+                      environmentPublicKey: verified.environmentPublicKey,
                     });
-                    return { target, claims };
+                    return {
+                      environmentId: verified.environmentId,
+                      endpoint,
+                      endpointRuntime: provisioned?.runtime ?? null,
+                      environmentCredential,
+                    };
                   }),
-                );
-                if (
-                  captured &&
-                  (yield* managedEndpointProvider.deprovision({
-                    userId: input.userId,
-                    environmentId: verified.environmentId,
-                    target: captured.target,
-                  }))
                 )
-                  yield* ownership.finishRelease({
-                    userId: input.userId,
-                    environmentId: verified.environmentId,
-                    claims: captured.claims,
-                  });
-              }).pipe(
-                Effect.tapError(() =>
-                  Effect.logWarning("Failed link retains fenced cleanup for retry", {
-                    environmentId: verified.environmentId,
-                  }),
+                .pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "SqlError"
+                      ? new RelayAuthorizationUnavailableError({
+                          code: "authorization_unavailable",
+                          traceId: "relay",
+                        })
+                      : error,
+                  ),
                 ),
-                Effect.ignore,
-              );
-            }),
-          ),
-          Effect.mapError((error) =>
-            error._tag === "SqlError"
-              ? new RelayAuthorizationUnavailableError({
-                  code: "authorization_unavailable",
-                  traceId: "relay",
-                })
-              : error,
-          ),
-        );
-      return {
-        environmentId: verified.environmentId,
-        endpoint,
-        endpointRuntime: provisioned?.runtime ?? null,
-        environmentCredential,
-      };
+            );
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                // A failed relink keeps the existing link's endpoint; only a new environment is torn down.
+                if (input.request.managedTunnelsEnabled && previousLink === null) {
+                  yield* cleanup(verified.environmentId, cleanupTarget);
+                  yield* releaseOwnership(verified.environmentId);
+                }
+                yield* reservations.failed(reservation);
+              }).pipe(Effect.andThen(Effect.failCause(cause))),
+            ),
+          );
+        }),
+      );
     }),
   });
 });

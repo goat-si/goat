@@ -58,6 +58,9 @@ import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
+import { declaredRequest } from "./declaredArguments.ts";
+import { readRemoteToolResult } from "./remoteToolResult.ts";
+export { readRemoteToolResult } from "./remoteToolResult.ts";
 import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
 import {
   broadWorkspaceRoot,
@@ -247,6 +250,8 @@ export interface SshHostToolCall {
   /** Refuse when no current session already carries exactly this caller's authority. */
   readonly existingSessionOnly?: true;
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
+  /** Added to the arguments only where the remote tool declares them (declaredArguments.ts). */
+  readonly optionalArguments?: Readonly<Record<string, unknown>>;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -440,44 +445,6 @@ const keyOnlyPasswordPrompt = SshAuth.SshPasswordPrompt.of({
       }),
     ),
 });
-
-interface CallToolResult {
-  readonly isError?: boolean;
-  readonly structuredContent?: unknown;
-  readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>;
-}
-
-/** Reads a remote `tools/call` result: its structured payload, or the refusal and code it returned. */
-export function readRemoteToolResult(
-  tool: string,
-  raw: unknown,
-):
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly message: string; readonly code?: string } {
-  const result = (typeof raw === "object" && raw !== null ? raw : {}) as CallToolResult;
-  const text = result.content?.find((item) => item.type === "text")?.text;
-  let payload: unknown = result.structuredContent;
-  if (payload === undefined && text !== undefined) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = undefined;
-    }
-  }
-  if (result.isError === true) {
-    const fields =
-      typeof payload === "object" && payload !== null
-        ? (payload as { readonly message?: unknown; readonly code?: unknown })
-        : {};
-    const message = "message" in fields ? String(fields.message) : (text ?? "no details");
-    return {
-      ok: false,
-      message: `The remote ${tool} refused: ${message}`,
-      ...(typeof fields.code === "string" ? { code: fields.code } : {}),
-    };
-  }
-  return { ok: true, value: payload };
-}
 
 const SshLaunchAttachments = Schema.Array(
   Schema.Union([ChatImageAttachment, ChatFileAttachment]),
@@ -1887,13 +1854,12 @@ const make = Effect.gen(function* () {
               ),
         ),
       );
-      const answer = yield* callAcpMcpTool({
+      const request = yield* declaredRequest(call, {
         endpoint: new URL("/mcp", link.host.baseUrl).toString(),
         authorization: `Bearer ${link.token}`,
         tool: remoteToolName(call.tool, link.host.serverVersion),
-        arguments: call.arguments,
-        beforeToolCall: stillAuthorized,
-      }).pipe(
+      });
+      const answer = yield* callAcpMcpTool({ ...request, beforeToolCall: stillAuthorized }).pipe(
         Effect.timeoutOption(call.timeoutMs),
         Effect.catch((error) => {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
@@ -2022,13 +1988,14 @@ const make = Effect.gen(function* () {
             `GOAT on ${target.alias} is too old to limit what an outside agent may change. Update GOAT there before calling ${call.tool} on it.`,
           );
         }
-        const answer = yield* callAcpMcpTool({
+        const request = yield* declaredRequest(call, {
           endpoint: new URL("mcp", routeBootstrap.httpBaseUrl).toString(),
           authorization: `Bearer ${session.token}`,
           tool: remoteToolName(call.tool, routeBootstrap.remoteServerVersion),
-          arguments: call.arguments,
-          beforeToolCall: stillAuthorized,
-        }).pipe(Effect.timeoutOption(call.timeoutMs));
+        });
+        const answer = yield* callAcpMcpTool({ ...request, beforeToolCall: stillAuthorized }).pipe(
+          Effect.timeoutOption(call.timeoutMs),
+        );
         if (Option.isNone(answer)) {
           return yield* failure(
             "host_unavailable",

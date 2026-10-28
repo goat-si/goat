@@ -149,6 +149,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
       ),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
   const supervisor = EnvironmentSupervisor.of({
@@ -336,6 +337,7 @@ describe("hub proxy discovery coordinator", () => {
         subscribeServerConfig: () => Stream.never,
         ready: Effect.void,
         probe: Effect.void,
+        inboundFrames: Effect.succeed(0),
         closed: Effect.never,
       };
       const supervisor = EnvironmentSupervisor.of({

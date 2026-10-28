@@ -12,6 +12,29 @@ const fixture = () => {
 };
 
 describe("ServerBrowserDiagnostics", () => {
+  it("masks a filled secret before the text limit can cut it to an unmatchable start", () => {
+    const page = new NodeEvents.EventEmitter();
+    const mask = (text: string) => text.replaceAll("pw_0123456789", "[secret]");
+    const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page, mask);
+    const text = `${"x".repeat(1_995)}pw_0123456789`;
+    page.emit("console", { type: () => "log", text: () => text, args: () => [] });
+    expect(diagnostics.consoleEntries[0]?.text).toBe(`${"x".repeat(1_995)}[secr`);
+    // A page can send any string as a request method, which the entry cuts to 32 characters.
+    const method = "pw_0123456789".padStart(40, "M");
+    page.emit("request", { url: () => "https://site.test/", method: () => method });
+    expect(diagnostics.networkEntries[0]?.method).toBe(`${"M".repeat(27)}[secr`);
+  });
+
+  it("keeps a failure's first line only after masking, so a filled value spanning lines stays hidden", () => {
+    const page = new NodeEvents.EventEmitter();
+    const mask = (text: string) => text.replaceAll("alpha\nbeta", "[secret]");
+    const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page, mask);
+    expect(diagnostics.firstLine(new Error("failed alpha\nbeta\nat frame"))).toBe(
+      "failed [secret]",
+    );
+    expect(diagnostics.firstLine("plain alpha\nbeta")).toBe("plain [secret]");
+  });
+
   it("redacts the start of a long cookie value cut by the text limit", async () => {
     const secret = "k".repeat(3_992);
     const page = Object.assign(new NodeEvents.EventEmitter(), {

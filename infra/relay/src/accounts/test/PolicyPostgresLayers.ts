@@ -37,25 +37,11 @@ export const testConfig: RelayConfiguration.RelayConfiguration["Service"] = {
   managedEndpointNamespace: "test_stage",
 };
 
-export function postgresPolicyLayer(
-  pg: ReturnType<typeof createPostgresFixture>,
-  options?: {
-    readonly config?: RelayConfiguration.RelayConfiguration["Service"];
-    readonly limits?: Partial<AccountLimits.Limits>;
-    readonly clear?: HookInbox.HookInbox["Service"]["clear"];
-  },
-) {
-  const database = Layer.effect(RelayDb, Drizzle.makeWithDefaults()).pipe(
-    Layer.provide(
-      PgClient.layer({
-        host: pg.socket,
-        username: "relay_test",
-        database: "postgres",
-        prepare: false,
-        maxConnections: 8,
-      }),
-    ),
-  );
+/** Real account policy services over a caller-provided RelayDb, RelayConfiguration and Crypto. */
+export function policyServicesLayer(options?: {
+  readonly limits?: Partial<AccountLimits.Limits>;
+  readonly clear?: HookInbox.HookInbox["Service"]["clear"];
+}) {
   return Layer.empty.pipe(
     Layer.provideMerge(AccountLifecycle.layer),
     Layer.provideMerge(EnvironmentCredentials.layer),
@@ -88,6 +74,29 @@ export function postgresPolicyLayer(
         ...options?.limits,
       }),
     ),
+  );
+}
+
+export function postgresPolicyLayer(
+  pg: ReturnType<typeof createPostgresFixture>,
+  options?: {
+    readonly config?: RelayConfiguration.RelayConfiguration["Service"];
+    readonly limits?: Partial<AccountLimits.Limits>;
+    readonly clear?: HookInbox.HookInbox["Service"]["clear"];
+  },
+) {
+  const database = Layer.effect(RelayDb, Drizzle.makeWithDefaults()).pipe(
+    Layer.provide(
+      PgClient.layer({
+        host: pg.socket,
+        username: "relay_test",
+        database: "postgres",
+        prepare: false,
+        maxConnections: 8,
+      }),
+    ),
+  );
+  return policyServicesLayer(options).pipe(
     Layer.provideMerge(RelayConfiguration.layer(options?.config ?? testConfig)),
     Layer.provideMerge(database),
     Layer.provideMerge(NodeCrypto.layer),

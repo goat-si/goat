@@ -52,4 +52,13 @@ describe("createTrayPicks", () => {
     expect(window.received).toEqual([]);
     expect(picks.gone(renderer())).toBe(false);
   });
+
+  it("drops a stop sent before a renderer listens and still delivers a pending pick", () => {
+    const picks = createTrayPicks<TrayPick, ReturnType<typeof renderer>>("open");
+    const window = renderer();
+    picks.pick(pick("pending"));
+    picks.send(pick("dropped"));
+    picks.listening(window);
+    expect(window.received).toEqual([pick("pending")]);
+  });
 });

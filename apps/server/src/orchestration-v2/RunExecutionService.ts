@@ -1,3 +1,4 @@
+import { repairSchedule } from "../retryJitter.ts";
 import { continuationOrigin } from "./ContinuationChain.ts";
 import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
@@ -38,13 +39,11 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -1804,13 +1803,7 @@ export const layer: Layer.Layer<
                       return yield* Effect.fail(writeCause);
                     }),
                   ),
-                  Effect.retry({
-                    schedule: Schedule.exponential("1 second").pipe(
-                      Schedule.modifyDelay(({ duration }) =>
-                        Effect.succeed(Duration.min(duration, Duration.seconds(30))),
-                      ),
-                    ),
-                  }),
+                  Effect.retry({ schedule: repairSchedule }),
                   // Startup may cancel the consumer and fail its own terminal
                   // write. Only service shutdown or the atomic gate ends recovery.
                   Effect.forkIn(scope),

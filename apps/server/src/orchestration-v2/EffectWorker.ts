@@ -1,3 +1,9 @@
+import {
+  OrchestrationEffectExecutionError,
+  hasCloudTrackingFailure,
+  workspaceLeaseBusy,
+  boundExecution,
+} from "./goat/EffectExecution.ts";
 import { CommandId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -30,44 +36,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
-
-export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
-  "OrchestrationEffectExecutionError",
-  {
-    effectId: Schema.String,
-    effectType: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
-
-const isOrchestrationEffectExecutionError = Schema.is(OrchestrationEffectExecutionError);
-const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
-
-function hasCloudTrackingFailure(cause: Cause.Cause<unknown>): boolean {
-  return cause.reasons.some((reason) => {
-    if (!Cause.isFailReason(reason)) return false;
-    const error = isOrchestrationEffectExecutionError(reason.error)
-      ? reason.error.cause
-      : reason.error;
-    return isProviderTurnControlError(error) && error.reason === "tracking-unavailable";
-  });
-}
-
-const isProviderTurnStartError = Schema.is(ProviderTurnStartService.ProviderTurnStartError);
-const isWorkspaceLeaseBusyError = Schema.is(ProviderTurnStartService.WorkspaceLeaseBusyError);
-
-function workspaceLeaseBusy(cause: Cause.Cause<unknown>) {
-  for (const reason of cause.reasons) {
-    if (!Cause.isFailReason(reason)) continue;
-    const startError = isOrchestrationEffectExecutionError(reason.error)
-      ? reason.error.cause
-      : reason.error;
-    if (isProviderTurnStartError(startError) && isWorkspaceLeaseBusyError(startError.cause)) {
-      return startError.cause;
-    }
-  }
-  return undefined;
-}
 
 export interface OrchestrationEffectExecutorV2Shape {
   readonly execute: (
@@ -797,7 +765,7 @@ export const layerWithOptions = (
 
           const execution = executor
             .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
-            .pipe(Effect.as("executed" as const));
+            .pipe(boundExecution(effect), Effect.as("executed" as const));
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { ServerConfig } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,16 +30,26 @@ const LOOPBACK_PREPARED = {
   httpBaseUrl: LOOPBACK_TARGET.httpBaseUrl,
   socketUrl: "ws://127.0.0.1:3773/ws",
 };
+const PROBE_CAPABLE_CONFIG = {
+  environment: { capabilities: { connectionProbe: true } },
+} as ServerConfig;
 
 describe("connected session health probes", () => {
-  it.effect.each(["application-active-probe", "application-active"] as const)(
-    "keeps a busy loopback session through %s and subsequent quick probes until it answers",
+  it.effect.each([
+    "application-active-probe",
+    "application-active",
+    "application-active-long",
+    "network-changed",
+  ] as const)(
+    "keeps a probe-capable busy loopback session through %s and quick signals despite an answering descriptor",
     (reason) =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const answer = yield* Deferred.make<void>();
         const harness = yield* makeHarness({
           prepare: () => Effect.succeed(LOOPBACK_PREPARED),
+          initialConfig: () => Effect.succeed(PROBE_CAPABLE_CONFIG),
+          checkHost: () => Effect.succeed("answered"),
           probe: () =>
             Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(answer))),
         });
@@ -55,6 +66,8 @@ describe("connected session health probes", () => {
         yield* Deferred.await(started);
         yield* TestClock.adjust(1_000);
         yield* harness.wake("application-active-probe");
+        yield* supervisor.retryNow;
+        yield* harness.wake("network-changed");
         for (const elapsed of [2_001, 12_000]) {
           yield* TestClock.adjust(elapsed);
           expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
@@ -73,13 +86,15 @@ describe("connected session health probes", () => {
   );
 
   it.effect(
-    "reconnects an unanswered loopback probe at 60 seconds despite subsequent signals",
+    "reconnects an unanswered probe-capable loopback session at 60 seconds despite an answering descriptor and subsequent signals",
     () =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const reconnectStarted = yield* Deferred.make<void>();
         const allowReconnect = yield* Deferred.make<void>();
         const harness = yield* makeHarness({
+          initialConfig: () => Effect.succeed(PROBE_CAPABLE_CONFIG),
+          checkHost: () => Effect.succeed("answered"),
           prepare: (attempt) =>
             attempt === 1
               ? Effect.succeed(LOOPBACK_PREPARED)
@@ -101,6 +116,8 @@ describe("connected session health probes", () => {
         yield* Deferred.await(started);
         yield* TestClock.adjust(1_000);
         yield* harness.wake("application-active-probe");
+        yield* supervisor.retryNow;
+        yield* harness.wake("network-changed");
         yield* TestClock.adjust(58_999);
         expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
         expect(yield* Ref.get(harness.releaseCount)).toBe(0);
@@ -143,7 +160,7 @@ describe("connected session health probes", () => {
   );
 
   it.effect.each([
-    { reason: "application-active-probe", timeoutMs: 3_000, shorten: false },
+    { reason: "application-active-probe", timeoutMs: 15_000, shorten: false },
     { reason: "application-active", timeoutMs: 15_000, shorten: false },
     { reason: "application-active", timeoutMs: 4_000, shorten: true },
   ] as const)("keeps remote probe deadline $timeoutMs ms ($reason, shorten=$shorten)", (test) =>
@@ -160,7 +177,7 @@ describe("connected session health probes", () => {
       yield* harness.wake(test.reason);
       yield* Deferred.await(started);
       yield* TestClock.adjust(1_000);
-      if (test.shorten) yield* harness.wake("application-active-probe");
+      if (test.shorten) yield* harness.wake("application-active-long");
       yield* TestClock.adjust(test.timeoutMs - 1_001);
       expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
       expect(yield* Ref.get(harness.releaseCount)).toBe(0);

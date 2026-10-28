@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlError from "effect/sql/SqlError";
 import { RelayDb } from "../db.ts";
 
@@ -29,9 +30,11 @@ const make = Effect.gen(function* () {
   return AccountTransactions.of({
     run: Effect.fn("AccountTransactions.run")(function* (input, effect) {
       if (yield* HeldAccountTransaction) return yield* effect;
+      const enclosing = yield* Effect.serviceOption(sql.transactionService);
       return yield* sql.withTransaction(
         Effect.gen(function* () {
-          yield* sql`SET TRANSACTION ISOLATION LEVEL READ COMMITTED`;
+          // Only the outermost transaction may set isolation; Connect link completion encloses this one.
+          if (Option.isNone(enclosing)) yield* sql`SET TRANSACTION ISOLATION LEVEL READ COMMITTED`;
           for (const key of [
             ...new Set([
               ...(input.environmentPublicKey === undefined ? [] : [input.environmentPublicKey]),

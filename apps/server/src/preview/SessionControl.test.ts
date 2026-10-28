@@ -220,6 +220,29 @@ describe("SessionControl", () => {
     expect(changes).toEqual([true, false]);
   });
 
+  it("marks a refusal raised before input, and leaves a cut after the gate unmarked", async () => {
+    const control = new SessionControl("agent");
+    control.stopAgents();
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "stopped",
+      beforeInput: true,
+    });
+    control.resumeAgents();
+    const gate = control.dispatchGate();
+    await control.take("person");
+    await control.release("person");
+    expect(() => gate()).toThrow(expect.objectContaining({ beforeInput: true }));
+    const started = Promise.withResolvers<void>();
+    const acting = control.agent("agent", () => {
+      control.dispatchGate()();
+      started.resolve();
+      return new Promise<never>(() => {});
+    });
+    await started.promise;
+    control.stopAgents();
+    await expect(acting).rejects.toMatchObject({ reason: "stopped", beforeInput: false });
+  });
+
   it("answers a stopped action at once even when its work ignores the signal, and keeps later actions behind that work", async () => {
     const control = new SessionControl("agent");
     const work = Promise.withResolvers<string>();
@@ -396,5 +419,57 @@ describe("SessionControl", () => {
       reason: "agentMismatch",
     });
     expect(dispatched).toEqual([]);
+  });
+
+  it("holds a tab an agent handed to a person until their hand back is recorded, not when their viewer drops", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    const before = control.generation;
+    expect(control.requestHandoff("Sign in with the code on your phone.")).toBe(true);
+    // Refs the agent took before asking expire, as at a takeover.
+    expect(control.generation).toBeGreaterThan(before);
+    await expect(control.agent("agent", async () => "typed")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await expect(control.secret("agent", async () => "filled")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await control.take("viewer");
+    await control.disconnect("viewer");
+    expect([control.handoffReason, ends]).toEqual(["Sign in with the code on your phone.", []]);
+    await control.take("viewer");
+    await control.release("viewer");
+    // Held until the hand back is recorded, which then ends it without reporting it again.
+    expect([control.handoffReason, ends]).toEqual([
+      "Sign in with the code on your phone.",
+      ["handedBack"],
+    ]);
+    expect(control.agentCanActNow("agent")).toBe(false);
+    control.endHandoff(null);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+    control.requestHandoff("Solve the CAPTCHA.");
+    control.stopAgents();
+    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "stopped"]]);
+  });
+
+  it("lets the request's own end free the tab without reporting a person's hand back", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    control.requestHandoff("Approve the sign-in.");
+    control.endHandoff(null);
+    expect(ends).toEqual([]);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+  });
+  it("refuses an agent's dialog answer or close on a tab it handed to a person", () => {
+    const control = new SessionControl("agent");
+    control.assertNoHumanControl();
+    control.requestHandoff("Decide whether to trust this device.", "handoff:dialog");
+    expect(() => control.assertNoHumanControl()).toThrow(
+      expect.objectContaining({ reason: "humanControl" }),
+    );
+    control.endHandoff(null);
+    control.assertNoHumanControl();
   });
 });

@@ -1,3 +1,9 @@
+import {
+  makeStartupFailureReporter,
+  makeBackendReadinessWait,
+  type BackendStartupFailure,
+} from "./DesktopBackendStartup.ts";
+export type { BackendStartupFailure } from "./DesktopBackendStartup.ts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
@@ -9,7 +15,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
@@ -33,6 +38,7 @@ import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublish
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
+const STARTUP_FAILURE_RESTART_ATTEMPTS = 3;
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
 const MAX_PREFLIGHT_FAILURE_ATTEMPTS = 5;
@@ -239,6 +245,7 @@ export interface BackendInstanceSpec {
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
   readonly onStateDirOwned?: () => Effect.Effect<void>;
   readonly onDatabaseAhead?: () => Effect.Effect<void>;
+  readonly onStartupFailure?: (failure: BackendStartupFailure) => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -622,6 +629,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const httpClient = yield* HttpClient.HttpClient;
   const state = yield* Ref.make(initialState);
   const mutex = yield* Semaphore.make(1);
+  const startupFailure = yield* makeStartupFailureReporter(spec.onStartupFailure);
 
   const { logWarning: logInstanceWarning, logError: logInstanceError } =
     DesktopObservability.makeComponentLogger(`desktop-backend-instance:${spec.id}`);
@@ -898,6 +906,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ...run,
               pid: Option.some(pid),
             }));
+            yield* startupFailure.reset;
             yield* backendOutputLog.beginSession({
               details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
             });
@@ -946,9 +955,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               yield* backendOutputLog.persistFailureSnapshot({
                 details: error.message,
               });
+              yield* startupFailure.report("The server started but did not become ready in time.");
             },
           ),
-          onOutput: (streamName, chunk) => backendOutputLog.writeOutputChunk(streamName, chunk),
+          onOutput: (streamName, chunk) =>
+            startupFailure
+              .append(streamName, chunk)
+              .pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -994,6 +1007,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           reason,
           delayMs: Duration.toMillis(delay),
         });
+        if ((yield* Ref.get(state)).restartAttempt >= STARTUP_FAILURE_RESTART_ATTEMPTS) {
+          yield* startupFailure.report(`The server could not start (${reason}).`);
+        }
         const restartFiber = yield* Effect.forkIn(
           Effect.sleep(delay).pipe(
             Effect.andThen(
@@ -1121,25 +1137,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     });
   });
 
-  const waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean> = Effect.fn(
-    "DesktopBackendManager.waitForReady",
-  )(
-    function* (_timeout: Duration.Duration) {
-      const current = yield* Ref.get(state);
-      if (!current.desiredRunning) return { done: true, ready: false };
-      return current.ready ? { done: true, ready: true } : { done: false, ready: false };
-    },
-    (effect, timeout) =>
-      effect.pipe(
-        Effect.repeat({
-          until: (status) => status.done,
-          schedule: Schedule.spaced(Duration.millis(100)),
-        }),
-        Effect.map((status) => status.ready),
-        Effect.timeoutOption(timeout),
-        Effect.map(Option.getOrElse(() => false)),
-      ),
-  );
+  const waitForReady = makeBackendReadinessWait(snapshot);
 
   yield* Effect.addFinalizer(() => stop());
 

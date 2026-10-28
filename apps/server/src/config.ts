@@ -1,5 +1,4 @@
 import * as Context from "effect/Context";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -9,7 +8,6 @@ import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import type { OtlpEndpointSource } from "@goat/contracts";
-import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import {
   DEFAULT_SIGNAL_EXPORT,
   nodeProcessRuntimeAttributes,
@@ -199,14 +197,6 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
     ],
     { concurrency: "unbounded" },
   );
-
-  const swept = sweepStalePendingAttachments({
-    attachmentsDir: derivedPaths.attachmentsDir,
-    nowMs: yield* Clock.currentTimeMillis,
-  });
-  if (swept.deleted > 0) {
-    yield* Effect.logInfo("Removed expired attachment uploads.", { deleted: swept.deleted });
-  }
 });
 
 const makeTest = Effect.fn("ServerConfig.makeTest")(function* (

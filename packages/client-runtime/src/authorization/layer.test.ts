@@ -1,3 +1,4 @@
+import { makeManagedRelayTestClient } from "../relay/managedRelayTestClient.ts";
 import { vi } from "vite-plus/test";
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
@@ -171,7 +172,7 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
       ),
   });
   const unexpected = () => Effect.die("Unexpected relay request");
-  const relay = ManagedRelay.ManagedRelayClient.of({
+  const relay = makeManagedRelayTestClient({
     relayUrl: "https://relay.example.test",
     listEnvironments: unexpected,
     listDevices: unexpected,
@@ -190,7 +191,6 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
     unregisterDevice: unexpected,
     registerLiveActivity: unexpected,
     getAgentActivitySnapshot: unexpected,
-    resetTokenCache: Effect.void,
   });
   const layer = RemoteEnvironmentAuthorization.layer.pipe(
     Layer.provide(

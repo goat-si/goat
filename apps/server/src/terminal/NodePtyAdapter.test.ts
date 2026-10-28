@@ -4,10 +4,12 @@ import * as NodeNet from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
+import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
 import * as NodePtyAdapter from "./NodePtyAdapter.ts";
@@ -71,6 +73,34 @@ const layerTestFor = (platform: NodeJS.Platform = "win32") =>
   );
 
 const layerTest = layerTestFor();
+
+it.effect("expires a silent Windows PTY handshake and permits another spawn", () =>
+  Effect.gen(function* () {
+    const { nativeProcess, subscribed } = preparePendingProcess();
+    const adapter = yield* PtyAdapter.PtyAdapter;
+    const done = yield* Deferred.make<void>();
+    const fiber = yield* adapter.spawn(spawnInput).pipe(
+      Effect.result,
+      Effect.tap(() => Deferred.succeed(done, undefined)),
+      Effect.forkChild,
+    );
+    yield* subscribed;
+    yield* TestClock.adjust("15 seconds");
+    assert.isTrue(yield* Deferred.isDone(done));
+    const result = yield* Fiber.join(fiber);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.instanceOf(result.failure, PtyAdapter.PtySpawnError);
+    assert.equal(nativeProcess._socket.listenerCount("ready_datapipe"), 0);
+    assert.equal(nativeProcess._socket.listenerCount("error"), 0);
+    assert.equal(nativeProcess._socket.listenerCount("close"), 0);
+    assert.equal(nativeProcess.events.listenerCount("exit"), 0);
+    assert.equal(nativeProcess._agent.kill.mock.calls.length, 1);
+    const next = yield* adapter.spawn(spawnInput);
+    assert.isAbove(next.pid, 0);
+    yield* TestClock.adjust("1 minute");
+    assert.equal(spawn.mock.results.at(-1)?.value._agent.kill.mock.calls.length, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
 
 it.effect("waits for the Windows PID without requiring output", () =>
   Effect.gen(function* () {

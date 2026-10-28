@@ -11,6 +11,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 
+const WINDOWS_PTY_READY_TIMEOUT = "15 seconds";
+const isPtySpawnError = Schema.is(PtyAdapter.PtySpawnError);
+
 export class NodePtyModuleLoadError extends Schema.TaggedError<NodePtyModuleLoadError>()(
   "NodePtyModuleLoadError",
   {
@@ -270,6 +273,12 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
       });
       if (platform === "win32") {
         yield* waitForWindowsPid(ptyProcess.nativeProcess, ptyProcess.process, input.shell).pipe(
+          Effect.timeout(WINDOWS_PTY_READY_TIMEOUT),
+          Effect.mapError((cause) =>
+            isPtySpawnError(cause)
+              ? cause
+              : new PtyAdapter.PtySpawnError({ adapter: "node-pty", shell: input.shell, cause }),
+          ),
           Effect.onError(() =>
             Effect.sync(() => ptyProcess.process.disposeExitSubscription()).pipe(
               Effect.andThen(killStartingWindowsPty(ptyProcess.nativeProcess)),

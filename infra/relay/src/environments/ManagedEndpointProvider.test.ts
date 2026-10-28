@@ -695,6 +695,7 @@ describe("ManagedEndpointProvider", () => {
                 environmentId: input.environmentId,
                 tunnelId: "replacement-tunnel",
                 generation: claimedGeneration,
+                incarnationId: input.incarnationId,
               })
               .pipe(Effect.asVoid);
           }),
@@ -820,7 +821,10 @@ describe("ManagedEndpointProvider", () => {
           Effect.gen(function* () {
             if (changeGeneration) {
               changeGeneration = false;
-              yield* allocations.claimDeprovision(input);
+              yield* allocations.claimDeprovision({
+                ...input,
+                incarnationId: (yield* allocations.get(input))?.incarnationId ?? "missing",
+              });
             }
             return yield* allocations.recordTunnel(input);
           }),

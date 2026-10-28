@@ -57,7 +57,10 @@ vi.mock("../agent-awareness/remoteRegistration", () => ({
   unregisterAgentAwarenessDeviceForCurrentUser: vi.fn(),
 }));
 
-type ClerkListener = (resources: { readonly user: { readonly id: string } | null }) => void;
+type ClerkListener = (resources: {
+  readonly user: { readonly id: string } | null;
+  readonly session: { readonly status: string } | null;
+}) => void;
 
 function fakeClerk() {
   const listeners = new Set<ClerkListener>();
@@ -69,7 +72,11 @@ function fakeClerk() {
     },
   } as unknown as Parameters<typeof cloudAccountService.attach>[0];
   const emit = (userId: string | null) => {
-    for (const listener of listeners) listener({ user: userId === null ? null : { id: userId } });
+    for (const listener of listeners)
+      listener({
+        user: userId === null ? null : { id: userId },
+        session: userId === null ? null : { status: "active" },
+      });
   };
   return { clerk, emit };
 }
@@ -144,11 +151,19 @@ async function renderProvider() {
   await act(() => root.unmount());
 }
 
-it("does not initialize Clerk when cloud config lacks a JWT template", async () => {
-  expoConfig.extra = { ...completeExtra, clerk: { publishableKey: "pk_test_example" } };
+it("does not initialize Clerk when cloud config lacks a publishable key", async () => {
+  expoConfig.extra = { ...completeExtra, clerk: {} };
   vi.resetModules();
   await renderProvider();
   expect(ClerkProvider).not.toHaveBeenCalled();
+});
+
+it("initializes with complete public configuration without a legacy JWT template", async () => {
+  goatConnect.enabled = true;
+  expoConfig.extra = { ...completeExtra, clerk: { publishableKey: "pk_test_example" } };
+  vi.resetModules();
+  await renderProvider();
+  expect(ClerkProvider).toHaveBeenCalled();
 });
 
 it("does not initialize Clerk when GOAT Connect is disabled", async () => {

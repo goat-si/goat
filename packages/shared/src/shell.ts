@@ -9,8 +9,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
 import * as HostProcess from "./HostProcess.ts";
+import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 const WINDOWS_PATH_DELIMITER = ";";
@@ -747,22 +749,7 @@ export function npmShimExecutable(
   return isFile(executable) ? executable : undefined;
 }
 
-export type XcodeGitLocator = (env: NodeJS.ProcessEnv) => string | undefined;
-
-// xcrun honors DEVELOPER_DIR and the `xcode-select` choice, as the shim does.
-function locateXcodeGitWithXcrun(env: NodeJS.ProcessEnv): string | undefined {
-  try {
-    const located = NodeChildProcess.execFileSync("/usr/bin/xcrun", ["--find", "git"], {
-      encoding: "utf8",
-      env,
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return NodePath.isAbsolute(located) ? located : undefined;
-  } catch {
-    return undefined;
-  }
-}
+export type XcodeGitLocator = (env: NodeJS.ProcessEnv) => Effect.Effect<string | undefined>;
 
 export const XcodeGitLocation = Context.Reference<XcodeGitLocator>(
   "@goat/shared/shell/XcodeGitLocation",
@@ -771,42 +758,53 @@ export const XcodeGitLocation = Context.Reference<XcodeGitLocator>(
 
 const MACOS_GIT_SHIM = "/usr/bin/git";
 
+const MacosGitResolutionLock = Context.Reference("@goat/shared/shell/MacosGitResolutionLock", {
+  defaultValue: () => Semaphore.makeUnsafe(1),
+});
+
 /**
  * Skip the xcrun shim's per-spawn lookup only when git resolves to /usr/bin/git.
  * User-selected git on PATH still wins, children keep PATH, and lookup failures use `git`.
  */
-const resolveMacosGit = Effect.fnUntraced(function* (
+const resolveMacosGit = Effect.fn("shell.resolveMacosGit")(function* (
   env: NodeJS.ProcessEnv,
   resolveExecutable: SpawnExecutableResolver,
 ) {
-  const locateXcodeGit = yield* XcodeGitLocation;
-  const cache = yield* CommandResolutionCache;
-  const cacheKey = [
-    "xcode-git",
-    String(spawnResolverCacheId(resolveExecutable)),
-    String(spawnResolverCacheId(locateXcodeGit)),
-    resolvePathEnvironmentVariable(env),
-    env.DEVELOPER_DIR ?? "",
-  ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
-  const nowNanos = yield* Clock.currentTimeNanos;
-  const cached = cache.get(cacheKey);
-  // An Xcode update or removal deletes the binary; look again instead of failing the spawn.
-  if (
-    cached !== undefined &&
-    cached.expiresAtNanos > nowNanos &&
-    (cached.resolvedPath === null ||
-      resolveExecutable(cached.resolvedPath, "darwin", env) !== undefined)
-  ) {
-    return cached.resolvedPath ?? "git";
-  }
-  const located =
-    resolveExecutable("git", "darwin", env) === MACOS_GIT_SHIM ? locateXcodeGit(env) : undefined;
-  const realGit =
-    located !== undefined && resolveExecutable(located, "darwin", env) !== undefined
-      ? located
-      : null;
-  cacheCommandResolution(cache, cacheKey, realGit, nowNanos);
-  return realGit ?? "git";
+  const lock = yield* MacosGitResolutionLock;
+  return yield* lock.withPermits(1)(
+    Effect.gen(function* () {
+      const locateXcodeGit = yield* XcodeGitLocation;
+      const cache = yield* CommandResolutionCache;
+      const cacheKey = [
+        "xcode-git",
+        String(spawnResolverCacheId(resolveExecutable)),
+        String(spawnResolverCacheId(locateXcodeGit)),
+        resolvePathEnvironmentVariable(env),
+        env.DEVELOPER_DIR ?? "",
+      ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
+      const nowNanos = yield* Clock.currentTimeNanos;
+      const cached = cache.get(cacheKey);
+      // An Xcode update or removal deletes the binary; look again instead of failing the spawn.
+      if (
+        cached !== undefined &&
+        cached.expiresAtNanos > nowNanos &&
+        (cached.resolvedPath === null ||
+          resolveExecutable(cached.resolvedPath, "darwin", env) !== undefined)
+      ) {
+        return cached.resolvedPath ?? "git";
+      }
+      const located =
+        resolveExecutable("git", "darwin", env) === MACOS_GIT_SHIM
+          ? yield* locateXcodeGit(env)
+          : undefined;
+      const realGit =
+        located !== undefined && resolveExecutable(located, "darwin", env) !== undefined
+          ? located
+          : null;
+      cacheCommandResolution(cache, cacheKey, realGit, yield* Clock.currentTimeNanos);
+      return realGit ?? "git";
+    }),
+  );
 });
 
 export interface SpawnCommandOptions extends CommandAvailabilityOptions {

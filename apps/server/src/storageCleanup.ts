@@ -1,3 +1,4 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import {
   GitCommandError,
   OrchestrationV2AppThreadJson,
@@ -186,6 +187,7 @@ export class StorageCleanup extends Context.Service<
 >()("goat/storageCleanup") {}
 
 const make = Effect.gen(function* () {
+  const auxiliary = yield* AuxiliarySqlite.AuxiliarySqlite;
   const automationHold = yield* AutomationHold.AutomationHold;
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* Settings.ServerSettingsService;
@@ -236,10 +238,7 @@ const make = Effect.gen(function* () {
         );
       });
 
-  // pnpm imports packages by clone or reflink when its store shares a device
-  // with the worktree. Those files have one link but share blocks with the
-  // store, so removing them frees almost nothing. A store on another device
-  // forces real copies, which still count.
+  // Same-device pnpm clones share store blocks; only cross-device copies count toward reclaim.
   const sharedPnpmVirtualStore = Effect.fnUntraced(
     function* (root: string) {
       const nodeModules = path.join(root, "node_modules");
@@ -702,9 +701,10 @@ const make = Effect.gen(function* () {
       );
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
-    // Another local GOAT app may hold these checkouts; see otherGoatHomes.
     roots.splice(0, roots.length, ...(yield* ownWorktreeRoots({ roots, baseDir: config.baseDir })));
-    const otherBindings = yield* readOtherHomeBindings({ ownDatabase: config.dbPath });
+    const otherBindings = yield* readOtherHomeBindings({ ownDatabase: config.dbPath }).pipe(
+      Effect.provideService(AuxiliarySqlite.AuxiliarySqlite, auxiliary),
+    );
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
           SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t

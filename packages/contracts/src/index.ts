@@ -93,6 +93,7 @@ export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./previewAutomationControl.ts";
 export * from "./previewSession.ts";
+export * from "./previewHandoff.ts";
 export * from "./connectionCatalog.ts";
 export * from "./previewCapture.ts";
 export * from "./resourceTelemetry.ts";
@@ -128,3 +129,5 @@ export * from "./humanStepResult.ts";
 export * from "./permissionProfiles.ts";
 export * from "./goatclawLanes.ts";
 export * from "./decisions.ts";
+
+export * from "./actionOutcomeSafety.ts";

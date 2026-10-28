@@ -193,6 +193,7 @@ export function makeAllocations(calls: AllocationCall[] = []) {
   const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
   const recoveryEnabled = new Set<string>();
   let generation = 0;
+  let incarnations = 0;
   const mutate = (
     key: string,
     change: (
@@ -220,7 +221,7 @@ export function makeAllocations(calls: AllocationCall[] = []) {
         calls.push({ operation: "reserve", input });
         const allocation = allocations.get(allocationKey(input)) ?? {
           ...input,
-          incarnationId: "10000000-0000-4000-8000-000000000001",
+          incarnationId: `10000000-0000-4000-8000-${String(++incarnations).padStart(12, "0")}`,
           accountEpoch: 1,
           endpointGeneration: 0,
           capacityReleasedAt: null,
@@ -239,7 +240,10 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "recordTunnel", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation
+        ) {
           return null;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -253,7 +257,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "recordDns", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation || current.tunnelId !== input.tunnelId) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation ||
+          current.tunnelId !== input.tunnelId
+        ) {
           return null;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -266,7 +274,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "markReady", input });
         const current = allocations.get(allocationKey(input));
-        if (current?.generation !== input.generation || current.tunnelId !== input.tunnelId) {
+        if (
+          current?.incarnationId !== input.incarnationId ||
+          current.generation !== input.generation ||
+          current.tunnelId !== input.tunnelId
+        ) {
           return false;
         }
         mutate(allocationKey(input), (allocation) => ({
@@ -301,7 +313,8 @@ export function makeAllocations(calls: AllocationCall[] = []) {
         if (
           allocation === undefined ||
           allocation.tunnelId !== input.tunnelId ||
-          allocation.generation !== input.generation
+          allocation.generation !== input.generation ||
+          allocation.incarnationId !== input.incarnationId
         ) {
           return null;
         }
@@ -311,7 +324,9 @@ export function makeAllocations(calls: AllocationCall[] = []) {
     withClaimedTunnel: (input, effect) =>
       Effect.suspend(() => {
         const current = allocations.get(allocationKey(input));
-        return current?.tunnelId === input.tunnelId && current.generation === input.generation
+        return current?.incarnationId === input.incarnationId &&
+          current.tunnelId === input.tunnelId &&
+          current.generation === input.generation
           ? Effect.asSome(effect)
           : Effect.succeedNone;
       }),
@@ -319,7 +334,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "claimDeprovision", input });
         const allocation = allocations.get(allocationKey(input));
-        if (allocation === undefined || allocation.generation !== input.generation) {
+        if (
+          allocation === undefined ||
+          allocation.generation !== input.generation ||
+          allocation.incarnationId !== input.incarnationId
+        ) {
           return null;
         }
         mutate(allocationKey(input), (current) => current);
@@ -335,7 +354,11 @@ export function makeAllocations(calls: AllocationCall[] = []) {
       Effect.sync(() => {
         calls.push({ operation: "removeClaimed", input });
         const allocation = allocations.get(allocationKey(input));
-        if (allocation === undefined || allocation.generation !== input.generation) {
+        if (
+          allocation === undefined ||
+          allocation.generation !== input.generation ||
+          allocation.incarnationId !== input.incarnationId
+        ) {
           return false;
         }
         allocations.delete(allocationKey(input));

@@ -85,8 +85,8 @@ export interface ComputerUseAttachmentInput {
   readonly runtimeMode?: RuntimeMode | undefined;
   /** The run this session is prepared for; absent outside a turn. */
   readonly runId?: RunId | undefined;
-  /** A person caused that run (ComputerUseOrigin.personStarted). */
-  readonly personStarted?: boolean | undefined;
+  /** A person or an agent they direct caused that run (ComputerUseOrigin.directedRun). */
+  readonly directed?: boolean | undefined;
   readonly readOnly: boolean;
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
@@ -128,7 +128,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   const kind = everyAppKind({
     runtimeMode: input.runtimeMode,
     unattended,
-    personStarted: input.personStarted === true && input.runId !== undefined,
+    directed: input.directed === true && input.runId !== undefined,
   });
   const everyApp = kind !== undefined;
   const leases = input.leases;

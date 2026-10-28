@@ -1,4 +1,6 @@
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
+import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
+import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
 import { filePreviewKind } from "@goat/shared/filePreview";
 import { findRevealRef } from "./markdownFindContext";
 import { type MessageId, type ServerProviderSkill, ThreadId } from "@goat/contracts";
@@ -25,7 +27,6 @@ import {
   CalendarClockIcon,
   DownloadIcon,
   EyeIcon,
-  MessagesSquareIcon,
   RedoIcon as Redo2Icon,
   type IconComponent,
   UndoIcon as Undo2Icon,
@@ -170,9 +171,10 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           expanded && "w-full",
         )}
       >
+        <MessageAuthorHeading>Automation</MessageAuthorHeading>
         <FoldedMessageHeader
-          icon={CalendarClockIcon}
-          label="Automation"
+          lead={{ icon: CalendarClockIcon, label: "Automation" }}
+          name="Automation"
           summary={summary}
           expanded={expanded}
           onToggle={() => setExpanded((value) => !value)}
@@ -229,68 +231,37 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 }
 
 function FoldedMessageHeader(props: {
-  icon: IconComponent;
-  label: string;
+  /** Shown before the summary; an agent message names its sender above the bubble instead. */
+  lead?: { icon: IconComponent; label: string } | undefined;
+  /** Names the toggle when the message has no text to summarize. */
+  name: string;
   summary: string;
   expanded: boolean;
   onToggle: () => void;
-  /** Makes the label a button of its own; left out, the label stays plain text. */
-  onOpenLabel?: (() => void) | undefined;
 }) {
-  const Icon = props.icon;
-  const chevron = (
-    <ChevronDownIcon
-      className={cn(
-        "size-3.5 shrink-0 text-muted-foreground transition-transform",
-        props.expanded && "rotate-180",
-      )}
-    />
-  );
-  if (props.onOpenLabel) {
-    // A button cannot hold another, so the label sits beside the toggle; clicks on the
-    // icon and padding land on this row and still toggle.
-    return (
-      <div
-        data-scroll-anchor-ignore
-        onClick={(event) => {
-          if (event.target === event.currentTarget) props.onToggle();
-        }}
-        className="flex w-full min-w-0 items-center gap-1.5 rounded-2xl px-3 py-2 text-sm"
-      >
-        <Icon className="pointer-events-none size-4 shrink-0 stroke-2 text-muted-foreground" />
-        <InlineButton
-          tone="muted"
-          aria-label={`Open ${props.label}`}
-          onClick={props.onOpenLabel}
-          className="min-w-0 max-w-1/2"
-        >
-          <span className="truncate">{props.label}</span>
-        </InlineButton>
-        <button
-          type="button"
-          aria-expanded={props.expanded}
-          aria-label={props.summary ? undefined : `Message from ${props.label}`}
-          onClick={props.onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <span className="min-w-0 flex-1 truncate">{props.summary}</span>
-          {chevron}
-        </button>
-      </div>
-    );
-  }
+  const Lead = props.lead?.icon;
   return (
     <button
       type="button"
       aria-expanded={props.expanded}
+      aria-label={props.summary ? undefined : `Message from ${props.name}`}
       data-scroll-anchor-ignore
       onClick={props.onToggle}
       className="flex w-full min-w-0 items-center gap-1.5 rounded-2xl px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <Icon className="size-4 shrink-0 stroke-2 text-muted-foreground" />
-      <span className="max-w-1/2 shrink-0 truncate text-muted-foreground">{props.label}</span>
+      {Lead ? <Lead className="size-4 shrink-0 stroke-2 text-muted-foreground" /> : null}
+      {props.lead ? (
+        <span className="max-w-1/2 shrink-0 truncate text-muted-foreground">
+          {props.lead.label}
+        </span>
+      ) : null}
       <span className="min-w-0 flex-1 truncate">{props.summary}</span>
-      {chevron}
+      <ChevronDownIcon
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+          props.expanded && "rotate-180",
+        )}
+      />
     </button>
   );
 }
@@ -351,12 +322,36 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ? { environmentId: ctx.activeThreadEnvironmentId, threadId: senderThreadId }
       : null,
   );
-  const senderTitle = senderShell?.title.trim();
-  // Only a sender this environment still knows gets a link; anything else would open nowhere.
-  const openSender =
-    senderThreadId && senderTitle && senderShell?.deletedAt === null
-      ? () => ctx.onOpenThread(senderThreadId)
-      : undefined;
+  const senderTitle = senderShell?.title.trim() || "Untitled thread";
+  // An inherited message in a fork was delivered to the thread it was forked from.
+  const destinationThreadId = row.projectedItem?.item.threadId ?? ctx.threadRef?.threadId ?? null;
+  // A send from another machine names its sender in the context, as that machine described it.
+  const remoteSender = senderThreadId ? undefined : row.message.context?.remoteSender;
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const localMachine = useEnvironment(folded ? ctx.activeThreadEnvironmentId : null)?.label ?? null;
+  const machine = remoteSender?.environmentLabel ?? localMachine;
+  // Only a sender this environment still holds gets a link; anything else would open nowhere.
+  const sender: SentBySender = remoteSender
+    ? {
+        kind: "remote",
+        environmentId: remoteSender.environmentId,
+        threadId: remoteSender.threadId,
+        title: remoteSender.title,
+        connected: connectedEnvironmentIds.includes(remoteSender.environmentId),
+      }
+    : !senderThreadId
+      ? { kind: "unrecorded" }
+      : senderShell === null
+        ? { kind: "unknown" }
+        : senderShell.deletedAt !== null
+          ? { kind: "deleted", title: senderTitle }
+          : { kind: "open", threadId: senderThreadId, title: senderTitle };
+  const footerSender =
+    folded && senderThreadId
+      ? { threadId: senderThreadId }
+      : sender.kind === "remote" && sender.connected
+        ? { threadId: sender.threadId, environmentId: sender.environmentId }
+        : null;
   const resolvedContext = resolveUserMessageContext(
     userMessage.standingInstructions !== null || userMessage.attribution === "guest"
       ? { ...row.message, text: userMessage.text }
@@ -479,6 +474,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       className="group flex flex-col items-end gap-1"
       data-user-message-attribution={folded ? "agent" : undefined}
     >
+      {folded ? (
+        <TimelineSentByLabel
+          sender={sender}
+          destination={
+            destinationThreadId === null
+              ? null
+              : { threadId: destinationThreadId, messageId: row.message.id }
+          }
+          machine={machine}
+          sentAt={formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}
+          onOpenThread={ctx.onOpenThread}
+        />
+      ) : null}
       {userMessage.attribution === "t3code" ? (
         <p
           className="me-1 text-2xs text-muted-foreground/70"
@@ -493,8 +501,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <GuestMessageName name={userMessage.guestName} />
         </div>
       ) : null}
-      {row.message.inputIntent === "steer" ||
-      row.message.inputIntent === "promoted_queued_to_steer" ? (
+      {/* A message from another thread names its sender instead; how it arrived adds nothing. */}
+      {!folded &&
+      (row.message.inputIntent === "steer" ||
+        row.message.inputIntent === "promoted_queued_to_steer") ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div
@@ -505,14 +515,23 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           folded && expanded && "w-full",
         )}
       >
+        <MessageAuthorHeading>
+          {folded
+            ? sender.kind === "open" || sender.kind === "deleted"
+              ? sender.title
+              : "Agent"
+            : userMessage.guestName === undefined
+              ? "You"
+              : `${userMessage.guestName} (guest)`}
+        </MessageAuthorHeading>
         {folded ? (
           <FoldedMessageHeader
-            icon={MessagesSquareIcon}
-            label={senderTitle || "Agent"}
+            name={
+              sender.kind === "open" || sender.kind === "deleted" ? sender.title : "another thread"
+            }
             summary={foldSummary}
             expanded={expanded}
             onToggle={() => setExpanded((value) => !value)}
-            onOpenLabel={openSender}
           />
         ) : null}
         {/* Find reads the DOM, so a folded message stays mounted but hidden while find is open. */}
@@ -525,9 +544,6 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
-            <MessageAuthorHeading>
-              {userMessage.guestName === undefined ? "You" : `${userMessage.guestName} (guest)`}
-            </MessageAuthorHeading>
             {(regularImages.length > 0 || userVideos.length > 0) && (
               <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
                 {regularImages.map((image) => (
@@ -681,8 +697,27 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         >
           <div className="flex shrink-0 items-center gap-2">
-            {folded && senderThreadId ? (
-              <InlineButton onClick={() => ctx.onOpenThread(senderThreadId)} tone="muted">
+            {sender.kind === "remote" && !sender.connected ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span tabIndex={0} className="text-muted-foreground/70 text-xs" />}
+                >
+                  Open thread
+                </TooltipTrigger>
+                <TooltipPopup>{`Connect ${machine ?? "that machine"} to open this thread`}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {footerSender !== null ? (
+              <InlineButton
+                onClick={() =>
+                  "environmentId" in footerSender
+                    ? ctx.onOpenThread(footerSender.threadId, {
+                        environmentId: footerSender.environmentId,
+                      })
+                    : ctx.onOpenThread(footerSender.threadId)
+                }
+                tone="muted"
+              >
                 Open thread
               </InlineButton>
             ) : null}
@@ -818,7 +853,7 @@ const COLLAPSED_USER_MESSAGE_FADE_MASK = `linear-gradient(to bottom, black calc(
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
   text: string;
   renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
-  skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills: ReadonlyArray<ServerProviderSkill>;
   markdownCwd: string | undefined;
   collapsible?: boolean;
   footer?: ReactNode;
@@ -894,7 +929,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   renderContextReference?: (reference: ChatMarkdownContextReference) => ReactNode;
-  skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills: ReadonlyArray<ServerProviderSkill>;
   markdownCwd: string | undefined;
 }) {
   const ctx = use(TimelineRowCtx);

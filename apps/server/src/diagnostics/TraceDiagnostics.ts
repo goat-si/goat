@@ -9,8 +9,10 @@ import type {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -406,7 +408,7 @@ export function streamTraceFileLines(
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
 
-  const read: TraceDiagnostics["Service"]["read"] = Effect.fn("TraceDiagnostics.read")(
+  const scan: TraceDiagnostics["Service"]["read"] = Effect.fn("TraceDiagnostics.scan")(
     function* (options) {
       const readAt = options.readAt ?? (yield* DateTime.now);
       const slowSpanThresholdMs = options.slowSpanThresholdMs ?? DEFAULT_SLOW_SPAN_THRESHOLD_MS;
@@ -460,6 +462,35 @@ export const make = Effect.gen(function* () {
         ...(readFailureError ? { partialFailure: true, error: readFailureError } : {}),
       });
     },
+  );
+
+  let inFlight = HashMap.empty<
+    readonly [string, number, number],
+    Deferred.Deferred<ServerTraceDiagnosticsResult>
+  >();
+  const read = Effect.fn("TraceDiagnostics.read")((options: TraceDiagnosticsOptions) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const readAt = options.readAt ?? (yield* DateTime.now);
+        const key = [
+          options.traceFilePath,
+          Math.max(0, Math.floor(options.maxFiles)),
+          options.slowSpanThresholdMs ?? DEFAULT_SLOW_SPAN_THRESHOLD_MS,
+        ] as const;
+        const existing = HashMap.get(inFlight, key);
+        if (Option.isSome(existing)) {
+          const result = yield* restore(Deferred.await(existing.value));
+          return { ...result, readAt };
+        }
+        const pending = Deferred.makeUnsafe<ServerTraceDiagnosticsResult>();
+        inFlight = HashMap.set(inFlight, key, pending);
+        const exit = yield* restore(scan({ ...options, readAt })).pipe(Effect.exit);
+        inFlight = HashMap.remove(inFlight, key);
+        yield* Deferred.done(pending, exit);
+        const result = yield* exit;
+        return { ...result, readAt };
+      }),
+    ),
   );
 
   return TraceDiagnostics.of({ read });

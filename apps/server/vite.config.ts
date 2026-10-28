@@ -6,6 +6,8 @@ import { defineConfig, mergeConfig } from "vite-plus";
 import baseConfig from "../../vite.config.ts";
 import { resolveBuildCommit, resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { resolveSeaBuildTarget } from "../../scripts/lib/sea-build-target.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -34,25 +36,36 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
 const buildCommitTime = resolveBuildCommitTime(import.meta.dirname);
 
 // tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
-const packExecutable = process.env.GOAT_PACK_EXE === "1";
+const packMode = process.env.GOAT_PACK_EXE;
+const packExecutable = packMode === "1" || packMode === "bundle";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
   "darwin-x64": { platform: "darwin", arch: "x64" },
-  "linux-arm64": { platform: "linux", arch: "arm64" },
   "linux-x64": { platform: "linux", arch: "x64" },
   "win-arm64": { platform: "win", arch: "arm64" },
   "win-x64": { platform: "win", arch: "x64" },
 } as const;
-const packExecutableTarget = process.env.GOAT_PACK_EXE_TARGET?.trim();
-if (packExecutableTarget && !Object.hasOwn(SEA_TARGETS, packExecutableTarget)) {
+const { target: packExecutableTarget, injectLinuxArm64 } = resolveSeaBuildTarget({
+  target: process.env.GOAT_PACK_EXE_TARGET,
+  platform: HostProcess.Platform.defaultValue(),
+  arch: HostProcess.Architecture.defaultValue(),
+});
+if (packMode === "1" && injectLinuxArm64) {
+  throw new Error("Use `node apps/server/scripts/cli.ts build-exe` for Linux ARM64 injection.");
+}
+if (packMode === "bundle" && !injectLinuxArm64) {
+  throw new Error("GOAT_PACK_EXE=bundle is only supported for native Linux ARM64 builds.");
+}
+const seaTarget = injectLinuxArm64 ? undefined : packExecutableTarget;
+if (seaTarget && !Object.hasOwn(SEA_TARGETS, seaTarget)) {
   throw new Error(
     `GOAT_PACK_EXE_TARGET must be one of ${Object.keys(SEA_TARGETS).join(", ")}, got "${packExecutableTarget}".`,
   );
 }
-const packExecutableTargets = packExecutableTarget
+const packExecutableTargets = seaTarget
   ? [
       {
-        ...SEA_TARGETS[packExecutableTarget as keyof typeof SEA_TARGETS],
+        ...SEA_TARGETS[seaTarget as keyof typeof SEA_TARGETS],
         // Exact pin: cross-target builds download this version's binary from nodejs.org.
         nodeVersion: rootPackageJson.engines.node,
       },
@@ -83,7 +96,8 @@ export default mergeConfig(
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
       clean: true,
-      ...(packExecutable
+      ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
+      ...(packMode === "1"
         ? {
             exe: {
               fileName: "goat",
@@ -108,6 +122,7 @@ export default mergeConfig(
         __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
         __GOAT_BUILD_COMMIT__: JSON.stringify(resolveBuildCommit(import.meta.dirname) ?? ""),
         __GOAT_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
+        __GOAT_BUILD_HOSTED_APP_URL__: JSON.stringify(repoEnv.GOAT_HOSTED_APP_URL?.trim() ?? ""),
         __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
         __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

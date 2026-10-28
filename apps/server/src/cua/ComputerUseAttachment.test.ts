@@ -110,6 +110,7 @@ const fakeLeases = (input: {
       input.detection ?? { humanInput: true, privateMode: true, frames: false },
     ),
     resume: Effect.die("unused"),
+    hold: () => Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
@@ -254,28 +255,33 @@ describe("computerUseAttachment", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("routes an interactive local provider thread through the proxy under a control", () =>
-    Effect.gen(function* () {
-      const driver = fakeDriver({ enabled: true, running: true });
-      const leases = fakeLeases({});
-      const attached = yield* decide(driver, { leases: leases.leases });
-      if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
-      // Without a primitive channel on this server the proxy gets no reverse-channel secret.
-      assert.equal(attached.proxyChannelToken, undefined);
-      assert.deepEqual(attached, {
-        _tag: "proxied",
-        mcp,
-        attachmentGeneration: attached.attachmentGeneration,
-        control: interactiveControl,
-        proxy,
-        // A cua-driver the person configured would skip Stop, pauses and app approvals.
-        overrideUserConfig: true,
-        skills: ["computer-use", "screen-code"],
-      });
-      assert.equal(driver.calls.acquire, 1);
-      // An interactive control is not tied to a grant, even when the thread holds one.
-      assert.deepEqual(leases.minted, [Option.none()]);
-    }),
+  it.effect.each(["codex", "fx"])(
+    "routes an interactive %s thread through the proxy under a control",
+    (provider) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const attached = yield* decide(driver, {
+          driver: ProviderDriverKind.make(provider),
+          leases: leases.leases,
+        });
+        if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+        // Without a primitive channel on this server the proxy gets no reverse-channel secret.
+        assert.equal(attached.proxyChannelToken, undefined);
+        assert.deepEqual(attached, {
+          _tag: "proxied",
+          mcp,
+          attachmentGeneration: attached.attachmentGeneration,
+          control: interactiveControl,
+          proxy,
+          // A cua-driver the person configured would skip Stop, pauses and app approvals.
+          overrideUserConfig: true,
+          skills: ["computer-use", "screen-code"],
+        });
+        assert.equal(driver.calls.acquire, 1);
+        // An interactive control is not tied to a grant, even when the thread holds one.
+        assert.deepEqual(leases.minted, [Option.none()]);
+      }),
   );
 
   it.effect("drops only the computer-use guide for the project that switched it off", () =>
@@ -328,38 +334,43 @@ describe("computerUseAttachment", () => {
     }),
   );
 
-  it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>
-    Effect.gen(function* () {
-      const driver = fakeDriver({ enabled: true, running: true });
-      const attached = yield* decide(driver, { leases: fakeLeases({}).leases }).pipe(
-        Effect.provide(
-          ServerSettings.ServerSettingsService.layerTest({
-            disabledBuiltInSkills: ["computer-use", "skill-from-a-newer-build"],
-          }),
-        ),
-      );
-      assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, ["screen-code"]);
-      const config = ComputerUse.withComputerUse(session, attached, ROUTE);
-      assert.isDefined(config.cuaDriver);
-      assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
-      const defaults = yield* decide(driver, { leases: fakeLeases({}).leases });
-      assert.isTrue(
-        McpProviderSession.carriesComputerUseSkill(
-          ComputerUse.withComputerUse(session, defaults, ROUTE),
-        ),
-      );
-    }),
+  it.effect.each(["codex", "fx"])(
+    "keeps %s tools but drops the skill the person switched off in Settings",
+    (provider) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const attached = yield* decide(driver, {
+          driver: ProviderDriverKind.make(provider),
+          leases: fakeLeases({}).leases,
+        }).pipe(
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({
+              disabledBuiltInSkills: ["computer-use", "skill-from-a-newer-build"],
+            }),
+          ),
+        );
+        assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, ["screen-code"]);
+        const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+        assert.isDefined(config.cuaDriver);
+        assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
+        const defaults = yield* decide(driver, {
+          driver: ProviderDriverKind.make(provider),
+          leases: fakeLeases({}).leases,
+        });
+        assert.isTrue(
+          McpProviderSession.carriesComputerUseSkill(
+            ComputerUse.withComputerUse(session, defaults, ROUTE),
+          ),
+        );
+      }),
   );
 
-  // Every origin a run can have: a person's client, an interactive run no person sent (a task's
-  // completion wake), and each unattended reason (automation, schedule, webhook, Slack, channels).
+  // Every origin a run can have: one a person or their agents direct, and each unattended reason (automation, schedule, webhook, Slack, channels).
   const everyOrigin: ReadonlyArray<{
     readonly label: string;
     readonly origin: ComputerUse.ComputerUseAttachmentInput["origin"];
-    readonly personStarted: boolean;
   }> = [
-    { label: "a person", origin: interactive, personStarted: true },
-    { label: "an interactive wake", origin: interactive, personStarted: false },
+    { label: "a person or an agent", origin: interactive },
     ...(
       [
         "goat_bot",
@@ -374,13 +385,12 @@ describe("computerUseAttachment", () => {
     ).map((reason) => ({
       label: `unattended ${reason}`,
       origin: { _tag: "unattended", reason } as const,
-      personStarted: false,
     })),
   ];
 
   it.effect.each(everyOrigin)(
     "D16: a full access run started by $label uses every app without approval, with the host setting off",
-    ({ origin, personStarted }) =>
+    ({ origin }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({});
@@ -388,7 +398,6 @@ describe("computerUseAttachment", () => {
           origin,
           runtimeMode: "full-access",
           runId: RunId.make("run:origin"),
-          personStarted,
           leases: leases.leases,
         }).pipe(Effect.provide(allowFullAccess(false)));
         assert.equal(
@@ -405,7 +414,7 @@ describe("computerUseAttachment", () => {
 
   it.effect.each(everyOrigin)(
     "a run outside full access started by $label still needs approval, with the host setting on",
-    ({ origin, personStarted }) =>
+    ({ origin }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({});
@@ -413,7 +422,6 @@ describe("computerUseAttachment", () => {
           origin,
           runtimeMode: "approval-required",
           runId: RunId.make("run:origin"),
-          personStarted,
           leases: leases.leases,
         }).pipe(Effect.provide(allowFullAccess(true)));
         assert.deepEqual(leases.everyApp, []);
@@ -463,7 +471,7 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  +it.effect.each([
+  it.effect.each([
     {
       label: "Plan",
       overrides: { interactionMode: "plan" },
@@ -522,16 +530,11 @@ describe("computerUseAttachment", () => {
                 id: runId,
                 userMessageId: MessageId.make("message:launch"),
                 requestedAt: at,
+                startedAt: at,
                 completedAt: null,
               },
             ]),
-          message: () =>
-            Effect.succeed({
-              createdAt: at,
-              createdBy: "agent" as const,
-              creationSource: "mcp" as const,
-            }),
-          grantRun: () => Effect.succeed(undefined),
+          message: () => Effect.succeed({ createdAt: at }),
         };
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({
@@ -541,7 +544,6 @@ describe("computerUseAttachment", () => {
           origin: yield* ComputerUseOrigin.computerUseOrigin(reads, { threadId, runId }),
           runtimeMode: "full-access",
           runId,
-          personStarted: yield* ComputerUseOrigin.personStarted(reads, { threadId, runId }),
           leases: leases.leases,
         });
         assert.equal(
@@ -617,40 +619,45 @@ describe("computerUseAttachment", () => {
     }),
   );
 
-  it.effect("refuses plan, read-only, disabled and cloud threads without starting the driver", () =>
-    Effect.gen(function* () {
-      const cases = [
-        [{ enabled: true }, { interactionMode: "plan" as const }, "plan"],
-        [{ enabled: true }, { readOnly: true }, "read-only"],
-        [{ enabled: false }, {}, "disabled"],
-        [
-          { enabled: true },
-          { driver: ProviderDriverKind.make("claudeCloud") },
-          "unsupported-provider",
-        ],
-        [
-          { enabled: true },
-          { driver: ProviderDriverKind.make("devinCloud") },
-          "unsupported-provider",
-        ],
-        [{ enabled: true }, { driver: ProviderDriverKind.make("muse") }, "unsupported-provider"],
-        [{ enabled: true }, { driver: undefined }, "unsupported-provider"],
-      ] as const;
-      for (const [settings, overrides, reason] of cases) {
-        const driver = fakeDriver({ ...settings, running: true });
-        assert.deepEqual(yield* decide(driver, overrides), {
+  it.effect.each(["codex", "fx"])(
+    "refuses plan, read-only, disabled and cloud threads without starting the driver (%s)",
+    (provider) =>
+      Effect.gen(function* () {
+        const cases = [
+          [{ enabled: true }, { interactionMode: "plan" as const }, "plan"],
+          [{ enabled: true }, { readOnly: true }, "read-only"],
+          [{ enabled: false }, {}, "disabled"],
+          [
+            { enabled: true },
+            { driver: ProviderDriverKind.make("claudeCloud") },
+            "unsupported-provider",
+          ],
+          [
+            { enabled: true },
+            { driver: ProviderDriverKind.make("devinCloud") },
+            "unsupported-provider",
+          ],
+          [{ enabled: true }, { driver: ProviderDriverKind.make("muse") }, "unsupported-provider"],
+          [{ enabled: true }, { driver: undefined }, "unsupported-provider"],
+        ] as const;
+        for (const [settings, overrides, reason] of cases) {
+          const driver = fakeDriver({ ...settings, running: true });
+          assert.deepEqual(
+            yield* decide(driver, { driver: ProviderDriverKind.make(provider), ...overrides }),
+            {
+              _tag: "none",
+              reason,
+              blockUserConfig: false,
+            },
+          );
+          assert.equal(driver.calls.acquire, 0, reason);
+        }
+        assert.deepEqual(yield* ComputerUse.computerUseAttachment(Option.none(), input()), {
           _tag: "none",
-          reason,
+          reason: "disabled",
           blockUserConfig: false,
         });
-        assert.equal(driver.calls.acquire, 0, reason);
-      }
-      assert.deepEqual(yield* ComputerUse.computerUseAttachment(Option.none(), input()), {
-        _tag: "none",
-        reason: "disabled",
-        blockUserConfig: false,
-      });
-    }),
+      }),
   );
 
   it.effect("reports an enabled driver that did not start as unavailable", () =>
@@ -693,53 +700,68 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  it.effect("gives an unattended turn nothing without a lease, and blocks a user's driver", () =>
-    Effect.gen(function* () {
-      const driver = fakeDriver({ enabled: true, running: true });
-      assert.deepEqual(yield* decide(driver, { origin: unattended }), {
-        _tag: "none",
-        reason: "needs-approval",
-        blockUserConfig: true,
-      });
-      // The daemon is not started for a turn that cannot use it.
-      assert.equal(driver.calls.acquire, 0);
-      // Every other refusal of an unattended turn still blocks a user-defined server.
-      assert.deepEqual(
-        yield* decide(fakeDriver({ enabled: false, running: true }), { origin: unattended }),
-        { _tag: "none", reason: "disabled", blockUserConfig: true },
-      );
-    }),
+  it.effect.each(["codex", "fx"])(
+    "gives an unattended %s turn nothing without a lease, and blocks a user's driver",
+    (provider) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        assert.deepEqual(
+          yield* decide(driver, { driver: ProviderDriverKind.make(provider), origin: unattended }),
+          {
+            _tag: "none",
+            reason: "needs-approval",
+            blockUserConfig: true,
+          },
+        );
+        // The daemon is not started for a turn that cannot use it.
+        assert.equal(driver.calls.acquire, 0);
+        // Every other refusal of an unattended turn still blocks a user-defined server.
+        assert.deepEqual(
+          yield* decide(fakeDriver({ enabled: false, running: true }), {
+            driver: ProviderDriverKind.make(provider),
+            origin: unattended,
+          }),
+          { _tag: "none", reason: "disabled", blockUserConfig: true },
+        );
+      }),
   );
 
-  it.effect("routes a leased unattended turn through the proxy, failing closed without one", () =>
-    Effect.gen(function* () {
-      const driver = fakeDriver({ enabled: true, running: true });
-      const leased = fakeLeases({ grant: lease });
-      const attached = yield* decide(driver, { origin: unattended, leases: leased.leases });
-      if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
-      assert.deepEqual(attached, {
-        _tag: "proxied",
-        mcp,
-        attachmentGeneration: attached.attachmentGeneration,
-        control: {
-          controlId: "control:unattended",
-          threadId: lease.threadId,
-          expiresAt: lease.expiresAt,
-          handoffId: lease.handoffId,
-        },
-        proxy,
-        overrideUserConfig: true,
-        skills: ["computer-use", "screen-code"],
-      });
-      assert.deepEqual(leased.minted, [Option.some(lease)]);
-      assert.deepEqual(
-        yield* decide(driver, {
+  it.effect.each(["codex", "fx"])(
+    "routes a leased unattended %s turn through the proxy, failing closed without one",
+    (provider) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leased = fakeLeases({ grant: lease });
+        const attached = yield* decide(driver, {
+          driver: ProviderDriverKind.make(provider),
           origin: unattended,
-          leases: fakeLeases({ grant: lease, proxy: undefined }).leases,
-        }),
-        { _tag: "none", reason: "unavailable", blockUserConfig: true },
-      );
-    }),
+          leases: leased.leases,
+        });
+        if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+        assert.deepEqual(attached, {
+          _tag: "proxied",
+          mcp,
+          attachmentGeneration: attached.attachmentGeneration,
+          control: {
+            controlId: "control:unattended",
+            threadId: lease.threadId,
+            expiresAt: lease.expiresAt,
+            handoffId: lease.handoffId,
+          },
+          proxy,
+          overrideUserConfig: true,
+          skills: ["computer-use", "screen-code"],
+        });
+        assert.deepEqual(leased.minted, [Option.some(lease)]);
+        assert.deepEqual(
+          yield* decide(driver, {
+            driver: ProviderDriverKind.make(provider),
+            origin: unattended,
+            leases: fakeLeases({ grant: lease, proxy: undefined }).leases,
+          }),
+          { _tag: "none", reason: "unavailable", blockUserConfig: true },
+        );
+      }),
   );
 
   it("replaces the session's previous driver with exactly the decision's", () => {

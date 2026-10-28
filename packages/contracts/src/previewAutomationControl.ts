@@ -33,3 +33,15 @@ const MESSAGES: Readonly<Record<PreviewAutomationControlReason, string>> = {
 
 export const previewControlMessage = (reason: PreviewAutomationControlReason | undefined) =>
   reason === undefined ? undefined : MESSAGES[reason];
+
+/** `human`: a person controls the tab now; `agent`: an agent session opened it; `unclaimed`: neither. */
+export const PreviewAutomationTabOwner = Schema.Literals(["agent", "human", "unclaimed"]);
+
+/** Who may drive a tab, as a status read reports it. */
+export const PreviewAutomationTabControl = Schema.Struct({
+  owner: PreviewAutomationTabOwner,
+  ownedByCaller: Schema.Boolean,
+  generation: Schema.Number,
+  /** An agent handed the tab to a person (preview.request_handoff) until they hand it back. */
+  waitingForPerson: Schema.optionalKey(Schema.Literal(true)),
+});

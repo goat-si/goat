@@ -16,6 +16,8 @@ export interface WindowsGitBashDeps {
 }
 
 const REG_SZ_VALUE = /^\s*DefaultShell\s+REG_SZ\s+(.+?)\s*$/iu;
+const REGISTRY_QUERY_TIMEOUT_MS = 5_000;
+const REGISTRY_QUERY_MAX_BYTES = 64 * 1024;
 
 /** The REG_SZ data from `reg query`, or undefined when the value is absent. */
 const parseOpenSshDefaultShell = (output: string | undefined): string | undefined => {
@@ -101,29 +103,27 @@ export const bashScriptArg = (shell: string, scriptFile: string): string =>
     ? scriptFile.replaceAll("\\", "/")
     : scriptFile;
 
-const readOpenSshDefaultShell = (): Effect.Effect<string | undefined> =>
-  Effect.promise(
-    () =>
-      new Promise((resolve) => {
-        const child = NodeChildProcess.spawn(
-          "reg",
-          ["query", String.raw`HKLM\SOFTWARE\OpenSSH`, "/v", "DefaultShell"],
-          { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-        );
-        const stdout: Buffer[] = [];
-        let settled = false;
-        const finish = (value: string | undefined) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        };
-        child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-        child.once("error", () => finish(undefined));
-        child.once("close", (code) =>
-          finish(code === 0 ? Buffer.concat(stdout).toString("utf8") : undefined),
-        );
-      }),
-  );
+const readOpenSshDefaultShell = Effect.fn("SshRuntimeGitBash.readDefaultShell")(
+  () =>
+    Effect.callback<string | undefined>((resume) => {
+      const child = NodeChildProcess.execFile(
+        "reg",
+        ["query", String.raw`HKLM\SOFTWARE\OpenSSH`, "/v", "DefaultShell"],
+        {
+          windowsHide: true,
+          timeout: REGISTRY_QUERY_TIMEOUT_MS,
+          maxBuffer: REGISTRY_QUERY_MAX_BYTES,
+          killSignal: "SIGKILL",
+        },
+        (error, stdout) => resume(Effect.succeed(error ? undefined : stdout)),
+      );
+      return Effect.sync(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      });
+    }),
+  Effect.timeoutOption(REGISTRY_QUERY_TIMEOUT_MS),
+  Effect.map((value) => (value._tag === "Some" ? value.value : undefined)),
+);
 
 const fileExists = (path: string): Effect.Effect<boolean> =>
   Effect.promise(() =>

@@ -47,6 +47,10 @@
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"
     },
+    "./server/windowsTaskkill": {
+      "types": "./src/server/windowsTaskkill.ts",
+      "import": "./src/server/windowsTaskkill.ts"
+    },
     "./server/driver": {
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"
@@ -62,6 +66,10 @@
     "./server/handoffBudget": {
       "types": "./src/server/handoffBudget.ts",
       "import": "./src/server/handoffBudget.ts"
+    },
+    "./server/finiteProviderRequest": {
+      "types": "./src/server/finiteProviderRequest.ts",
+      "import": "./src/server/finiteProviderRequest.ts"
     },
     "./server/IdAllocator": {
       "types": "./src/server/IdAllocator.ts",

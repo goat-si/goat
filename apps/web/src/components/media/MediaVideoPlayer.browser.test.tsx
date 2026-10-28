@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { act as screenAct, render as renderScreen, stubGlobal } from "../../../test/render";
 import { MediaVideoPlayer } from "./MediaVideoPlayer";
 
 const first = "https://example.com/video.mp4?signature=first";
@@ -266,4 +267,73 @@ describe("MediaVideoPlayer signed URL recovery", () => {
       ).not.toBeNull();
     },
   );
+});
+
+describe("MediaVideoPlayer visibility resources", () => {
+  it("shares one visibility observer and loads each nearby video's metadata", async () => {
+    const observers: VisibilityObserver[] = [];
+    class VisibilityObserver {
+      readonly targets = new Set<Element>();
+      constructor(readonly callback: IntersectionObserverCallback) {
+        observers.push(this);
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+      show() {
+        this.callback(
+          [...this.targets].map(
+            (target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry,
+          ),
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+    using _observer = stubGlobal("IntersectionObserver", VisibilityObserver);
+    await using screen = await renderScreen(
+      <>
+        <MediaVideoPlayer src={first} label="first" />
+        <MediaVideoPlayer src={second} label="second" />
+      </>,
+    );
+    const firstVideo = screen.getByLabelText("first");
+    const secondVideo = screen.getByLabelText("second");
+    await expect.element(firstVideo).toHaveAttribute("preload", "none");
+    await expect.element(secondVideo).toHaveAttribute("preload", "none");
+    expect(observers).toHaveLength(1);
+    await screenAct(() => observers[0]!.show());
+    await expect.element(firstVideo).toHaveAttribute("preload", "metadata");
+    await expect.element(secondVideo).toHaveAttribute("preload", "metadata");
+    expect(observers[0]!.targets.size).toBe(0);
+  });
+
+  it("keeps playback running across player rerenders", async () => {
+    await using screen = await renderScreen(<MediaVideoPlayer src={first} label="clip" />);
+    const video = screen.getByLabelText("clip").element() as HTMLVideoElement;
+    using pause = vi.spyOn(video, "pause").mockImplementation(() => undefined);
+    await screenAct(() => video.dispatchEvent(new Event("play", { bubbles: true })));
+    await screen.rerender(<MediaVideoPlayer src={first} label="renamed clip" />);
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  it("pauses a retried video when its document becomes hidden", async () => {
+    await using screen = await renderScreen(<MediaVideoPlayer src={first} label="clip" />);
+    const failedVideo = screen.getByLabelText("clip").element();
+    await screenAct(() => failedVideo.dispatchEvent(new Event("error")));
+    await screenAct(() =>
+      (screen.getByRole("button", { name: "Retry video" }).element() as HTMLButtonElement).click(),
+    );
+    const retriedVideo = screen.getByLabelText("clip").element() as HTMLVideoElement;
+    expect(retriedVideo).not.toBe(failedVideo);
+    using pause = vi.spyOn(retriedVideo, "pause").mockImplementation(() => undefined);
+    using _hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    await screenAct(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(pause).toHaveBeenCalledOnce();
+  });
 });

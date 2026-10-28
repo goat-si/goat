@@ -1,3 +1,7 @@
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as AuxiliarySqlite from "../../storage/AuxiliarySqlite.ts";
+import { ImessageDbError, openImessageChatDb } from "./imessageChatDb.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- synthetic SQLite and filesystem fixture only.
 import * as NodeSqlite from "node:sqlite";
 import * as NodeFS from "node:fs";
@@ -42,7 +46,7 @@ const file: ImessageSettingsFile = {
 };
 
 describe("iMessage owner poll", () => {
-  it.effect("starts at zero and replays a durable receipt after a lost checkpoint", () =>
+  it.effect("preserves cursors through held reads and ingest, and replays a lost checkpoint", () =>
     Effect.gen(function* () {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-imsg-replay-"));
       try {
@@ -53,6 +57,14 @@ describe("iMessage owner poll", () => {
         let cursor: ChannelLedger.ImessageCursor | undefined;
         let failCheckpoint = false;
         let scans = 0;
+        const queryStarted = yield* Deferred.make<void>();
+        const queryResult = yield* Deferred.make<ReadonlyArray<ImessageRow>, ImessageDbError>();
+        const ingestStarted = yield* Deferred.make<void>();
+        const ingestContinue = yield* Deferred.make<void>();
+        const checkpointStarted = yield* Deferred.make<void>();
+        const checkpointContinue = yield* Deferred.make<void>();
+        let held = false;
+        let failRead = false;
         const stored = new Set<string>();
         let receipts = 0;
         const ledger = {
@@ -67,13 +79,21 @@ describe("iMessage owner poll", () => {
                   detail: "fixture",
                 });
               }
+              if (held) {
+                yield* Deferred.succeed(checkpointStarted, undefined);
+                yield* Deferred.await(checkpointContinue);
+              }
               cursor = next;
             }),
           getDeliveryState: () => Effect.succeed(undefined),
         } as unknown as ChannelLedger.ChannelLedger["Service"];
         const gateway = {
           ingest: (message: ChannelInboundMessage) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
+              if (held) {
+                yield* Deferred.succeed(ingestStarted, undefined);
+                yield* Deferred.await(ingestContinue);
+              }
               receipts += 1;
               stored.add(message.idempotencyKey);
               return {} as ChannelIngestResult;
@@ -92,15 +112,23 @@ describe("iMessage owner poll", () => {
           } as unknown as ChannelTransport.ChannelTransportRegistry["Service"],
           scope,
           now: () => clock,
-          openDb: () => ({
-            maxRowId: () => max,
-            rowsAfter: (after) => {
-              scans += 1;
-              return row && row.rowid > after ? [row] : [];
-            },
-            rowById: (id) => (row === undefined ? undefined : { ...row, rowid: id }),
-            close: () => {},
-          }),
+          openDb: () =>
+            Effect.succeed({
+              maxRowId: () => Effect.succeed(max),
+              rowsAfter: (after) =>
+                Effect.gen(function* () {
+                  scans += 1;
+                  if (failRead) return yield* Effect.fail(new ImessageDbError("query_failed"));
+                  if (held) {
+                    yield* Deferred.succeed(queryStarted, undefined);
+                    return yield* Deferred.await(queryResult);
+                  }
+                  return row && row.rowid > after ? [row] : [];
+                }),
+              rowById: (id) =>
+                Effect.succeed(row === undefined ? undefined : { ...row, rowid: id }),
+              close: () => Effect.void,
+            }),
         });
         expect(yield* runtime.pollDue("owner")).toBe(0);
         expect(cursor).toEqual({ cursor: 0, pendingRowIds: [] });
@@ -135,6 +163,30 @@ describe("iMessage owner poll", () => {
         expect(cursor?.cursor).toBe(1);
         expect(receipts).toBe(2);
         expect(stored.size).toBe(1);
+        held = true;
+        clock += 5_000;
+        row = { ...row, rowid: 2, guid: "guid-held" };
+        max = 2;
+        const pendingPoll = yield* runtime.pollDue("owner").pipe(Effect.forkChild);
+        yield* Deferred.await(queryStarted);
+        expect(cursor).toEqual({ cursor: 1, pendingRowIds: [] });
+        yield* Deferred.succeed(queryResult, [row]);
+        yield* Deferred.await(ingestStarted);
+        expect(cursor).toEqual({ cursor: 1, pendingRowIds: [] });
+        yield* Deferred.succeed(ingestContinue, undefined);
+        yield* Deferred.await(checkpointStarted);
+        expect(cursor).toEqual({ cursor: 1, pendingRowIds: [] });
+        yield* Deferred.succeed(checkpointContinue, undefined);
+        expect(yield* Fiber.join(pendingPoll)).toBe(1);
+        expect(cursor).toEqual({ cursor: 2, pendingRowIds: [] });
+        held = false;
+        failRead = true;
+        cursor = { cursor: 2, pendingRowIds: [1] };
+        row = { ...row, chat_join_count: 0, chat_guid: null };
+        clock += 5_000;
+        expect((yield* Effect.result(runtime.pollDue("owner")))._tag).toBe("Failure");
+        expect(cursor).toEqual({ cursor: 2, pendingRowIds: [1] });
+        failRead = false;
         const pendingRowIds = Array.from({ length: 128 }, (_, index) => index + 1);
         cursor = { cursor: 129, pendingRowIds };
         row = { ...row, chat_join_count: 0, chat_guid: null };
@@ -186,6 +238,7 @@ describe("iMessage owner poll", () => {
         const layer = Layer.mergeAll(
           ChannelLedger.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
           ChannelTransport.layer,
+          AuxiliarySqlite.layer,
         ).pipe(Layer.provide(NodeServices.layer));
         yield* Effect.gen(function* () {
           const ledger = yield* ChannelLedger.ChannelLedger;
@@ -232,12 +285,18 @@ describe("iMessage owner poll", () => {
                 : Effect.fail(new ChannelGatewayError({ reason: "not_home" })),
             ),
           } as ChannelBotHome.ChannelBotHome["Service"];
+          const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
+          const openDb = (file: string) =>
+            openImessageChatDb(file).pipe(
+              Effect.provideService(AuxiliarySqlite.AuxiliarySqlite, reader),
+            );
           const registry = yield* ChannelTransport.ChannelTransportRegistry;
           const scope = yield* Scope.make();
           const runtime = makeImessageChannelRuntime({
             stateDir: dir,
             platform: "darwin",
             dbPath: path,
+            openDb,
             ledger,
             gateway,
             home,
@@ -303,6 +362,7 @@ describe("iMessage owner poll", () => {
             stateDir: dir,
             platform: "linux",
             dbPath: path,
+            openDb,
             ledger,
             gateway,
             home,

@@ -114,30 +114,42 @@ it.effect("an approved foreground request lets this turn's control take the fore
   ),
 );
 
-it.effect.each([
-  { from: "remote", unattended: false, kind: "available" },
-  { from: "schedule", unattended: true, kind: "needs_human" },
-] as const)(
-  "a full access turn from $from waits for its foreground approval only when launched from another environment",
-  ({ from, unattended, kind }) =>
+it.effect(
+  "a full access turn launched from another environment takes the foreground without a card, and waits for one after giving it up",
+  () =>
     withWaiting(
       ({ request, handoffs, leases, runId, created }) =>
         Effect.gen(function* () {
           // The every-app control the attachment gives this origin in full access.
-          assert.isTrue(
-            Option.isSome(yield* leases.everyAppControl(threadId, unattended, { runId })),
+          const control = Option.getOrThrow(
+            yield* leases.everyAppControl(threadId, false, { person: true, runId }),
           );
+          assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
+          if (!leases.releaseForeground) return assert.fail("releaseForeground is required");
+          yield* leases.releaseForeground({ threadId, controlId: control.controlId });
           const waiting = yield* request({ foreground: true }, WAIT).pipe(
             Effect.forkChild({ startImmediately: true }),
           );
-          const card = yield* created();
-          if (kind === "available") yield* answer(handoffs, card, "completed");
-          assert.equal((yield* Fiber.join(waiting)).kind, kind);
-          assert.equal(yield* leases.foregroundAvailable(threadId, purpose), kind === "available");
+          yield* answer(handoffs, yield* created(), "completed");
+          assert.equal((yield* Fiber.join(waiting)).kind, "available");
+          assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
         }),
       undefined,
-      from,
+      "remote",
     ),
+);
+
+it.effect("a scheduled full access turn still asks for the foreground and does not wait", () =>
+  withWaiting(
+    ({ request, leases, runId }) =>
+      Effect.gen(function* () {
+        assert.isTrue(Option.isSome(yield* leases.everyAppControl(threadId, true, { runId })));
+        assert.equal((yield* request({ foreground: true }, WAIT)).kind, "needs_human");
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));
+      }),
+    undefined,
+    "schedule",
+  ),
 );
 
 it.effect.each(["declined", "cancelled"] as const)(
@@ -280,6 +292,32 @@ it.effect(
             yield* leases.everyAppControl(threadId, false, { person: true, runId });
             assert.deepEqual(yield* Queue.take(watched), []);
             assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+          }),
+        (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
+      );
+    }),
+);
+
+it.effect(
+  "a whole-screen approval naming an app opened after computer use started asks the desktop to admit it",
+  () =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+      const devBuild = "com.t3tools.t3code.dev.worktree";
+      yield* withWaiting(
+        ({ request, handoffs, leases, runId, created }) =>
+          Effect.gen(function* () {
+            yield* leases.control(threadId, Option.none(), runId);
+            assert.deepEqual(yield* Queue.take(watched), []);
+            const screen = yield* request({}, WAIT).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* answer(handoffs, yield* created(), "completed");
+            assert.equal((yield* Fiber.join(screen)).kind, "available");
+            const named = yield* request({ apps: [devBuild] }, WAIT);
+            assert.equal(named.kind, "available");
+            assert.include(named.message, "bounded_resource_outside_manifest");
             assert.deepEqual(yield* Queue.take(watched), [devBuild]);
           }),
         (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),

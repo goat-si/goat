@@ -25,6 +25,7 @@
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
         "knip-schemas.ts",
+        "agent-surface/eval/replay-run.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
         "worktree-add.ts",
@@ -32,6 +33,7 @@
         "export-brand-icons.ts",
         "goat-rename.ts",
         "sign-macos.ts",
+        "smoke-desktop-app.ts",
         // Local Linux computer use helper build and its live check.
         "build-computer-use-helper-linux.ts",
         "computer-use-linux-smoke.ts",
@@ -53,6 +55,8 @@
         "src/claude-history-worker.ts!",
         // The Linux computer use helper, bundled on its own by scripts/build-computer-use-helper-linux.ts.
         "src/cua/linuxHelper/main.ts!",
+        // AcpAdapterV2.test.ts selects this subprocess fixture by path string.
+        "scripts/acp-mock-notice-v1-agent.ts",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",
@@ -102,6 +106,7 @@
       // generate-solar-icons after adding an icon.
       "entry": [
         "scripts/warm-dep-cache.ts",
+        "scripts/verify-built-boot.ts",
         "test/fixtures/**/*.mjs",
         "scripts/generate-solar-icons.ts",
         // scripts/bench-ssh-post-connect.mjs loads this module through Vite by path.
@@ -156,7 +161,12 @@
       ],
     },
     "infra/relay": {
-      "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
+      "entry": [
+        "alchemy.run.ts!",
+        "src/persistence/schema.ts!",
+        "postgres.vite.config.ts",
+        "src/**/*.postgres.ts",
+      ],
     },
     "infra/ingest": {
       // Wrangler loads the Worker's default export by path (wrangler.jsonc "main").

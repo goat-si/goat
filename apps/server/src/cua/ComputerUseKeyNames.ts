@@ -5,7 +5,15 @@
  */
 // Provider lines are JSON-RPC; only press_key and hotkey arguments are rewritten.
 // @effect-diagnostics preferSchemaOverJson:off
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+
+/** Whether a driver build presses keypad keys itself (goat.4 added their key codes). */
+export const driverPressesKeypad = (version: string) =>
+  Number(/-goat\.(\d+)$/u.exec(version)?.[1] ?? 0) >= 4;
+
+const PINNED_KEYPAD = driverPressesKeypad(CUA_DRIVER_VERSION);
 
 const MODIFIERS: ReadonlyMap<string, string> = new Map([
   ["cmd", "cmd"],
@@ -157,7 +165,7 @@ export type ResolvedKey =
   | { readonly error: string };
 
 /** One key press resolved to a key the driver can press and its modifiers. */
-function resolveKey(key: string, modifiers: ReadonlyArray<string>): ResolvedKey {
+function resolveKey(key: string, modifiers: ReadonlyArray<string>, keypad: boolean): ResolvedKey {
   const resolved: Array<string> = [];
   const add = (modifier: string) => {
     if (!resolved.includes(modifier)) resolved.push(modifier);
@@ -180,8 +188,11 @@ function resolveKey(key: string, modifiers: ReadonlyArray<string>): ResolvedKey 
     }
   }
   const folded = name.length > 1 ? canonical(name) : name;
-  // xdotool's Prior and Next are spelled as the driver knows them; other names pass as written.
-  const spelled = folded === "pageup" || folded === "pagedown" ? folded : name;
+  // A driver with keypad key codes gets the keypad key as named; its own pass reads it the same.
+  if (keypad && KEYPAD.has(folded)) return { key: name, modifiers: resolved };
+  // A spelling folded onto another name (Prior, ArrowLeft, KP_Enter) is sent as that name.
+  const aliased = name.length > 1 && ALIASES.has(name.toLowerCase().replace(/[ _-]/gu, ""));
+  const spelled = aliased ? folded : name;
   const character = KEYSYMS.get(folded) ?? KEYPAD.get(folded) ?? spelled;
   const base = SHIFTED.get(character);
   if (base !== undefined) add("shift");
@@ -226,6 +237,7 @@ const keyRefusal = (id: JsonRpcId, message: string) =>
  */
 export function resolveKeyCall(
   line: string,
+  { keypad = PINNED_KEYPAD }: { readonly keypad?: boolean } = {},
 ): { readonly line: string } | { readonly answer: string } {
   let message: Record<string, unknown> | undefined;
   try {
@@ -247,7 +259,7 @@ export function resolveKeyCall(
   if (params?.name === "press_key" && typeof args.key === "string") {
     const given = strings(args.modifiers ?? []);
     if (given === undefined) return { line };
-    const resolved = resolveKey(args.key, given);
+    const resolved = resolveKey(args.key, given, keypad);
     if ("error" in resolved) return { answer: keyRefusal(id, resolved.error) };
     if (resolved.key === args.key && resolved.modifiers.join() === given.join()) return { line };
     const { modifiers: _, ...rest } = args;
@@ -265,7 +277,15 @@ export function resolveKeyCall(
     const isModifier = (key: string) => MODIFIERS.has(key.trim().toLowerCase());
     const last = keys.findLast((key) => !isModifier(key));
     if (last === undefined) return { line };
-    const resolved = resolveKey(last, keys.filter(isModifier));
+    // Only modifiers come before the one plain key; anything else would be dropped silently.
+    if (keys.at(-1) !== last || keys.slice(0, -1).some((key) => !isModifier(key)))
+      return {
+        answer: keyRefusal(
+          id,
+          `A hotkey is modifiers (cmd, shift, option, ctrl or fn) followed by one key, and ${JSON.stringify(keys)} is not. Nothing was pressed.`,
+        ),
+      };
+    const resolved = resolveKey(last, keys.filter(isModifier), keypad);
     if ("error" in resolved) return { answer: keyRefusal(id, resolved.error) };
     const next = [...resolved.modifiers, resolved.key];
     if (next.join("\u0000") === keys.join("\u0000")) return { line };

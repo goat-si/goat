@@ -218,10 +218,10 @@ describe("pull request list answers across a reload", () => {
       host: "github.com",
       projectId: ProjectId.make("project-1"),
       projectTitle: "t3code",
-      repository: "pingdotgg/t3code",
+      repository: "goat-si/goat",
       number,
       title: `Pull request ${number}`,
-      url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+      url: `https://github.com/goat-si/goat/pull/${number}`,
       author: { login: "octocat", name: null, avatarUrl: null },
       headBranch: `feat/branch-${number}`,
       baseBranch: "main",
@@ -251,7 +251,7 @@ describe("pull request list answers across a reload", () => {
       ],
       errors: [{ projectId: ProjectId.make("project-1"), projectTitle: "t3code", message: "boom" }],
       truncated: true,
-      nextCursors: { "pingdotgg/t3code": "cursor-1" },
+      nextCursors: { "goat-si/goat": "cursor-1" },
     }) as PullRequestListResult;
   const local = EnvironmentId.make("env-local");
   const remote = EnvironmentId.make("env-remote");
@@ -308,7 +308,7 @@ describe("pull request list answers across a reload", () => {
     rememberPullRequestListAnswer(storage, { environmentId: local, input }, answer(rows));
     const searched = { ...input, query: "fix" };
     rememberPullRequestListAnswer(storage, { environmentId: local, input: searched }, answer(rows));
-    const continued = { ...input, cursors: { "pingdotgg/t3code": "cursor-1" } };
+    const continued = { ...input, cursors: { "goat-si/goat": "cursor-1" } };
     rememberPullRequestListAnswer(
       storage,
       { environmentId: local, input: continued },

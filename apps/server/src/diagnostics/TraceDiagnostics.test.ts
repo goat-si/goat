@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -61,6 +63,308 @@ function readTraces(fileSystem: Partial<FileSystem.FileSystem>) {
 }
 
 describe("TraceDiagnostics", () => {
+  it.effect("shares overlapping trace scans and starts a fresh scan after completion", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let opens = 0;
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens++;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  return new TextEncoder().encode(
+                    record({
+                      name: "fixture",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 2,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options), { startImmediately: true });
+      yield* Deferred.await(entered);
+      const nextReadAt = DateTime.makeUnsafe("2026-05-05T11:00:00.000Z");
+      const follower = yield* Effect.forkChild(
+        diagnostics.read({ ...options, readAt: nextReadAt }),
+        { startImmediately: true },
+      );
+      assert.equal(opens, 1);
+      yield* Deferred.succeed(release, undefined);
+      const first = yield* Fiber.join(leader);
+      const second = yield* Fiber.join(follower);
+      assert.equal(first.recordCount, 1);
+      assert.deepStrictEqual(second, { ...first, readAt: nextReadAt });
+      const fresh = yield* diagnostics.read(options);
+      assert.equal(opens, 2);
+      assert.equal(fresh.recordCount, 1);
+    }),
+  );
+
+  it.effect("shares read failures only in flight and retries on the next explicit read", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let opens = 0;
+      let failed = true;
+      const problem = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "open",
+        description: "fixture denial",
+        pathOrDescriptor: traceFilePath,
+      });
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens++;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  if (failed) return yield* problem;
+                  return new TextEncoder().encode(
+                    record({
+                      name: "recovered",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 1,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options), { startImmediately: true });
+      yield* Deferred.await(entered);
+      const follower = yield* Effect.forkChild(diagnostics.read(options), {
+        startImmediately: true,
+      });
+      assert.equal(opens, 1);
+      yield* Deferred.succeed(release, undefined);
+      const results = yield* Effect.all([Fiber.join(leader), Fiber.join(follower)]);
+      assert.isTrue(results.every((result) => Option.isSome(result.error)));
+      failed = false;
+      const recovered = yield* diagnostics.read(options);
+      assert.equal(recovered.recordCount, 1);
+      assert.isTrue(Option.isNone(recovered.error));
+      assert.equal(opens, 2);
+    }),
+  );
+
+  it.effect("a cancelled diagnostics follower does not cancel its shared leader", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let opens = 0;
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens++;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  return new TextEncoder().encode(
+                    record({
+                      name: "fixture",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 1,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options), { startImmediately: true });
+      yield* Deferred.await(entered);
+      const follower = yield* Effect.forkChild(diagnostics.read(options), {
+        startImmediately: true,
+      });
+      yield* Fiber.interrupt(follower);
+      yield* Deferred.succeed(release, undefined);
+      assert.equal((yield* Fiber.join(leader)).recordCount, 1);
+      assert.equal(opens, 1);
+      yield* diagnostics.read(options);
+      assert.equal(opens, 2);
+    }),
+  );
+
+  it.effect("leader interruption releases diagnostics followers and clears the flight", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let opens = 0;
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens++;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  return new TextEncoder().encode(
+                    record({
+                      name: "fixture",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 1,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options), { startImmediately: true });
+      yield* Deferred.await(entered);
+      const follower = yield* Effect.forkChild(diagnostics.read(options), {
+        startImmediately: true,
+      });
+      yield* Fiber.interrupt(leader);
+      yield* Deferred.succeed(release, undefined);
+      assert.equal((yield* Fiber.join(follower).pipe(Effect.exit))._tag, "Failure");
+      assert.equal((yield* diagnostics.read(options)).recordCount, 1);
+      assert.equal(opens, 2);
+    }),
+  );
+
+  it.effect("shares scan defects with followers and retries after the failed flight", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let opens = 0;
+      let failed = true;
+      const problem = new Error("fixture defect");
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens++;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  if (failed) return yield* Effect.die(problem);
+                  return new TextEncoder().encode(
+                    record({
+                      name: "recovered",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 1,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options).pipe(Effect.exit), {
+        startImmediately: true,
+      });
+      yield* Deferred.await(entered);
+      const follower = yield* Effect.forkChild(diagnostics.read(options).pipe(Effect.exit), {
+        startImmediately: true,
+      });
+      assert.equal(opens, 1);
+      yield* Deferred.succeed(release, undefined);
+      const first = yield* Fiber.join(leader);
+      const second = yield* Fiber.join(follower);
+      assert.equal(first._tag, "Failure");
+      assert.deepStrictEqual(second, first);
+      failed = false;
+      assert.equal((yield* diagnostics.read(options)).recordCount, 1);
+      assert.equal(opens, 2);
+    }),
+  );
+
+  it.effect("shares equivalent scan options while isolating paths, rotations, and thresholds", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const opens: Array<string> = [];
+      const diagnostics = yield* TraceDiagnostics.make.pipe(
+        Effect.provide(
+          FileSystem.layerNoop({
+            stream: (path) =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  opens.push(path);
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  return new TextEncoder().encode(
+                    record({
+                      name: "fixture",
+                      traceId: "trace",
+                      spanId: "span",
+                      startMs: 1,
+                      durationMs: 500,
+                    }) + "\n",
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const options = { traceFilePath, maxFiles: 0, readAt };
+      const leader = yield* Effect.forkChild(diagnostics.read(options), { startImmediately: true });
+      yield* Deferred.await(entered);
+      const equivalent = yield* Effect.forkChild(
+        diagnostics.read({ ...options, maxFiles: 0.9, slowSpanThresholdMs: 1_000 }),
+        { startImmediately: true },
+      );
+      const otherPath = yield* Effect.forkChild(
+        diagnostics.read({ ...options, traceFilePath: "/tmp/other.trace.ndjson" }),
+        { startImmediately: true },
+      );
+      const rotated = yield* Effect.forkChild(diagnostics.read({ ...options, maxFiles: 1 }), {
+        startImmediately: true,
+      });
+      const lowerThreshold = yield* Effect.forkChild(
+        diagnostics.read({ ...options, slowSpanThresholdMs: 100 }),
+        { startImmediately: true },
+      );
+      assert.deepStrictEqual(opens, [
+        traceFilePath,
+        "/tmp/other.trace.ndjson",
+        `${traceFilePath}.1`,
+        traceFilePath,
+      ]);
+      yield* Deferred.succeed(release, undefined);
+      const first = yield* Fiber.join(leader);
+      assert.deepStrictEqual(yield* Fiber.join(equivalent), first);
+      assert.equal((yield* Fiber.join(otherPath)).traceFilePath, "/tmp/other.trace.ndjson");
+      assert.equal((yield* Fiber.join(rotated)).recordCount, 2);
+      assert.equal((yield* Fiber.join(lowerThreshold)).slowSpanCount, 1);
+      assert.equal(first.slowSpanCount, 0);
+      assert.equal(opens.length, 5);
+    }),
+  );
+
   it.effect("aggregates failures, slow spans, log levels, and parse errors", () =>
     Effect.sync(() => {
       const diagnostics = aggregateLines([

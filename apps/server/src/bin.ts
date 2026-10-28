@@ -9,6 +9,9 @@ import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 import { isEntrypoint } from "./entrypoint.ts";
 
+// Effect CLI built-ins describe the whole command tree, so they need the full CLI.
+const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--no-wizard", "--help", "-h"]);
+
 if (
   isEntrypoint({
     moduleUrl: import.meta.url,
@@ -23,7 +26,16 @@ if (
   // Guard sockets before either dispatch path can load outbound-capable modules.
   const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
   ignoreMacosTypeOfServiceEinval();
-  if (command === "__document-text") {
+  if (command === "--version" && process.argv.length === 3) {
+    const { runVersionMain } = await import("./cli/helperMain.ts");
+    runVersionMain();
+  } else if (
+    command === "__ssh-helper" &&
+    !process.argv.some((arg) => FULL_CLI_BUILTINS.has(arg.split("=")[0] ?? arg))
+  ) {
+    const { runSshHelperMain } = await import("./cli/helperMain.ts");
+    await runSshHelperMain(process.argv.slice(2));
+  } else if (command === "__document-text") {
     const { extractDocumentText } = await import("./provider/documentTextWorker.ts");
     try {
       process.stdout.write(await extractDocumentText(process.argv[3]!, process.argv[4]!));
@@ -51,6 +63,10 @@ if (
     // A thread's BROWSER; see urlOpener/UrlOpenerShim.ts.
     const { runUrlOpenerCli } = await import("./urlOpener/urlOpenerCli.ts");
     process.exitCode = await runUrlOpenerCli(process.argv.slice(3));
+  } else if (command === "__ssh-helper" || (command === "--version" && process.argv.length === 3)) {
+    // SSH probes and launches start goat for these many times per reconnect.
+    const { runSshHelperCli } = await import("./cli/sshHelperCli.ts");
+    runSshHelperCli();
   } else {
     const { agentSurfaceInvocation, nodeInputReader } =
       await import("./cli/agentSurfaceCommand.ts");

@@ -9,6 +9,7 @@ import { makeProviderClientRegistry } from "@goat/provider-core/client";
 import { cursorClient, cursorCloudClient } from "@goat/provider-cursor/client";
 import { devinCloudClient } from "@goat/provider-devin-cloud/client";
 import { claudeCloudClient } from "@goat/provider-claude-cloud/client";
+import { fxClient } from "@goat/provider-fx/client";
 import { grokClient } from "@goat/provider-grok/client";
 import { museClient } from "@goat/provider-muse/client";
 import { openCodeClient } from "@goat/provider-opencode/client";
@@ -18,21 +19,25 @@ export const providerClients = makeProviderClientRegistry([
   {
     driverKind: ProviderDriverKind.make("codex"),
     label: "Codex",
+    acpRegistryAgentIds: ["codex-acp"],
     settingsSchema: CodexSettings,
   },
   {
     driverKind: ProviderDriverKind.make("claudeAgent"),
     label: "Claude",
+    acpRegistryAgentIds: ["claude-acp"],
     settingsSchema: ClaudeSettings,
   },
   cursorClient,
   cursorCloudClient,
   claudeCloudClient,
   grokClient,
+  fxClient,
   openCodeClient,
   {
     driverKind: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
+    acpRegistryAgentIds: ["antigravity-acp"],
     settingsSchema: AntigravitySettings,
   },
   museClient,

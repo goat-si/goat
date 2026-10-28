@@ -107,23 +107,27 @@ interface ReserveManagedEndpointAllocationInput extends ManagedEndpointAllocatio
 }
 
 interface RecordManagedEndpointTunnelInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
 }
 
 interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly dnsRecordId: string;
   readonly tunnelId: string;
   readonly generation: number;
 }
 
 interface MarkManagedEndpointReadyInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
   readonly origin: RelayManagedEndpointOrigin;
 }
 
 interface ClaimManagedEndpointReleaseInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly tunnelId: string;
   readonly generation: number;
   readonly markReleased?: boolean;
@@ -136,10 +140,12 @@ interface EnableManagedEndpointRecoveryInput extends ManagedEndpointAllocationKe
 }
 
 interface ClaimManagedEndpointDeprovisionInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly generation: number;
 }
 
 interface RemoveClaimedManagedEndpointAllocationInput extends ManagedEndpointAllocationKey {
+  readonly incarnationId: string;
   readonly generation: number;
 }
 
@@ -184,7 +190,9 @@ export class ManagedEndpointAllocations extends Context.Service<
       input: ClaimManagedEndpointReleaseInput,
     ) => Effect.Effect<number | null, ManagedEndpointAllocationPersistenceError>;
     readonly withClaimedTunnel: <A, E, R>(
-      input: ClaimManagedEndpointReleaseInput,
+      input: Omit<ClaimManagedEndpointReleaseInput, "tunnelId"> & {
+        readonly tunnelId: string | null;
+      },
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<Option.Option<A>, E | ManagedEndpointAllocationPersistenceError, R>;
     /** Return a teardown claim generation, or null if concurrent provisioning superseded the captured snapshot. */
@@ -453,6 +461,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
         )
@@ -483,6 +492,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -516,6 +526,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -671,6 +682,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
@@ -694,7 +706,9 @@ export const make = Effect.gen(function* () {
     }),
     withClaimedTunnel: Effect.fn("relay.managed_endpoint_allocations.with_claimed_tunnel")(
       function* <A, E, R>(
-        input: ClaimManagedEndpointReleaseInput,
+        input: Omit<ClaimManagedEndpointReleaseInput, "tunnelId"> & {
+          readonly tunnelId: string | null;
+        },
         effect: Effect.Effect<A, E, R>,
       ): Effect.fn.Return<Option.Option<A>, E | ManagedEndpointAllocationPersistenceError, R> {
         const lockError = (cause: unknown) =>
@@ -703,7 +717,7 @@ export const make = Effect.gen(function* () {
             stage: "database-request",
             userId: input.userId,
             environmentId: input.environmentId,
-            tunnelId: input.tunnelId,
+            ...(input.tunnelId === null ? {} : { tunnelId: input.tunnelId }),
             cause,
           });
         return yield* db
@@ -712,7 +726,9 @@ export const make = Effect.gen(function* () {
           .where(
             and(
               whereAllocation(input),
-              eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
+              input.tunnelId === null
+                ? isNull(relayManagedEndpointAllocations.tunnelId)
+                : eq(relayManagedEndpointAllocations.tunnelId, input.tunnelId),
               eq(relayManagedEndpointAllocations.generation, input.generation),
             ),
           )
@@ -738,6 +754,7 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             whereAllocation(input),
+            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
             eq(relayManagedEndpointAllocations.generation, input.generation),
           ),
         )

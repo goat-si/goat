@@ -70,6 +70,10 @@
     "./agentSurface/listing": {
       "types": "./src/agentSurface/listing.ts",
       "import": "./src/agentSurface/listing.ts"
+    },
+    "./connectAssurance": {
+      "types": "./src/connectAssurance.ts",
+      "import": "./src/connectAssurance.ts"
     }
   },
   "scripts": {

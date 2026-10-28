@@ -4,6 +4,7 @@ import { EnvironmentOwnership } from "../environments/EnvironmentOwnership.ts";
 import * as Layer from "effect/Layer";
 import * as RelayDb from "../db.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
+import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
@@ -33,8 +34,10 @@ export const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
     environment: "sandbox",
   },
   clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "goat-relay",
+  clerkPublishableKey: `pk_test_${btoa("clerk.example.test$")}`,
+  clerkAuthorizedParties: ["https://app.example.test"],
+  clerkCliOAuthClientId: "cli-client",
+  clerkJwtAudience: "https://relay.example.test",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
@@ -64,6 +67,10 @@ export function layerRelayUnlinkTest(input?: {
 }) {
   return Layer.mergeAll(
     policyUnitLayer,
+    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+      exclusive: (_userId, use) => use(Effect.void),
+      withdraw: (_input, revoke) => revoke,
+    }),
     Layer.succeed(EnvironmentOwnership, {
       beginRelease: () => Effect.succeed([]),
       finishRelease: input?.finishRelease ?? (() => Effect.succeed(true)),

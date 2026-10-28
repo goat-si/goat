@@ -19,9 +19,23 @@ const ref = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
 const PASSWORD = "pw_unit_secret_value";
 
 /** One password field behind a scripted CDP session; faults are injected per method. */
-const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: boolean } = {}) => {
-  const field = { value: "" };
-  const page = { frames: () => [], mainFrame: () => page } as unknown as Page;
+const makeTab = (
+  faults: {
+    readonly fillReply?: boolean;
+    readonly fillThrew?: boolean;
+    readonly fillRefused?: boolean;
+    readonly stillFilled?: boolean;
+  } = {},
+) => {
+  const field = { value: "", type: "password", isConnected: true };
+  const closes: Array<() => void> = [];
+  let sessionClosed = false;
+  const context = {};
+  const page = {
+    frames: () => [],
+    mainFrame: () => page,
+    context: () => context,
+  } as unknown as Page;
   const send = async (method: string, params?: Record<string, unknown>) => {
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
     if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
@@ -33,25 +47,40 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
       return { result: { subtype: "node", objectId: "field" } };
     if (fn.includes("self.origin : null")) return { result: { value: "https://login.test" } };
     if (fn.includes("HTMLInputElement.prototype")) {
+      if (faults.fillRefused) return { result: { value: false } };
       field.value = String(args[0]?.value);
+      // The page's input listener threw after the value was set.
+      if (faults.fillThrew)
+        return { result: { type: "object" }, exceptionDetails: { text: "Uncaught" } };
       if (faults.fillReply) throw new Error("Target closed");
       return { result: { value: true } };
     }
-    if (fn.includes("this.value === value")) {
+    if (fn.includes('return "empty"')) {
+      if (sessionClosed) throw new Error("Target page, context or browser has been closed");
       if (faults.stillFilled) throw new Error("Session closed");
-      return { result: { value: field.value === args[0]?.value } };
+      // Runs the page-side check against the scripted field.
+      const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
+      return { result: { value: check.call({ ...field }, args[0]?.value) } };
     }
     throw new Error(`unexpected ${method}`);
   };
   const tab = {
     page,
-    cdp: { send } as unknown as CDPSession,
+    cdp: {
+      send,
+      on: (event: string, listener: () => void) => event === "close" && closes.push(listener),
+    } as unknown as CDPSession,
     frameSessions: new Map(),
     control: new SessionControl("agent-a"),
     recording: null as unknown,
     recordingStart: null as unknown,
   };
-  return { tab, field };
+  /** The frame's session goes away, as an out-of-process frame's does when it detaches. */
+  const closeSession = () => {
+    sessionClosed = true;
+    for (const listener of closes) listener();
+  };
+  return { tab, field, closeSession };
 };
 
 const request = (operation: PreviewAutomationRequest["operation"], input: unknown) =>
@@ -74,6 +103,7 @@ const withFill = <A>(
     state: { consumed: number },
   ) => Promise<A>,
   beforeConsume: () => void = () => {},
+  passwords: ReadonlyArray<string> = [PASSWORD],
 ) => {
   const state = { consumed: 0 };
   const secrets = Layer.succeed(
@@ -86,11 +116,8 @@ const withFill = <A>(
       consumeForOrigin: (input) =>
         Effect.sync(beforeConsume).pipe(
           Effect.flatMap(() =>
-            input.origin === "https://login.test" && state.consumed === 0
-              ? Effect.sync(() => {
-                  state.consumed += 1;
-                  return PASSWORD;
-                })
+            input.origin === "https://login.test" && state.consumed < passwords.length
+              ? Effect.sync(() => passwords[state.consumed++]!)
               : Effect.fail(new SecretRequestError({ reason: "ref_unavailable" })),
           ),
         ),
@@ -109,13 +136,50 @@ const expired = 0;
 it.live("keeps the fence when the fill's reply is lost after the page may have typed it", () => {
   const { tab, field } = makeTab({ fillReply: true });
   return withFill(async (fill) => {
-    await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow(
-      "could not confirm whether the password was typed",
-    );
+    const uncertain = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    expect(String(uncertain.message)).toContain("could not confirm whether the password was typed");
+    // It may have typed, so it does not say nothing was sent.
+    expect(uncertain.detail).toBeUndefined();
     expect(field.value).toBe(PASSWORD);
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
     );
+  });
+});
+
+it.live("lifts the fence of a field whose frame session closed with its document", () => {
+  const { tab, closeSession } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+    closeSession();
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
+  });
+});
+
+it.live("an exception after the value was set may have typed it, so the fence stays", () => {
+  const { tab, field } = makeTab({ fillThrew: true });
+  return withFill(async (fill) => {
+    const uncertain = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    expect(String(uncertain.message)).toContain("could not confirm whether the password was typed");
+    expect(uncertain.detail).toBeUndefined();
+    expect(field.value).toBe(PASSWORD);
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+  });
+});
+
+it.live("a field the fill refused before setting it says nothing was typed", () => {
+  const { tab, field } = makeTab({ fillRefused: true });
+  return withFill(async (fill) => {
+    const usedUp = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    expect(String(usedUp.message)).toContain("Nothing was filled");
+    expect(usedUp.detail).toEqual({ beforeInput: true });
+    expect(field.value).toBe("");
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
   });
 });
 
@@ -124,6 +188,10 @@ it.live("keeps the fence when GOAT cannot check the filled field", () => {
   return withFill(async (fill) => {
     await fill.fill(tab, fillRequest, later(), record);
     await expect(fill.guard(tab, request("recordingStart", {}))).rejects.toThrow(
+      "cannot confirm the password it filled is gone",
+    );
+    // The field may now show part of the value as plain text, which the mask cannot find.
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
       "cannot confirm the password it filled is gone",
     );
   });
@@ -144,7 +212,9 @@ it.live("a Stop that lands while the ref is consumed leaves the field empty", ()
   const { tab, field } = makeTab();
   return withFill(
     async (fill, state) => {
-      await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow("used up");
+      const usedUp = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+      expect(String(usedUp.message)).toContain("used up");
+      expect(usedUp.detail).toEqual({ beforeInput: true });
       expect(state.consumed).toBe(1);
       expect(field.value).toBe("");
     },
@@ -196,5 +266,247 @@ it.live("masks filled values in every answer, keys included only for page-made J
         error: { _tag: "X", message: `said ${PASSWORD}` },
       }),
     ).toEqual({ ok: false, error: { _tag: "X", message: "said [secret]" } });
+  });
+});
+
+it.live("masks a filled value in the escaped and URL-encoded forms a page echoes it in", () => {
+  const { tab } = makeTab();
+  const password = 'p@ss "w0rd"\\ ä&+=';
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const echoed = [
+        JSON.stringify({ password }),
+        `password=${encodeURIComponent(password)}`,
+        new URLSearchParams({ password }).toString(),
+      ].join("\n");
+      const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text: echoed } });
+      expect(outcome).toEqual({
+        ok: true,
+        result: {
+          text: ['{"password":"[secret]"}', "password=[secret]", "password=[secret]"].join("\n"),
+        },
+      });
+    },
+    undefined,
+    [password],
+  );
+});
+
+it.live("masks lowercase percent escapes, overlapping values and a value no URL can encode", () => {
+  const { tab } = makeTab();
+  const first = "very-private-prefix%2";
+  const second = "&cdefghijklmnopqrstuvwxyz";
+  const unpaired = "pw\uD800abc";
+  // Hex digits right after a value's end or start must not hide it by looking like an escape.
+  const trailingPercent = "long-password%a";
+  const hexStart = "aBcdefgh123";
+  // Playwright's snapshot writes control characters as \xNN.
+  const control = "long\u0001password";
+  // Playwright's snapshot drops zero-width characters and collapses whitespace.
+  const spaced = "word  with\u200bspaces";
+  // A fetch collapses whitespace but keeps zero-width characters.
+  const fetchSpaced = "alpha  beta\u200bgamma";
+  return withFill(
+    async (fill) => {
+      for (let i = 0; i < 8; i++) await fill.fill(tab, fillRequest, later(), record);
+      const text = [
+        `${first}6cdefghijklmnopqrstuvwxyz`,
+        encodeURIComponent(second).toLowerCase(),
+        unpaired,
+        `${trailingPercent}b`,
+        `%2${hexStart}`,
+        String.raw`- textbox: "long\x01password"`,
+        "- text: word withspaces",
+        "alpha beta\u200bgamma",
+      ].join("\n");
+      const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
+      expect(outcome).toEqual({
+        ok: true,
+        result: {
+          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"\n- text: [secret]\n[secret]',
+        },
+      });
+    },
+    undefined,
+    [first, second, unpaired, trailingPercent, hexStart, control, spaced, fetchSpaced],
+  );
+});
+
+it.live("masks the start of a filled value that a cut fetch answer ends on", () => {
+  const { tab } = makeTab();
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const fetched = (text: string, truncated: boolean) =>
+        fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
+      expect(fetched("echo alpha ", true)).toEqual({
+        ok: true,
+        result: { text: "echo [secret]", truncated: true },
+      });
+      // An answer that was not cut ends where the page's text ends.
+      expect(fetched("echo alpha ", false)).toEqual({
+        ok: true,
+        result: { text: "echo alpha ", truncated: false },
+      });
+    },
+    undefined,
+    ["alpha beta gamma"],
+  );
+});
+
+it.live("masks a filled value a fetch rendered without its brackets, end spaces or raw URL", () => {
+  const { tab } = makeTab();
+  return withFill(
+    async (fill) => {
+      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record);
+      // A link label loses its brackets, a pre block its end spaces, an href is URL-encoded.
+      const text = ["link alphabetagamma", "alt alpha  beta", "href /p/alpha%28beta%29%20gamma"];
+      const outcome = fill.mask(request("fetch", {}))({
+        ok: true,
+        result: { text: text.join("\n") },
+      });
+      expect(outcome).toEqual({
+        ok: true,
+        result: { text: ["link [secret]", "alt [secret]", "href /p/[secret]"].join("\n") },
+      });
+    },
+    undefined,
+    ["alpha[beta]gamma", "alpha  beta ", "alpha(beta) gamma"],
+  );
+});
+
+it.live("masks a link label whose dropped brackets join escapes, symbols or a cut", () => {
+  const { tab } = makeTab();
+  return withFill(
+    async (fill) => {
+      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record);
+      const fetched = (text: string, truncated: boolean) =>
+        fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
+      const labels = [
+        "[alpha%41beta](https://x/)",
+        "[!@#7$%(8)&*9](https://x/)",
+        "[continue](https://x/alpha%FF%20beta)",
+        "[next](https://x/p/m7Q/n8Rv9)",
+        "ordinary prose",
+      ];
+      expect(fetched(labels.join("\n"), false)).toEqual({
+        ok: true,
+        result: {
+          text: [
+            "[[secret]](https://x/)",
+            "[[secret]](https://x/)",
+            "[continue](https://x/[secret])",
+            "[next](https://x/p/[secret])",
+            "ordinary prose",
+          ].join("\n"),
+          truncated: false,
+        },
+      });
+      expect(fetched("see [alphabetag", true)).toEqual({
+        ok: true,
+        result: { text: "see [[secret]", truncated: true },
+      });
+    },
+    undefined,
+    ["alpha%[41]beta", "!@#[7]$%(8)&*9", "alpha[beta]gamma", "alpha%FF beta", "m7Q\\n8Rv9"],
+  );
+});
+
+it.live(
+  "leaves refs and GOAT's own fields alone when only a short skeleton or a field matches",
+  () => {
+    const { tab } = makeTab();
+    return withFill(
+      async (fill) => {
+        for (let i = 0; i < 2; i++) await fill.fill(tab, fillRequest, later(), record);
+        // "[ ] / e1" drops to "e1", too short to compare that way: refs stay.
+        const tree = '- button "Go" [ref=e1]';
+        expect(
+          fill.mask(request("snapshot", {}))({ ok: true, result: { accessibilityTree: tree } }),
+        ).toEqual({
+          ok: true,
+          result: { accessibilityTree: tree },
+        });
+        expect(
+          fill.mask(request("status", {}))({
+            ok: true,
+            result: { status: "ready-for-input", text: "page says ready-for-input" },
+          }),
+        ).toEqual({ ok: true, result: { status: "ready-for-input", text: "page says [secret]" } });
+      },
+      undefined,
+      ["[ ] / e1", "ready-for-input"],
+    );
+  },
+);
+
+it.live("masks a long page text only up to a little past the caller's cut", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    // The value straddles the cut at 100, in a text far longer than anything scanned.
+    const text = `${"a ".repeat(45)}${PASSWORD}${"z".repeat(1_000_000)}`;
+    const masked = fill.maskText(threadId)(text, 100);
+    expect(masked.length).toBeLessThan(1_000);
+    expect(masked.slice(0, 100)).toBe(`${"a ".repeat(45)}[secret]zz`);
+  });
+});
+
+it.live("masks a very long filled value without failing the answer", () => {
+  const { tab } = makeTab();
+  const long = "a".repeat(40_000);
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const text = `${"a".repeat(100_000)} tail`;
+      expect(fill.mask(request("fetch", {}))({ ok: true, result: { text } })).toEqual({
+        ok: true,
+        result: { text: "[secret] tail" },
+      });
+    },
+    undefined,
+    [long],
+  );
+});
+
+it.live("keeps the fence while an edited filled field still holds part of the value", () => {
+  const { tab, field } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    field.value = PASSWORD.slice(0, -1);
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+    // A password input still shows dots, so a text snapshot cannot read the edited value.
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.type = "text";
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
+    );
+    field.value = "";
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
+    // Revealed with its value unchanged, the field still shows the password as plain text.
+    field.value = PASSWORD;
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
+    );
+    field.value = "";
+    // A page that puts the value back is fenced again, even after a check found the field empty.
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.type = "password";
+    field.value = PASSWORD;
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+    // Detached and put back, revealed and edited, the same node is fenced again.
+    field.isConnected = false;
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.isConnected = true;
+    field.type = "text";
+    field.value = PASSWORD.slice(0, -1);
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
+    );
   });
 });

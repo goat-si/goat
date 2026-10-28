@@ -47,6 +47,7 @@ vi.mock("./androidNotifications", () => ({
   clearAndroidAgentNotifications: vi.fn(),
 }));
 
+const connectPushGate = vi.hoisted(() => ({ enabled: true }));
 const secureStore = vi.hoisted(() => new Map<string, string>());
 const widgetMocks = vi.hoisted(() => ({
   dismissEnded: vi.fn(),
@@ -244,6 +245,7 @@ const runBackgroundOperations = Effect.fn("TestRemoteRegistration.runBackgroundO
 
 describe("makeRelayDeviceRegistrationRequest", () => {
   beforeEach(() => {
+    connectPushGate.enabled = true;
     vi.restoreAllMocks();
     vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
       type: "ios",
@@ -267,6 +269,23 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     widgetMocks.dismissEnded.mockReset();
     environmentConfigsMock.configs.clear();
   });
+
+  it.effect(
+    "retained native registration does not start providers or register push during the reachability beta",
+    () => {
+      connectPushGate.enabled = false;
+      registrationRecordStore.current = {
+        identity: "retained-account-device",
+        signature: "retained-signature",
+      };
+      return Effect.gen(function* () {
+        yield* refreshAgentAwarenessRegistration();
+        expect(Notifications.getDevicePushTokenAsync).not.toHaveBeenCalled();
+        expect(configureAndroidAgentNotifications).not.toHaveBeenCalled();
+        expect(saveAgentAwarenessRegistrationRecord).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(layerRelayTest));
+    },
+  );
 
   it("disables push features in Personal Team relay registrations", () => {
     Constants.expoConfig!.extra = { iosPersonalTeamBuild: true };
@@ -885,4 +904,6 @@ describe("makeRelayDeviceRegistrationRequest", () => {
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
   isGoatConnectEnabled: () => true,
+  isGoatConnectPushEnabled: () => connectPushGate.enabled,
+  isGoatConnectPushAvailable: () => connectPushGate.enabled,
 }));
