@@ -23,6 +23,7 @@ import {
   truncateText,
 } from "./inPageFetch.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { FETCHED_BODY } from "./browserArtifacts.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 describe("resolveFetchUrl", () => {
@@ -293,10 +294,12 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {
     const image = await inPageFetch(page, control, { url: "/logo.png" });
     expect(image).toMatchObject({ format: "raw", text: "", contentType: "image/png" });
-    expect([...(image.body ?? [])]).toEqual([137, 80, 78, 71]);
+    expect([...(image[FETCHED_BODY] ?? [])]).toEqual([137, 80, 78, 71]);
+    // Held under a symbol, the bytes never appear in the result's JSON.
+    expect(JSON.stringify(image)).not.toContain("137");
     const capped = await inPageFetch(page, control, { url: "/logo.png", maxSavedBytes: 3 });
     expect(capped).toMatchObject({ format: "raw", text: "", truncated: true });
-    expect(capped.body).toBeUndefined();
+    expect(capped[FETCHED_BODY]).toBeUndefined();
     expect((await inPageFetch(page, control, { url: "/korean" })).text).toBe("한국어");
     const long = await inPageFetch(page, control, { url: "/long", maxChars: 50 });
     expect(long.truncated).toBe(true);

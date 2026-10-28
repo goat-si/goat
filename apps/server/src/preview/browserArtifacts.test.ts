@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import type { Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
-import { publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
+import { FETCHED_BODY, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { SessionControl } from "./SessionControl.ts";
 
@@ -29,15 +29,17 @@ const fetched = (body: Uint8Array) => ({
   format: "raw" as const,
   text: "",
   truncated: false,
-  body,
+  [FETCHED_BODY]: body,
 });
+
+const waiting = () => false;
 
 it("saves a fetched body as an owner-only file and returns its path instead of the bytes", () =>
   withDir(async (dir) => {
     await NodeFSP.mkdir(dir, { mode: 0o755 });
     if (posix) await NodeFSP.chmod(dir, 0o755);
-    const result = await publishFetchedBody(dir, fetched(Uint8Array.of(1, 2, 3)), Infinity);
-    expect(result).not.toHaveProperty("body");
+    const result = await publishFetchedBody(dir, fetched(Uint8Array.of(1, 2, 3)), waiting);
+    expect(FETCHED_BODY in result).toBe(false);
     expect(result).toMatchObject({ sizeBytes: 3, format: "raw" });
     const { savedPath } = result as unknown as { readonly savedPath: string };
     expect(NodePath.dirname(savedPath)).toBe(dir);
@@ -51,12 +53,39 @@ it("saves a fetched body as an owner-only file and returns its path instead of t
     }
   }));
 
-it("writes nothing once the caller's deadline has passed", () =>
+it("writes nothing and reports a timeout once the caller's deadline has passed", () =>
   withDir(async (dir) => {
-    const result = await publishFetchedBody(dir, fetched(Uint8Array.of(1)), 0);
-    expect(result).not.toHaveProperty("body");
-    expect(result).not.toHaveProperty("savedPath");
+    await expect(
+      publishFetchedBody(dir, fetched(Uint8Array.of(1)), () => true),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+    });
     expect(NodeFS.existsSync(dir) ? await NodeFSP.readdir(dir) : []).toEqual([]);
+  }));
+
+it("drops a save that outlasted its caller instead of giving it its name", () =>
+  withDir(async (dir) => {
+    let expired = false;
+    await expect(
+      publishArtifact(
+        dir,
+        "browser-fetch-x.bin",
+        async (path) => {
+          await NodeFSP.writeFile(path, "late");
+          // The caller's deadline passes while the write is still finishing.
+          expired = true;
+        },
+        () => expired,
+      ),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(await NodeFSP.readdir(dir)).toEqual([]);
+  }));
+
+it("leaves an ordinary result's own body field alone", () =>
+  withDir(async (dir) => {
+    const evaluated = { body: "hello", status: 200 };
+    expect(await publishFetchedBody(dir, evaluated, waiting)).toBe(evaluated);
+    expect(NodeFS.existsSync(dir)).toBe(false);
   }));
 
 it("leaves no partial file when saving fails midway", () =>
@@ -107,7 +136,7 @@ it("writes nothing when an outer observation is withheld after the fetch finishe
       return result;
     });
     await expect(
-      outer.then((result) => publishFetchedBody(dir, result, Infinity)),
+      outer.then((result) => publishFetchedBody(dir, result, waiting)),
     ).rejects.toMatchObject({
       reason: "privateMode",
     });

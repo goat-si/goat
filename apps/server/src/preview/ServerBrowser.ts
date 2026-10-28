@@ -1952,6 +1952,7 @@ const make = Effect.gen(function* () {
         return inPageFetch(tab.page, tab.control, {
           ...fetchInput,
           timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
+          deadline: deadlineMs,
         });
       }
       case "scrollCollect":
@@ -2034,7 +2035,15 @@ const make = Effect.gen(function* () {
         return answerCall(request.timeoutMs, (deadlineMs) =>
           runOperation(request, deadlineMs)
             // After every observation around the operation let the result through.
-            .then((result) => publishFetchedBody(config.browserArtifactsDir, result, deadlineMs))
+            .then((result) =>
+              request.operation === "fetch"
+                ? publishFetchedBody(
+                    config.browserArtifactsDir,
+                    result,
+                    () => performance.now() >= deadlineMs,
+                  )
+                : result,
+            )
             .finally(() => markUsed(request)),
         );
       },

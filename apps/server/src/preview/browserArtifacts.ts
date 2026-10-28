@@ -9,6 +9,19 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import { ServerBrowserOperationError } from "./browserOperationError.ts";
+
+/**
+ * Key of a fetch result's in-memory body. A symbol key never reaches JSON or schema encoding, so
+ * an unsaved body cannot leave the server, and an ordinary result's own body field is untouched.
+ */
+export const FETCHED_BODY = Symbol("fetchedBody");
+
+const notSaved = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationTimeoutError",
+    "The fetch finished after its deadline, so its body was not saved.",
+  );
 
 const MAX_SITE_SLUG_LENGTH = 40;
 const MAX_SUGGESTED_NAME_LENGTH = 80;
@@ -87,13 +100,17 @@ export const publishArtifact = async (
   dir: string,
   name: string,
   save: (path: string) => Promise<void>,
+  expired: () => boolean = () => false,
 ) => {
+  if (expired()) throw notSaved();
   await ensureArtifactDir(dir);
   const path = NodePath.join(dir, name);
   const partial = `${path}.partial`;
   try {
     await save(partial);
     await NodeFSP.chmod(partial, 0o600);
+    // A save that outlasted its caller never takes its final name.
+    if (expired()) throw notSaved();
     await NodeFSP.rename(partial, path);
     return path;
   } catch (cause) {
@@ -104,13 +121,13 @@ export const publishArtifact = async (
 
 /**
  * Turns a fetch result's in-memory body into a saved file. Runs after every observation around
- * the operation has let the result through, so a withheld result writes nothing; a body the
- * caller stopped waiting for is dropped too.
+ * the operation has let the result through, so a withheld result writes nothing; once the
+ * caller stopped waiting, nothing is kept and the save reports a timeout.
  */
-export const publishFetchedBody = async <R>(dir: string, result: R, deadline: number) => {
-  if (typeof result !== "object" || result === null || !("body" in result)) return result;
-  const { body, ...rest } = result as R & { readonly body: unknown };
-  if (!(body instanceof Uint8Array) || performance.now() >= deadline) return rest;
+export const publishFetchedBody = async <R>(dir: string, result: R, expired: () => boolean) => {
+  if (typeof result !== "object" || result === null || !(FETCHED_BODY in result)) return result;
+  const { [FETCHED_BODY]: body, ...rest } = result as R & { readonly [FETCHED_BODY]: unknown };
+  if (!(body instanceof Uint8Array)) return rest;
   const url = "url" in rest && typeof rest.url === "string" ? rest.url : "";
   const contentType =
     "contentType" in rest && typeof rest.contentType === "string" ? rest.contentType : "";
@@ -118,6 +135,7 @@ export const publishFetchedBody = async <R>(dir: string, result: R, deadline: nu
     dir,
     artifactFileName("fetch", url, { extension: extensionFor(contentType, url) }),
     (path) => NodeFSP.writeFile(path, body, { mode: 0o600, flag: "wx" }),
+    expired,
   );
   return { ...rest, savedPath, sizeBytes: body.byteLength };
 };

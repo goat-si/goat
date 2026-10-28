@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - Playwright calls run outside the Effect runtime.
 /** Reads same-origin session content in the page; fields, hidden markup and credentials stay out. */
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import type { Page } from "playwright-core";
@@ -5,6 +6,7 @@ import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
 import { tabCookies } from "./pageSecrets.ts";
+import { FETCHED_BODY } from "./browserArtifacts.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
@@ -13,6 +15,8 @@ export interface InPageFetchInput {
   readonly timeoutMs?: number | undefined;
   /** Largest body that is not text kept for a file; larger ones are dropped as truncated. */
   readonly maxSavedBytes?: number | undefined;
+  /** The request's deadline on the performance.now() clock; the fetch and its copy end by then. */
+  readonly deadline?: number | undefined;
 }
 
 export interface InPageFetchResult {
@@ -25,7 +29,7 @@ export interface InPageFetchResult {
   readonly text: string;
   readonly truncated: boolean;
   /** A raw body's bytes, held in memory until the server saves them; never sent to a caller. */
-  readonly body?: Uint8Array;
+  readonly [FETCHED_BODY]?: Uint8Array;
 }
 
 type PageOutcome =
@@ -262,6 +266,30 @@ export const inPageFetch = (
 
 type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
 
+const fetchTimedOut = (url: string) =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationTimeoutError",
+    `Fetching ${url} did not finish within its deadline.`,
+  );
+
+/** Waits for page work no longer than the deadline; the late reply is ignored. */
+const beforeDeadline = async <A>(work: Promise<A>, deadline: number, url: string) => {
+  const left = deadline - performance.now();
+  void work.catch(() => undefined);
+  if (left <= 0) throw fetchTimedOut(url);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(fetchTimedOut(url)), left);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /** Copies a held body out of the page in bounded slices, within the fetch's deadline. */
 const readHeldBody = async (
   held: { evaluate<R, A>(read: (value: Held, arg: A) => R, arg: A): Promise<R> },
@@ -271,21 +299,20 @@ const readHeldBody = async (
 ) => {
   const body = new Uint8Array(size);
   for (let start = 0; start < size; start += SLICE_BYTES) {
-    if (performance.now() >= deadline)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationTimeoutError",
-        `Fetching ${url} did not finish within its deadline.`,
-      );
     const end = Math.min(size, start + SLICE_BYTES);
-    const encoded = await held.evaluate(
-      (value, [from, to]) => {
-        const bytes = (value.body ?? new Uint8Array()).subarray(from, to);
-        let binary = "";
-        for (let at = 0; at < bytes.length; at += 0x8000)
-          binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-        return btoa(binary);
-      },
-      [start, end] as const,
+    const encoded = await beforeDeadline(
+      held.evaluate(
+        (value, [from, to]) => {
+          const bytes = (value.body ?? new Uint8Array()).subarray(from, to);
+          let binary = "";
+          for (let at = 0; at < bytes.length; at += 0x8000)
+            binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+          return btoa(binary);
+        },
+        [start, end] as const,
+      ),
+      deadline,
+      url,
     );
     body.set(Buffer.from(encoded, "base64"), start);
   }
@@ -299,8 +326,12 @@ const fetchInPage = async (
   const url = resolveFetchUrl(input.url, page.url());
   const format = input.format ?? "markdown";
   const maxChars = bounded(input.maxChars, DEFAULT_MAX_CHARS, 1, MAX_CHARS);
-  const timeoutMs = bounded(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS);
-  const deadline = performance.now() + timeoutMs;
+  const deadline = Math.min(
+    input.deadline ?? Number.POSITIVE_INFINITY,
+    performance.now() + bounded(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
+  );
+  // The page aborts its own request when the request's time runs out.
+  const timeoutMs = Math.max(1, Math.floor(deadline - performance.now()));
   const args = JSON.stringify({
     url,
     format,
@@ -359,7 +390,7 @@ const shapeOutcome = async (
     return { ...head, format: "raw", text: "", truncated: outcome.truncated };
   if (outcome.kind === "binary") {
     const body = await readHeldBody(held, outcome.size ?? 0, deadline, url);
-    return { ...head, format: "raw", text: "", truncated: false, body };
+    return { ...head, format: "raw", text: "", truncated: false, [FETCHED_BODY]: body };
   }
   // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.
   const shown = outcome.kind === "html" ? normalizeText(outcome.text) : outcome.text;
