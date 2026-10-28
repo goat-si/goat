@@ -1,5 +1,9 @@
 import { mockExecution } from "./EffectWorker.testkit.ts";
 import { reservedCleanup, cancellationFence, heldTitleDeadline } from "./EffectWorker.testkit.ts";
+import {
+  replacementClaimSurvivesOldFinalizer,
+  cancellationRollbackPreservesClaim,
+} from "./EffectWorker.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -814,4 +818,15 @@ it.effect("retires an interrupted worker's cancellation fence after its original
 it.effect(
   "settles title generation at its two minute owner budget without replacing the title",
   () => heldTitleDeadline,
+);
+it.effect(
+  "keeps a replacement claim admitted after the old worker's retry finalizer",
+  () => replacementClaimSurvivesOldFinalizer,
+);
+it.effect(
+  "executes a claimed effect after its cancellation transaction rolls back",
+  () => cancellationRollbackPreservesClaim,
+);
+it.effect("warns once about held cleanup after its worker is interrupted", () =>
+  cancellationFence(true, true),
 );

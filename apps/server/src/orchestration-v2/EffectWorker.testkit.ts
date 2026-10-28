@@ -11,10 +11,13 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -225,12 +228,16 @@ export const reservedCleanup = Effect.gen(function* () {
   );
 }).pipe(Effect.scoped);
 
-export const cancellationFence = (interruptOwner = false) =>
+export const cancellationFence = (interruptOwner = false, checkWarning = false) =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const cleaning = yield* Deferred.make<void>();
     const releaseCleanup = yield* Deferred.make<void>();
     const operations: string[] = [];
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      if (message[0] === "orchestration-v2.effect-cleanup-unresolved") warnings.push(message);
+    });
     const target = ThreadId.make("thread:late-native-cleanup");
     yield* Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
@@ -286,7 +293,11 @@ export const cancellationFence = (interruptOwner = false) =>
             threadId: ThreadId.make("thread:independent-cancel"),
           },
         ]);
-        yield* TestClock.adjust("1 minute");
+        yield* TestClock.adjust("14 seconds");
+        if (checkWarning) assert.equal(warnings.length, 0);
+        yield* TestClock.adjust("1 second");
+        if (checkWarning)
+          assert.equal(warnings.length, 1, "held cleanup must warn after interruption");
         assert.isFalse(yield* worker.runOnce);
         assert.deepEqual(operations, ["first:native"]);
         assert.equal(Option.getOrThrow(yield* outbox.get("native:second")).status, "pending");
@@ -296,14 +307,166 @@ export const cancellationFence = (interruptOwner = false) =>
         assert.isTrue(yield* worker.runOnce);
         assert.deepEqual(operations, ["first:native", "first:stopped", "second:native"]);
         assert.isTrue(yield* worker.runOnce);
+        yield* TestClock.adjust("1 minute");
+        if (checkWarning) assert.equal(warnings.length, 1, "cleanup warns only once");
       }).pipe(
         Effect.ensuring(Deferred.succeed(releaseCleanup, undefined)),
         Effect.provide(workerLayer),
       );
     }).pipe(
       Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      Effect.provide(Logger.layer([logger])),
     );
   }).pipe(Effect.scoped);
+
+const pendingCleanup = (
+  id: string,
+  target: ThreadId,
+): EffectOutbox.PendingOrchestrationEffectV2 => ({
+  id,
+  commandId: CommandId.make(`command:${id}`),
+  threadId: target,
+  request: { type: "terminal.cleanup" },
+});
+
+export const replacementClaimSurvivesOldFinalizer = Effect.gen(function* () {
+  const retried = yield* Deferred.make<void>();
+  const releaseOld = yield* Deferred.make<void>();
+  const replacementClaimed = yield* Deferred.make<void>();
+  const releaseReplacement = yield* Deferred.make<void>();
+  const target = ThreadId.make("thread:replacement-admission");
+  const effectId = "effect:replacement-admission";
+  let executorCalls = 0;
+  yield* Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    yield* outbox.enqueue([pendingCleanup(effectId, target)]);
+    const workerLayer = (workerId: string, overrides: Partial<EffectOutbox.EffectOutboxV2Shape>) =>
+      EffectWorker.layerWithOptions({ workerId }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(EffectOutbox.EffectOutboxV2, { ...outbox, ...overrides }),
+            Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+              execute: () =>
+                Effect.sync(() => {
+                  executorCalls++;
+                }),
+            }),
+          ),
+        ),
+      );
+    yield* Effect.gen(function* () {
+      const old = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const first = yield* old.runOnce.pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(retried);
+      yield* Effect.gen(function* () {
+        const replacement = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const second = yield* replacement.runOnce.pipe(Effect.forkScoped);
+        yield* Deferred.await(replacementClaimed);
+        assert.equal(Option.getOrThrow(yield* outbox.get(effectId)).attemptCount, 2);
+        yield* Deferred.succeed(releaseOld, undefined);
+        const firstExit = yield* Fiber.join(first);
+        assert.isTrue(Exit.isFailure(firstExit));
+        yield* Deferred.succeed(releaseReplacement, undefined);
+        assert.isTrue(yield* Fiber.join(second));
+        assert.equal(executorCalls, 1, "the replacement claim must execute");
+        assert.equal(Option.getOrThrow(yield* outbox.get(effectId)).status, "succeeded");
+        assert.isFalse(yield* replacement.runOnce);
+      }).pipe(
+        Effect.provide(
+          workerLayer("worker:replacement", {
+            get: (id) =>
+              Deferred.succeed(replacementClaimed, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseReplacement)),
+                Effect.andThen(outbox.get(id)),
+              ),
+          }),
+        ),
+      );
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(releaseOld, undefined)),
+      Effect.ensuring(Deferred.succeed(releaseReplacement, undefined)),
+      Effect.provide(
+        workerLayer("worker:old", {
+          get: (id) =>
+            Effect.fail(
+              new EffectOutbox.EffectOutboxError({
+                operation: "get",
+                effectId: id,
+                cause: "Synthetic pre-execution failure",
+              }),
+            ),
+          retry: (input) =>
+            outbox.retry(input).pipe(
+              Effect.tap(() => Deferred.succeed(retried, undefined)),
+              Effect.tap(() => Deferred.await(releaseOld)),
+            ),
+        }),
+      ),
+    );
+  }).pipe(
+    Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+  );
+}).pipe(Effect.scoped);
+
+export const cancellationRollbackPreservesClaim = Effect.gen(function* () {
+  const target = ThreadId.make("thread:rollback-admission");
+  const effectId = "effect:rollback-admission";
+  const executed: string[] = [];
+  yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    yield* outbox.enqueue([pendingCleanup(effectId, target)]);
+    let rollbackOnce = true;
+    const workerLayer = EffectWorker.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(EffectOutbox.EffectOutboxV2, {
+            ...outbox,
+            get: (id) =>
+              Effect.gen(function* () {
+                if (rollbackOnce) {
+                  rollbackOnce = false;
+                  const exit = yield* sql
+                    .withTransaction(
+                      Effect.gen(function* () {
+                        const cancelled = yield* outbox.cancelUnsettled({
+                          threadId: target,
+                          effectTypes: ["terminal.cleanup"],
+                          reason: "Synthetic rollback",
+                        });
+                        assert.deepEqual(cancelled, [effectId]);
+                        return yield* Effect.fail("rollback cancellation");
+                      }),
+                    )
+                    .pipe(Effect.exit);
+                  assert.isTrue(Exit.isFailure(exit));
+                  assert.equal(Option.getOrThrow(yield* outbox.get(id)).status, "running");
+                }
+                return yield* outbox.get(id);
+              }),
+          }),
+          Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+            execute: (effect) =>
+              Effect.sync(() => {
+                executed.push(effect.id);
+              }),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      assert.isTrue(yield* worker.runOnce);
+      assert.deepEqual(executed, [effectId], "rolled-back cancellation must preserve execution");
+      assert.equal(Option.getOrThrow(yield* outbox.get(effectId)).status, "succeeded");
+      yield* outbox.enqueue([pendingCleanup("effect:after-rollback", target)]);
+      assert.isTrue(yield* worker.runOnce);
+      assert.deepEqual(executed, [effectId, "effect:after-rollback"]);
+    }).pipe(Effect.provide(workerLayer));
+  }).pipe(
+    Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+  );
+});
 
 export const mockExecution = () => ({
   begin: () => Effect.succeedSome("synthetic"),
