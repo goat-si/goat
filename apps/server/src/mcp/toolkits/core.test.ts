@@ -82,7 +82,7 @@ import { ProjectToolkit } from "./project/tools.ts";
 import * as SshHandlers from "./ssh/handlers.ts";
 import { SshToolkit } from "./ssh/tools.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
-import { GOAT_PREFIXED_TOOL_NAMES, PUBLISHED_TOOLKITS } from "./core.toolNames.testkit.ts";
+import { CORE_GOAT_TOOL_NAMES, PUBLISHED_TOOLKITS } from "./coreToolNames.testkit.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
@@ -148,7 +148,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     }
   }
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual(
-    GOAT_PREFIXED_TOOL_NAMES,
+    CORE_GOAT_TOOL_NAMES,
   );
   expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([
     "channel_bot_home",
@@ -161,7 +161,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(207);
+  expect(names.size).toBe(215);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],
