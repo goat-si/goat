@@ -1578,13 +1578,13 @@ const make = Effect.gen(function* () {
       const encoder = tab.recording?.encoder;
 
       if (tab.viewers.size === 0 && !encoder && !tab.desktop) {
-        const allowed = tab.control.assertAgentMayDispatch();
-        // Nobody watches yet; a viewer that opens later starts from here.
-        screen.notePointer(tab, x, y);
-        return allowed;
+        tab.control.assertAgentMayDispatch();
+        return screen.notePointer(tab, x, y);
       }
       screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
+      // A Stop during the move refuses the input before it goes out, without marking dispatch.
+      tab.control.assertAgentMayDispatch();
       if (phase === "click") {
         screen.showPointer(tab, x, y, "click");
         await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
@@ -2321,7 +2321,6 @@ const make = Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         tab.viewers.add(viewer);
-        screen.replayPointer(tab, viewer);
         reportLiveTabs();
       }),
       () =>
@@ -2397,6 +2396,7 @@ const make = Effect.gen(function* () {
       });
     });
     broadcastViewport(tab);
+    screen.replayPointer(tab, viewer);
     yield* Effect.promise(() => startScreencast(1));
     // An idle page does not repaint for a new screencast, so the viewer
     // starts from a still unless a live frame beat it.

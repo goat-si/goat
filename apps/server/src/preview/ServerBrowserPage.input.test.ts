@@ -121,13 +121,12 @@ it("points at a field that appears late, within the input's time, and nowhere fo
     expect(points).toHaveLength(1);
   }));
 
-it("sends nothing after a Stop that lands while the pointer moves", () =>
+it("draws no pointer for a caller that already gave up", () =>
   fixture(async (page) => {
     await page.setContent('<input id="f">');
-    const stop = () => {
-      throw new Error("stopped");
-    };
-    await expect(pointBefore(page, { locator: "#f" }, async () => {}, stop)).rejects.toThrow(
-      "stopped",
-    );
+    const points: unknown[] = [];
+    // The request spent its time queued: the caller's deadline has passed before the move.
+    const gate = Object.assign(() => {}, { deadline: 0 });
+    await pointBefore(page, { locator: "#f" }, async (point) => void points.push(point), gate);
+    expect(points).toEqual([]);
   }));

@@ -276,7 +276,10 @@ export const makeSurface = <Tab extends ScreenTab>(
     drawPointer(tab, { phase, x, y, ...withCursor });
     notePointer(tab, x, y);
   };
-  /** A viewer that opens mid-run sees where the agent's owned pointer last was on this page. */
+  /**
+   * A viewer that opens mid-run sees where the agent's owned pointer last was on this page. Call
+   * after its first viewport: a viewer places a pointer only once it knows the viewport.
+   */
   const replayPointer = (
     tab: Tab,
     viewer: ScreenTab["viewers"] extends ReadonlySet<infer V> ? V : never,
