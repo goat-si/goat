@@ -567,8 +567,9 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
           element("Continue", 4),
         ],
         accessibilityTree: { nodes: Array.from({ length: 2_000 }, (_, i) => ({ nodeId: `${i}` })) },
+        // Errors, which snapshots keep; other entries are only counted.
         consoleEntries: Array.from({ length: 100 }, (_, i) => ({
-          level: "log",
+          level: "error",
           text: `entry ${i}`,
           timestamp: "t",
         })),
@@ -620,7 +621,7 @@ it.effect("bounds the snapshot text even when nothing but logs and the title are
         ...snapshotResult,
         title: "t".repeat(70_000),
         interactiveElements: [],
-        consoleEntries: [{ level: "log", text: "x".repeat(70_000), timestamp: "t" }],
+        consoleEntries: [{ level: "error", text: "x".repeat(70_000), timestamp: "t" }],
       };
       yield* serveSnapshots("mcp-bounded-logs-client", oversized);
 
@@ -947,7 +948,10 @@ it.effect("registers annotated tools and preserves authenticated request context
             : { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }),
         };
         expect(result.structuredContent).toMatchObject(expected);
-        expect(routedRequests.at(-1)?.operation).toBe("status");
+        // A click names its page's URL, so its icon needs no status read.
+        expect(routedRequests.at(-1)?.operation).toBe(
+          request.name === "goat_preview_click" ? "click" : "status",
+        );
         const text = result.content[0];
         const decodedText = text?.type === "text" ? decodeJsonText(text.text) : null;
         expect(decodedText).toMatchObject(expected);
