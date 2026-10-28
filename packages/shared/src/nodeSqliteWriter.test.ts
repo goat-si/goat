@@ -27,6 +27,7 @@ import {
   maintenancePrelude,
   holdMaintenance,
   captureWriterNotices,
+  awaitAdmissionRecovery,
 } from "./nodeSqliteWriter.testFixtures.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
@@ -791,7 +792,9 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
       yield* TestClock.adjust("10 seconds");
       yield* Deferred.await(refusals[2]!);
       const warningsUnderPressure = notices.warnings.slice();
+      using recovery = awaitAdmissionRecovery(worker);
       reader.exec("ROLLBACK");
+      yield* recovery.recovered;
       yield* TestClock.adjust("100 millis");
       yield* Fiber.join(transaction);
       assert.equal(
@@ -805,8 +808,11 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
       assert.equal((yield* sql`SELECT COUNT(*) AS count FROM existing_wal`)[0]?.count, 3);
       assert.equal(startedWorkers.length, 1);
     }).pipe(
-      Effect.provide(SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true })),
-      Effect.provide(notices.layer),
+      Effect.provide(
+        SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true }).pipe(
+          Layer.provideMerge(notices.layer),
+        ),
+      ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -851,7 +857,9 @@ it.effect.each(["frames", "journal-size"] as const)(
           );
           yield* Deferred.await(refused);
           assert.isUndefined(mutation.pollUnsafe());
+          using recovery = awaitAdmissionRecovery(worker);
           reader.exec("ROLLBACK");
+          yield* recovery.recovered;
           yield* TestClock.adjust("100 millis");
           yield* Fiber.join(mutation);
           assert.equal((yield* sql`SELECT COUNT(*) AS count FROM checkpoint_probe`)[0]?.count, 3);

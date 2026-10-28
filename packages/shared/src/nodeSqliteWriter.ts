@@ -1,6 +1,8 @@
 import * as NodeWorkerThreads from "node:worker_threads";
 import { identity } from "effect/Function";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
+import * as Fiber from "effect/Fiber";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -26,6 +28,8 @@ interface Reply {
   readonly rows?: unknown;
   readonly completedAtMs?: number;
   readonly backpressure?: boolean;
+  readonly walFrames?: number;
+  readonly checkpointedFrames?: number;
   readonly prepareMs?: number;
   readonly nativeMs?: number;
   readonly error?: WorkerError;
@@ -33,7 +37,9 @@ interface Reply {
 type Startup =
   | { readonly type: "ready" }
   | ({ readonly type: "unavailable" } & Omit<WorkerError, "operation">);
-type Notice = { readonly type: "maintenance-unavailable" | "maintenance-recovered" };
+type Notice = {
+  readonly type: "maintenance-unavailable" | "maintenance-recovered" | "admission-recovered";
+};
 interface Request {
   readonly type?: "close";
   readonly sql?: string;
@@ -68,6 +74,8 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   let initialized = false;
+  let retirement: Promise<number> | undefined;
+  const retire = (worker: NodeWorkerThreads.Worker) => (retirement ??= worker.terminate());
   const worker = yield* Effect.acquireRelease(
     Effect.try({
       try: () =>
@@ -89,24 +97,22 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
       catch: (cause) => failure(cause, "open"),
     }),
     (worker) =>
-      Effect.suspend(() => {
-        const retiring = worker.terminate();
-        if (initialized) return Effect.promise(() => retiring);
-        // Native startup can outlive termination; this instance never replaces its writer.
-        worker.unref();
-        return Effect.sync(() => {
-          runFork(
-            Effect.promise(() => retiring).pipe(
-              Effect.catchCause(() => Effect.logWarning("SQLite writer retirement failed")),
-            ),
-          );
-        });
-      }),
+      Effect.promise(() => retire(worker)).pipe(
+        Effect.catchCause(() => Effect.logWarning("SQLite writer retirement failed")),
+      ),
   );
   const requests = yield* Semaphore.make(1);
   let sequence = 0;
   let owner = 0;
   let stopped: SqlError | undefined;
+  let pressureSince: number | undefined;
+  let pressureDegraded = false;
+  const clearPressure = Effect.suspend(() => {
+    pressureSince = undefined;
+    const recovered = pressureDegraded;
+    pressureDegraded = false;
+    return recovered ? Effect.logInfo("SQLite writer WAL admission recovered") : Effect.void;
+  });
   let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
   const failPending = (cause: unknown) => {
     stopped ??= failure(cause, "execute");
@@ -121,6 +127,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   worker.on("exit", (code) => failPending(new Error(`Writer exited with code ${code}`)));
   worker.on("message", (reply: Reply | Startup | Notice) => {
     if ("type" in reply) {
+      if (reply.type === "admission-recovered") runFork(clearPressure);
       if (reply.type === "maintenance-unavailable")
         runFork(Effect.logWarning("SQLite writer checkpoint unavailable; mutations paused"));
       if (reply.type === "maintenance-recovered")
@@ -134,8 +141,19 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     request?.resume(reply);
   });
   // Native work must finish before interruption can release the connection or roll it back.
-  const send = (input: Request) =>
-    Effect.callback<Reply, SqlError>((resume) => {
+  const send = Effect.fn("SqliteWriter.send")(function* (input: Request) {
+    let delayed = false;
+    const watchdog = yield* Effect.sleep("10 seconds").pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          delayed = true;
+        }),
+      ),
+      Effect.andThen(Effect.logWarning("SQLite writer request stalled; maintenance may be busy")),
+      Effect.interruptible,
+      Effect.forkChild({ startImmediately: true }),
+    );
+    return yield* Effect.callback<Reply, SqlError>((resume) => {
       if (stopped !== undefined) {
         resume(Effect.fail(stopped));
         return;
@@ -151,7 +169,13 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
         worker.unref();
         resume(Effect.fail(failure(cause, "execute")));
       }
-    }).pipe(Effect.uninterruptible);
+    }).pipe(
+      Effect.ensuring(Fiber.interrupt(watchdog)),
+      Effect.onExit(() =>
+        delayed ? Effect.logInfo("SQLite writer request stall cleared") : Effect.void,
+      ),
+    );
+  }, Effect.uninterruptible);
   yield* Effect.addFinalizer(() =>
     Effect.suspend(() =>
       initialized && stopped === undefined
@@ -208,6 +232,13 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   ).pipe(
     Effect.timeout("10 seconds"),
     Effect.mapError((cause) => (isSqlError(cause) ? cause : failure(cause, "open"))),
+    Effect.onError(() =>
+      Effect.sync(() => {
+        // Return the startup error now; the owning scope still awaits native retirement.
+        worker.unref();
+        retire(worker);
+      }),
+    ),
   );
   initialized = true;
   worker.unref();
@@ -237,33 +268,39 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
         catch: (cause) => failure(cause, "execute"),
       }).pipe(
         Effect.flatMap((input) => {
-          const attempt = send(input).pipe(
-            Effect.flatMap(
-              (
-                reply,
-              ): Effect.Effect<unknown, SqlError | { readonly _tag: "WriterBackpressure" }> => {
-                if (reply.backpressure) return Effect.fail({ _tag: "WriterBackpressure" });
-                for (const [operation, nativeMs] of [
-                  ["prepare", reply.prepareMs],
-                  ["execute", reply.nativeMs],
-                ] as const) {
-                  if (nativeMs !== undefined && reply.completedAtMs !== undefined)
-                    recordSlowSql({
-                      connection: "writer",
-                      operation,
-                      owner: name,
-                      nativeMs,
-                      completedAtMs: reply.completedAtMs,
-                    });
-                }
-                if (reply.error !== undefined)
-                  return Effect.fail(nativeFailure(reply.error, reply.error.operation));
-                if (!("rows" in reply))
-                  return Effect.fail(failure(new Error("Invalid writer reply"), "decode"));
-                return Effect.succeed(reply.rows);
-              },
-            ),
-          );
+          const attempt = Effect.gen(function* () {
+            const reply = yield* send(input);
+            if (reply.backpressure) {
+              const now = yield* Clock.currentTimeMillis;
+              pressureSince ??= now;
+              if (!pressureDegraded && now - pressureSince >= 10_000) {
+                pressureDegraded = true;
+                yield* Effect.logWarning(
+                  `SQLite writer WAL admission degraded; walFrames=${reply.walFrames} checkpointedFrames=${reply.checkpointedFrames}`,
+                );
+              }
+              return yield* Effect.fail({ _tag: "WriterBackpressure" } as const);
+            }
+            if (reply.backpressure === false) yield* clearPressure;
+            for (const [operation, nativeMs] of [
+              ["prepare", reply.prepareMs],
+              ["execute", reply.nativeMs],
+            ] as const) {
+              if (nativeMs !== undefined && reply.completedAtMs !== undefined)
+                recordSlowSql({
+                  connection: "writer",
+                  operation,
+                  owner: name,
+                  nativeMs,
+                  completedAtMs: reply.completedAtMs,
+                });
+            }
+            if (reply.error !== undefined)
+              return yield* nativeFailure(reply.error, reply.error.operation);
+            if (!("rows" in reply))
+              return yield* failure(new Error("Invalid writer reply"), "decode");
+            return reply.rows;
+          });
           return recover(
             attempt.pipe(
               Effect.retry({

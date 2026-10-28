@@ -188,3 +188,17 @@ export const captureWriterNotices = () => {
   });
   return { warnings, recoveries, layer: Logger.layer([logger], { mergeWithExisting: false }) };
 };
+
+export const awaitAdmissionRecovery = (worker: NodeWorkerThreads.Worker) => {
+  const recovered = Deferred.makeUnsafe<void>();
+  const listener = (reply: { type?: string }) => {
+    if (reply.type === "admission-recovered") Deferred.doneUnsafe(recovered, Effect.void);
+  };
+  worker.on("message", listener);
+  return {
+    recovered: Deferred.await(recovered),
+    [Symbol.dispose]() {
+      worker.off("message", listener);
+    },
+  };
+};

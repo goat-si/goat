@@ -8,6 +8,8 @@ let db;
 let wal = false;
 let unknown = false;
 let blocked = false;
+let walFrames = 0;
+let checkpointedFrames = 0;
 let idle;
 let nextSequence = 0;
 let transactionOwner;
@@ -65,7 +67,7 @@ const initialize = () => {
     });
     maintain(true);
     parentPort.postMessage({ type: "ready" });
-    if (workerData.checkpoint && wal) idle = setTimeout(maintain, 100);
+    if (workerData.checkpoint && wal) scheduleMaintenance();
   } catch (error) {
     try { if (db) db.close(); } finally { db = undefined; }
     parentPort.postMessage({ type: "unavailable", message: String(error.message || error),
@@ -94,8 +96,12 @@ const prepare = (sql, cached) => {
   }
   return entry;
 };
+const scheduleMaintenance = () => {
+  if (idle === undefined) idle = setTimeout(() => { idle = undefined; maintain(); }, 100);
+};
 const maintain = (observeOnly = false) => {
   clearTimeout(idle);
+  idle = undefined;
   if (!workerData.checkpoint || !db || !wal || db.isTransaction) return;
   try {
     let state = db.prepare("PRAGMA wal_checkpoint(NOOP)").get();
@@ -112,14 +118,18 @@ const maintain = (observeOnly = false) => {
       finally { db.exec("PRAGMA busy_timeout = " + timeout); }
       state = db.prepare("PRAGMA wal_checkpoint(NOOP)").get();
     }
+    walFrames = state.log;
+    checkpointedFrames = state.checkpointed;
+    const wasPaused = blocked || unknown;
     blocked = state.log >= 10000 || oversized();
+    if (wasPaused && !blocked) parentPort.postMessage({ type: "admission-recovered" });
     if (unknown) parentPort.postMessage({ type: "maintenance-recovered" });
     unknown = false;
-    if (!observeOnly && (blocked || state.log - state.checkpointed >= 1000)) idle = setTimeout(maintain, 100);
+    if (blocked || state.log - state.checkpointed >= 1000) scheduleMaintenance();
   } catch {
     if (!unknown) parentPort.postMessage({ type: "maintenance-unavailable" });
     unknown = true;
-    if (!observeOnly) idle = setTimeout(maintain, 100);
+    scheduleMaintenance();
   }
 };
 parentPort.on("message", (request) => {
@@ -148,8 +158,8 @@ parentPort.on("message", (request) => {
     entry = prepare(sql, cached);
     prepareMs = performance.now() - started;
     if (entry.flags.backpressure && !db.isTransaction && (unknown || blocked)) {
-      maintain();
-      if (unknown || blocked) return parentPort.postMessage({ id, backpressure: true });
+      scheduleMaintenance();
+      return parentPort.postMessage({ id, backpressure: true, walFrames, checkpointedFrames });
     }
     operation = "execute";
     started = performance.now();
@@ -169,7 +179,8 @@ parentPort.on("message", (request) => {
     classification = undefined;
     if (entry.flags.journal && workerData.checkpoint)
       wal = String(values ? rows[0]?.[0] : rows[0]?.journal_mode).toLowerCase() === "wal";
-    parentPort.postMessage({ id, rows, prepareMs, nativeMs, completedAtMs });
+    parentPort.postMessage({ id, rows, prepareMs, nativeMs, completedAtMs,
+      backpressure: entry.flags.backpressure ? false : undefined });
   } catch (error) {
     if (!db.isTransaction) transactionOwner = undefined;
     if (operation === "prepare") prepareMs = performance.now() - started;
@@ -178,7 +189,7 @@ parentPort.on("message", (request) => {
   } finally {
     classification = undefined;
     // OR FAIL may commit rows; checkpoint failure must not replace a committed SQL result.
-    if (entry && entry.flags.check && !db.isTransaction) maintain();
+    if (entry && entry.flags.check && !db.isTransaction) maintain(true);
   }
 });
 `;
