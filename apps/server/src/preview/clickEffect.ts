@@ -4,7 +4,7 @@
  * is a suspected no-op. Late effects and ambient activity (a clock, a poll) are not counted.
  */
 import { constVoid } from "effect/Function";
-import type { ElementHandle, Frame, JSHandle, Locator, Page, Request } from "playwright-core";
+import type { ElementHandle, Frame, JSHandle, Locator, Page } from "playwright-core";
 
 export type ClickEvidence =
   | "dom"
@@ -27,6 +27,7 @@ const INSTALL_MS = 4 * SETTLE_MS;
 interface Watch {
   readonly seen: Set<string>;
   readonly changed: Promise<void>;
+  readonly navigated: Promise<boolean>;
   readonly arm: (target: unknown) => void;
   readonly stop: () => void;
 }
@@ -42,6 +43,8 @@ const INSTALL = `(() => {
   let target = null;
   let resolve = () => undefined;
   const changed = new Promise((done) => (resolve = done));
+  let navigatedNow = () => undefined;
+  const navigated = new Promise((done) => (navigatedNow = done));
   const note = (kind) => {
     if (!armed) return;
     seen.add(kind);
@@ -66,37 +69,32 @@ const INSTALL = `(() => {
   };
   // A write that leaves the value as it was, such as the same attribute or text set again, is not a
   // change; each attribute and text node is judged by its value before the batch and now.
-  // A node taken out and put back where it was, or text replaced by the same text, is no change.
-  const moved = (records) => {
-    const nodes = new Map();
-    for (const record of records) {
-      if (record.type !== "childList") continue;
-      const place = { net: 0, parent: record.target, previous: record.previousSibling,
-        next: record.nextSibling };
-      for (const node of record.removedNodes) {
-        const entry = nodes.get(node) ?? { ...place };
-        entry.net -= 1;
-        nodes.set(node, entry);
+  // A child list counts as changed only when it differs from how it was before the batch,
+  // rebuilt by undoing the batch's records in reverse; text counts by its content.
+  const sameNode = (left, right) => left === right ||
+    (left.nodeType === 3 && right.nodeType === 3 && left.data === right.data);
+  const childrenChanged = (records) => {
+    const lists = new Map();
+    for (const record of records) if (record.type === "childList") lists.set(record.target, null);
+    for (const parent of lists.keys()) {
+      let children = [...parent.childNodes];
+      for (const record of [...records].reverse()) {
+        if (record.type !== "childList" || record.target !== parent) continue;
+        children = children.filter((node) => ![...record.addedNodes].includes(node));
+        const next = record.nextSibling ? children.indexOf(record.nextSibling) : -1;
+        const previous = record.previousSibling ? children.indexOf(record.previousSibling) : -1;
+        const at = next >= 0 ? next : previous >= 0 ? previous + 1 : record.nextSibling ? 0 :
+          children.length;
+        children.splice(at, 0, ...record.removedNodes);
       }
-      for (const node of record.addedNodes) {
-        const entry = nodes.get(node) ?? { ...place };
-        entry.net += 1;
-        nodes.set(node, entry);
-      }
+      const now = [...parent.childNodes];
+      if (now.length !== children.length || now.some((node, i) => !sameNode(node, children[i])))
+        return true;
     }
-    let added = "", removed = "";
-    for (const [node, entry] of nodes) {
-      if (entry.net === 0) {
-        if (node.parentNode !== entry.parent || node.previousSibling !== entry.previous ||
-            node.nextSibling !== entry.next) return true;
-      } else if (node.nodeType !== 3) return true;
-      else if (entry.net > 0) added += node.data;
-      else removed += node.data;
-    }
-    return added !== removed;
+    return false;
   };
   const changedIn = (records) => {
-    if (moved(records)) return true;
+    if (childrenChanged(records)) return true;
     const before = new Map();
     for (const record of records) {
       if (record.type === "childList") continue;
@@ -173,7 +171,11 @@ const INSTALL = `(() => {
   const onFocus = (event) => related(event) && note("focus");
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
-  const onNavigate = (event) => (event.userInitiated || handled()) && note("navigation");
+  const onNavigate = (event) => {
+    if (!armed || !(event.userInitiated || handled())) return;
+    note("navigation");
+    navigatedNow(true);
+  };
   const navigation = window.navigation;
   const listeners = [[document, "input", onInput], [document, "change", onInput],
     [document, "focusin", onFocus], [document, "beforetoggle", onBeforeToggle],
@@ -203,12 +205,13 @@ const INSTALL = `(() => {
   const stop = () => {
     armed = false;
     resolve();
+    navigatedNow(false);
     dispatching.clear();
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
     navigation?.removeEventListener("navigate", onNavigate);
   };
-  return { seen, changed, arm, stop };
+  return { seen, changed, navigated, arm, stop };
 })()`;
 
 /** A wait on the page that a dialog it opens could block forever; undefined once it runs out. */
@@ -310,19 +313,8 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
     seen.add("download");
     wake();
   };
-  // A navigation that replaces the document cannot be read from the page while it is pending, so a
-  // request for a new document in the clicked frame after arming counts. Same-document changes
-  // are judged in the page, where a change other work made is not the click's.
-  const onRequest = (request: Request) => {
-    if (!armed || !request.isNavigationRequest()) return;
-    const navigated = request.frame();
-    if (navigated !== page.mainFrame() && navigated !== frame) return;
-    seen.add("navigation");
-    wake();
-  };
   page.on("popup", onPopup);
   page.on("download", onDownload);
-  page.on("request", onRequest);
   // A page that cannot run script, or that a dialog holds, still reports popups and dialogs.
   const installing = Promise.resolve()
     .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
@@ -332,31 +324,35 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   const release = () => {
     page.off("popup", onPopup);
     page.off("download", onDownload);
-    page.off("request", onRequest);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);
   };
   const record = (kinds: ReadonlyArray<string> | void | undefined) => {
     for (const kind of kinds ?? []) seen.add(kind as ClickEvidence);
   };
+  // Asked before the press: a read issued once a navigation is pending never answers, but one
+  // already waiting does, so a navigation the page attributes to the click still reports.
+  let first: Promise<void> | undefined;
+  let navigated: Promise<void> | undefined;
   const arm = async (aim: ClickAim) => {
     armed = true;
     const target: unknown = "element" in aim ? aim.element : aim.point;
     await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
+    first = watch
+      ?.evaluate((state) => state.changed.then(() => [...state.seen]))
+      .then(record, constVoid);
+    navigated = watch
+      ?.evaluate((state) => state.navigated)
+      .then((yes) => void (yes && seen.add("navigation")), constVoid);
   };
   const settle = async (dialog = false): Promise<ClickEffect> => {
     try {
       if (dialog) seen.add("dialog");
       else {
         // The first signal's kinds arrive with it, before a navigation can replace the document.
-        await bounded(
-          Promise.race([
-            woke,
-            watch
-              ?.evaluate((state) => state.changed.then(() => [...state.seen]))
-              .then(record, constVoid),
-          ]),
-        );
+        await bounded(Promise.race([woke, first]));
+        // A navigation the click started was noted before the press returned, so this is quick.
+        await bounded(navigated, 5);
         // A failed read proves nothing.
         record(
           await bounded(

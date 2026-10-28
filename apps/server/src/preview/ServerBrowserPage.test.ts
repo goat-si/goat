@@ -424,8 +424,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
   });
 
   it("confirms a click that starts a navigation before the new page loads", async () => {
+    // A served page, as agents browse: an initial about:blank document fires no navigate events.
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<a href="https://slow.test/next">next</a>',
+      }),
+    );
     await page.route("https://slow.test/next", () => {});
-    await page.setContent('<a href="https://slow.test/next">next</a>');
+    await page.goto("https://page.test/");
     await expect(ServerBrowserPage.click(page, { selector: "a" })).resolves.toMatchObject({
       effect: "confirmed",
       evidence: expect.arrayContaining(["navigation"]),

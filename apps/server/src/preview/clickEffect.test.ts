@@ -444,3 +444,45 @@ it("still confirms a checkbox toggled through its label and a node moved to a ne
       effect: "confirmed",
     });
   }));
+
+it("does not confirm a sort that leaves the order as it was, or a node added and removed again", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<button id="sort" onclick="list.replaceChildren(...[...list.children].sort((a, b) => a.textContent.localeCompare(b.textContent)))">sort</button>
+       <ul id="list"><li>a</li><li>b</li></ul>
+       <button id="measure" onclick="const probe = document.createElement('div'); document.body.append(probe); probe.getBoundingClientRect(); probe.remove()">measure</button>`,
+    );
+    await page.focus("#sort");
+    await expect(ServerBrowserPage.click(page, { selector: "#sort" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.focus("#measure");
+    await expect(ServerBrowserPage.click(page, { selector: "#measure" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
+
+it("does not credit a click with a page load other work started, and does credit a link it follows", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<p id="still">static</p><a id="next" href="https://slow.test/next">next</a><script>
+          // A poll answered right after the press, by a timer the click has no part in.
+          window.poll = () => document.addEventListener("mouseup", () =>
+            setTimeout(() => { location.href = "https://slow.test/login"; }, 5), { once: true });
+        </script>`,
+      }),
+    );
+    await page.route("https://slow.test/**", () => {});
+    await page.goto("https://page.test/");
+    await page.evaluate("poll()");
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.goto("https://page.test/");
+    await expect(ServerBrowserPage.click(page, { selector: "#next" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["navigation"]),
+    });
+  }));
