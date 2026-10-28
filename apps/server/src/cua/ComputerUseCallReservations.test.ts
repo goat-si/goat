@@ -665,6 +665,22 @@ describe("server computer-use call reservations", () => {
           yield* f.reserve(f.b, batch({ pid: 44, window_id: 9 }, { pid: 45 }), "run_steps"),
           { status: "refused", detail: "target_busy" },
         );
+        // A check naming another window moves later steps there, so it is desktop work too.
+        for (const check of [
+          { wait_for: { pid: 42, window_id: 7, name: "OK" } },
+          { expect: [{ app: "Other", window: "Doc" }] },
+        ])
+          assert.deepInclude(
+            yield* f.reserve(
+              f.b,
+              {
+                ...batch({ pid: 44, window_id: 9 }),
+                steps: [{ tool: "click", args: {}, ...check }],
+              },
+              "run_steps",
+            ),
+            { status: "refused", detail: "target_busy" },
+          );
         // Without a scope, or with foreground delivery, it still needs foreground approval.
         for (const args of [
           { pid: 44, window_id: 9, steps: [] },

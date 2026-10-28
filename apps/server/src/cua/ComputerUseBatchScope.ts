@@ -50,9 +50,9 @@ const positive = (value: unknown): value is number =>
 const WINDOW_FIELDS = ["pid", "window_id", "app", "window", "target"] as const;
 
 /**
- * The one window a run_steps call acts in: its own pid and window_id, when no step names another.
- * Checks (wait_for, expect) only read. Any other batch may act in any window of its scoped apps,
- * so it is judged as desktop work.
+ * The one window a run_steps call acts in: its own pid and window_id, when nothing in its steps
+ * names another. A check (wait_for, expect) that names a window also moves the window later steps
+ * inherit, so it counts. Any other batch may act in any window of its scoped apps: desktop work.
  */
 export function batchWindow(
   name: unknown,
@@ -71,21 +71,20 @@ export function batchWindow(
     return undefined;
   const steps = batch?.steps;
   if (!Array.isArray(steps)) return undefined;
-  const own = (fields: Readonly<Record<string, unknown>>) =>
-    WINDOW_FIELDS.every(
-      (field) =>
-        fields[field] === undefined ||
-        (field === "pid" && fields[field] === pid) ||
-        (field === "window_id" && fields[field] === windowId),
+  // Every object a step holds, at any depth, names no window but the batch's own.
+  const own = (value: unknown, depth: number): boolean => {
+    if (depth > 8) return false;
+    if (Array.isArray(value)) return value.every((item) => own(item, depth + 1));
+    const fields = record(value);
+    if (fields === undefined) return true;
+    return (
+      WINDOW_FIELDS.every(
+        (field) =>
+          fields[field] === undefined ||
+          (field === "pid" && fields[field] === pid) ||
+          (field === "window_id" && fields[field] === windowId),
+      ) && Object.values(fields).every((nested) => own(nested, depth + 1))
     );
-  for (const step of steps) {
-    const entry = record(step);
-    if (entry === undefined || !own(entry)) return undefined;
-    for (const [key, value] of Object.entries(entry)) {
-      if (key === "wait_for" || key === "expect") continue;
-      const fields = record(value);
-      if (fields !== undefined && !own(fields)) return undefined;
-    }
-  }
-  return { pid, windowId };
+  };
+  return own(steps, 0) ? { pid, windowId } : undefined;
 }
