@@ -89,7 +89,10 @@ const keyOf = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
  */
 export class ClosedPopups {
   private readonly openers = new Map<string, string>();
-  constructor(private readonly limit = 64) {}
+  private readonly limit: number;
+  constructor(limit = 64) {
+    this.limit = limit;
+  }
   record(threadId: string, tabId: string, openerTabId: string) {
     this.openers.set(keyOf(threadId, tabId), openerTabId);
     if (this.openers.size > this.limit) this.openers.delete(this.openers.keys().next().value ?? "");

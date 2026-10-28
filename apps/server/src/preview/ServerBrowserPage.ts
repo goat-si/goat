@@ -307,8 +307,9 @@ const locatePoint = async (
   } finally {
     void target.dispose().catch(constVoid);
   }
+  const viewport = page.viewportSize();
   let box = await locator.boundingBox({ timeout: remaining(deadline) });
-  if (!inViewport(box, page.viewportSize())) {
+  if (!inViewport(box, viewport)) {
     await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
     box = await locator.boundingBox({ timeout: remaining(deadline) });
   }
