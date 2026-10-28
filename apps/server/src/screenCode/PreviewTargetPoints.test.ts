@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type PreviewAutomationError,
+  type ScreenElementRef,
   type ScreenHostCall,
   type ScreenTargetRef,
 } from "@goat/contracts";
@@ -317,4 +318,166 @@ it.effect(
       expect(reloaded).toMatchObject({ mode: "full" });
       expect(reloaded).toHaveProperty("resetReason");
     }),
+);
+
+it.effect("a ref from an incomplete tree is refused after the page changes, before any input", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://example.test/before",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    let documentGeneration: number | undefined = 1;
+    let treeComplete = false;
+    const sent: Array<{ operation: string; exact: unknown }> = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "click" || request.operation === "drag")
+          sent.push({ operation: request.operation, exact: request.exact });
+        return Effect.succeed(
+          (request.operation === "status"
+            ? {
+                tabId: tab.tabId,
+                url: tab.url,
+                ...(documentGeneration === undefined ? {} : { documentGeneration }),
+                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+              }
+            : request.operation === "snapshot"
+              ? {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree:
+                    '- button "Save" [ref=e1]\n- listitem "Card" [ref=e2]\n- iframe [ref=e3]',
+                  treeComplete,
+                  omitted: treeComplete ? [] : ["unread_frames"],
+                  refGeneration: "1",
+                }
+              : { ok: true }) as A,
+        );
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    type Read = { elements: Array<{ ref: ScreenElementRef }>; complete: boolean };
+    const read = (callId: number) =>
+      host
+        .dispatch(call("observe", callId, {}, ref), context)
+        .pipe(Effect.map((result) => result.value as Read));
+
+    const incomplete = yield* read(3);
+    expect(incomplete.complete).toBe(false);
+    const [save, card] = incomplete.elements;
+    yield* host.dispatch(call("click", 4, { ref: save!.ref }, ref), context);
+    // The browser's own input gate gets the document the observation saw.
+    expect(sent).toEqual([
+      { operation: "click", exact: expect.objectContaining({ documentGeneration: 1 }) },
+    ]);
+
+    // The same origin, a new document (a redirect, a reload) before the next observation.
+    documentGeneration = 2;
+    const stale = yield* host
+      .dispatch(call("click", 5, { ref: save!.ref }, ref), context)
+      .pipe(Effect.result);
+    expect(stale._tag === "Failure" && stale.failure).toMatchObject({
+      code: "stale_reference",
+      effectStarted: false,
+    });
+    const staleDrag = yield* host
+      .dispatch(call("drag", 6, { sourceRef: card!.ref, destinationRef: save!.ref }, ref), context)
+      .pipe(Effect.result);
+    expect(staleDrag._tag === "Failure" && staleDrag.failure).toMatchObject({
+      code: "stale_reference",
+      effectStarted: false,
+    });
+    expect(sent).toHaveLength(1);
+
+    // Without a document generation from the browser, an incomplete tree offers no refs at all.
+    documentGeneration = undefined;
+    expect((yield* read(7)).elements).toEqual([]);
+
+    // A complete tree's refs keep today's behavior: no document on the request.
+    documentGeneration = 3;
+    treeComplete = true;
+    const complete = yield* read(8);
+    yield* host.dispatch(call("click", 9, { ref: complete.elements[0]!.ref }, ref), context);
+    expect(sent.at(-1)?.exact).not.toHaveProperty("documentGeneration");
+  }),
+);
+
+it.effect("a ref observed through one binding of a tab is refused through another", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://example.test/before",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const sent: string[] = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "click" || request.operation === "drag")
+          sent.push(request.operation);
+        return Effect.succeed(
+          (request.operation === "status"
+            ? {
+                tabId: tab.tabId,
+                url: tab.url,
+                documentGeneration: 1,
+                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+              }
+            : request.operation === "snapshot"
+              ? {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: '- button "Save" [ref=e1]\n- button "Drop" [ref=e2]',
+                  treeComplete: false,
+                  omitted: ["unread_frames"],
+                  refGeneration: "1",
+                }
+              : { ok: true }) as A,
+        );
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const bind = (callId: number) =>
+      host
+        .dispatch(call("select_tab", callId, { tabId: "tab" }), context)
+        .pipe(Effect.map((result) => (result.value as { targetRef: ScreenTargetRef }).targetRef));
+    const first = yield* bind(1);
+    const second = yield* bind(2);
+    yield* host.dispatch(call("claim_tab", 3, {}, first), context);
+    const read = (yield* host.dispatch(call("observe", 4, {}, second), context)).value as {
+      elements: Array<{ ref: ScreenElementRef }>;
+    };
+    const [save, drop] = read.elements;
+    for (const args of [{ ref: save!.ref }, { sourceRef: save!.ref, destinationRef: drop!.ref }]) {
+      const refused = yield* host
+        .dispatch(call("ref" in args ? "click" : "drag", 5, args, first), context)
+        .pipe(Effect.result);
+      expect(refused._tag === "Failure" && refused.failure).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+      });
+    }
+    expect(sent).toEqual([]);
+  }),
 );

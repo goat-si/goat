@@ -141,3 +141,9 @@ export function extractToolActivityPresentation(
       : {}),
   };
 }
+
+/** The muted one-line outcome the server gave a tool row, such as a screen cell's receipt counts. */
+export function workEntryToolSummary(item: unknown): string | undefined {
+  const summary = trimmedString(asRecord(item)?.toolSummary, 200);
+  return summary && !/[\r\n]/u.test(summary) ? summary : undefined;
+}

@@ -9,7 +9,7 @@ import { ReportError, type RunRow, renderReports, rescoreRow, scoreArms } from "
 const taskSet = validateTaskSet(
   JSON.parse(NodeFS.readFileSync(new URL("tasks.json", import.meta.url), "utf8")),
   {
-    witnesses: new Set(["calculator", "finder", "textEdit", "kakao"]),
+    witnesses: new Set(["calculator", "finder", "textEdit"]),
     oracles: new Set(Object.keys(ORACLES)),
   },
 );

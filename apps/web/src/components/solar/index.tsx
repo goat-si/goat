@@ -337,7 +337,6 @@ export const TerminalIcon = /* @__PURE__ */ solarIcon(solar.command, "TerminalIc
 export const TextIcon = /* @__PURE__ */ solarIcon(solar.text, "TextIcon");
 export const TextSearchIcon = /* @__PURE__ */ solarIcon(solar.fileSearch, "TextSearchIcon");
 export const TextWrapIcon = /* @__PURE__ */ solarIcon(solar.listArrowDown, "TextWrapIcon");
-export const TicketIcon = /* @__PURE__ */ solarIcon(solar.ticket, "TicketIcon");
 export const TrashIcon = /* @__PURE__ */ solarIcon(solar.trashBinMinimalistic, "TrashIcon");
 export const TrendingDownIcon = /* @__PURE__ */ solarIcon(solar.graphDown, "TrendingDownIcon");
 export const TrendingUpIcon = /* @__PURE__ */ solarIcon(solar.graphUp, "TrendingUpIcon");

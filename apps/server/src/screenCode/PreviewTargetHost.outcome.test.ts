@@ -80,3 +80,48 @@ it.effect(
       expect(fixture.requests.filter((request) => request.operation === "click")).toHaveLength(1);
     }),
 );
+
+it.effect(
+  "a navigation that reached its page is a confirmed receipt; one without a URL is not",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      fixture.state.clickResult = { url: "https://example.test/next" };
+      expect(
+        (yield* fixture.dispatch("navigate_tab", { url: "https://example.test/next" }))?.outcome,
+      ).toBe("ok");
+      fixture.state.clickResult = {};
+      expect(
+        (yield* fixture.dispatch("navigate_tab", { url: "https://example.test/other" }))?.outcome,
+      ).toBe("ok");
+      const receipts = fixture.bridge
+        .takeCellImagesNow("run", "turn", "cell")
+        .journal.filter((entry) => entry.receipt.method === "navigate_tab")
+        .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
+      expect(receipts).toEqual([
+        ["confirmed", ["navigate:reached", "origin:https://example.test"]],
+        ["unverifiable", ["dispatched; observe to confirm"]],
+      ]);
+    }),
+);
+
+it.effect("typed text stays unverifiable, whatever the page answers about it", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    fixture.state.clickResult = { effect: "confirmed", evidence: ["value"] };
+    expect((yield* fixture.dispatch("type_text", { ref, text: "Ada" }))?.outcome).toBe("ok");
+    fixture.state.clickResult = { ok: true };
+    expect((yield* fixture.dispatch("type_text", { ref, text: "Ada" }))?.outcome).toBe("ok");
+    const receipts = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.filter((entry) => entry.receipt.method === "type_text")
+      .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
+    expect(receipts).toEqual([
+      ["unverifiable", ["dispatched; observe to confirm"]],
+      ["unverifiable", ["dispatched; observe to confirm"]],
+    ]);
+  }),
+);

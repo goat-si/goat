@@ -477,7 +477,6 @@
   "apps/web/src/components/ui/toast.tsx": 2,
   "apps/web/src/components/ui/tooltip.tsx": 1,
   "apps/web/src/components/usage/UsageLimits.tsx": 1,
-  "apps/web/src/components/usage/UsageLimitsPooled.tsx": 1,
   "apps/web/src/components/usage/UsagePage.tsx": 3,
   "apps/web/src/components/usage/UsageProviderChart.tsx": 1,
   "apps/web/src/connection/useDesktopLocalBootstraps.ts": 1,

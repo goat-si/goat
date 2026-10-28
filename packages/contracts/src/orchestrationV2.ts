@@ -1905,6 +1905,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */
     outputOmitted: Schema.optional(Schema.Boolean),
+    /** A muted one-line outcome the server derived for the row, such as a screen cell's; display only. */
+    toolSummary: Schema.optional(TrimmedNonEmptyString),
   }),
 ]);
 export type OrchestrationV2TurnItem = typeof OrchestrationV2TurnItem.Type;
@@ -2780,6 +2782,8 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */
     outputOmitted: Schema.optional(Schema.Boolean),
+    /** A muted one-line outcome the server derived for the row, such as a screen cell's; display only. */
+    toolSummary: Schema.optional(TrimmedNonEmptyString),
   }),
 ]);
 export type OrchestrationV2TurnItemJson = typeof OrchestrationV2TurnItemJson.Type;

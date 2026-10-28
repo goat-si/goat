@@ -62,6 +62,8 @@ interface BoundTarget {
   readonly observationId?: string;
   /** The document the latest observation saw, when the host reports one; points belong to it. */
   readonly documentGeneration?: number;
+  /** The latest observation, when its tree was incomplete: its refs are held to its document. */
+  readonly incompleteObservationId?: string;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -184,7 +186,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       generation: 0,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
-    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url });
+    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url }, context);
     return ref;
   };
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -225,7 +227,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
-    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url });
+    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url }, context);
     if (originOf(current.url) !== bound.origin) {
       observations.evictTarget(bound.ref.id);
       if (!readOnly)
@@ -287,7 +289,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       if (call.method === "select_tab") {
         const tabs = yield* list(context);
-        const tabId = stringField(arg, "tabId");
+        // A tab target's identity from an earlier cell of this turn names its tab again.
+        const identity = stringField(arg, "identity");
+        const tabId =
+          stringField(arg, "tabId") ?? (identity ? targets.get(identity)?.tab.tabId : undefined);
         const url = stringField(arg, "url");
         const mentionId = stringField(arg, "mentionId");
         const hints = bindingHints.get(turnKey(context));
@@ -312,7 +317,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           return yield* Effect.fail(
             fail(
               candidates.length ? "target_ambiguous" : "target_missing",
-              "Specify one live tab ID or URL.",
+              identity && !tabId
+                ? "That tab target is not bound in this turn; use its tabId or screen.listTabs()."
+                : "Specify one live tab ID or URL.",
             ),
           );
         const candidate = candidates[0];
@@ -496,12 +503,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           observations,
           arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
+        const { incompleteObservationId: _previous, ...kept } = reading;
         targets.set(bound.ref.id, {
-          ...reading,
+          ...kept,
           observationId: result.value.observationId,
           ...(current.documentGeneration === undefined
             ? {}
             : { documentGeneration: current.documentGeneration }),
+          ...(result.value.complete || result.value.elements.length === 0
+            ? {}
+            : { incompleteObservationId: result.value.observationId }),
         });
         return result;
       }
@@ -543,6 +554,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
       const selector = stringField(arg, "selector");
+      // A ref acts only through the binding that observed it, which holds its document and gate.
+      if (
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly targetId?: unknown }).targetId !== bound.ref.id,
+        )
+      )
+        return yield* Effect.fail(
+          fail("stale_reference", "That element belongs to another tab target; observe this one."),
+        );
       const locator =
         arg.ref && typeof arg.ref === "object"
           ? observations.index.resolveElement(
@@ -575,6 +598,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if (point && bound.documentGeneration !== current.documentGeneration)
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
+        );
+      // A ref from an incomplete tree is held to its document the same way: the browser's ref
+      // table alone was never relied on for those.
+      const documentBound =
+        bound.incompleteObservationId !== undefined &&
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly observationId?: unknown }).observationId ===
+              bound.incompleteObservationId,
+        );
+      if (documentBound && bound.documentGeneration !== current.documentGeneration)
+        return yield* Effect.fail(
+          fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
       if (point?.kind === "document")
         return yield* Effect.fail(
@@ -758,8 +796,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       else observations.index.invalidatePoints(bound.ref.id);
-      // A point carries its screenshot's document so the browser's input gate can refuse it.
-      const pointDocument = point ? bound.documentGeneration : undefined;
+      // A point, or a ref from an incomplete tree, carries its document so the browser's input
+      // gate can refuse it.
+      const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
       const result = yield* invoke(
         bound,
         context,
@@ -782,7 +821,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const reached =
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
       if (typeof reached === "string")
-        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
+        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached }, context);
       // The agent moved its own tab, so the handle follows to the page it reached; the old
       // document's refs and points were retired above.
       if (
@@ -799,19 +838,24 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
-      // A click the browser saw change something is confirmed; nothing seen stays unverifiable,
-      // since late effects can follow, so the cell goes on and one observation settles it.
+      // A click the browser saw change something is confirmed, and so is a navigation that
+      // reached its page; nothing seen stays unverifiable, since late effects can follow, so the
+      // cell goes on and one observation settles it. Typed text stays unverifiable: no read the
+      // page cannot also produce tells this input's insert from the page's own.
       const seen =
         operation === "click" && typeof result === "object" && result !== null
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
-      const confirmed = seen?.effect === "confirmed" && Array.isArray(seen.evidence);
+      const navigated = operation === "navigate" && typeof reached === "string";
+      const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
       return {
         value: result,
         category: confirmed ? "confirmed" : "unverifiable",
-        evidence: confirmed
-          ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
-          : ["dispatched; observe to confirm"],
+        evidence: navigated
+          ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
+          : confirmed && seen
+            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `click:${String(each)}`)
+            : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
       };

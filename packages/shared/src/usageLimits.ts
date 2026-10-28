@@ -14,6 +14,8 @@ import {
 
 import * as DateTime from "effect/DateTime";
 
+import { accountRefOfSourceId, quotaPoolAccountName } from "./quotaAccountName.ts";
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -58,7 +60,9 @@ function cursorUsageWindowRank(id: string): number {
   return rank < 0 ? CURSOR_USAGE_WINDOWS.length : rank;
 }
 
-function providersWithLimits(providers: readonly ServerProvider[]): readonly ServerProvider[] {
+export function providersWithLimits(
+  providers: readonly ServerProvider[],
+): readonly ServerProvider[] {
   return providers.filter(
     (provider) =>
       provider.enabled &&
@@ -69,11 +73,11 @@ function providersWithLimits(providers: readonly ServerProvider[]): readonly Ser
 }
 
 /** Pool quota, or a pool GOAT could not read: never the instance's own login. */
-const routedThroughOpenCodex = (limits: ServerProviderUsageLimits) =>
+export const routedThroughOpenCodex = (limits: ServerProviderUsageLimits) =>
   limits.quotaPool !== undefined || limits.quotaPoolRoute !== undefined;
 
 /** A routed instance's own login as usage limits, and whether its driver can redeem there. */
-function localLimits(limits: ServerProviderUsageLimits) {
+export function localLimits(limits: ServerProviderUsageLimits) {
   const own = limits.localAccount;
   if (own === undefined) return undefined;
   return {
@@ -171,6 +175,23 @@ function accountKeyResolver(reports: Iterable<AccountReport>) {
   };
 }
 
+/** Where GOAT learned of an account: an OpenCodex pool, a login on an environment, or a proxy. */
+export type LimitOrigin =
+  | { readonly kind: "pool"; readonly homeId: string | undefined; readonly label: string }
+  | { readonly kind: "login" }
+  | { readonly kind: "proxy"; readonly label: string };
+
+const originKey = (origin: LimitOrigin) =>
+  origin.kind === "login"
+    ? "login"
+    : `${origin.kind}:${origin.kind === "pool" ? (origin.homeId ?? origin.label) : origin.label}`;
+
+function unionOrigins(left: readonly LimitOrigin[] = [], right: readonly LimitOrigin[] = []) {
+  const seen = new Map(left.map((origin) => [originKey(origin), origin]));
+  for (const origin of right) if (!seen.has(originKey(origin))) seen.set(originKey(origin), origin);
+  return [...seen.values()];
+}
+
 export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
@@ -192,6 +213,10 @@ export interface LimitAccount {
   readonly aggregated?: boolean | undefined;
   readonly state?: UsageLimitSourceAccount["state"];
   readonly observedAt?: string | undefined;
+  /** Every path that reported this account; merging keeps them all. */
+  readonly origins?: ReadonlyArray<LimitOrigin> | undefined;
+  /** An OpenCodex pool account's name for people; displayName keeps the raw label. */
+  readonly poolName?: string | undefined;
 }
 
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
@@ -234,6 +259,10 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     accounts.set(key, {
       ...previous,
       aggregated: previous.aggregated !== false || next.aggregated !== false,
+      origins: unionOrigins(previous.origins, next.origins),
+      ...((previous.poolName ?? next.poolName) === undefined
+        ? {}
+        : { poolName: previous.poolName ?? next.poolName }),
       ...(winner.state === undefined ? {} : { state: winner.state }),
       ...(winner.observedAt === undefined ? {} : { observedAt: winner.observedAt }),
       displayName: previous.displayName ?? next.displayName,
@@ -256,14 +285,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       },
     });
   };
-  const resolveKey = accountKeyResolver(
-    [...presentations.values()].flatMap((presentation) => [
-      ...(presentation.serverConfig?.providers ?? [])
-        .filter((provider) => provider.enabled)
-        .map(nativeReport),
-      ...(presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) => source.accounts),
-    ]),
-  );
+  const resolveKey = limitAccountKeys(presentations);
   for (const [environmentId, presentation] of presentations) {
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
@@ -288,6 +310,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
           limits: own.limits,
           // Usually also one of the pool's accounts, so it counts only when the pool is unreadable.
           aggregated: provider.usageLimits.quotaPool === undefined,
+          origins: [{ kind: "login" }],
         });
         continue;
       }
@@ -304,6 +327,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         redeem: { environmentId, input: { instanceId: provider.instanceId } },
         limits: provider.usageLimits,
         aggregated: true,
+        origins: [{ kind: "login" }],
       });
     }
   }
@@ -322,6 +346,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
           key,
           driver: account.driver,
           displayName: account.email ? null : (account.label ?? account.id.replace(/\.json$/i, "")),
+          ...(source.kind === "opencodex" && !account.email
+            ? { poolName: sourceAccountName(source.kind, account) ?? undefined }
+            : {}),
           email: account.email,
           plan: account.plan,
           accentColor: undefined,
@@ -339,6 +366,11 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
             : null,
           limits: account.usageLimits,
           aggregated: account.state !== "paused" && account.state !== "reauth",
+          origins: [
+            source.kind === "opencodex"
+              ? { kind: "pool", homeId: source.homeId, label: source.label }
+              : { kind: "proxy", label: source.label },
+          ],
           ...(account.state === undefined ? {} : { state: account.state }),
           ...(account.observedAt === undefined ? {} : { observedAt: account.observedAt }),
         });
@@ -346,6 +378,34 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     }
   }
   return [...accounts.values()];
+}
+
+/** The identity collectLimitAccounts merges by: email or credential, then workspace. */
+export function limitAccountKeys(presentations: LimitPresentations) {
+  return accountKeyResolver(
+    [...presentations.values()].flatMap((presentation) => [
+      ...(presentation.serverConfig?.providers ?? [])
+        .filter((provider) => provider.enabled)
+        .map(nativeReport),
+      ...(presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) => source.accounts),
+    ]),
+  );
+}
+
+/** Never an opaque id: OpenCodex accounts read as plan and privacy label, proxy files lose .json. */
+export function sourceAccountName(
+  kind: UsageLimitSourceSnapshots[number]["kind"],
+  account: UsageLimitSourceAccount,
+): string | null {
+  if (account.email) return null;
+  if (kind === "opencodex") {
+    return quotaPoolAccountName({
+      label: account.label,
+      plan: account.plan,
+      accountRef: accountRefOfSourceId(account.id),
+    });
+  }
+  return account.label ?? account.id.replace(/\.json$/i, "");
 }
 
 /** Each Home's newest snapshot decides which accounts exist and their state. */

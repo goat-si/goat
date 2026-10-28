@@ -7,6 +7,7 @@ import {
   ScreenRunResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import { INPUT_TITLE, INPUT_TITLE_MAX } from "../../../cua/ScreenCellRow.ts";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -45,12 +46,21 @@ const ScreenRunToolLimits = Schema.Struct({
 
 export const ScreenRunToolInput = Schema.Struct({
   code: Schema.String.check(Schema.isNonEmpty()),
+  title: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMaxLength(INPUT_TITLE_MAX),
+      Schema.isPattern(INPUT_TITLE),
+    ).annotate({
+      description:
+        "One line saying what the cell does; it titles the timeline row. Never typed text or secrets.",
+    }),
+  ),
   reset: Schema.optionalKey(Schema.Boolean),
   limits: Schema.optionalKey(ScreenRunToolLimits),
 });
 
 const isInput = Schema.is(ScreenRunToolInput);
-const fields = new Set(["code", "reset", "limits"]);
+const fields = new Set(["code", "title", "reset", "limits"]);
 export function validScreenRunPayload(payload: unknown): boolean {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return false;
   const raw = payload as Record<string, unknown>;

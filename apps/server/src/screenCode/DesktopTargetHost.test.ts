@@ -924,12 +924,12 @@ it.effect("GOAT's refusal tells the agent why, what to do, and which thread hold
 
 // A full Finder read passes the primitive channel's size cap, and the lease proxy sends a marker
 // in its place: the read ran, so the agent hears the limit and keeps its binding.
-it.effect("a window read too large for the primitive channel fails as tree_limit, not stale", () =>
+it.effect("a window read too large even at 256 elements fails as tree_limit, not stale", () =>
   Effect.gen(function* () {
-    let reads = 0;
+    let large = false;
     const { host, sent } = fixture({
       get_window_state: () =>
-        reads++ === 1
+        large
           ? {
               code: "primitive_reply_too_large",
               message: "Driver reply exceeded the primitive channel limit.",
@@ -946,11 +946,20 @@ it.effect("a window read too large for the primitive channel fails as tree_limit
     const first = yield* host.observe(call("get_window_state", {}, target), context);
     const elementRef = (first.value as { elements: Array<{ ref: ScreenElementRef }> }).elements[0]
       ?.ref;
+    large = true;
+    const readsBefore = sent.length;
     const tooLarge = yield* host
       .observe(call("get_window_state", {}, target), context)
       .pipe(Effect.result);
+    large = false;
     if (!elementRef) throw new Error("The first read must offer a ref");
     expect(tooLarge._tag === "Failure" && tooLarge.failure.code).toBe("tree_limit");
+    // Smaller walks were tried first; none fit.
+    expect(
+      sent
+        .slice(readsBefore)
+        .map((entry) => (entry.args as { max_elements?: number }).max_elements),
+    ).toEqual([4096, 1024, 256]);
     // That read retired the driver's earlier tokens, so the earlier ref never reaches it.
     const sentBefore = sent.length;
     const click = yield* host
