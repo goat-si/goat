@@ -82,6 +82,7 @@ export class PreviewAutomationBroker extends Context.Service<
       request: PreviewAutomationInvokeInput,
     ) => Effect.Effect<A, PreviewAutomationError>;
     readonly listBoundTabs: BoundPreviewTabs.ListBoundTabs;
+    readonly canOpenTab: BoundPreviewTabs.CanOpenTab;
   }
 >()("goat/mcp/PreviewAutomationBroker") {}
 
@@ -774,8 +775,19 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     supports: supportsOperation,
     invoke,
   });
+  const canOpenTab = BoundPreviewTabs.makeCanOpenTab({
+    hosts: Effect.map(SynchronizedRef.get(state), (current) => current.clients),
+    supports: supportsOperation,
+  });
 
-  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke, listBoundTabs });
+  return PreviewAutomationBroker.of({
+    connect,
+    focusHost,
+    respond,
+    invoke,
+    listBoundTabs,
+    canOpenTab,
+  });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
 export const layer = Layer.effect(PreviewAutomationBroker, make);

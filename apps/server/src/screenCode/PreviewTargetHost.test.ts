@@ -796,3 +796,21 @@ it.effect("preview host keeps a refusal before input as nothing started", () =>
       });
   }),
 );
+
+it.effect("a turn with no tab yet reports tabs available when this server can open one", () =>
+  Effect.gen(function* () {
+    const withoutTabs = (canOpen: boolean) =>
+      makePreviewTargetHost({
+        invoke: <A>() => Effect.succeed(null as A),
+        listBoundTabs: () => Effect.succeed([]),
+        canOpenTab: () => Effect.succeed(canOpen),
+      });
+    expect(yield* (yield* withoutTabs(true)).availability(context)).toEqual([
+      { kind: "tab", available: true },
+    ]);
+    // No browser host here can open a tab, so the agent hears that it has none.
+    expect(yield* (yield* withoutTabs(false)).availability(context)).toEqual([
+      { kind: "tab", available: false, reason: "no_host" },
+    ]);
+  }),
+);
