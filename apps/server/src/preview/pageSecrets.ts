@@ -105,26 +105,31 @@ export const protectedNumbers = (values: ReadonlyArray<string>): ReadonlySet<num
   new Set(
     values.flatMap((value) => {
       const digits = value.replace(/\D/g, "");
-      return /^[\d\s+().-]+$/.test(value) && digits.length >= 4 ? [Number(digits)] : [];
+      return /^[\d\s+().-]+$/.test(value) && digits.length > 0 ? [Number(digits)] : [];
     }),
   );
 
 /**
  * Masks every string in an evaluation result, object keys included: all of it is the page's. A
- * number equal to a masked field's numeric form is masked too; numbers never join the text mask.
+ * number, or a run of digits in a string, equal to a masked field's numeric form is masked too;
+ * this applies to evaluation results only, so short codes never mask ordinary page text.
  */
 export const redactValue = (
   value: unknown,
   mask: (text: string) => string,
   numbers: ReadonlySet<number> = new Set(),
 ): unknown => {
-  if (typeof value === "string") return mask(value);
+  const text = (each: string) =>
+    numbers.size === 0
+      ? mask(each)
+      : mask(each).replace(/\d+/g, (run) => (numbers.has(Number(run)) ? MASKED_VALUE : run));
+  if (typeof value === "string") return text(value);
   if ((typeof value === "number" || typeof value === "bigint") && numbers.has(Number(value)))
     return MASKED_VALUE;
   if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, numbers));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask, numbers)]),
+    Object.entries(value).map(([key, each]) => [text(key), redactValue(each, mask, numbers)]),
   );
 };
 

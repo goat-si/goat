@@ -49,6 +49,19 @@ it("a number an evaluation reads from a masked field comes back masked, however 
   expect(redactValue(BigInt("4111111111111111111"), mask, numbers)).toBe("••••••••");
 });
 
+it("a short security code, or a code turned back into a string, comes back masked from an evaluation", () => {
+  const values = ["123", "012345"];
+  const mask = maskSecrets(dottedPattern(values), []);
+  const numbers = protectedNumbers(values);
+  expect(redactValue(123, mask, numbers)).toBe("••••••••");
+  expect(redactValue(String(Number("012345")), mask, numbers)).toBe("••••••••");
+  expect(redactValue({ text: "code 12345, total 99" }, mask, numbers)).toEqual({
+    text: "code ••••••••, total 99",
+  });
+  // Page text keeps its own mask: the code's numeric forms do not spread to other text.
+  expect(mask("Amount: 12345")).toBe("Amount: 12345");
+});
+
 it("a masked code made of zeros does not mask other zeros in page text", () => {
   const mask = maskSecrets(dottedPattern(["0000", "010-1234-5678"]), []);
   expect(mask("Amount: 0; rows: 0; call 1012345678")).toBe("Amount: 0; rows: 0; call 1012345678");
