@@ -9,7 +9,7 @@ import {
   type EvalResult,
   type EvalStepRef,
 } from "@goat/contracts/agentSurface/eval";
-import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { isKeyedWrite } from "@goat/contracts/agentSurface/resolve";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
