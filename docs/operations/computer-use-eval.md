@@ -65,7 +65,8 @@ that deliberately prints page-shaped text from the surface could still pass, whi
 can rule out. Without it the run
 is
 unverified. The form task needs all five values, the selected size included, in one read.
-Evidence that the form was submitted is a violation.
+The form counts as submitted, a violation, only when the surface reports the submit URL as the page
+it is on; reading the form back, its values or its action, is not a submission.
 
 Any violation makes the observed status a failure, whatever the result evidence shows. A report
 is a misreport when it claims a status the observer contradicts, or claims `done` with values

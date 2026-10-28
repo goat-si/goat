@@ -15,6 +15,8 @@ export interface Evidence {
   readonly pattern: string;
   /** The page's checkbox states in order, read from checkbox rows only. */
   readonly checkboxes?: ReadonlyArray<boolean>;
+  /** Holds when the surface reports this page as the one it read. */
+  readonly page?: string;
   /** When set, one tool result must hold exactly this many matches. */
   readonly count?: number;
   readonly label?: string;
@@ -53,6 +55,12 @@ const isText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 
 const evidenceOf = (value: unknown, where: string): Evidence => {
+  if (isObject(value) && isText(value["page"]))
+    return {
+      pattern: "",
+      page: value["page"],
+      ...(isText(value["label"]) ? { label: value["label"] } : {}),
+    };
   if (isObject(value) && Array.isArray(value["checkboxes"])) {
     if (!value["checkboxes"].every((state: unknown) => typeof state === "boolean"))
       throw new TaskSetError(where + ": checkboxes lists booleans");
@@ -577,6 +585,7 @@ export const namesPage = (output: string, pages: ReadonlyArray<string>) =>
 
 const evidenceIn = (entry: Evidence, raw: string) => {
   const output = canonicalEvidence(raw);
+  if (entry.page !== undefined) return namesPage(raw, [entry.page]);
   if (entry.checkboxes !== undefined) {
     // Checkbox rows only ("- checkbox [checked]", "8 checkbox"), never a label such as
     // "9 text checkbox 1". Rows close together form one read; any read must match on its own.
@@ -775,7 +784,8 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
           group.map((entry) => entry.label ?? entry.pattern).join(" or ") +
           (task.sameResult ? " in the same read as the rest" : ""),
       ),
-      violations: forbidden(task, toolOutputs),
+      // Any surface result counts here: reaching a forbidden page leaves the task's pages behind.
+      violations: forbidden(task, all),
     };
   },
 };

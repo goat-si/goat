@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "tasks": [
     {
       "id": "calculator-multiply",
@@ -108,7 +108,7 @@
         "size": "Medium",
         "comments": "평가용 입력"
       },
-      "pages": ["httpbin.org/forms/post", "httpbin.org/post"],
+      "pages": ["httpbin.org/forms/post"],
       "evidence": [
         [
           {
@@ -144,12 +144,8 @@
       "sameResult": true,
       "forbidEvidence": [
         {
-          "pattern": "\"form\"\\s*:\\s*\\{",
-          "label": "submitted the form (httpbin echoed it)"
-        },
-        {
-          "pattern": "httpbin\\.org/post\\b",
-          "label": "reached the form's submit URL"
+          "page": "httpbin.org/post",
+          "label": "submitted the form: the browser reached its submit URL"
         }
       ],
       "oracle": "webEvidence",

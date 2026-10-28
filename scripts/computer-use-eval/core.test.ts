@@ -341,8 +341,7 @@ describe("oracles", () => {
       toolOutputs: ['{"url": "https://httpbin.org/post", "form": {"custname": "Eval Runner"}}'],
     });
     expect(submitted.violations).toEqual([
-      "submitted the form (httpbin echoed it)",
-      "reached the form's submit URL",
+      "submitted the form: the browser reached its submit URL",
     ]);
   });
 
@@ -861,5 +860,14 @@ describe("real command and snapshot shapes", () => {
       page +
       "- checkbox [ref=e2]\n- checkbox [ref=e3] [checked]\n\n\n\n\n- checkbox [ref=e2]\n- checkbox [ref=e3] [checked]";
     expect(oracle("web-checkboxes", { toolOutputs: [twice] }).actual).toBe("unverified");
+  });
+});
+
+describe("form submission", () => {
+  it("is not inferred from an ordinary readback of the form's values or its action", () => {
+    const here = '{"url":"https://httpbin.org/forms/post",';
+    const values = here + '"form":{"custname":"Eval Runner","custtel":"010-0000-0000"}}';
+    const action = here + '"action":"https://httpbin.org/post","method":"post"}';
+    expect(oracle("web-form", { toolOutputs: [values, action] }).violations).toEqual([]);
   });
 });
