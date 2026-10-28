@@ -122,15 +122,23 @@ export const redactValue = (
   const text = (each: string) =>
     numbers.size === 0
       ? mask(each)
-      : mask(each).replace(/\d+/g, (run) => (numbers.has(Number(run)) ? MASKED_VALUE : run));
+      : mask(each).replace(/\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, (token) =>
+          numbers.has(Number(token)) ? MASKED_VALUE : token,
+        );
   if (typeof value === "string") return text(value);
   if ((typeof value === "number" || typeof value === "bigint") && numbers.has(Number(value)))
     return MASKED_VALUE;
   if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, numbers));
   if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [text(key), redactValue(each, mask, numbers)]),
-  );
+  // Two keys that mask alike both stay, the later one numbered.
+  const entries = new Map<string, unknown>();
+  for (const [key, each] of Object.entries(value)) {
+    const masked = text(key);
+    let name = masked;
+    for (let copy = 2; entries.has(name); copy++) name = `${masked} (${copy})`;
+    entries.set(name, redactValue(each, mask, numbers));
+  }
+  return Object.fromEntries(entries);
 };
 
 /**

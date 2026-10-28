@@ -62,6 +62,17 @@ it("a short security code, or a code turned back into a string, comes back maske
   expect(mask("Amount: 12345")).toBe("Amount: 12345");
 });
 
+it("a code written in exponent form is masked, and keys that mask alike both stay", () => {
+  const values = ["4111111111111111111111", "123"];
+  const mask = maskSecrets(dottedPattern(values), []);
+  const numbers = protectedNumbers(values);
+  expect(redactValue(String(Number("4111111111111111111111")), mask, numbers)).toBe("••••••••");
+  expect(redactValue({ item123: "a", item0123: "b" }, mask, numbers)).toEqual({
+    "item••••••••": "a",
+    "item•••••••• (2)": "b",
+  });
+});
+
 it("a masked code made of zeros does not mask other zeros in page text", () => {
   const mask = maskSecrets(dottedPattern(["0000", "010-1234-5678"]), []);
   expect(mask("Amount: 0; rows: 0; call 1012345678")).toBe("Amount: 0; rows: 0; call 1012345678");
