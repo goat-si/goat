@@ -927,9 +927,9 @@ it.effect("GOAT's refusal tells the agent why, what to do, and which thread hold
 it.effect("a window read too large for the primitive channel fails as tree_limit, not stale", () =>
   Effect.gen(function* () {
     let reads = 0;
-    const { host } = fixture({
+    const { host, sent } = fixture({
       get_window_state: () =>
-        reads++ === 0
+        reads++ === 1
           ? {
               code: "primitive_reply_too_large",
               message: "Driver reply exceeded the primitive channel limit.",
@@ -943,10 +943,21 @@ it.effect("a window read too large for the primitive channel fails as tree_limit
       context,
     );
     const target = bound.value as ScreenTargetRef;
+    const first = yield* host.observe(call("get_window_state", {}, target), context);
+    const elementRef = (first.value as { elements: Array<{ ref: ScreenElementRef }> }).elements[0]
+      ?.ref;
     const tooLarge = yield* host
       .observe(call("get_window_state", {}, target), context)
       .pipe(Effect.result);
+    if (!elementRef) throw new Error("The first read must offer a ref");
     expect(tooLarge._tag === "Failure" && tooLarge.failure.code).toBe("tree_limit");
+    // That read retired the driver's earlier tokens, so the earlier ref never reaches it.
+    const sentBefore = sent.length;
+    const click = yield* host
+      .invoke(call("click", { elementRef }, target), context)
+      .pipe(Effect.result);
+    expect(click._tag === "Failure" && click.failure.code).toBe("stale_reference");
+    expect(sent.length).toBe(sentBefore);
     const again = yield* host.observe(call("get_window_state", {}, target), context);
     expect(again.value).toMatchObject({ indexedText: "Apply" });
     const shapeless = fixture({ get_window_state: { elements: [] } });

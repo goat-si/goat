@@ -369,8 +369,15 @@ export const createDesktopTargetHost = (deps: {
         bound.connectionGeneration,
       );
       const state = object(driverValue(reply));
-      // The read ran; only a driver naming another window makes the binding stale.
-      if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE)
+      // The read ran and retired the driver's earlier tokens, so their refs go even when this
+      // answer is unusable; only a driver naming another window makes the binding stale.
+      const retire = () => {
+        observations.evictTarget(bound.ref.id);
+        delete bound.observationId;
+        delete bound.snapshotId;
+      };
+      if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) {
+        retire();
         return yield* Effect.fail(
           fail(
             "tree_limit",
@@ -379,13 +386,16 @@ export const createDesktopTargetHost = (deps: {
               : "This window's accessibility tree is larger than GOAT carries in one read; nothing changed. Take a screenshot of it, or work in a smaller window.",
           ),
         );
-      if (!state || integer(state.pid) === undefined || integer(state.window_id) === undefined)
+      }
+      if (!state || integer(state.pid) === undefined || integer(state.window_id) === undefined) {
+        retire();
         return yield* Effect.fail(
           fail(
             "downstream_failure",
             "The driver's answer did not describe the window. Observe again.",
           ),
         );
+      }
       if (state.pid !== bound.pid || state.window_id !== bound.windowId) {
         observations.evictTarget(bound.ref.id);
         targets.delete(bound.ref.id);

@@ -548,7 +548,13 @@ export const make = Effect.gen(function* () {
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined)
           return yield* send(input, current.controlId, registered, record, binding, now);
-        if (value === undefined || !live(value, now) || now >= waitUntil)
+        // Only a registered proxy starts drivers; without one nothing will bind.
+        if (
+          value === undefined ||
+          !live(value, now) ||
+          registered === undefined ||
+          now >= waitUntil
+        )
           return yield* Effect.fail(desktopNotReady("unbound"));
         yield* Deferred.await(bound).pipe(Effect.timeoutOption(waitUntil - now));
         now = yield* Clock.currentTimeMillis;

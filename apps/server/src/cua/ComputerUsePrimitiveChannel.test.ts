@@ -530,7 +530,12 @@ describe("ComputerUsePrimitiveChannel", () => {
         const f = yield* fixture();
         assert.isTrue(yield* f.channel.reportControlCutoff(f.report(0)));
         assert.isFalse(yield* f.channel.reportControlReady(f.report(0)));
-        assert.equal((yield* Effect.flip(f.request())).reason, "desktop_not_ready");
+        // The control is active and its driver was cut off: the call waits for a restart.
+        const unbound = yield* Effect.flip(f.request()).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust(PrimitiveChannel.DRIVER_BIND_WAIT_MS);
+        assert.equal((yield* Fiber.join(unbound)).reason, "desktop_not_ready");
         assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
         const waiter = yield* f.request().pipe(Effect.forkChild);
         const delivered = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
@@ -564,7 +569,12 @@ describe("ComputerUsePrimitiveChannel", () => {
       yield* Stream.runHead(f.registered.requests);
       assert.isTrue(yield* f.channel.reportControlCutoff(f.report(1)));
       assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
-      assert.equal((yield* Effect.flip(f.request())).reason, "desktop_not_ready");
+      // The control is active and its driver was cut off: the call waits for a restart.
+      const unbound = yield* Effect.flip(f.request()).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(PrimitiveChannel.DRIVER_BIND_WAIT_MS);
+      assert.equal((yield* Fiber.join(unbound)).reason, "desktop_not_ready");
       assert.isFalse(yield* f.channel.reportControlReady(f.report(1)));
     }),
   );

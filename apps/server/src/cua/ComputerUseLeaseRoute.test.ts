@@ -331,20 +331,20 @@ describe("computer use lease route", () => {
         });
         assert.equal(yield* f.postPrimitive("primitive-control-cutoff", report(0)), 204);
         assert.equal(yield* f.postPrimitive("primitive-control-ready", report(0)), 409);
-        assert.equal(
-          (yield* Effect.flip(
-            f.channel.request({
-              threadId,
-              runId: "run:one",
-              turnId: "cell:one",
-              callId: 0,
-              deadlineMillis: 600_000,
-              tool: "click",
-              args: {},
-            }),
-          )).reason,
-          "desktop_not_ready",
-        );
+        // The control is active and its driver was cut off: the call waits for a restart.
+        const unbound = yield* Effect.flip(
+          f.channel.request({
+            threadId,
+            runId: "run:one",
+            turnId: "cell:one",
+            callId: 0,
+            deadlineMillis: 600_000,
+            tool: "click",
+            args: {},
+          }),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* TestClock.adjust(ComputerUsePrimitiveChannel.DRIVER_BIND_WAIT_MS);
+        assert.equal((yield* Fiber.join(unbound)).reason, "desktop_not_ready");
         assert.equal(yield* f.postPrimitive("primitive-control-ready", report(1)), 204);
         assert.equal(yield* f.postPrimitive("primitive-control-ready", report(1)), 409);
         assert.equal(yield* f.postPrimitive("primitive-control-cutoff", report(0)), 204);

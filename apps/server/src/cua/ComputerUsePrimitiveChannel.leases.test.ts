@@ -99,13 +99,6 @@ layer("ComputerUsePrimitiveChannel while a driver starts", (it) => {
           controlId: control.controlId,
           expiresAt: Number.MAX_SAFE_INTEGER,
         });
-        const registered = yield* channel.registerStream({
-          ...authority,
-          proxyInstanceId: "proxy:one",
-          kind: "thread",
-        });
-        if (registered.status !== "registered") throw new Error("expected registration");
-        const delivered = yield* Stream.runHead(registered.requests).pipe(Effect.forkChild);
         const call = {
           threadId,
           runId: "run:one",
@@ -115,6 +108,16 @@ layer("ComputerUsePrimitiveChannel while a driver starts", (it) => {
           tool: "list_apps",
           args: {},
         };
+        // No proxy has registered, so no driver will bind: the call does not wait.
+        const unregistered = yield* Effect.flip(channel.request({ ...call, callId: 0 }));
+        assert.equal(unregistered.reason, "desktop_not_ready");
+        const registered = yield* channel.registerStream({
+          ...authority,
+          proxyInstanceId: "proxy:one",
+          kind: "thread",
+        });
+        if (registered.status !== "registered") throw new Error("expected registration");
+        const delivered = yield* Stream.runHead(registered.requests).pipe(Effect.forkChild);
         // No driver has bound yet, as after a new turn or a replaced child.
         const waiting = yield* channel
           .request(call)
