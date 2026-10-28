@@ -400,6 +400,8 @@ export default defineConfig({
       "infra/task-cache/vendor/**",
       // Macroscope requires one glob per line; Markdown formatting corrupts it.
       ".macroscope/ignore.md",
+      // Verbatim copies of the Cua Driver release's license notices.
+      "apps/desktop/src/cua/notices/**",
       ".alchemy",
       "dist",
       "dist-electron",
