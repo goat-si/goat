@@ -66,6 +66,8 @@ import {
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   RECONNECTING,
+  REQUEST_ID_BUSY,
+  SCREEN_CALL_EXPIRED,
   SCREEN_SHARED,
   TURN_ENDED,
   WRONG_DISPLAY,
@@ -699,14 +701,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     const key = isRequest ? JSON.stringify(id) : "";
     if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))
-      return yield* sink.answer(
-        refusal(
-          id,
-          message.method,
-          "invalid_target",
-          "This request id still has work in progress. Use a new request id after observing its result.",
-        ),
-      );
+      return yield* sink.answer(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (finished !== undefined) {
@@ -720,9 +715,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // Before anything reaches the driver; a known pause, end or idle turn answers first.
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
-        return yield* sink.answer(
-          refusal(id, message.method, "expired", "This screen call ended before dispatch."),
-        );
+        return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
       if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection

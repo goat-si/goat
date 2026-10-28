@@ -30,6 +30,9 @@ export const DESKTOP_CAPTURE_OFF =
 export const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
 
+export const REQUEST_ID_BUSY =
+  "This request id still has work in progress. Use a new request id after observing its result.";
+export const SCREEN_CALL_EXPIRED = "This screen call ended before dispatch.";
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 
