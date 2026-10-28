@@ -133,3 +133,44 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
       }),
     ),
 );
+
+it.effect("carries a closed popup's opener from the host to the caller's error", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+      const ready = yield* Deferred.make<string>();
+      const tabId = PreviewTabId.make("tab-popup");
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const events = yield* broker.connect({ clientId, environmentId: scope.environmentId });
+      yield* Stream.runForEach(events, (event) =>
+        event.type === "connected"
+          ? Deferred.succeed(ready, event.connectionId)
+          : broker.respond({
+              clientId,
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationTabNotFoundError",
+                message: "host text the broker does not forward",
+                detail: { closedPopup: { openerTabId: "tab-opener", openerOpen: true } },
+              },
+            }),
+      ).pipe(Effect.forkScoped);
+      const connectionId = yield* Deferred.await(ready);
+      yield* broker.focusHost({
+        clientId,
+        connectionId,
+        environmentId: scope.environmentId,
+        focused: true,
+        liveTabs: [{ threadId: scope.thread.threadId, tabId }],
+      });
+      const error = yield* broker
+        .invoke<void>({ scope, tabId, operation: "click", input: {} })
+        .pipe(Effect.flip);
+      expect(error.message).toBe(
+        "Tab tab-popup, a popup, has closed. Its opener tab-opener is still open: pass tabId tab-opener to continue there.",
+      );
+    }),
+  ),
+);

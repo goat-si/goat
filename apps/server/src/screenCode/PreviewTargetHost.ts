@@ -574,7 +574,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
       // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
-      if (point && call.method !== "click" && call.method !== "right_click")
+      if (point && !["click", "right_click", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
         );
@@ -602,6 +602,20 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           break;
         }
         case "drag": {
+          if (point) {
+            const end =
+              arg.toPoint && typeof arg.toPoint === "object"
+                ? observations.index.resolvePoint(
+                    arg.toPoint as Parameters<typeof observations.index.resolvePoint>[0],
+                  )
+                : undefined;
+            if (!end || end.targetId !== bound.ref.id || end.kind === "document")
+              return yield* Effect.fail(
+                fail("stale_reference", "Observe a viewport screenshot and use two of its points."),
+              );
+            input = { from: { x: point.x, y: point.y }, to: { x: end.x, y: end.y } };
+            break;
+          }
           const source =
             arg.sourceRef && typeof arg.sourceRef === "object"
               ? observations.index.resolveElement(
@@ -622,6 +636,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         case "scroll":
           input = {
             ...(locator ? { locator } : {}),
+            ...(point ? { x: point.x, y: point.y } : {}),
             deltaX: typeof arg.deltaX === "number" ? arg.deltaX : 0,
             deltaY: typeof arg.deltaY === "number" ? arg.deltaY : 0,
           };
@@ -669,13 +684,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           input = { url: arg.url };
           break;
       }
-      // Typing and selecting wait for their target; the request deadline, which the server starts
+      // Input waits for its target or a dialog; the request deadline, which the server starts
       // before queueing, ends with the cell so nothing lands after the cell stopped waiting.
       let cellBudgetMs: number | undefined;
-      if (call.method === "select" || call.method === "set_value" || call.method === "type_text") {
+      if (["select", "type", "click", "drag", "scroll"].includes(operation)) {
         const now = yield* Clock.currentTimeMillis;
         cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
-        input = { ...input, timeoutMs: cellBudgetMs };
+        if (operation === "select" || operation === "type")
+          input = { ...input, timeoutMs: cellBudgetMs };
       }
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;

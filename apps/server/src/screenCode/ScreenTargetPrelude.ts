@@ -231,7 +231,10 @@ const __target = (binding, note, owner) => {
       if (tab) {
         const source = aim(from);
         const target = aim(to);
-        if (source.point || target.point) throw new ScreenError('unsupported', 'Tabs drag between elements, not points.', true);
+        // A map or canvas drags between two screenshot points; an element and a point do not mix.
+        if (source.point && target.point)
+          return act('drag', 'drag', { point: source.point, toPoint: target.point });
+        if (source.point || target.point) throw new ScreenError('unsupported', 'Drag between two elements or two points [x, y].', true);
         return act('drag', 'drag', {
           ...(source.ref ? { sourceRef: source.ref } : { sourceSelector: source.selector }),
           ...(target.ref ? { destinationRef: target.ref } : { destinationSelector: target.selector }),

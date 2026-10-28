@@ -192,7 +192,7 @@ export const previewEntries = {
     description:
       "Click one browser-page element by snapshot locator or selector, or a point on the page.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Prefer a ref from the latest snapshot as locator, or a Playwright selector such as role=button[name=\"Save\"]; selector accepts legacy CSS. A target that never appears times out with nothing sent. The server browser returns effect: confirmed with evidence when the page changed right after the click, or suspected_noop when nothing changed; observe before retrying. Supply exactly one target, with x and y together for coordinates. button=right performs a right click and clickCount=2 performs a double-click. These extended button/count options are implemented by the server browser. A click that opens a dialog can return while the dialog is still pending; inspect goat_preview_status and resolve it with goat_preview_dialog.",
+      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Prefer a ref from the latest snapshot as locator, or a Playwright selector such as role=button[name=\"Save\"] or one getByRole('button', { name: 'Save' }) call; selector accepts legacy CSS. A target that never appears times out with nothing sent. The server browser returns effect: confirmed with evidence when the page changed right after the click, or suspected_noop when nothing changed; observe before retrying. Supply exactly one target, with x and y together for coordinates. button=right performs a right click and clickCount=2 performs a double-click. These extended button/count options are implemented by the server browser. A click that opens a dialog can return while the dialog is still pending; inspect goat_preview_status and resolve it with goat_preview_dialog.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -315,7 +315,7 @@ export const previewEntries = {
     summary: "Drag in preview page",
     description: "Drag a browser-page element onto another element.",
     guide:
-      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target. For a map or canvas, give from and to viewport points (and optional steps) instead.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -388,7 +388,7 @@ export const previewEntries = {
     summary: "Scroll preview page",
     description: "Scroll a browser page or a selected scroll container.",
     guide:
-      "Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls.",
+      "Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls. With x and y, a real wheel goes to the viewport point, which pages such as maps use to zoom.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",

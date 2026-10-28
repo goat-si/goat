@@ -32,6 +32,8 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
+import { codeLocator } from "./codeLocator.ts";
+import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -196,6 +198,8 @@ export const targetLocator = (
 ): Locator | null => {
   const selector = input.locator ?? input.selector;
   if (selector === undefined) return null;
+  const written = codeLocator(page, selector);
+  if (written !== null) return written;
   const engines = selector.replace(
     /\\.|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g,
     " ",
@@ -233,7 +237,7 @@ export interface DispatchGate {
 }
 const open: DispatchGate = () => {};
 
-/** How long an action that passed its gate may still wait for Playwright's own checks. */
+/** How long an action that passed its gate may wait for Playwright's checks, within the deadline. */
 const DISPATCH_TIMEOUT_MS = 1_000;
 
 const targetChanged = () =>
@@ -259,7 +263,10 @@ const unsentOnTimeout = (cause: unknown) =>
       )
     : cause;
 
-/** Playwright's actionability waits, without the mouse move its trial runs make. */
+/**
+ * Waits for visible, enabled and stable before the gate, within the request's deadline: the
+ * Playwright action after it has only a short budget, and motion can come from any script.
+ */
 const settled = async (locator: Locator, deadline: number, enabled = true) => {
   const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
     throw unsentOnTimeout(cause);
@@ -275,8 +282,8 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
   }
 };
 
-/** After the gate: Playwright's own last checks, briefly, and no wait for a navigation. */
-const dispatched = { timeout: DISPATCH_TIMEOUT_MS, noWaitAfter: true } as const;
+const dispatched = (deadline: number) =>
+  ({ timeout: Math.min(DISPATCH_TIMEOUT_MS, remaining(deadline)), noWaitAfter: true }) as const;
 
 const targetPoint = (
   page: Page,
@@ -301,10 +308,13 @@ const locatePoint = async (
   } finally {
     void target.dispose().catch(constVoid);
   }
-  await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
-  const box = await locator.boundingBox({ timeout: remaining(deadline) });
-  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const viewport = page.viewportSize();
+  let box = await locator.boundingBox({ timeout: remaining(deadline) });
+  if (!inViewport(box, viewport)) {
+    await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+    box = await locator.boundingBox({ timeout: remaining(deadline) });
+  }
+  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
 };
 
@@ -758,7 +768,7 @@ export const click = async (
     if (count === 1)
       return locator === null
         ? page.mouse.click(point.x, point.y, { button })
-        : locator.click({ button, ...dispatched });
+        : locator.click({ button, ...dispatched(deadline) });
     return page.mouse
       .down({ button, clickCount: count })
       .then(() => page.mouse.up({ button, clickCount: count }));
@@ -888,7 +898,7 @@ export const hover = async (
   await settled(locator, deadline, false);
   remaining(deadline);
   gate();
-  await locator.hover(dispatched);
+  await locator.hover(dispatched(deadline));
 };
 
 export const select = async (
@@ -979,6 +989,11 @@ export const drag = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
+  if (input.from && input.to) {
+    await pointer(input.from, "move");
+    await dragBetween(page, { ...input, from: input.from, to: input.to }, gate, deadline);
+    return pointer(input.to, "move");
+  }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, deadline), "move");
@@ -988,7 +1003,7 @@ export const drag = async (
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   remaining(deadline);
   gate();
-  await source.dragTo(target, dispatched);
+  await source.dragTo(target, dispatched(deadline));
 };
 
 export const press = async (
@@ -1006,6 +1021,9 @@ export const scroll = async (
   gate: DispatchGate = open,
 ) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
+  if (input.x !== undefined && input.y !== undefined) {
+    return wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
+  }
   const locator = targetLocator(page, input);
   if (locator === null) {
     gate();

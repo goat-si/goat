@@ -45,10 +45,13 @@ const INSTALL = `(() => {
   const changed = new Promise((done) => (resolve = done));
   let navigatedNow = () => undefined;
   const navigated = new Promise((done) => (navigatedNow = done));
+  // The first answer waits until the click's own event was handled, so the focus its mousedown
+  // gave does not end it before the click's changes are seen.
+  let clicked = false;
   const note = (kind) => {
     if (!armed) return;
     seen.add(kind);
-    resolve();
+    if (clicked) resolve();
   };
   // Shadow-inclusive: a node inside a shadow root is within its host.
   const within = (node, ancestor) => {
@@ -141,6 +144,15 @@ const INSTALL = `(() => {
       dismissible = new Set();
     }
     if (event.type === "click") opensWindow(event);
+    if (["click", "contextmenu", "dblclick"].includes(event.type)) {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        clicked = true;
+        if (seen.size > 0) resolve();
+      };
+      channel.port2.postMessage(null);
+    }
     // Changes pending from before this event are ambient.
     observer.takeRecords();
     dispatching.add(event);
@@ -229,6 +241,7 @@ const INSTALL = `(() => {
   };
   const arm = (at) => {
     seen.clear();
+    clicked = false;
     target = at && typeof at.x === "number" ? deepest(at.x, at.y) : at;
     if (target) watch(target.getRootNode());
     controlsAt.clear();
