@@ -69,7 +69,7 @@ import {
   SortableTabList,
   type TabAudioState,
 } from "./RightPanelTab";
-import { observeResize } from "~/lib/observeResize";
+import { usePanelTabLayout } from "./usePanelTabLayout";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -164,12 +164,6 @@ type TabContextMenuAction =
   | "close-others"
   | "close-to-right"
   | "close-all";
-
-const TAB_SCROLL_EDGE_TOLERANCE = 1;
-
-function tabScrollViewport(root: HTMLDivElement | null): HTMLDivElement | null {
-  return root?.querySelector<HTMLDivElement>('[data-slot="scroll-area-viewport"]') ?? null;
-}
 
 function previewTabIdOf(
   surface: RightPanelSurface,
@@ -545,14 +539,22 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
-  const tabListRef = useRef<HTMLDivElement>(null);
   const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
-  const [tabScrollState, setTabScrollState] = useState({
-    hasOverflow: false,
-    canScrollLeft: false,
-    canScrollRight: false,
+  const {
+    attachTabList,
+    scrollState: tabScrollState,
+    scrollTabs,
+    tabWidth,
+    retainedWidth,
+    prepareClose,
+    release: releaseTabLayout,
+  } = usePanelTabLayout({
+    ids: props.surfaces.map((surface) => surface.id),
+    activeId: props.activeSurfaceId,
+    open: props.open !== false,
+    addButtonRef: addSurfaceTriggerRef,
   });
 
   if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
@@ -578,34 +580,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
     return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
   }, [props.open]);
-
-  const updateTabScrollState = (viewport: HTMLDivElement) => {
-    const hasOverflow = viewport.scrollWidth - viewport.clientWidth > TAB_SCROLL_EDGE_TOLERANCE;
-    const canScrollLeft = hasOverflow && viewport.scrollLeft > TAB_SCROLL_EDGE_TOLERANCE;
-    const canScrollRight =
-      hasOverflow &&
-      viewport.scrollLeft + viewport.clientWidth < viewport.scrollWidth - TAB_SCROLL_EDGE_TOLERANCE;
-    setTabScrollState((current) => {
-      if (
-        current.hasOverflow === hasOverflow &&
-        current.canScrollLeft === canScrollLeft &&
-        current.canScrollRight === canScrollRight
-      ) {
-        return current;
-      }
-      return { hasOverflow, canScrollLeft, canScrollRight };
-    });
-  };
-
-  const scrollTabs = (direction: -1 | 1) => {
-    const viewport = tabScrollViewport(tabListRef.current);
-    if (!viewport) return;
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    viewport.scrollBy({
-      left: direction * Math.max(120, viewport.clientWidth * 0.75),
-      behavior: reduceMotion ? "auto" : "smooth",
-    });
-  };
 
   const addSurfaceActions = [
     {
@@ -762,6 +736,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (event.button !== 1) return;
     event.preventDefault();
     event.stopPropagation();
+    prepareClose(surface.id);
     props.onCloseSurface(surface);
   };
   // Every tab receives these. Parents pass fresh closures on each render, so
@@ -771,6 +746,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const tabIdOf = (surfaceId: string) => `${tabIdPrefix}-tab-${surfaceId}`;
   const newSurfaceShortcut = shortcutLabelForCommand(props.keybindings, "rightPanel.new");
   const handleTabListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    )
+      return;
     const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
     const index = tabs.findIndex((tab) => tab === event.target);
     const surface = props.surfaces[index];
@@ -778,6 +761,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const action = panelTabKeyAction(event.key, index, tabs.length);
     if (action === null) return;
     event.preventDefault();
+    releaseTabLayout();
     switch (action.type) {
       case "focus":
         tabs[action.index]?.focus();
@@ -793,60 +777,29 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         break;
     }
   };
-  const onActivateTab = useStableCallback(props.onActivate);
-  const onCloseTab = useStableCallback(props.onCloseSurface);
+  const onActivateTab = useStableCallback((surface: RightPanelSurface) => {
+    releaseTabLayout();
+    props.onActivate(surface);
+  });
+  const onCloseTab = useStableCallback((surface: RightPanelSurface, pointer: boolean) => {
+    if (pointer) prepareClose(surface.id);
+    else releaseTabLayout();
+    props.onCloseSurface(surface);
+  });
   const onTabAuxClick = useStableCallback(handleTabAuxClick);
   const onTabContextMenu = useStableCallback(
     (event: ReactMouseEvent, surface: RightPanelSurface) => {
       void handleTabContextMenu(event, surface);
     },
   );
-  const onStartRenameTab = useStableCallback((surfaceId: string) => setRenamingDevice(surfaceId));
+  const onStartRenameTab = useStableCallback((surfaceId: string) => {
+    releaseTabLayout();
+    setRenamingDevice(surfaceId);
+  });
   const onFinishRenameTab = useStableCallback((surfaceId: string, title: string) => {
     props.onRenameDevice?.(surfaceId, title);
     setRenamingDevice(null);
   });
-
-  // A newly active tab, or tabs that start overflowing, can sit outside the scrolled strip.
-  useEffect(() => {
-    if (!props.activeSurfaceId || !tabScrollState.hasOverflow) return;
-    const activeTab = tabListRef.current?.querySelector<HTMLElement>("[data-active-tab='true']");
-    activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [props.activeSurfaceId, tabScrollState.hasOverflow]);
-
-  const attachTabList = (root: HTMLDivElement | null) => {
-    tabListRef.current = root;
-    const viewport = tabScrollViewport(root);
-    if (!viewport) return;
-
-    const update = () => updateTabScrollState(viewport);
-    const handleWheel = (event: WheelEvent) => {
-      if (event.ctrlKey) return;
-      let delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 16;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= viewport.clientWidth;
-      if (delta === 0) return;
-
-      const previousScrollLeft = viewport.scrollLeft;
-      viewport.scrollLeft += delta;
-      if (viewport.scrollLeft === previousScrollLeft) return;
-      event.preventDefault();
-      update();
-    };
-
-    const content = viewport.firstElementChild;
-    const stopObserving = observeResize(content ? [viewport, content] : viewport, update);
-    viewport.addEventListener("scroll", update, { passive: true });
-    viewport.addEventListener("wheel", handleWheel, { passive: false });
-    update();
-
-    return () => {
-      tabListRef.current = null;
-      stopObserving();
-      viewport.removeEventListener("scroll", update);
-      viewport.removeEventListener("wheel", handleWheel);
-    };
-  };
 
   return (
     <PreviewPanelShell
@@ -866,6 +819,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
         data-right-panel-tabbar
+        onPointerLeave={releaseTabLayout}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) releaseTabLayout();
+        }}
       >
         <ScrollArea
           radius="none"
@@ -880,10 +837,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               role="tablist"
               aria-label="Panel tabs"
               aria-orientation="horizontal"
-              className="flex items-center gap-1"
+              className="flex shrink-0 items-center gap-1"
+              style={{ width: retainedWidth }}
               onKeyDown={handleTabListKeyDown}
             >
-              <SortableTabList surfaces={props.surfaces} onMove={props.onMoveSurface}>
+              <SortableTabList
+                surfaces={props.surfaces}
+                onMove={props.onMoveSurface}
+                onDragStart={releaseTabLayout}
+              >
                 {props.surfaces.map((surface) => {
                   const previewTabId = previewTabIdOf(surface, props.previewSessions);
                   const favicon = previewFaviconOf(
@@ -895,6 +857,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <RightPanelTab
                       key={surface.id}
                       surface={surface}
+                      width={tabWidth}
                       dragDisabled={!props.onMoveSurface || renamingDevice === surface.id}
                       active={surface.id === props.activeSurfaceId}
                       pending={props.pendingSurfaceIds.has(surface.id)}
@@ -927,7 +890,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               </SortableTabList>
             </div>
             {props.open !== false ? (
-              <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
+              <Menu
+                open={addSurfaceMenuOpen}
+                onOpenChange={(open) => {
+                  releaseTabLayout();
+                  setAddSurfaceMenuOpen(open);
+                }}
+              >
                 <Tooltip>
                   <TooltipTrigger
                     render={
