@@ -200,7 +200,7 @@ export const targetLocator = (
     " ",
   );
   // The tree shows a ref bare, so a bare GOAT ref is one; as CSS it would match nothing.
-  const bare = /^\s*(t3-\S+-(?:f\d+)?e\d+)\s*$/.exec(selector)?.[1];
+  const bare = /^\s*(t3-[\da-f]{8}-[\da-z]+-(?:f\d+)?e\d+)\s*$/.exec(selector)?.[1]; // goat-rename: legacy
   if (bare !== undefined || /(?:^|>>)\s*\*?aria-ref\s*=/.test(engines)) {
     const ref = bare ?? /^\s*aria-ref\s*=\s*(\S+)\s*$/.exec(selector)?.[1];
     const nativeRef = ref === undefined ? undefined : pageRefs.get(page)?.refs.get(ref);

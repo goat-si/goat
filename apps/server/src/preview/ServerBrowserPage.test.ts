@@ -591,6 +591,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(await page.locator("button").textContent()).toBe("saved");
   });
 
+  it("still reads a CSS selector that merely starts like a ref", async () => {
+    await page.setContent(
+      `<t3-toolbar><button id="save-e1" onclick="this.textContent='saved'">save</button></t3-toolbar>`,
+    );
+    await takeSnapshot();
+    await ServerBrowserPage.click(page, { selector: "t3-toolbar>#save-e1" });
+    expect(await page.locator("button").textContent()).toBe("saved");
+  });
+
   it("refuses a stale bare ref at once and before any input", async () => {
     await page.setContent("<button>continue</button>");
     const locator = buttonLocator((await takeSnapshot()).accessibilityTree, "continue");
