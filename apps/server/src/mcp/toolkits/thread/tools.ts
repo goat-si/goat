@@ -1,7 +1,6 @@
 import { withClientRequestId } from "../keyedParameters.ts";
 import {
   IsoDateTime,
-  ModelSelection,
   NonNegativeInt,
   OrchestrationV2ContextTransfer,
   OrchestrationV2DispatchCommandResult,
@@ -13,11 +12,13 @@ import {
   OrchestratorMcpPendingRequestReadResult,
   OrchestratorMcpPendingRequestRespondInput,
   OrchestratorMcpPendingRequestRespondResult,
+  OrchestratorMcpThreadConfigurationInput,
+  OrchestratorMcpThreadConfigurationResult,
+  OrchestratorMcpThreadConfigureInput,
+  OrchestratorMcpThreadConfigureResult,
   OrchestratorMcpThreadSearchInput,
   OrchestratorMcpThreadSearchResult,
-  ProviderInteractionMode,
   RunId,
-  RuntimeMode,
   ScheduledTask,
   ScheduledTaskId,
   ThreadId,
@@ -161,23 +162,14 @@ const PendingRequestRespondTool = Tool.make(agentSurfaceRegistry["pending_reques
 const ThreadConfigurationTool = Tool.make(agentSurfaceRegistry["thread.configuration_read"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.configuration_read"].description,
-  parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
-  success: Schema.Struct({
-    threadId: ThreadId,
-    modelSelection: ModelSelection,
-    runtimeMode: RuntimeMode,
-    interactionMode: ProviderInteractionMode,
-  }),
+  parameters: OrchestratorMcpThreadConfigurationInput,
+  success: OrchestratorMcpThreadConfigurationResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.configuration_read"]));
 const ThreadConfigureTool = Tool.make(agentSurfaceRegistry["thread.configure"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.configure"].description,
-  parameters: withClientRequestId(
-    Schema.Struct({
-      threadId: Schema.optional(ThreadId),
-      modelSelection: ModelSelection,
-    }),
-  ),
+  parameters: OrchestratorMcpThreadConfigureInput,
+  success: OrchestratorMcpThreadConfigureResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.configure"]));
 
 const transferResult = Schema.Struct({ sequence: NonNegativeInt, targetThreadId: ThreadId });

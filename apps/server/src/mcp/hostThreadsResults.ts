@@ -1,5 +1,7 @@
 import {
   OrchestratorMcpFailure,
+  OrchestratorMcpThreadConfigurationResult,
+  OrchestratorMcpThreadConfigureResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
@@ -53,6 +55,10 @@ export const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitRe
 export const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 export const decodeInterrupt = Schema.decodeUnknownEffect(OrchestratorMcpThreadInterruptResult);
 export const decodeRetry = Schema.decodeUnknownEffect(OrchestratorMcpThreadRetryResult);
+export const decodeConfiguration = Schema.decodeUnknownEffect(
+  OrchestratorMcpThreadConfigurationResult,
+);
+export const decodeConfigure = Schema.decodeUnknownEffect(OrchestratorMcpThreadConfigureResult);
 export const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResult);
 
 export const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
