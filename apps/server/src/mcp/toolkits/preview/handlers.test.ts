@@ -168,7 +168,7 @@ it.effect("preview results and failures expose safety and a next step after MCP 
               timeoutMs: 1,
             }),
           );
-        if (request.operation === "select")
+        if (request.operation === "hover")
           return Effect.fail(
             new PreviewAutomationTimeoutError({
               environmentId: scope.environmentId,
@@ -177,11 +177,30 @@ it.effect("preview results and failures expose safety and a next step after MCP 
               providerInstanceId: ProviderInstanceId.make("codex"),
               clientId: "browser",
               connectionId: PreviewAutomationConnectionId.make("connection"),
-              operation: "select",
+              operation: "hover",
               requestId: "safety-request",
               timeoutMs: 1,
-              dispatched: false,
-              interceptedBy: "Pointer intercepted by <div> (dialog).",
+              interceptedBy:
+                "Pointer intercepted by <div> (dialog). Now at the target: <div> (dialog) #consent.",
+            }),
+          );
+        if (request.operation === "drag")
+          return Effect.fail(
+            new PreviewAutomationControlInterruptedError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "drag",
+              requestId: "safety-request",
+              timeoutMs: 1,
+              remoteTag: "PreviewAutomationControlInterruptedError",
+              remoteMessageLength: 0,
+              cause: undefined,
+              reason: "stopped",
+              dispatched: true,
             }),
           );
         if (request.operation === "press")
@@ -248,16 +267,25 @@ it.effect("preview results and failures expose safety and a next step after MCP 
       safety: { possibleCommit: true, retryClass: "never" },
       next: expect.stringMatching(/^Observe first: the input may have landed/),
     });
-    // Nothing went out and something covered the target: the next step names the blocker check.
+    // A real interception may have pressed: the hint names the cover and still says observe first.
     const covered = yield* server.callTool({
-      name: "goat_preview_select",
-      arguments: { selector: "select", values: ["a"] },
+      name: "goat_preview_hover",
+      arguments: { selector: "button" },
     });
     const coveredText = covered.content.find((part) => part.type === "text");
     expect(coveredText?.type === "text" ? JSON.parse(coveredText.text) : null).toMatchObject({
-      safety: { possibleCommit: false },
-      next: expect.stringContaining("@layers"),
+      safety: { possibleCommit: true },
+      next: expect.stringMatching(/^Something covered the target .*Observe first/),
     });
+    // Stop while input was going out is still final: safety stays cautious and no hint is given.
+    const stoppedMidway = yield* server.callTool({
+      name: "goat_preview_drag",
+      arguments: { source: "#a", target: "#b" },
+    });
+    const midwayText = stoppedMidway.content.find((part) => part.type === "text");
+    const midway = midwayText?.type === "text" ? JSON.parse(midwayText.text) : {};
+    expect(midway).toMatchObject({ reason: "stopped" });
+    expect(midway).not.toHaveProperty("next");
     // A tab stopped before the key went out sent nothing.
     const stopped = yield* server.callTool({ name: "goat_preview_press", arguments: { key: "a" } });
     expect(stopped.isError).toBe(true);

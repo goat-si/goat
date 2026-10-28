@@ -37,7 +37,7 @@ const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set
   "waitFor",
 ]);
 
-function classifyBrowserControlReason(
+export function classifyBrowserControlReason(
   reason: PreviewAutomationControlReason | undefined,
 ): "transient" | "reobserve" | "fix_input" | "terminal" {
   switch (reason) {

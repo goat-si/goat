@@ -1,4 +1,5 @@
 import type { ActionOutcomeSafety, PreviewAutomationOperation } from "@goat/contracts";
+import { classifyBrowserControlReason } from "../../../preview/actionOutcomeSafety.ts";
 
 const actions = new Set([
   "click",
@@ -52,13 +53,24 @@ export const failureHint = (
   safety: ActionOutcomeSafety,
 ): { next?: string } => {
   if (!actions.has(operation) || safety.code === "write_refused_terminal") return {};
+  // Stop, private mode or another owner ends the attempt even when input may already be out.
+  if (
+    "_tag" in error &&
+    error._tag === "PreviewAutomationControlInterruptedError" &&
+    classifyBrowserControlReason(
+      "reason" in error
+        ? (error.reason as Parameters<typeof classifyBrowserControlReason>[0])
+        : undefined,
+    ) === "terminal"
+  )
+    return {};
+  if ("interceptedBy" in error && typeof error.interceptedBy === "string")
+    return {
+      next: `Something covered the target (interceptedBy names it). Observe first in case the click landed, close or move past the cover, then retry; ${RETRY_LATER}`,
+    };
   if (safety.possibleCommit)
     return {
       next: `Observe first: the input may have landed. If it did not, snapshot again before retrying; ${RETRY_LATER}`,
-    };
-  if ("interceptedBy" in error && typeof error.interceptedBy === "string")
-    return {
-      next: `Something covers the target: snapshot again, close the blocker its @layers line names, then retry; ${RETRY_LATER}`,
     };
   return { next: `Snapshot again (close any @layers blocker) before retrying; ${RETRY_LATER}` };
 };
