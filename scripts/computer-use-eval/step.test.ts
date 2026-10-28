@@ -106,6 +106,21 @@ describe("runStep", () => {
     expect(scoreArms([clean])[0]?.coexistence).toBe(1);
   });
 
+  it("treats a final read without a window list as an unobserved end for window witnesses", async () => {
+    for (const id of ["textedit-korean-discard", "finder-sidebar"]) {
+      let reads = 0;
+      const { deps } = fakeDeps({
+        readWitness: async () => {
+          reads += 1;
+          return reads > 1 ? {} : { windows: [] };
+        },
+      });
+      const row = await runStep(task(id), codex, base, deps);
+      expect(row.cleanupUnobserved).toBe(true);
+      expect(scoreArms([row])[0]?.coexistence).toBeNull();
+    }
+  });
+
   it("registers its observer where shutdown can stop it, and clears it after a return or a throw", async () => {
     let release: (value: Ran) => void = () => undefined;
     let entered: () => void = () => undefined;

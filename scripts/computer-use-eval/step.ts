@@ -81,6 +81,9 @@ const promptFor = (task: Task, arm: ArmSpec) =>
   answerInstruction(task.answerKeys) +
   ' The status value is "done", "failed" or "skipped".';
 
+/** Witnesses whose reads list windows; their final read must list them to observe the end. */
+const WINDOW_WITNESSES = new Set(["finder", "textEdit"]);
+
 /** The final read; a failed witness read is kept as one, and the saved-file scan still runs. */
 const finalObservation = async (
   read: (() => Promise<JsonObject>) | null,
@@ -161,10 +164,12 @@ export const runStep = async <Snapshot>(
   };
   const leftovers = await deps.leftoversOf(arm, task, before, after, final);
   // A failed or malformed final read hides closed or changed windows, so the end counts as unobserved.
+  // Window witnesses must list their windows; a missing list is as unusable as a failed read.
   const endUnobserved =
     read !== null &&
     (Object.keys(final).some((key) => /error/iu.test(key)) ||
-      ("windows" in final && finalWindows(final) === null));
+      ((WINDOW_WITNESSES.has(task.witness ?? "") || "windows" in final) &&
+        finalWindows(final) === null));
   const notes = [
     ...observed.notes,
     ...leftovers.notes,
