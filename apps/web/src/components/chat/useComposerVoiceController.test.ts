@@ -15,7 +15,7 @@ const payload: VoiceRecordingPayload = {
   durationMs: 4_000,
 };
 
-function setup() {
+function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
   const target: ComposerVoiceTarget = {
     environmentId: EnvironmentId.make("voice-env-a"),
     threadId: ThreadId.make("voice-thread-a"),
@@ -24,6 +24,8 @@ function setup() {
     cwd: "/fixture",
     locale: "en-US",
     enabled: true,
+    route: { kind: "environment", environmentId: EnvironmentId.make("voice-env-a") },
+    ...overrides,
   };
   let draft: VoiceDraftSnapshot = {
     ownerKey: target.ownerKey,
@@ -198,7 +200,20 @@ describe("composer voice controller", () => {
     expect(session.onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each(["environmentId", "threadId", "providerInstanceId"] as const)(
+  it("refuses desktop voice input before opening the microphone when this computer runs no local environment", async () => {
+    using session = setup({ route: { kind: "unavailable" } });
+    await session.controller.start();
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: expect.stringContaining("Local environment"),
+    });
+    expect(session.startRecording).not.toHaveBeenCalled();
+    expect(session.prewarm).not.toHaveBeenCalled();
+    expect(session.transcribe).not.toHaveBeenCalled();
+    expect(session.readDraft().text).toBe("hello");
+  });
+
+  it.each(["environmentId", "threadId", "providerInstanceId", "route"] as const)(
     "invalidates final transcription when %s changes",
     async (field) => {
       using session = setup();
@@ -217,6 +232,9 @@ describe("composer voice controller", () => {
         ...(field === "threadId" ? { threadId: ThreadId.make("voice-thread-b") } : {}),
         ...(field === "providerInstanceId"
           ? { providerInstanceId: ProviderInstanceId.make("codex-other") }
+          : {}),
+        ...(field === "route"
+          ? { route: { kind: "local" as const, environmentId: EnvironmentId.make("this-mac") } }
           : {}),
       };
       session.controller.setTarget(next);
