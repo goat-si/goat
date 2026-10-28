@@ -35,10 +35,16 @@ const choices = (schema: Schema) => {
     : "";
 };
 
-const hasFields = (schema: Schema) =>
+const hasFields = (schema: Schema): boolean =>
   isSchema(schema.properties) ||
   isSchema(schema.additionalProperties) ||
-  branchesOf(schema).some((branch) => isSchema(branch) && isSchema(branch.properties));
+  (branchesOf(schema).some((branch) => isSchema(branch) && hasFields(branch)) &&
+    // A union that also takes a list or a scalar is no object a line can spell out.
+    branchesOf(schema).every(
+      (branch) =>
+        isSchema(branch) &&
+        (branch.type === undefined || branch.type === "object" || branch.type === "null"),
+    ));
 
 const requiredOf = (schema: Schema): ReadonlyArray<unknown> =>
   Array.isArray(schema.required) ? schema.required : [];
@@ -60,32 +66,40 @@ const merged = (alternatives: ReadonlyArray<Schema>): Schema => {
   return types.size === 1 ? { type: first.type } : {};
 };
 
+interface Fields {
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly required: ReadonlySet<unknown>;
+  readonly open: boolean;
+}
+
 /**
- * An object's keys, with those its anyOf/oneOf alternatives declare: a key is required when the
- * object or every alternative requires it. A schema for additionalProperties means keys no line lists.
+ * An object's keys, with those its anyOf/oneOf alternatives declare at any depth: a key is
+ * required when the object or every alternative requires it. A schema for additionalProperties
+ * means keys no line lists.
  */
-const fieldsOf = (schema: Schema) => {
+const fieldsOf = (schema: Schema): Fields => {
   const own = isSchema(schema.properties) ? schema.properties : {};
   const properties: Record<string, unknown> = { ...own };
   const required = new Set(requiredOf(schema));
-  const alternatives = branchesOf(schema).filter(
-    (branch): branch is Schema => isSchema(branch) && branch.type !== "null",
-  );
-  const declaring = alternatives.filter((branch) => isSchema(branch.properties));
-  for (const key of new Set(
-    declaring.flatMap((branch) => Object.keys(branch.properties as Schema)),
-  ))
+  const alternatives = branchesOf(schema)
+    .filter((branch): branch is Schema => isSchema(branch) && branch.type !== "null")
+    .map(fieldsOf);
+  for (const key of new Set(alternatives.flatMap((fields) => Object.keys(fields.properties))))
     if (!Object.hasOwn(own, key))
       properties[key] = merged(
-        declaring.flatMap((branch) => {
-          const value = (branch.properties as Schema)[key];
+        alternatives.flatMap((fields) => {
+          const value = fields.properties[key];
           return isSchema(value) ? [unwrap(value)] : [];
         }),
       );
-  const [first, ...rest] = alternatives.map(requiredOf);
-  for (const key of declaring.length === 0 ? [] : (first ?? []))
-    if (rest.every((list) => list.includes(key))) required.add(key);
-  return { properties, required, open: isSchema(schema.additionalProperties) };
+  const [first, ...rest] = alternatives;
+  for (const key of first?.required ?? [])
+    if (rest.every((fields) => fields.required.has(key))) required.add(key);
+  return {
+    properties,
+    required,
+    open: isSchema(schema.additionalProperties) || alternatives.some((fields) => fields.open),
+  };
 };
 
 const render = (schema: Schema, depth: number, pick: ReadonlyArray<string> | undefined): string => {
