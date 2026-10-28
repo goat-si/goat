@@ -1108,10 +1108,7 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = AgentTabState.popupOwner(
-      { ...opener, ownerId: opener.control.agentId },
-      Date.now(),
-    );
+    const agentId = AgentTabState.popupOwner(opener, Date.now());
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;

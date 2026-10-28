@@ -21,13 +21,13 @@ export interface AgentInput {
  */
 export const popupOwner = (
   opener: {
-    readonly ownerId: string | null;
+    readonly control: { readonly agentId: string | null };
     readonly agentOperating: boolean;
     readonly lastAgentInput?: AgentInput | undefined;
   },
   now: number,
 ): string | null => {
-  if (opener.ownerId !== null) return opener.ownerId;
+  if (opener.control.agentId !== null) return opener.control.agentId;
   const recent = opener.lastAgentInput;
   return recent && (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
     ? recent.agentId
