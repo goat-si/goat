@@ -320,8 +320,10 @@ const make = Effect.gen(function* () {
     const callerProject = known.find((project) => project.id === callerThread?.projectId);
     // A pull request named by repository builds its URL through the project that holds it, which
     // need not be the caller's. Without a host, that is the one project whose remote matches.
-    const holderOf = (repository: string, host: string | null) =>
-      host === null ? undefined : projectForPullRequest(known, { host, repository }, undefined);
+    const holds = (project: OrchestrationProjectShell, repository: string) => {
+      const { host } = projectHostAndProvider(project);
+      return host !== null && projectForPullRequest([project], { host, repository }, undefined);
+    };
     const urlProject = (input: PullRequestTargetInput) => {
       if (input.url !== undefined || input.repository === undefined) return callerProject;
       const { repository } = input;
@@ -330,15 +332,14 @@ const make = Effect.gen(function* () {
           projectForPullRequest(known, { host: input.host, repository }, callerProject) ??
           callerProject
         );
-      const holders = known.filter(
-        (project) => holderOf(repository, projectHostAndProvider(project).host) === project,
+      // Checkouts of one repository share its canonical key; two repositories that answer to the
+      // same short name (Azure DevOps org/project/_git/web) are ambiguous, so the caller passes url.
+      const holders = known.filter((project) => holds(project, repository));
+      const repositories = new Set(
+        holders.map((project) => project.repositoryIdentity?.canonicalKey ?? project.id),
       );
-      const [only] = holders;
-      return callerProject !== undefined && holders.includes(callerProject)
-        ? callerProject
-        : holders.length === 1
-          ? only
-          : callerProject;
+      if (callerProject !== undefined && holders.includes(callerProject)) return callerProject;
+      return repositories.size === 1 ? holders[0] : callerProject;
     };
     return yield* Effect.forEach(targets, (input) =>
       resolveTarget(input, urlProject(input)).pipe(

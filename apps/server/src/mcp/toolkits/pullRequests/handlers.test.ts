@@ -791,4 +791,41 @@ describe("pull request reads", () => {
         ).toMatchObject({ _tag: "PullRequestUrlInvalidError" });
       }),
   );
+  it.effect(
+    "refuses a short repository name two Azure DevOps projects share instead of picking one",
+    () =>
+      Effect.gen(function* () {
+        const azure = (org: string) => ({
+          ...makeProject({
+            canonicalKey: `dev.azure.com/${org}/project/_git/web`,
+            locator: {
+              source: "git-remote",
+              remoteName: "origin",
+              remoteUrl: `https://dev.azure.com/${org}/project/_git/web`,
+            },
+            provider: SourceControlProviderKind.make("azure-devops"),
+            displayName: `${org}/project/_git/web`,
+            owner: org,
+            name: "web",
+          }),
+          id: ProjectId.make(`project-${org}`),
+        });
+        const harness = yield* makeHarness({
+          thread: null,
+          projects: [azure("one"), azure("two")],
+        });
+        expect(
+          yield* harness
+            .call("goat_pull_request_checks", { repository: "web", number: 9 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestHostRequiredError" });
+        yield* harness.call("goat_pull_request_checks", {
+          repository: "two/project/_git/web",
+          number: 9,
+        });
+        expect((yield* Ref.get(harness.reads)).map((ref) => ref.projectId)).toEqual([
+          "project-two",
+        ]);
+      }),
+  );
 });
