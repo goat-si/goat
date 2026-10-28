@@ -943,3 +943,48 @@ describe.skipIf(!chromiumInstalled)(
     });
   },
 );
+describe.skipIf(!chromiumInstalled)("what a sign-in may claim after a script request", () => {
+  it.live(
+    "does not call a later page accepted after a same-site script request carried the password",
+    () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, call, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/form");
+          const { ref, value } = secrets.save("https://login.test");
+          yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+          // An autosave on the same site, answered 200, then an unrelated page.
+          const body = JSON.stringify("draft=" + value);
+          yield* Effect.promise(() =>
+            page.evaluate(
+              "fetch('https://login.test/api', { method: 'POST', body: " + body + " })",
+            ),
+          );
+          yield* call(tabId, "navigate", { url: "https://login.test/next" });
+          const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+          expect(state).toMatchObject({ stage: "unknown", submitted: true });
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    },
+  );
+});
+describe.skipIf(!chromiumInstalled)("the identifier a form was sent with", () => {
+  it.live("calls a form sent after its identifier was cleared partial, not accepted", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/form");
+        const { ref } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        yield* Effect.promise(() => page.locator("#user").fill(""));
+        yield* Effect.promise(() =>
+          Promise.all([page.waitForURL("https://login.test/welcome"), page.click("#go")]),
+        );
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state).toMatchObject({ stage: "partial", submitted: true });
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+});

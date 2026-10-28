@@ -17,7 +17,7 @@ import * as Effect from "effect/Effect";
 import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { BrowserContext, CDPSession, Frame, Page } from "playwright-core";
+import type { BrowserContext, CDPSession, Frame, Page, Request } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
@@ -70,6 +70,8 @@ const SHARED_FENCED =
   "A tab that shares this tab's sign-ins holds a password GOAT filled, so goat_preview_evaluate, image snapshots and recordings here stay off until that field lets go.";
 const FILLING =
   "GOAT is filling a password in a tab that shares this tab's sign-ins. Try again once it is done.";
+const IMAGE_RACED =
+  "GOAT filled a password in a tab that shares this tab's sign-ins while this image was taken, so it was dropped. Take it again.";
 
 type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
 
@@ -157,8 +159,20 @@ const IDENTIFIER_OF = `(field) => {
   return id ? id.value.trim() : null;
 }`;
 const IDENTIFIER = `function () { return (${IDENTIFIER_OF})(this); }`;
-/** The identifier now, or nothing once the field left its document. */
-const IDENTIFIER_NOW = `function () { return this.isConnected ? (${IDENTIFIER_OF})(this) : undefined; }`;
+const SENT_BINDING = "__goatSignInSent";
+// Reports, as the field's form is sent, whether its identifier was filled: the document that
+// could answer later is often gone by the time GOAT sees the request.
+const WATCH_SUBMIT = `function (binding) {
+  const field = this;
+  const form = field.form || field.closest("form");
+  if (!form || form.__goatSentWatch) return;
+  form.__goatSentWatch = true;
+  form.addEventListener("submit", () => {
+    const id = (${IDENTIFIER_OF})(field);
+    if (typeof self[binding] === "function")
+      self[binding](id === null ? "absent" : id === "" ? "empty" : "filled");
+  }, true);
+}`;
 // Without an identifier field, page text names the account: as a whole address, and no other one.
 const NAMED_ONLY = `(wanted) => {
   const text = document.body ? document.body.innerText.toLowerCase() : "";
@@ -316,8 +330,20 @@ const originOf = (url: string) => {
 
 const VALIDATION_CHARS = 200;
 
-const fieldState = (identifier: string | null): PreviewSignInField =>
-  identifier === null ? "absent" : identifier === "" ? "empty" : "filled";
+const SENT_STATES: ReadonlyArray<PreviewSignInField> = ["absent", "empty", "filled"];
+
+/** A form sent from the top document, or from a frame on the site the password went into. */
+const navigates = (request: Request, page: Page, destination: string) => {
+  try {
+    const frame = request.frame();
+    return (
+      request.isNavigationRequest() &&
+      (frame === page.mainFrame() || originOf(frame.url()) === destination)
+    );
+  } catch {
+    return false;
+  }
+};
 
 /** Documents that take their creator's origin rather than one from their URL. */
 const INHERITED_ORIGIN = /^(?:about:|blob:|$)/u;
@@ -475,6 +501,15 @@ export const make = Effect.gen(function* () {
   const filling = new WeakMap<BrowserContext, number>();
   /** The field each tab last took a password into, and where it went. */
   const lastFill = new WeakMap<Page, Target & { readonly destination: string }>();
+  /** Threads with a tab in a context: a password filled there joins each one's mask at once. */
+  const contextThreads = new WeakMap<BrowserContext, Set<ThreadId>>();
+  /** Fills started per context, so an image let through before one started is dropped after. */
+  const fillEpoch = new WeakMap<BrowserContext, number>();
+  /** Image snapshots the guard let through, with the fill count it saw. */
+  const imageChecks = new WeakMap<
+    PreviewAutomationRequest,
+    { readonly tab: SecretFillTab; readonly epoch: number }
+  >();
   const track = (tab: SecretFillTab) => {
     const context = tab.page.context();
     const known = contextTabs.get(context) ?? new Set<SecretFillTab>();
@@ -485,6 +520,7 @@ export const make = Effect.gen(function* () {
   const reserving = async <A>(tab: SecretFillTab, run: () => Promise<A>) => {
     const context = tab.page.context();
     filling.set(context, (filling.get(context) ?? 0) + 1);
+    fillEpoch.set(context, (fillEpoch.get(context) ?? 0) + 1);
     try {
       return await run();
     } finally {
@@ -493,16 +529,21 @@ export const make = Effect.gen(function* () {
       else filling.delete(context);
     }
   };
-  /** A thread acting on a tab of a context a password went into masks that password too. */
-  const join = (tab: SecretFillTab, threadId: ThreadId) => {
-    track(tab);
-    const shared = contextValues.get(tab.page.context());
-    if (shared === undefined) return;
+  const addValues = (threadId: ThreadId, added: Iterable<string>) => {
     const values = filledValues.get(threadId) ?? new Set<string>();
     const before = values.size;
-    for (const value of shared) values.add(value);
+    for (const value of added) values.add(value);
     filledValues.set(threadId, values);
     if (values.size !== before) maskers.delete(threadId);
+  };
+  /** A thread with a tab in a context masks every password filled there, now and later. */
+  const joinContext = (threadId: ThreadId, context: BrowserContext) => {
+    contextThreads.set(context, (contextThreads.get(context) ?? new Set<ThreadId>()).add(threadId));
+    addValues(threadId, contextValues.get(context) ?? []);
+  };
+  const join = (tab: SecretFillTab, threadId: ThreadId) => {
+    track(tab);
+    joinContext(threadId, tab.page.context());
   };
   /** A page that took a password, and the popups it or they open, keep their pixels off. */
   const markFilled = (page: Page) => {
@@ -528,48 +569,64 @@ export const make = Effect.gen(function* () {
     tab.page.on("request", (request) => {
       if (request.method() === "GET" || request.method() === "HEAD") return;
       const field = lastFill.get(tab.page);
-      const kind = request.resourceType();
-      const script = kind === "xhr" || kind === "fetch";
       if (field === undefined) return;
-      if (kind !== "document" && !(script && originOf(request.url()) === field.destination)) return;
+      const kind = request.resourceType();
+      const form = kind === "document" && navigates(request, tab.page, field.destination);
+      const script =
+        (kind === "xhr" || kind === "fetch") && originOf(request.url()) === field.destination;
+      if (!form && !script) return;
       const values = filledValues.get(threadId);
       const carried =
         request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
       if (values === undefined || !carriesValue(carried, values)) return;
       const at = ++signInOrder;
-      const identifier = signIns.get(tab.page)?.identifierAtFill;
+      // A form reports its identifier as it is sent; a script request has none to read.
+      const sent = signIns.get(tab.page)?.identifierAtSubmit;
+      if (form) noteSignIn(tab.page, { identifierAtSubmit: undefined });
       noteSignIn(tab.page, {
         submitted: {
           documentGeneration: tab.documentGeneration ?? 0,
           at,
-          ...(identifier ? { identifier } : {}),
+          kind: form ? "form" : "script",
+          identifier: form ? (sent ?? "unread") : "unread",
         },
       });
-      const update = (change: {
-        readonly status?: number;
-        readonly identifier?: PreviewSignInField;
-      }) => {
-        const submitted = signIns.get(tab.page)?.submitted;
-        if (submitted?.at === at) noteSignIn(tab.page, { submitted: { ...submitted, ...change } });
-      };
-      // The field as it was sent; once its document is gone, the fill's reading stands.
-      void field.session
-        .send("Runtime.callFunctionOn", {
-          objectId: field.objectId,
-          functionDeclaration: IDENTIFIER_NOW,
-          returnByValue: true,
-        })
-        .then((answer) => {
-          const now: unknown = answer.exceptionDetails ? undefined : answer.result.value;
-          if (now === null || typeof now === "string") update({ identifier: fieldState(now) });
-        }, constVoid);
       void request.response().then((response) => {
-        if (response) update({ status: response.status() });
+        const submitted = signIns.get(tab.page)?.submitted;
+        if (response && submitted?.at === at)
+          noteSignIn(tab.page, { submitted: { ...submitted, status: response.status() } });
       }, constVoid);
     });
     tab.control.onHandoffChange((end) => {
       if (end === "handedBack") noteSignIn(tab.page, { handedBackAt: ++signInOrder });
     });
+  };
+  const boundSessions = new WeakSet<CDPSession>();
+  /** Hears the field's form being sent, from the isolated world, before its request leaves. */
+  const watchSubmit = async (page: Page, target: Target) => {
+    if (!boundSessions.has(target.session)) {
+      boundSessions.add(target.session);
+      target.session.on("Runtime.bindingCalled", (event) => {
+        if (event.name !== SENT_BINDING) return;
+        const sent = SENT_STATES.find((state) => state === event.payload);
+        if (sent === undefined) return;
+        const submitted = signIns.get(page)?.submitted;
+        // The request can reach GOAT first; then the form's report completes it.
+        if (submitted?.kind === "form" && submitted.identifier === "unread")
+          noteSignIn(page, { submitted: { ...submitted, identifier: sent } });
+        else noteSignIn(page, { identifierAtSubmit: sent });
+      });
+      await target.session
+        .send("Runtime.addBinding", { name: SENT_BINDING, executionContextName: WORLD })
+        .catch(constVoid);
+    }
+    await target.session
+      .send("Runtime.callFunctionOn", {
+        objectId: target.objectId,
+        functionDeclaration: WATCH_SUBMIT,
+        arguments: [{ value: SENT_BINDING }],
+      })
+      .catch(constVoid);
   };
   const fences = new WeakMap<Page, Array<Fence>>();
   // A frame's session closes with its document: whatever it filled there is gone.
@@ -649,13 +706,15 @@ export const make = Effect.gen(function* () {
               if ("error" in consumed) throw refused(consumed.error, consumed.failure);
               used = true;
               const value = consumed.value;
-              const values = filledValues.get(request.threadId) ?? new Set<string>();
-              values.add(value);
-              filledValues.set(request.threadId, values);
-              maskers.delete(request.threadId);
+              // Every thread with a tab sharing these sign-ins masks it, answers under way too.
+              const shares = tab.page.context();
+              contextValues.set(
+                shares,
+                (contextValues.get(shares) ?? new Set<string>()).add(value),
+              );
+              joinContext(request.threadId, shares);
+              for (const each of contextThreads.get(shares) ?? []) addValues(each, [value]);
               rememberSecret(tab.page, value);
-              const known = contextValues.get(tab.page.context()) ?? new Set<string>();
-              contextValues.set(tab.page.context(), known.add(value));
               // Before typing: a lost reply may still have typed it, and its pixels stay off.
               const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
               origins.add(destination);
@@ -666,7 +725,7 @@ export const make = Effect.gen(function* () {
               markFilled(tab.page);
               // Watching before the value goes in: its own input handler may submit at once.
               lastFill.set(tab.page, { ...target, destination });
-              noteSignIn(tab.page, { identifierAtFill: fieldState(identifier) });
+              await watchSubmit(tab.page, target);
               watchSignIn(tab, request.threadId);
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
@@ -791,6 +850,8 @@ export const make = Effect.gen(function* () {
     const textSnapshot =
       request.operation === "snapshot" &&
       (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
+    if (request.operation === "snapshot" && !textSnapshot)
+      imageChecks.set(request, { tab, epoch: fillEpoch.get(tab.page.context()) ?? 0 });
     const guarded =
       request.operation === "evaluate" ||
       request.operation === "recordingStart" ||
@@ -818,6 +879,16 @@ export const make = Effect.gen(function* () {
   const mask =
     (request: PreviewAutomationRequest) =>
     <O extends Outcome>(outcome: O): O => {
+      // A fill that started in the context after the guard let the image through drops it.
+      const image = imageChecks.get(request);
+      if (image !== undefined && outcome.ok) {
+        const raced = (fillEpoch.get(image.tab.page.context()) ?? 0) !== image.epoch;
+        const off = raced ? IMAGE_RACED : pixelsOff(image.tab, request.threadId);
+        if (off !== null) {
+          const error = refused(off);
+          return { ok: false, error: { _tag: error.tag, message: error.message } } as O;
+        }
+      }
       const text = maskerFor(request.threadId);
       if (text === undefined) return outcome;
       return (
@@ -831,11 +902,16 @@ export const make = Effect.gen(function* () {
    * Masks the thread's filled values in one text. With `limit`, a text the caller will cut there is
    * cut first a little past it and masked as cut, so a huge page text is never scanned whole.
    */
-  const maskText = (threadId: string) => (text: string, limit?: number) => {
-    const masker = maskerFor(ThreadId.make(threadId));
-    if (masker === undefined) return text;
-    if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
-    return masker(text.slice(0, limit + masker.slack), true);
+  const maskText = (threadId: string, page?: Pick<Page, "context">) => {
+    const thread = ThreadId.make(threadId);
+    // A tab's own records mask what any thread fills in its context from the start.
+    if (page !== undefined) joinContext(thread, page.context());
+    return (text: string, limit?: number) => {
+      const masker = maskerFor(thread);
+      if (masker === undefined) return text;
+      if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
+      return masker(text.slice(0, limit + masker.slack), true);
+    };
   };
 
   /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
