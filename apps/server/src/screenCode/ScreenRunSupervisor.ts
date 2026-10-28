@@ -46,6 +46,10 @@ export class ScreenSupervisorFailure extends Schema.TaggedError<ScreenSupervisor
     code: SupervisorCode,
     effectStarted: Schema.optionalKey(Schema.Boolean),
     receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt)),
+    /** What ended the cell before an effect that may have started made it unknown_outcome. */
+    endedBy: Schema.optionalKey(SupervisorCode),
+    /** Every receipt, as receipts reports its last 16, for the cell's timeline row. */
+    journal: Schema.optionalKey(Schema.Array(ScreenEffectReceipt)),
   },
 ) {}
 const isScreenSupervisorFailure = Schema.is(ScreenSupervisorFailure);
@@ -54,12 +58,16 @@ const failure = (
   options: {
     effectStarted?: boolean;
     receipts?: readonly ScreenEffectReceipt[];
+    endedBy?: typeof SupervisorCode.Type;
+    journal?: readonly ScreenEffectReceipt[];
   } = {},
 ) =>
   new ScreenSupervisorFailure({
     code,
     ...(options.effectStarted === undefined ? {} : { effectStarted: options.effectStarted }),
     ...(options.receipts === undefined ? {} : { receipts: [...options.receipts] }),
+    ...(options.endedBy === undefined ? {} : { endedBy: options.endedBy }),
+    ...(options.journal === undefined ? {} : { journal: [...options.journal] }),
   });
 
 interface ActiveCell {
@@ -290,7 +298,7 @@ export function createScreenRunSupervisor(deps: {
                 identity.turnId,
                 cellId,
               );
-              const receipts = journal.slice(-16).map(({ receipt }) =>
+              const normalized = journal.map(({ receipt }) =>
                 receipt.journalState === "settled"
                   ? receipt
                   : receipt.dispatched
@@ -305,12 +313,18 @@ export function createScreenRunSupervisor(deps: {
                         category: "refused" as const,
                       },
               );
+              const receipts = normalized.slice(-16);
               const effectStarted =
                 effectsStarted > 0 || receipts.some((receipt) => receipt.dispatched);
               callAbort.abort();
               close(session);
               reject(
-                failure(effectStarted ? "unknown_outcome" : code, { effectStarted, receipts }),
+                failure(effectStarted ? "unknown_outcome" : code, {
+                  effectStarted,
+                  receipts,
+                  endedBy: code,
+                  journal: normalized,
+                }),
               );
             };
             const onAbort = () => failRun("stopped");

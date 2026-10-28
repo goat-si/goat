@@ -16,10 +16,16 @@ import { COMPUTER_USE_TOOL_SOURCE, cuaDriverToolName } from "@goat/shared/toolAc
 import * as Context from "effect/Context";
 
 import { targetPid } from "./ComputerUseScope.ts";
+import { appSubject, inputTitle, siteSubject } from "./ScreenCellRow.ts";
 
 const MAX_APPS = 512;
 const MAX_SCREEN_TARGETS = 1024;
 const MAX_SCREEN_CELLS = 512;
+const MAX_OPEN_CELL_SUBJECTS = 256;
+const MAX_CELL_SUBJECTS_PER_TARGET = 128;
+const MAX_SCREEN_ROWS = 1024;
+// Long enough for the provider's row to be ingested after its cell ends.
+const SCREEN_ROW_TTL_MS = 15 * 60_000;
 const MAX_ANSWER_CHARS = 65_536;
 // A screen cell's result holds its value, console and up to 64 receipts.
 const MAX_SCREEN_ANSWER_CHARS = 512 * 1024;
@@ -37,6 +43,20 @@ export type ScreenTargetLabel =
       readonly name?: string | undefined;
     }
   | { readonly kind: "tab"; readonly pageUrl: string | null | undefined };
+
+/** The cell a host relabelled a target in. */
+export interface ScreenCellRef {
+  readonly runId: string;
+  readonly turnId: string;
+  readonly cellId: string;
+}
+
+/** The row text the server made for a finished cell. */
+export interface ScreenRowText {
+  readonly threadId: string;
+  readonly title?: string | undefined;
+  readonly summary?: string | undefined;
+}
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -121,6 +141,29 @@ function finishedScreenCell(item: OrchestrationV2TurnItem) {
   return { code: typeof code === "string" ? code : undefined };
 }
 
+const isScreenRun = (item: OrchestrationV2TurnItem) =>
+  item.type === "dynamic_tool" && SCREEN_RUN_TOOL.test(item.toolName ?? "");
+
+/** The title the agent gave a cell, in whichever envelope its provider kept the arguments. */
+const screenRunInputTitle = (item: OrchestrationV2TurnItem) => {
+  if (item.type !== "dynamic_tool") return undefined;
+  const input = record(item.input);
+  return inputTitle(input?.title ?? record(input?.arguments)?.title);
+};
+
+/** The cell a screen run row's own result or error names; nothing in it is ever displayed. */
+const screenRunCellId = (item: OrchestrationV2TurnItem) => {
+  if (item.type !== "dynamic_tool" || item.output === undefined) return undefined;
+  const cellId = answerFields(item.output, MAX_SCREEN_ANSWER_CHARS)?.cellId;
+  return typeof cellId === "string" && cellId.length <= 200 ? cellId : undefined;
+};
+
+const subjectOf = (
+  target:
+    | { readonly kind: "app"; readonly label: ComputerUseCallAppLabel }
+    | { readonly kind: "tab"; readonly pageUrl: string },
+) => (target.kind === "app" ? appSubject(target.label) : siteSubject(target.pageUrl));
+
 function websiteUrl(value: unknown) {
   const raw = text(value, 4096);
   if (raw === undefined) return undefined;
@@ -175,6 +218,9 @@ export const makeCallApps = () => {
   // The targets each cell acted on, in order, kept by the server: providers may hand back a
   // summary or a truncated tail in place of the cell's receipts, and receipts keep only 16 calls.
   const screenCells = new Map<string, readonly string[]>();
+  // Subjects each running cell's own calls relabelled its targets to, by target id.
+  const cellSubjects = new Map<string, Map<string, string[]>>();
+  const screenRows = new Map<string, ScreenRowText & { readonly at: number }>();
   const labelOf = (
     tool: string,
     args: Readonly<Record<string, unknown>> | undefined,
@@ -219,9 +265,10 @@ export const makeCallApps = () => {
     },
     /**
      * Keeps what a screen host bound a target id to; a tab's later label follows its navigation.
-     * A label without an app name, bundle id or web page forgets the id.
+     * A label without an app name, bundle id or web page forgets the id. The cell whose call
+     * relabelled it keeps the label's subject, so a tab that went from site A to B names both.
      */
-    screenTarget: (targetId: string, label: ScreenTargetLabel) => {
+    screenTarget: (targetId: string, label: ScreenTargetLabel, cell?: ScreenCellRef) => {
       screenTargets.delete(targetId);
       if (label.kind === "app") {
         const bundleId = text(label.bundleId, 255);
@@ -242,6 +289,73 @@ export const makeCallApps = () => {
       const oldest = screenTargets.keys().next();
       if (screenTargets.size > MAX_SCREEN_TARGETS && oldest.done !== true)
         screenTargets.delete(oldest.value);
+      const target = screenTargets.get(targetId);
+      if (cell === undefined || target === undefined) return;
+      const key = `${cell.runId}\u0000${cell.turnId}\u0000${cell.cellId}`;
+      let byTarget = cellSubjects.get(key);
+      if (byTarget === undefined) {
+        cellSubjects.set(key, (byTarget = new Map()));
+        const stale = cellSubjects.keys().next();
+        if (cellSubjects.size > MAX_OPEN_CELL_SUBJECTS && stale.done !== true)
+          cellSubjects.delete(stale.value);
+      }
+      const subjects = byTarget.get(targetId) ?? [];
+      const subject = subjectOf(target);
+      if (!subjects.includes(subject) && subjects.length < MAX_CELL_SUBJECTS_PER_TARGET)
+        subjects.push(subject);
+      byTarget.set(targetId, subjects);
+    },
+    /**
+     * The distinct subjects a finished cell touched, its targets in first-use order: what its own
+     * calls relabelled them to, or a target's current label when the cell relabelled none.
+     */
+    takeCellSubjects: (cell: ScreenCellRef, targetIds: readonly string[]) => {
+      const key = `${cell.runId}\u0000${cell.turnId}\u0000${cell.cellId}`;
+      const byTarget = cellSubjects.get(key);
+      cellSubjects.delete(key);
+      const subjects: string[] = [];
+      for (const targetId of targetIds) {
+        const target = screenTargets.get(targetId);
+        const seen = byTarget?.get(targetId) ?? (target === undefined ? [] : [subjectOf(target)]);
+        for (const subject of seen) if (!subjects.includes(subject)) subjects.push(subject);
+      }
+      return subjects;
+    },
+    /** Keeps a finished cell's row text by its cell id until the provider's row is ingested. */
+    screenRow: (cellId: string, row: ScreenRowText, now: number) => {
+      screenRows.delete(cellId);
+      screenRows.set(cellId, { ...row, at: now });
+      for (const [id, kept] of screenRows) {
+        if (screenRows.size <= MAX_SCREEN_ROWS && now - kept.at < SCREEN_ROW_TTL_MS) break;
+        screenRows.delete(id);
+      }
+    },
+    /** Whether a screen run row resolved nothing, so the stored row's presentation should stay. */
+    unresolvedScreenRow: (item: OrchestrationV2TurnItem) =>
+      isScreenRun(item) && item.type === "dynamic_tool" && item.toolSummary === undefined,
+    /**
+     * A screen run update that resolved nothing keeps what its stored row was given: an update
+     * without the result (a summary, a replayed status) must not erase a resolved title.
+     */
+    keepStoredScreenRow: (
+      item: OrchestrationV2TurnItem,
+      stored: OrchestrationV2TurnItem | null,
+    ): OrchestrationV2TurnItem => {
+      if (item.type !== "dynamic_tool" || stored?.type !== "dynamic_tool") return item;
+      if (stored.toolSummary === undefined || item.toolSummary !== undefined) return item;
+      const title = screenRunInputTitle(item) ?? stored.title;
+      return {
+        ...item,
+        toolSummary: stored.toolSummary,
+        ...(title === null ? {} : { title }),
+        ...(item.toolIcon === undefined && stored.toolIcon !== undefined
+          ? {
+              toolIcon: stored.toolIcon,
+              ...(stored.toolSurface === undefined ? {} : { toolSurface: stored.toolSurface }),
+              ...(stored.toolSource === undefined ? {} : { toolSource: stored.toolSource }),
+            }
+          : {}),
+      };
     },
     /**
      * Keeps the targets a finished cell acted on, in first-use order, for its row to name. A cell
@@ -259,42 +373,62 @@ export const makeCallApps = () => {
     /**
      * A cua-driver call presented as the app it names or whose pid a proxy labelled; a finished
      * screen cell as the first app it acted on, else the first page, from the server's record of
-     * the cell or else its receipts. Anything else, or a call whose provider named its app, stays.
+     * the cell or else its receipts, titled as its agent named it or as the server summed it up.
+     * Anything else, or a call whose provider named its app, stays.
      */
-    present: (item: OrchestrationV2TurnItem): OrchestrationV2TurnItem => {
-      const cell = finishedScreenCell(item);
-      const recorded =
-        cell?.code === undefined ? undefined : screenCells.get(cellKey(item.threadId, cell.code));
-      const receipts = cell === undefined ? undefined : receiptTargetIds(item);
-      // The record is a cell with this code, which may not be this call: kept receipts decide,
-      // and the record stands in only where it agrees with them or none survived.
-      const targetIds =
-        receipts === undefined
-          ? (recorded ?? [])
-          : recorded !== undefined &&
-              receipts.length > 0 &&
-              receipts.every((id) => recorded.includes(id))
-            ? recorded
-            : receipts;
-      const targets = targetIds.flatMap((id) => screenTargets.get(id) ?? []);
-      const app = targets.find((target) => target.kind === "app");
-      if (app !== undefined) return asApp(item, app.label);
-      const tab = targets.find((target) => target.kind === "tab");
-      if (tab !== undefined)
-        return { ...item, toolIcon: { _tag: "website", pageUrl: tab.pageUrl } };
-      const call = driverCall(item);
-      if (call === undefined) return item;
-      if (
-        item.toolSource?.kind === "computer" &&
-        item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
-      )
-        return item;
-      return asApp(
-        item,
-        labelOf(call.tool, call.args, item.type === "dynamic_tool" ? item.output : undefined),
-      );
+    present: (item: OrchestrationV2TurnItem, now?: number): OrchestrationV2TurnItem => {
+      const shown = presentTarget(item);
+      if (!isScreenRun(shown)) return shown;
+      const cellId = screenRunCellId(shown);
+      const row = cellId === undefined ? undefined : screenRows.get(cellId);
+      const live =
+        row !== undefined &&
+        row.threadId === shown.threadId &&
+        (now === undefined || now - row.at < SCREEN_ROW_TTL_MS)
+          ? row
+          : undefined;
+      const title = screenRunInputTitle(shown) ?? live?.title;
+      return title === undefined && live?.summary === undefined
+        ? shown
+        : {
+            ...shown,
+            ...(title === undefined ? {} : { title }),
+            ...(live?.summary === undefined ? {} : { toolSummary: live.summary }),
+          };
     },
   };
+  function presentTarget(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
+    const cell = finishedScreenCell(item);
+    const recorded =
+      cell?.code === undefined ? undefined : screenCells.get(cellKey(item.threadId, cell.code));
+    const receipts = cell === undefined ? undefined : receiptTargetIds(item);
+    // The record is a cell with this code, which may not be this call: kept receipts decide,
+    // and the record stands in only where it agrees with them or none survived.
+    const targetIds =
+      receipts === undefined
+        ? (recorded ?? [])
+        : recorded !== undefined &&
+            receipts.length > 0 &&
+            receipts.every((id) => recorded.includes(id))
+          ? recorded
+          : receipts;
+    const targets = targetIds.flatMap((id) => screenTargets.get(id) ?? []);
+    const app = targets.find((target) => target.kind === "app");
+    if (app !== undefined) return asApp(item, app.label);
+    const tab = targets.find((target) => target.kind === "tab");
+    if (tab !== undefined) return { ...item, toolIcon: { _tag: "website", pageUrl: tab.pageUrl } };
+    const call = driverCall(item);
+    if (call === undefined) return item;
+    if (
+      item.toolSource?.kind === "computer" &&
+      item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
+    )
+      return item;
+    return asApp(
+      item,
+      labelOf(call.tool, call.args, item.type === "dynamic_tool" ? item.output : undefined),
+    );
+  }
 };
 
 export class ComputerUseCallApps extends Context.Reference<ReturnType<typeof makeCallApps>>(

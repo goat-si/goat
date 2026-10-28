@@ -45,12 +45,22 @@ const ScreenRunToolLimits = Schema.Struct({
 
 export const ScreenRunToolInput = Schema.Struct({
   code: Schema.String.check(Schema.isNonEmpty()),
+  title: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isNonEmpty(),
+      Schema.isMaxLength(80),
+      Schema.isPattern(/^[^\r\n]*$/u),
+    ).annotate({
+      description:
+        "One line saying what the cell does; it titles the timeline row. Never typed text or secrets.",
+    }),
+  ),
   reset: Schema.optionalKey(Schema.Boolean),
   limits: Schema.optionalKey(ScreenRunToolLimits),
 });
 
 const isInput = Schema.is(ScreenRunToolInput);
-const fields = new Set(["code", "reset", "limits"]);
+const fields = new Set(["code", "title", "reset", "limits"]);
 export function validScreenRunPayload(payload: unknown): boolean {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return false;
   const raw = payload as Record<string, unknown>;

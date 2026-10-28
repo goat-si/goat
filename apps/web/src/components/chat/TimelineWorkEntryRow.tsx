@@ -58,6 +58,7 @@ import { ComputerUseRunCard } from "./ComputerUseRunCard";
 import { fileChangeTargetPaths } from "@goat/client-runtime/work-log/file-change-diff";
 import { fileChangeRowLabel } from "./fileChangeInlineDiff.logic";
 import { fileChangeLineCounts } from "@goat/client-runtime/work-log/line-counts";
+import { workEntryToolSummary } from "@goat/client-runtime/work-log/tool-presentation";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -328,6 +329,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     workEntry.questionAnswer && hasQuestionAnswer(workEntry.questionAnswer)
       ? getQuestionAnswerPreview(workEntry.questionAnswer)
       : null;
+  const toolSummary = workEntryToolSummary(workEntry.structuredPayload) ?? null;
   const lineCounts = fileChangeLineCounts(workEntry.structuredPayload);
   const projectedFileChange =
     workEntry.projectedItem?.item.type === "file_change" ? workEntry.projectedItem.item : null;
@@ -431,13 +433,14 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         : "text-foreground/80";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
   const labelClassName = cn(
-    answerPreview || lineCounts ? "min-w-0" : "min-w-0 flex-1",
+    answerPreview || lineCounts || toolSummary ? "min-w-0" : "min-w-0 flex-1",
     "truncate",
     headingClass,
   );
   const accessiblePreview = [
     threadLabel?.text ?? previewText,
     answerPreview,
+    toolSummary,
     lineCounts ? lineCountsAccessibleText(lineCounts) : null,
   ]
     .filter(Boolean)
@@ -535,6 +538,9 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               >
                 {answerPreview}
               </span>
+            ) : null}
+            {toolSummary ? (
+              <span className="min-w-0 truncate text-muted-foreground">{toolSummary}</span>
             ) : null}
             {lineCounts ? <WorkLogLineCountsLabel counts={lineCounts} /> : null}
           </p>
