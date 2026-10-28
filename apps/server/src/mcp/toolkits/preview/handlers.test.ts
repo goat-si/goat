@@ -129,7 +129,7 @@ it.effect(
   },
 );
 
-it.effect("preview click and evaluate expose safety after MCP result encoding", () => {
+it.effect("preview results and failures expose safety and a next step after MCP encoding", () => {
   const scope: McpInvocationContext.McpInvocationScope = {
     environmentId: EnvironmentId.make("preview-safety-env"),
     requestNamespace: "preview-safety",
@@ -166,6 +166,22 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
               operation: "type",
               requestId: "safety-request",
               timeoutMs: 1,
+            }),
+          );
+        if (request.operation === "select")
+          return Effect.fail(
+            new PreviewAutomationTimeoutError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "select",
+              requestId: "safety-request",
+              timeoutMs: 1,
+              dispatched: false,
+              interceptedBy: "Pointer intercepted by <div> (dialog).",
             }),
           );
         if (request.operation === "press")
@@ -230,6 +246,17 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
     ).toMatchObject({
       _tag: "PreviewAutomationTimeoutError",
       safety: { possibleCommit: true, retryClass: "never" },
+      next: expect.stringMatching(/^Observe first: the input may have landed/),
+    });
+    // Nothing went out and something covered the target: the next step names the blocker check.
+    const covered = yield* server.callTool({
+      name: "goat_preview_select",
+      arguments: { selector: "select", values: ["a"] },
+    });
+    const coveredText = covered.content.find((part) => part.type === "text");
+    expect(coveredText?.type === "text" ? JSON.parse(coveredText.text) : null).toMatchObject({
+      safety: { possibleCommit: false },
+      next: expect.stringContaining("@layers"),
     });
     // A tab stopped before the key went out sent nothing.
     const stopped = yield* server.callTool({ name: "goat_preview_press", arguments: { key: "a" } });
@@ -239,6 +266,10 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
       reason: "stopped",
       safety: { possibleCommit: false },
     });
+    // Stop is final: no hint invites another attempt.
+    expect(stoppedText?.type === "text" ? JSON.parse(stoppedText.text) : {}).not.toHaveProperty(
+      "next",
+    );
     const filled = yield* server.callTool({
       name: "goat_preview_fill_secret",
       arguments: { secretRef: "secret-ref" },
