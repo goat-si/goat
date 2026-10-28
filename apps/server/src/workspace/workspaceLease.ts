@@ -5,9 +5,23 @@ import * as NodePath from "node:path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+
+import { claimWorkspace, type WorkspaceClaimKind } from "./workspaceLeaseRegistry.ts";
+
+/** Another GOAT server's claims on this machine could not be checked, so the folder stays untouched. */
+export class WorkspaceLeaseUnavailableError extends Schema.TaggedError<WorkspaceLeaseUnavailableError>()(
+  "WorkspaceLeaseUnavailableError",
+  { path: Schema.String, reason: Schema.String },
+) {
+  override get message(): string {
+    return `${this.path} is not available: ${this.reason}`;
+  }
+}
 
 interface Lease {
   readonly semaphore: Semaphore.Semaphore;
@@ -91,16 +105,78 @@ const leave = (admission: Admission) =>
     if (admission.lease.users === 0) leases.delete(admission.cwd);
   });
 
-/** Coordinates checkout removal and cleanup across threads using the same resolved cwd. */
+/**
+ * Runs effect holding a claim other GOAT servers on this machine respect, or None while one of
+ * theirs conflicts. A lease inside a folder this fiber holds whole needs none: that hold already
+ * keeps every other server out.
+ */
+const withForeignClaim = <A, E, R>(
+  kind: WorkspaceClaimKind,
+  key: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+  Effect.withFiber((fiber) =>
+    kind === "lease" && fiber.getRef(HeldSubtrees).some((root) => inside(root, key))
+      ? Effect.map(effect, Option.some)
+      : Effect.acquireUseRelease(
+          Effect.sync(() => claimWorkspace(kind, key)),
+          (claim): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+            claim.kind === "acquired"
+              ? Effect.map(effect, Option.some)
+              : claim.kind === "busy"
+                ? Effect.succeed(Option.none())
+                : Effect.fail(
+                    new WorkspaceLeaseUnavailableError({ path: key, reason: claim.reason }),
+                  ),
+          (claim) =>
+            Effect.sync(() => {
+              if (claim.kind === "acquired") claim.release();
+            }),
+        ),
+  );
+
+/**
+ * Waits while another server holds a folder over key whole. A fiber that holds a folder whole
+ * itself fails instead, so no removal waits on another and two servers cannot deadlock.
+ */
+const waitForForeignClaim = <A, E, R>(
+  key: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
+  withForeignClaim("lease", key, effect).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.withFiber((fiber) =>
+            fiber.getRef(HeldSubtrees).length > 0
+              ? Effect.fail(
+                  new WorkspaceLeaseUnavailableError({
+                    path: key,
+                    reason:
+                      "another GOAT server on this machine is removing a folder that holds it",
+                  }),
+                )
+              : Effect.sleep(Duration.millis(150 + Math.floor(Math.random() * 200))).pipe(
+                  Effect.andThen(Effect.suspend(() => waitForForeignClaim(key, effect))),
+                ),
+          ),
+      }),
+    ),
+  );
+
+/** Coordinates checkout removal and cleanup across threads and GOAT servers using one resolved cwd. */
 export const withWorkspaceLease = <A, E, R>(
   cwd: string,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
+): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
   Effect.acquireUseRelease(
     admit(cwd),
-    (admission): Effect.Effect<A, E, R> =>
+    (admission): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
       admission.kind === "admitted"
-        ? admission.lease.semaphore.withPermit(effect)
+        ? admission.lease.semaphore.withPermit(
+            waitForForeignClaim(admission.lease.canonical, effect),
+          )
         : Deferred.await(admission.released).pipe(Effect.andThen(withWorkspaceLease(cwd, effect))),
     leave,
   );
@@ -109,12 +185,14 @@ export const withWorkspaceLease = <A, E, R>(
 export const tryWithWorkspaceLease = <A, E, R>(
   cwd: string,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<Option.Option<A>, E, R> =>
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
   Effect.acquireUseRelease(
     admit(cwd),
-    (admission): Effect.Effect<Option.Option<A>, E, R> =>
+    (admission): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
       admission.kind === "admitted"
-        ? admission.lease.semaphore.withPermitsIfAvailable(1)(effect)
+        ? admission.lease.semaphore
+            .withPermitsIfAvailable(1)(withForeignClaim("lease", admission.lease.canonical, effect))
+            .pipe(Effect.map(Option.flatten))
         : Effect.succeed(Option.none()),
     leave,
   );
@@ -129,21 +207,29 @@ export const tryWithWorkspaceLease = <A, E, R>(
 export const tryWithWorkspaceSubtree = <A, E, R>(
   root: string,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<Option.Option<A>, E, R> =>
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
   Effect.acquireUseRelease(
     Effect.withFiber((fiber) => {
       const key = canonical(root, fiber.getRef(HostProcess.Platform));
       const busy =
         [...leases.values()].some((lease) => inside(key, lease.canonical)) ||
         [...subtrees.keys()].some((other) => inside(other, key) || inside(key, other));
-      if (busy)
-        return Effect.succeed(
-          Option.none<{ readonly key: string; readonly held: ReadonlyArray<string> }>(),
-        );
+      const none = Option.none<{
+        readonly key: string;
+        readonly held: ReadonlyArray<string>;
+        readonly release: () => void;
+      }>();
+      if (busy) return Effect.succeed(none);
+      const claim = claimWorkspace("subtree", key);
+      if (claim.kind === "busy") return Effect.succeed(none);
+      if (claim.kind === "unavailable")
+        return Effect.fail(new WorkspaceLeaseUnavailableError({ path: key, reason: claim.reason }));
       subtrees.set(key, Deferred.makeUnsafe<void>());
-      return Effect.succeed(Option.some({ key, held: fiber.getRef(HeldSubtrees) }));
+      return Effect.succeed(
+        Option.some({ key, held: fiber.getRef(HeldSubtrees), release: claim.release }),
+      );
     }),
-    (hold): Effect.Effect<Option.Option<A>, E, R> =>
+    (hold): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
       Option.isNone(hold)
         ? Effect.succeed(Option.none())
         : effect.pipe(
@@ -153,6 +239,7 @@ export const tryWithWorkspaceSubtree = <A, E, R>(
     (hold) =>
       Effect.suspend(() => {
         if (Option.isNone(hold)) return Effect.void;
+        hold.value.release();
         const released = subtrees.get(hold.value.key);
         subtrees.delete(hold.value.key);
         return released === undefined ? Effect.void : Deferred.succeed(released, undefined);
