@@ -842,3 +842,34 @@ describe("proxy release of a call that never ran", () => {
     }),
   );
 });
+
+describe("proxy reservations of a call its driver never answers", () => {
+  it.effect("an unanswered click releases its driver's reservations once its deadline passes", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:unanswered",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 30_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9, x: 1, y: 1 },
+      });
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      assert.deepInclude((yield* h.nextToDriver).params as object, { name: "click" });
+      // Until now the app stayed reserved to the stuck call, and other threads heard app_busy.
+      yield* TestClock.adjust("31 seconds");
+      const closed = yield* h.nextReservation;
+      assert.equal(closed.action, "close");
+      assert.equal(closed.connectionId, current.connectionId);
+      assert.equal((yield* h.primitiveReply).status, "unknown_outcome");
+    }),
+  );
+});

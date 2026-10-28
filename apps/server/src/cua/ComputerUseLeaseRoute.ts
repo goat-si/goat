@@ -21,6 +21,7 @@ import {
   ComputerUsePrimitiveControlReady,
   ComputerUsePrimitiveControlCutoff,
   DEFAULT_SCREEN_RUN_LIMITS,
+  COMPUTER_USE_PRIMITIVE_RESULT_BYTES,
 } from "@goat/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as Clock from "effect/Clock";
@@ -58,7 +59,9 @@ const decodePrimitiveReply = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveReply),
 );
 const PRIMITIVE_REPLY_BODY_BYTES =
-  Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
+  Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 +
+  COMPUTER_USE_PRIMITIVE_RESULT_BYTES +
+  128 * 1024;
 
 /**
  * A blank line while state is quiet, which every proxy skips: it keeps idle timeouts on the way
