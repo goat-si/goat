@@ -147,12 +147,11 @@ export function DraftHeroHeadline({
             project.environmentId === activeProjectRef.environmentId &&
             project.id === activeProjectRef.projectId,
         ) ?? null);
-  const scratchTargetEnvironmentId = scratchEnvironmentId(
-    activeProjectRef?.environmentId ?? primaryEnvironmentId,
-  );
+  const scratchTargetEnvironmentId = scratchEnvironmentId(activeProjectRef?.environmentId ?? null);
   const scratchWorkspaceRoot = scratchWorkspaceRootFor(scratchTargetEnvironmentId);
   const isScratchDraft =
-    activeProject !== null && isScratchProject(activeProject, scratchWorkspaceRoot);
+    activeProject !== null &&
+    isScratchProject(activeProject, scratchWorkspaceRootFor(activeProject.environmentId));
 
   // Scratch folders are reached through the leading "No project" row, never as project rows.
   // "Add project" is an action, so search hides it.
