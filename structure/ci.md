@@ -78,7 +78,13 @@ change under `apps/server/src/memory` or `apps/server/src/persistence` reaches i
 job summary lists each chosen server test file and the change that reached it.
 
 Labels widen a run as soon as they are added: `ci:full` runs everything, `ci:affected` what the
-changes reach, `ci:server` adds the full server suite, and `ci:memory` the memory growth suite.
+changes reach, `ci:server` adds the full server suite, `ci:memory` the memory growth suite, and
+`ci:windows` the Windows tests.
+
+`test-windows` runs the path and process sensitive suites (`WINDOWS_SUITES` in
+`goat-ci-scope.cjs`) on hosted `windows-2025`, the only CI that sees Windows-only failures
+(#1385). It runs in `lane=all`, in the `windows` lane, with `ci:windows`, and on a pull request
+that changes a file under one of those suites. Its job stops at 30 minutes and never runs on EPYC.
 Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and supersedes
 the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub still
 creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite on the

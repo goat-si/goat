@@ -6,6 +6,7 @@ name: goat-ci
 # code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. Each ci
 # matrix entry names its pool: the heavy tasks take the epyc runners, and the short Node-only tasks
 # (HOSTED_TASKS in goat-ci-scope.cjs) take ubuntu-24.04 so they never queue behind server shards.
+# test-windows takes hosted windows-2025 for any run, so Windows-only failures show up (#1385).
 # goat-scope, goat-screenshot-gate and goat-ci-result take the two
 # runners labelled epyc-light instead, which carry no epyc label, so a busy matrix never makes a
 # short gate job wait for a runner. The pre-push guard pins these expressions. EPYC runners persist
@@ -20,7 +21,8 @@ name: goat-ci
 # The full suite runs on request.
 # Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
 # reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
-# memory growth suite). Nothing runs on push, so merging into dev starts no CI. Run the workflow by
+# memory growth suite), ci:windows (the Windows tests, which a change under WINDOWS_SUITES in
+# goat-ci-scope.cjs also adds). Nothing runs on push, so merging into dev starts no CI. Run the workflow by
 # hand for a lane of any branch (gh workflow run goat-ci.yml --ref <branch>, lane all by default);
 # a successful lane=all run on dev marks its commit green for goat-nightly's schedule.
 # goat-ci-result is the one check to read: it fails when any selected task failed or was
@@ -40,10 +42,10 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: all (default), server (full server suite), memory-growth, or quick (check and typecheck)
+        description: all (default), server (full server suite), memory-growth, windows (Windows tests), or quick (check and typecheck)
         type: choice
         default: all
-        options: [all, server, memory-growth, quick]
+        options: [all, server, memory-growth, windows, quick]
 
 permissions:
   contents: read
@@ -113,12 +115,12 @@ jobs:
   ci:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
-    runs-on: ${{ matrix.runner == 'epyc' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || 60 }}
+    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || matrix.runner == 'epyc' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
-      # test-mobile, test-shared, test-ingest, test-memory-growth, build, and test-server in
+      # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck,
       # test-changed, and related server shards when its server tests outgrow one job. Each entry
@@ -145,7 +147,9 @@ jobs:
       # The EPYC runners' .env gives each runner its own HOME, so Vite+, Node, pnpm, Electron and
       # Playwright caches persist without two concurrent jobs sharing them. The runners are Ubuntu
       # 26.04, which Playwright 1.60 does not recognize, so they install and launch its 24.04 build.
+      # Steps the Windows job runs set shell: bash (Git Bash there), since its default is PowerShell.
       - name: Toolchain
+        shell: bash
         run: |
           if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
             echo "HOME=$HOME"
@@ -181,10 +185,18 @@ jobs:
       # leaves goat-* entries behind (packages/shared/src/testing/testTempSandbox.ts).
       - name: Isolate test temp directory
         if: startsWith(matrix.task, 'test')
+        shell: bash
         run: |
-          dir=$(mktemp -d "${TMPDIR:-/tmp}/goat-ci-XXXXXXXX")
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Node reads TEMP and TMP there, so they get the Windows form of the directory.
+            dir=$(mktemp -d "$(cygpath -u "$RUNNER_TEMP")/goat-ci-XXXXXXXX")
+            native=$(cygpath -w "$dir")
+            printf '%s=%s\n' TMPDIR "$native" TEMP "$native" TMP "$native" >> "$GITHUB_ENV"
+          else
+            dir=$(mktemp -d "${TMPDIR:-/tmp}/goat-ci-XXXXXXXX")
+            echo "TMPDIR=$dir" >> "$GITHUB_ENV"
+          fi
           echo "GOAT_CI_TMPDIR=$dir" >> "$GITHUB_ENV"
-          echo "TMPDIR=$dir" >> "$GITHUB_ENV"
           echo "GOAT_TEST_TMP_GUARD=fail" >> "$GITHUB_ENV"
 
       # SshWorkspaceSync's real-sshd test runs sshd with UsePAM no, which refuses a locked account
@@ -376,6 +388,16 @@ jobs:
           GOAT_MEMORY_GROWTH: "1"
         run: vp test run src/memory/MemoryImport.growth.test.ts src/memory/MemoryReceive.growth.test.ts
 
+      # The path and process sensitive suites only (WINDOWS_SUITES in goat-ci-scope.cjs), from the
+      # repository root so each file runs under its package's config. No browser or full server suite.
+      - name: Test Windows
+        if: matrix.task == 'test-windows'
+        shell: bash
+        run: |
+          mapfile -t suites < <(node -p 'require("./.github/scripts/goat-ci-scope.cjs").WINDOWS_SUITES.join("\n")' | tr -d '\r')
+          test "${#suites[@]}" -gt 0
+          vp test run "${suites[@]}"
+
       # Upstream merges must not bring back 0.0.x or split the four release manifests.
       - name: Check release version
         if: matrix.task == 'test'
@@ -405,6 +427,7 @@ jobs:
       # A leftover goat-test-* sandbox means a test worker died before its file finished.
       - name: Check for leaked temp files
         if: always() && env.GOAT_CI_TMPDIR != ''
+        shell: bash
         run: |
           dir="$GOAT_CI_TMPDIR"
           leaked=$({ find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-*'; find "$dir" -mindepth 2 -maxdepth 2 -path "$dir/goat-test-*/goat-*"; } | sed "s#^$dir/##" | sort)

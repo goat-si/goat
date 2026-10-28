@@ -26,6 +26,21 @@ describe("goat pre-push guard: per-entry matrix runner", () => {
     expect(refused.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
   });
 
+  it("allows the Windows entry only on the pinned hosted windows-2025 image (#1385)", () => {
+    const windows = (image: string) =>
+      matrixRunner.replace("${{ ", "${{ matrix.runner == 'windows' && '" + image + "' || ");
+    const pinned = fixture({
+      workflow: workflow({ ...baseJob, "runs-on": windows("windows-2025") }),
+    });
+    expect(pinned.hook(pinned.record(pinned.sha)).status).toBe(0);
+    const moving = fixture({
+      workflow: workflow({ ...baseJob, "runs-on": windows("windows-latest") }),
+    });
+    const refused = moving.hook(moving.record(moving.sha));
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
+  });
+
   it("keeps gate jobs off the per-entry expression", () => {
     const f = fixture({
       workflow: JSON.stringify({
