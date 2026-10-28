@@ -177,8 +177,8 @@ export type ServerBrowserViewerOutput =
       /** A secret field has focus: only its controller still gets frames. */
       readonly private: boolean;
       readonly waitingForPerson: boolean;
-      /** A person's hand back here was not recorded; the agent still waits for them. */
-      readonly handBackFailed?: true;
+      /** Why a person's hand back here did not complete the request. */
+      readonly handBackNotice?: "unsaved" | "expired" | "answered";
       readonly dialog: {
         readonly type: string;
         readonly message: string;

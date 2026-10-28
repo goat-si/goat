@@ -36,6 +36,8 @@ const HANDOFF_MESSAGE =
 
 /** What a person did with an agent's request on the tab: took it, handed it back, stopped it, or closed the tab. */
 export type HandoffChange = "taken" | "handedBack" | "stopped" | "ended";
+/** Why a person's hand back did not complete the request: not recorded yet, too late, or answered. */
+export type HandBackNotice = "unsaved" | "expired" | "answered";
 
 /** What a secret fill may do from inside its queued turn. */
 export interface SecretFence {
@@ -69,7 +71,7 @@ export class SessionControl {
   private requested: string | null = null;
   /** Which request the hold belongs to, so a late end never settles a newer one. */
   private requestId = "";
-  private handBackUnsaved = false;
+  private notice: HandBackNotice | null = null;
   private readonly handoffListeners = new Set<(end: HandoffChange, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
@@ -113,15 +115,15 @@ export class SessionControl {
     return this.requested;
   }
 
-  /** A person's hand back was not recorded, so the request still holds the tab. */
-  get handBackFailed() {
-    return this.handBackUnsaved;
+  /** Why the person's last hand back here did not complete the request, until they act again. */
+  get handBackNotice() {
+    return this.notice;
   }
 
-  /** Shows viewers that the hand back did not take; the next hand back or end clears it. */
-  handBackNotRecorded() {
-    if (this.requested === null || this.handBackUnsaved) return;
-    this.handBackUnsaved = true;
+  /** Tells viewers how a hand back ended; an unrecorded one only while the request still holds. */
+  noteHandBack(notice: HandBackNotice) {
+    if ((notice === "unsaved" && this.requested === null) || this.notice === notice) return;
+    this.notice = notice;
     this.changed();
   }
 
@@ -148,6 +150,7 @@ export class SessionControl {
       this.authority++;
       this.epoch++;
       this.requested = reason;
+      this.notice = null;
       this.requestId = requestId;
       this.onGenerationChange();
       this.cut(new BrowserControlInterrupted(HANDOFF_MESSAGE, "humanControl"));
@@ -171,7 +174,7 @@ export class SessionControl {
   private clearRequest(end: Exclude<HandoffChange, "taken"> | null) {
     if (this.requested === null) return false;
     this.requested = null;
-    this.handBackUnsaved = false;
+    this.notice = null;
     if (end !== null) for (const listener of this.handoffListeners) listener(end, this.requestId);
     return true;
   }
@@ -495,6 +498,7 @@ export class SessionControl {
       throw new BrowserControlInterrupted("Another viewer controls this browser tab.");
     }
     if (this.owner !== viewerId) {
+      this.notice = null;
       this.changeOwner(viewerId);
       if (this.requested !== null)
         for (const listener of this.handoffListeners) listener("taken", this.requestId);
@@ -520,7 +524,7 @@ export class SessionControl {
     }
     // The request stays held until its record takes the hand back, which then ends it here.
     if (handedBack && this.requested !== null) {
-      this.handBackUnsaved = false;
+      this.notice = null;
       for (const listener of this.handoffListeners) listener("handedBack", this.requestId);
     }
     this.changeOwner(null);

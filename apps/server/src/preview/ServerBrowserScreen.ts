@@ -9,6 +9,7 @@ import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
 import {
   BrowserControlInterrupted,
+  type HandBackNotice,
   type HandoffChange,
   type SessionControl,
 } from "./SessionControl.ts";
@@ -46,7 +47,7 @@ export const viewerControl = (control: SessionControl, viewerId: string) => ({
   private: control.isPrivate,
   // An agent asked a person for a step here and waits for them to hand the tab back.
   waitingForPerson: control.handoffReason !== null,
-  ...(control.handBackFailed ? { handBackFailed: true as const } : {}),
+  ...(control.handBackNotice === null ? {} : { handBackNotice: control.handBackNotice }),
 });
 
 /** A person took, handed back or ended an agent's request on a tab. */
@@ -75,10 +76,11 @@ export interface SurfaceService {
     readonly tabId: string;
   }) => Effect.Effect<void>;
   readonly onHandoffChange?: (listener: (changed: HandoffChanged) => void) => () => void;
-  /** Tells a tab's viewers that a person's hand back was not recorded, so they try again. */
-  readonly handBackFailed?: (input: {
+  /** Tells a tab's viewers why a person's hand back did not complete the request. */
+  readonly noteHandBack?: (input: {
     readonly threadId: string;
     readonly tabId: string;
+    readonly notice: HandBackNotice;
   }) => Effect.Effect<void>;
 }
 
@@ -266,8 +268,8 @@ export const makeSurface = <Tab extends ScreenTab>(
     });
   const endHandoff: NonNullable<SurfaceService["endHandoff"]> = (input) =>
     Effect.sync(() => findTab(input.threadId, input.tabId)?.control.endHandoff(null));
-  const handBackFailed: NonNullable<SurfaceService["handBackFailed"]> = (input) =>
-    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.handBackNotRecorded());
+  const noteHandBack: NonNullable<SurfaceService["noteHandBack"]> = (input) =>
+    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.noteHandBack(input.notice));
   const onHandoffChange = (listener: (changed: HandoffChanged) => void) => {
     handoffListeners.add(listener);
     return () => void handoffListeners.delete(listener);
@@ -281,7 +283,7 @@ export const makeSurface = <Tab extends ScreenTab>(
       requestHandoff,
       endHandoff,
       onHandoffChange,
-      handBackFailed,
+      noteHandBack,
     },
   };
 };

@@ -1,5 +1,8 @@
 import { previewSessionDetail } from "@goat/client-runtime/state/preview-sessions";
-import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
+import {
+  HAND_BACK_NOTICE,
+  type PreviewStreamControl,
+} from "@goat/client-runtime/preview/server-browser-stream";
 import {
   AuthPreviewOperateScope,
   type PreviewSession,
@@ -253,12 +256,13 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     surface.current?.takeControl();
   };
   const onStreamControl = (next: PreviewStreamControl | null) => {
-    // The server could not record this hand back; the tab still waits for the person.
-    if (next?.handBackFailed === true && stream?.handBackFailed !== true)
+    // The hand back did not complete the request: not saved, too late, or already answered.
+    const notice = next?.handBackNotice;
+    if (notice !== undefined && stream?.handBackNotice !== notice)
       toastManager.add({
         type: "error",
         title: "Hand back did not go through",
-        description: "The agent still waits for you. Take over and hand it back again.",
+        description: HAND_BACK_NOTICE[notice],
       });
     setStream(next);
     if (next === null) return;

@@ -9,6 +9,7 @@ import {
   type HandoffActor,
   HandoffError,
   isHandoffPending,
+  isPersonRunEnd,
   type OrchestrationV2DomainEvent,
   OrchestratorMcpFailure,
   PREVIEW_HANDOFF_PATH,
@@ -62,12 +63,6 @@ interface Pending {
   readonly runId: RunId;
 }
 
-/** Run ends that mean a person stopped or put away the thread, unlike a turn that finished. */
-const THREAD_ENDS: ReadonlySet<string> = new Set([
-  "person_stop",
-  "thread_archive",
-  "thread_delete",
-]);
 /** How often open requests are checked against their stored records, events missed or not. */
 const RECONCILE_EVERY = "15 seconds";
 
@@ -257,6 +252,21 @@ const make = Effect.gen(function* () {
     yield* settle(entry, "stopped").pipe(Effect.ignore);
   });
 
+  /** Whether the asking turn was stopped by a person or its thread put away; unknown if unread. */
+  const askerState = Effect.fn("PreviewHandoffs.askerState")(function* (entry: Pending) {
+    const shell = yield* orchestrator.getThreadShell(entry.threadId).pipe(Effect.option);
+    const records = yield* threads
+      .getThreadRecords(entry.threadId, ["runs"], { runIds: [entry.runId] })
+      .pipe(Effect.option);
+    if (Option.isNone(shell) || Option.isNone(records)) return "unknown" as const;
+    const thread = shell.value;
+    if (thread === null || thread.archivedAt !== null || thread.deletedAt !== null)
+      return "stopped" as const;
+    const run = records.value.runs.find((candidate) => candidate.id === entry.runId);
+    if (run === undefined) return "unknown" as const;
+    return isPersonRunEnd(run.terminationCause?.kind) ? ("stopped" as const) : ("live" as const);
+  });
+
   /**
    * A person's hand back: the record first, so a write that fails leaves the request held. A
    * request that expired or was answered first is freed too, and the person is told.
@@ -265,6 +275,14 @@ const make = Effect.gen(function* () {
     key: string,
     entry: Pending,
   ) {
+    const asker = yield* askerState(entry);
+    // Nothing is written until the asking turn is known: the hand back stays owed, the tab held.
+    if (asker === "unknown") {
+      owed.set(entry.handoffId, { entry, end: "handedBack" });
+      return yield* new HandoffError({ reason: "unavailable" });
+    }
+    // A person stopped that turn or put its thread away: the Stop is what ends the request.
+    if (asker === "stopped") return yield* stop(key, entry);
     const stored = yield* settle(entry, "handedBack");
     yield* end(key, entry);
     if (stored === "completed") return;
@@ -340,17 +358,24 @@ const make = Effect.gen(function* () {
     // A late end of an earlier request on this tab leaves the newer one alone.
     if (entry === undefined || entry.handoffId !== ended.requestId) return;
     if (ended.change === "taken") return yield* opened(entry);
-    // Nobody waits on the stream's hand back: a failed write is logged and the next check retries.
+    // Nobody waits on the stream's hand back, so its viewers hear how it ended: not recorded yet
+    // (the next check retries it), too late, or after another answer.
     if (ended.change === "handedBack")
       return yield* handBackEntry(key, entry).pipe(
-        Effect.catchIf(
-          (error) => error.reason === "unavailable",
-          () =>
-            Option.isSome(browser) && browser.value.handBackFailed
-              ? browser.value.handBackFailed({ threadId: entry.threadId, tabId: ended.tabId })
-              : Effect.void,
+        Effect.catch((error) =>
+          Option.isSome(browser) && browser.value.noteHandBack
+            ? browser.value.noteHandBack({
+                threadId: entry.threadId,
+                tabId: ended.tabId,
+                notice:
+                  error.reason === "expired"
+                    ? "expired"
+                    : error.reason === "conflict"
+                      ? "answered"
+                      : "unsaved",
+              })
+            : Effect.void,
         ),
-        Effect.ignore,
       );
     if (ended.change === "stopped") return yield* stop(key, entry);
     yield* endUnasked(key, entry, SCREEN);
@@ -414,18 +439,9 @@ const make = Effect.gen(function* () {
         yield* end(key, entry);
         continue;
       }
-      const shell = yield* orchestrator.getThreadShell(entry.threadId).pipe(Effect.option);
-      const records = yield* threads
-        .getThreadRecords(entry.threadId, ["runs"], { runIds: [entry.runId] })
-        .pipe(Effect.option);
-      const cause = Option.isSome(records)
-        ? records.value.runs.find((run) => run.id === entry.runId)?.terminationCause?.kind
-        : undefined;
-      const putAway =
-        Option.isSome(shell) &&
-        (shell.value === null || shell.value.archivedAt !== null || shell.value.deletedAt !== null);
-      if (putAway || (cause !== undefined && THREAD_ENDS.has(cause))) yield* stop(key, entry);
-      else if (owed.has(entry.handoffId)) yield* handBackEntry(key, entry).pipe(Effect.ignore);
+      // An owed hand back checks the asking turn itself, so a Stop found now wins over it.
+      if (owed.has(entry.handoffId)) yield* handBackEntry(key, entry).pipe(Effect.ignore);
+      else if ((yield* askerState(entry)) === "stopped") yield* stop(key, entry);
     }
   }).pipe(locked);
 
@@ -439,7 +455,7 @@ const make = Effect.gen(function* () {
     if (event.type === "thread.archived" || event.type === "thread.deleted")
       return threadEnded(event.threadId);
     const cause = event.type === "run.updated" ? event.payload.terminationCause?.kind : undefined;
-    if (event.type !== "run.updated" || cause === undefined || !THREAD_ENDS.has(cause))
+    if (event.type !== "run.updated" || cause === undefined || !isPersonRunEnd(cause))
       return Effect.void;
     // A Stop ends the turn it stopped; a late Stop of an earlier turn leaves newer requests held.
     return cause === "person_stop"

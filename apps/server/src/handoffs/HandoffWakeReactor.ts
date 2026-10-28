@@ -16,8 +16,10 @@ import {
   PREVIEW_HANDOFF_PATH,
   STORAGE_CLEAN_HANDOFF_PATH,
   endsWithItsRun,
+  isPersonRunEnd,
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
+  RunId,
   type ThreadId,
 } from "@goat/contracts";
 import * as AutomationHold from "../automationHold.ts";
@@ -219,6 +221,22 @@ const make = Effect.gen(function* () {
         if (!offered.has(messageId) && retry.failedAt < before) retries.delete(messageId);
     }).pipe(permit.withPermits(1));
 
+  /** Whether a person stopped the turn that asked for this handoff, or put its thread away. */
+  const askerStopped = Effect.fn("HandoffWakeReactor.askerStopped")(function* (
+    threadId: ThreadId,
+    handoffId: string,
+  ) {
+    const rows = yield* sql<{ readonly run_id: string | null }>`
+      SELECT run_id FROM orchestration_v2_projection_turn_items
+      WHERE thread_id = ${threadId} AND turn_item_id = ${handoffId}`;
+    const runId = rows[0]?.run_id;
+    if (runId === undefined || runId === null) return false;
+    const { runs } = yield* threads.getThreadRecords(threadId, ["runs"], {
+      runIds: [RunId.make(runId)],
+    });
+    return isPersonRunEnd(runs.find((run) => run.id === runId)?.terminationCause?.kind);
+  });
+
   const deliver = Effect.fn("HandoffWakeReactor.deliver")(
     function* (handoff: Handoff, since: string) {
       const wake = handoffWake(handoff);
@@ -233,6 +251,14 @@ const make = Effect.gen(function* () {
         shell.deletedAt !== null ||
         shell.archivedAt !== null ||
         (yield* delivered(wake.messageId))
+      ) {
+        retries.delete(wake.messageId);
+        return;
+      }
+      // Stop really stops: however a screen request ends after it, the stopped turn stays so.
+      if (
+        handoff.target.path === PREVIEW_HANDOFF_PATH &&
+        (yield* askerStopped(threadId, handoff.handoffId))
       ) {
         retries.delete(wake.messageId);
         return;

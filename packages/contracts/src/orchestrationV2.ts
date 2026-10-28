@@ -16,7 +16,10 @@ import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import { RuntimeRequestRespondCommand } from "./orchestrationV2RuntimeRequest.ts";
-export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+export {
+  isPersonRunEnd,
+  OrchestrationV2RunTerminationCause,
+} from "./orchestrationV2RunTermination.ts";
 import {
   OrchestrationV2LimitRecovery,
   OrchestrationV2LimitRecoveryUpdate,

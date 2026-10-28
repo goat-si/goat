@@ -130,9 +130,17 @@ describe("preview stream control", () => {
     client.stop();
   });
 
-  it("tells the viewer their hand back was not saved until they control the tab again", () => {
+  it("tells the viewer how a hand back that did not complete ended, until they act again", () => {
     const { client, socket, onControl } = connect();
-    socket.control({ ...agent, handBackFailed: true });
+    socket.message(JSON.stringify({ type: "control", ...agent, handBackNotice: "expired" }));
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe(
+      "The agent's request had already expired. The agent was told.",
+    );
+    socket.message(JSON.stringify({ type: "control", ...agent, handBackNotice: "answered" }));
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe(
+      "The agent's request was already answered. The tab is the agent's again.",
+    );
+    socket.control({ ...agent, handBackNotice: "unsaved" });
     const unsaved = onControl.mock.lastCall?.[0];
     expect(previewStreamControlLabel(unsaved)).toBe(
       "Hand back not saved. Take control and release it again.",

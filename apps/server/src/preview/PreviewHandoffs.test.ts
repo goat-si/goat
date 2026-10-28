@@ -52,6 +52,8 @@ const world = (
     readonly brokenStream?: boolean;
     /** Record writes from the screen that fail before one goes through. */
     readonly failedWrites?: number;
+    /** While broken, reading a turn's runs fails, as a busy or failing store would. */
+    readonly runReads?: { broken: boolean };
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -116,7 +118,10 @@ const world = (
             Layer.succeed(Handoffs.Handoffs, handoffs),
             Layer.mock(ThreadManagement.ThreadManagementService)({
               dispatch,
-              getThreadRecords: orchestrator.getThreadRecords,
+              getThreadRecords: (threadId, kinds, query) =>
+                options.runReads?.broken === true && query?.runIds !== undefined
+                  ? Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId }))
+                  : orchestrator.getThreadRecords(threadId, kinds, query),
             }),
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getEnvironmentId: Effect.succeed(environmentId),
@@ -192,7 +197,7 @@ const world = (
     /** Completes once the tab's viewers are told a hand back was not recorded. */
     const unsaved = yield* Deferred.make<void>();
     control.onChange(() => {
-      if (control.handBackFailed) Deferred.doneUnsafe(unsaved, Effect.void);
+      if (control.handBackNotice === "unsaved") Deferred.doneUnsafe(unsaved, Effect.void);
     });
     return {
       handoffs,
@@ -705,4 +710,121 @@ it.effect("frees the desktop and says so when the request expired before the han
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("expired");
     }),
   ),
+);
+
+const tabSession = PreviewHandoffs.browserSessionId(threadId, "tab-1");
+const stopTurn = (orchestrator: Orchestrator.OrchestratorV2["Service"]) =>
+  Effect.gen(function* () {
+    const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+    yield* orchestrator.dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("stop-run"),
+      threadId,
+      runId: run.id,
+      holdQueue: true,
+    });
+  });
+
+it.effect("ends a hand back as a Stop when the turn was stopped while no event arrived", () =>
+  withHarness(({ orchestrator, worker }) =>
+    Effect.gen(function* () {
+      const { handoffs, requests, control, settled, failed } = yield* world(orchestrator, {
+        brokenStream: true,
+        failedWrites: 1,
+      });
+      const result = yield* requests.request({
+        threadId,
+        providerInstanceId: instanceId,
+        reason,
+        tabId: "tab-1",
+      });
+      const handoffId = TurnItemId.make(result.handoff.handoffId);
+      yield* Effect.promise(async () => {
+        await control.take("viewer");
+        await control.release("viewer");
+      });
+      yield* Deferred.await(failed);
+      yield* stopTurn(orchestrator);
+      yield* worker.drain();
+      // The person hands it back again before any check ran.
+      yield* requests.handBack(tabSession).pipe(Effect.ignore);
+      expect(yield* Queue.take(settled)).toBe("opened");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
+      const record = yield* handoffs.read({ threadId, handoffId });
+      expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
+    }),
+  ),
+);
+
+it.effect("writes nothing for a hand back while the asking turn cannot be read", () =>
+  withHarness(({ orchestrator, worker }) =>
+    Effect.gen(function* () {
+      const runReads = { broken: false };
+      const { handoffs, requests, control, settled, failed } = yield* world(orchestrator, {
+        brokenStream: true,
+        failedWrites: 1,
+        runReads,
+      });
+      const result = yield* requests.request({
+        threadId,
+        providerInstanceId: instanceId,
+        reason,
+        tabId: "tab-1",
+      });
+      const handoffId = TurnItemId.make(result.handoff.handoffId);
+      yield* Effect.promise(async () => {
+        await control.take("viewer");
+        await control.release("viewer");
+      });
+      yield* Deferred.await(failed);
+      expect(yield* Queue.take(settled)).toBe("opened");
+      runReads.broken = true;
+      yield* stopTurn(orchestrator);
+      yield* worker.drain();
+      yield* TestClock.adjust("15 seconds");
+      const failure = yield* requests.handBack(tabSession).pipe(Effect.flip);
+      expect(failure.reason).toBe("unavailable");
+      // Still waiting for the person, as the take left it.
+      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("opened");
+      expect(control.handoffReason).toBe(reason);
+      // Once the turn reads again, the check finds the Stop.
+      runReads.broken = false;
+      yield* TestClock.adjust("15 seconds");
+      expect(yield* Queue.take(settled)).toBe("cancelled");
+      const record = yield* handoffs.read({ threadId, handoffId });
+      expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
+    }),
+  ),
+);
+
+it.effect(
+  "frees the tab and tells its viewers when a hand back comes after the request expired",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, requests, control, freed } = yield* world(orchestrator, {
+          brokenStream: true,
+        });
+        const result = yield* requests.request({
+          threadId,
+          providerInstanceId: instanceId,
+          reason,
+          tabId: "tab-1",
+        });
+        const told = yield* Deferred.make<void>();
+        control.onChange(() => {
+          if (control.handBackNotice === "expired") Deferred.doneUnsafe(told, Effect.void);
+        });
+        yield* TestClock.adjust("31 minutes");
+        yield* Effect.promise(async () => {
+          await control.take("viewer");
+          await control.release("viewer");
+        });
+        yield* Deferred.await(told);
+        yield* Deferred.await(freed);
+        const handoffId = TurnItemId.make(result.handoff.handoffId);
+        expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("expired");
+        expect(control.agentCanActNow("agent-session")).toBe(true);
+      }),
+    ),
 );

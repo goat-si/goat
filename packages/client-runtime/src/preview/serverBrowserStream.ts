@@ -35,14 +35,27 @@ export interface PreviewStreamControl {
   readonly private?: boolean;
   /** The agent asked a person for a step on this tab and waits for it to be handed back. */
   readonly waitingForPerson?: boolean;
-  /** Your hand back of a tab an agent asked you about was not saved; it still waits for you. */
-  readonly handBackFailed?: boolean;
+  /**
+   * Why your hand back did not complete the agent's request: not saved (the tab still waits for
+   * you), the request had expired, or it was answered another way first.
+   */
+  readonly handBackNotice?: PreviewStreamHandBackNotice;
   readonly dialog: null | {
     readonly type: string;
     readonly message: string;
     readonly defaultValue: string;
   };
 }
+
+export type PreviewStreamHandBackNotice = "unsaved" | "expired" | "answered";
+/** What a viewer reads after a hand back that did not complete the agent's request. */
+export const HAND_BACK_NOTICE: Readonly<Record<PreviewStreamHandBackNotice, string>> = {
+  unsaved: "Hand back not saved. Take control and release it again.",
+  expired: "The agent's request had already expired. The agent was told.",
+  answered: "The agent's request was already answered. The tab is the agent's again.",
+};
+const isHandBackNotice = (value: unknown): value is PreviewStreamHandBackNotice =>
+  value === "unsaved" || value === "expired" || value === "answered";
 
 export const previewStreamControlLabel = (control: PreviewStreamControl | null): string =>
   !control
@@ -51,8 +64,8 @@ export const previewStreamControlLabel = (control: PreviewStreamControl | null):
       ? "Read-only"
       : control.controller === "you"
         ? "You have control"
-        : control.handBackFailed === true
-          ? "Hand back not saved. Take control and release it again."
+        : control.handBackNotice !== undefined
+          ? HAND_BACK_NOTICE[control.handBackNotice]
           : control.controller === "another-viewer"
             ? "Another viewer has control"
             : control.waitingForPerson === true
@@ -323,7 +336,7 @@ export function createPreviewStreamClient(
         generation,
         dialog,
         private: privateMode,
-        handBackFailed,
+        handBackNotice,
         waitingForPerson,
         text,
         id,
@@ -415,7 +428,7 @@ export function createPreviewStreamClient(
           generation,
           dialog,
           ...(typeof privateMode === "boolean" ? { private: privateMode } : {}),
-          ...(handBackFailed === true ? { handBackFailed } : {}),
+          ...(isHandBackNotice(handBackNotice) ? { handBackNotice } : {}),
           ...(waitingForPerson === true ? { waitingForPerson: true } : {}),
         };
         if (
