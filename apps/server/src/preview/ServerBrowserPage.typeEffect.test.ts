@@ -38,5 +38,12 @@ describe.skipIf(!chromiumInstalled)("typed text read back", () => {
     await expect(typed("#name", "")).resolves.toBeUndefined();
     await expect(typed("#shout", "abc", true)).resolves.toBeUndefined();
     await expect(typed("#rich", "text")).resolves.toBeUndefined();
+    // A cancelled input whose page script then writes the predicted value is not this input's.
+    await page.evaluate(`
+      tail.value = "hel";
+      tail.addEventListener("beforeinput", () => queueMicrotask(() => { tail.value = "hello"; }));
+    `);
+    await page.evaluate("tail.focus(); tail.setSelectionRange(3, 3)");
+    await expect(typed("#tail", "lo")).resolves.toBeUndefined();
   });
 });
