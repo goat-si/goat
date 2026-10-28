@@ -471,7 +471,19 @@ const digits = (value: unknown) => asText(value).replace(/[^\d.-]/gu, "");
 const DOWNLOADS = new Set(["downloads", "다운로드"]);
 const RECENTS = new Set(["recents", "최근 항목"]);
 
-const evidenceIn = (entry: Evidence, output: string) => {
+/**
+ * Tool results in one shape whatever surface printed them: JSON string escapes undone, and the
+ * accessibility tree's "checkbox (settable, integer) 1" written as the snapshot's "checkbox [checked]".
+ */
+export const canonicalEvidence = (output: string) =>
+  output
+    .replace(/\\n/gu, "\n")
+    .replace(/\\"/gu, '"')
+    .replace(/checkbox \(settable, integer\) 1\b/gu, "checkbox [checked]")
+    .replace(/checkbox \(settable, integer\) 0\b/gu, "checkbox");
+
+const evidenceIn = (entry: Evidence, raw: string) => {
+  const output = canonicalEvidence(raw);
   const regex = new RegExp(entry.pattern, "giu");
   return entry.count === undefined
     ? regex.test(output)

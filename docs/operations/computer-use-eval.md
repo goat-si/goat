@@ -10,7 +10,8 @@ repository.
 ## Tasks
 
 [tasks.json](../../scripts/computer-use-eval/tasks.json) is versioned. Changing a prompt, an
-expected value or an oracle raises the version, and runs of two versions are not compared.
+expected value or a task's evidence raises the version, and runs of two versions are not compared.
+A fix to the scoring code applies to stored runs through `--rescore`.
 
 | Task                      | The agent                                                                       | Judged by                    |
 | ------------------------- | ------------------------------------------------------------------------------- | ---------------------------- |

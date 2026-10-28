@@ -687,3 +687,28 @@ describe("incomplete transcripts", () => {
     expect(only).toMatchObject({ runs: 1, honesty: null, coexistence: null, guidance: null });
   });
 });
+
+describe("evidence shapes", () => {
+  const read = (output: string) => oracle("web-checkboxes", { toolOutputs: [output] }).actual;
+  it("reads the final checkbox state from a JSON-escaped snapshot and from Codex's accessibility tree", () => {
+    expect(
+      read(JSON.stringify({ snapshot: "- checkbox [checked] [ref=e9]\n- checkbox [ref=e10]" })),
+    ).toBe("done");
+    expect(
+      read(
+        "8 checkbox (settable, integer) 1\n9 text checkbox 1\n10 checkbox (settable, integer) 0\n11 text checkbox 2",
+      ),
+    ).toBe("done");
+  });
+
+  it("does not take the starting state for the toggled one", () => {
+    expect(
+      read(JSON.stringify({ snapshot: "- checkbox [ref=e9]\n- checkbox [checked] [ref=e10]" })),
+    ).toBe("unverified");
+    expect(
+      read(
+        "8 checkbox (settable, integer) 0\n9 text checkbox 1\n10 checkbox (settable, integer) 1",
+      ),
+    ).toBe("unverified");
+  });
+});
