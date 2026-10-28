@@ -46,7 +46,6 @@ import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.t
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import * as Cursor from "./ComputerUseCursorTools.ts";
 import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
-import { makeInputVerifier } from "./ComputerUseInputVerify.ts";
 import { replyImageSize } from "./ComputerUseOverlay.ts";
 import { CAPTURE_HIDE_UNCONFIRMED, captureHidden } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
@@ -124,15 +123,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
-  const verifier = makeInputVerifier({
-    enabled: options.verifyInputByTreeDiff === true,
-    ownAnswers,
-    ended: Deferred.await(ended),
-    nextId: () => `${OWN_ID}verify:${ownRequests++}`,
-    scope,
-    live: (child) => lifecycle.current === child && active() && !options.transportHeld?.(),
-    request: (id) => outstanding.get(JSON.stringify(id)),
-  });
   const handshakeAnswers = makeLeaseProxyHandshake({
     startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
@@ -366,7 +356,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
       Stream.buffer({ capacity: "unbounded" }),
-      Stream.runForEach((line) => verifier.beforeReply(line, current, handle)),
+      Stream.runForEach(handle),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper
       // restart also invalidates its route; either way this proxy stays ended (#1348), and the
       // agent hears why instead of an approval failure (#1233).
@@ -954,7 +944,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             (key) => key === "session",
           ),
           connectionId: current.connectionId,
-          sink: verifier.wrap(sink, message, current),
+          sink,
           ...(reservationId === undefined ? {} : { reservationId }),
         });
     });

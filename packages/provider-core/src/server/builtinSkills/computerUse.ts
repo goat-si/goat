@@ -13,21 +13,21 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 ## Observe
 - Pick the window yourself: \`list_windows\`, then pass that window's \`pid\` and \`window_id\` to every call. Never act on whatever happens to be frontmost.
 - Read narrow first. \`get_window_state\` with \`query\` returns the rows whose text contains it, with their ancestors; \`max_elements\` and \`max_depth\` bound the walk. A filtered or truncated tree cannot show that something is absent.
-- After acting, read with \`since: "latest"\` for only what changed since the last read with the same \`query\` and limits; leave \`since\` out for a full read. Every tree read issues a new snapshot id and retires that window's earlier tokens, so act only with \`element_token\` values from the newest tree read; a screenshot-only read (\`include_accessibility_tree: false\`) keeps them.
-- Take only what you need: \`include_screenshot: false\` when the tree answers the question, a screenshot when the tree is empty, wrong or drawn (canvas, many Electron apps). Points are pixels of that window's latest screenshot.
+- After acting, read with \`since: "latest"\` for what changed since the last read with the same \`query\` and limits. Every tree read issues a new snapshot id and retires that window's earlier tokens, so act only with \`element_token\` values from the newest tree read; input and a screenshot-only read (\`include_accessibility_tree: false\`) keep them.
+- Take only what you need: \`include_screenshot: false\` when the tree answers the question, a screenshot when the tree is empty, wrong or drawn. Points are pixels of that window's latest screenshot.
 
 ## Act
-- Check each call or batch (below) before acting again. Prefer element tokens; use points for controls the tree lacks or that ignored an element action.
+- Independent actions can share one read's tokens; one \`since: "latest"\` read after them shows each one. Read before an action that depends on another. Prefer element tokens; use points for controls the tree lacks or that ignored an element action.
 - \`set_value\` replaces a field's whole value. When a fresh read shows it did not apply and you meant to replace, click the field, select all with \`hotkey\`, \`type_text\`, and read the value back. Some apps keep a value only after Tab or Return; check what was committed.
 - \`type_text\` inserts at the caret, but a newline in its text presses Return and a tab presses Tab, which can send or submit. Leave them out unless you mean those keys. When it refuses with \`retryable: true\` and a \`max_chunk_chars\`, send pieces no longer than that; after any other answer, observe first.
 - Wait with \`verify_state\`, never a sleep: name the outcome you expect (an element by role or label that exists, has a value, is enabled or selected; a window that exists, is gone, or has given bounds) and at most 10 s. It cannot wait for an element to disappear; read again instead. \`unsatisfied\` means it did not happen in time and \`unknown\` proves nothing.
-- If two attempts change nothing, stop and report what you saw.
+- If two attempts change nothing, stop and report it.
 
 ## Results
 - \`confirmed\`: continue. \`suspected_noop\`, \`no_drop\` or \`not_applied\`: it may have done nothing. Observe and decide; do not repeat blindly.
 - An \`effect\` always outranks a \`code\` (which may sit under \`refusal\`). Nothing was sent only when \`effect\` is \`refused\`, or there is no effect and the code is \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\` or \`permission_denied\`.
 - \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe and never resend it unchanged; a repeated keystroke can submit twice.
-- GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\`, which waits for the person's answer in this turn.
+- GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\` (it waits for an answer).
 - \`bounded_resource_outside_manifest\` on an app opened after computer use started: nothing was sent. Call \`computer_use.request\` with its \`bundle_id\`, then retry.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
 - Details: \`target_busy\`: the named thread holds that window or the desktop; wait or work elsewhere. \`control_idle\`: this turn is over, leave the screen. \`reconnecting\`: its link to GOAT blinked; retry shortly, then observe. \`transport_lost\`: it stayed down and the control ended; tell the person.
