@@ -135,6 +135,8 @@ const sleepUntil = (deadline: number) =>
 
 const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
+/** How long after an agent's input a popup still counts as opened by it. */
+const POPUP_ATTRIBUTION_MS = 2_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
 const ACTION_TIMELINE_LIMIT = 50;
 
@@ -321,6 +323,8 @@ interface ServerTab {
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
   agentOperating: boolean;
+  /** The agent whose input last reached this tab, and when it ended; popups it opens are its. */
+  lastAgentInput?: { readonly agentId: string; readonly at: number };
   fileChooserIntercepted: boolean;
   readonly onFileChooser: (chooser: FileChooser) => void;
 
@@ -1103,7 +1107,13 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = opener.control.agentId;
+    // A popup that follows an agent's input on a tab nobody owns is that agent's to use and close.
+    const recent = opener.lastAgentInput;
+    const agentId =
+      opener.control.agentId ??
+      (recent && (opener.agentOperating || Date.now() - recent.at < POPUP_ATTRIBUTION_MS)
+        ? recent.agentId
+        : null);
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;
@@ -1119,9 +1129,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
-        ...(opener.control.agentId === null
-          ? {}
-          : { automationOwner: opener.control.agentId, reveal: false }),
+        ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
             page: popup,
@@ -1130,8 +1138,7 @@ const make = Effect.gen(function* () {
       }),
     ).then(
       (snapshot) => {
-        if (opener.control.agentId === null)
-          controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+        if (agentId === null) controller?.push({ _tag: "popup", tabId: snapshot.tabId });
       },
       async () => {
         await popup.close().catch(constVoid);
@@ -1855,10 +1862,12 @@ const make = Effect.gen(function* () {
           );
         const generation = tab.control.generation;
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
+        if (tab.agentOperating) tab.lastAgentInput = { agentId: agentSessionId, at: Date.now() };
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(tab, request, deadlineMs, signal);
         } finally {
+          if (tab.agentOperating) tab.lastAgentInput = { agentId: agentSessionId, at: Date.now() };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);

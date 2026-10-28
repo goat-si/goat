@@ -1238,6 +1238,35 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("a popup an agent's click opened on an unclaimed tab belongs to that agent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      yield* Effect.yieldNow;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      yield* broker.invoke({
+        scope,
+        tabId: opened.tabId,
+        operation: "click",
+        input: { x: 5, y: 5 },
+      });
+      contexts[0]!.page.emit("popup", makeContext().page);
+      let popup;
+      do popup = yield* PubSub.take(events);
+      while (popup.type !== "opened" || popup.snapshot.tabId === opened.tabId);
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId: popup.snapshot.tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.control).toMatchObject({ owner: "agent", ownedByCaller: true });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("a tab opened to a file the browser cannot show reports the file to download", () =>
   Effect.scoped(
     Effect.gen(function* () {
