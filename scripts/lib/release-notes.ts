@@ -10,7 +10,7 @@ function platformOfFile(name: string) {
   return "other";
 }
 
-/** Public notes describe downloads and signing, without private source history. */
+/** Release notes describe downloads and signing, without the source commit history. */
 export function renderReleaseNotes(version: string, utcDate: string, files: ReadonlyArray<string>) {
   const sortedFiles = files.toSorted();
   const rows = ["mac", "win", "linux", "cli", "other"].flatMap((platform) =>

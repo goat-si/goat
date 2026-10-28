@@ -9,7 +9,7 @@ import {
   TRIAGE_PLAYBOOK,
 } from "./triagePrompt.ts";
 
-it("bundles triage instructions without exposing the private source repository", () => {
+it("bundles triage instructions without linking the source repository", () => {
   assert.deepEqual(exposureProblems("triage-playbook.md", TRIAGE_PLAYBOOK), []);
   assert.deepEqual(exposureProblems("triage-seed.md", buildTriageSeedPrompt("context.md")), []);
   assert.include(TRIAGE_PLAYBOOK, "# GOAT triage playbook");

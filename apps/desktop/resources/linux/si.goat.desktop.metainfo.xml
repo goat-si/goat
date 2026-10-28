@@ -32,7 +32,7 @@
   <categories>
     <category>Development</category>
   </categories>
-  <!-- Public URLs only: the source repository is private (D-10). -->
+  <!-- Releases repository URLs: shipped artifacts do not link the source repository (D-10). -->
   <url type="homepage">https://github.com/goat-si/goat-releases</url>
   <url type="bugtracker">https://github.com/goat-si/goat-releases/issues</url>
 </component>

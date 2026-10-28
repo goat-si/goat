@@ -2030,7 +2030,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
           GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat/extra",
         },
-        // The private source repository is never a feed: binaries live in goat-releases.
+        // The source repository is never a feed: binaries live in goat-releases.
         {
           GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
           GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
