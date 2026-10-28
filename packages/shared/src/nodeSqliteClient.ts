@@ -29,6 +29,8 @@ import type { Borrower, Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 import { satisfiesSemverRange } from "./semver.ts";
+import { connectionOwner, measureWriterSql, recordReaderSql } from "./slowSqlOperations.ts";
+export { recentSlowSql } from "./slowSqlOperations.ts";
 
 import { readerWorkerSource, checkpointWorkerSource } from "./sqliteWorkerSources.ts";
 
@@ -67,24 +69,7 @@ interface Acquired {
   readonly lockWaitMs: number;
 }
 
-interface ConnectionOwner {
-  readonly fiberId: number;
-  readonly name: string;
-  readonly traceId?: string;
-  readonly spanId?: string;
-}
-
-const connectionOwner = (fiber: Fiber.Fiber<unknown, unknown>): ConnectionOwner => {
-  const current = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
-  if (current?._tag !== "Span") return { fiberId: fiber.id, name: "untraced" };
-  let span: Tracer.Span = current;
-  while (span.name === "sqlite" || span.name === "sql.transaction") {
-    const parent: Tracer.AnySpan | undefined = Option.getOrUndefined(span.parent);
-    if (parent?._tag !== "Span") break;
-    span = parent;
-  }
-  return { fiberId: fiber.id, name: span.name, traceId: span.traceId, spanId: span.spanId };
-};
+type ConnectionOwner = ReturnType<typeof connectionOwner>;
 
 const annotateAcquired = (
   fiber: Fiber.Fiber<unknown, unknown>,
@@ -293,7 +278,7 @@ type ReaderStartup =
   | { readonly type: "ready" }
   | { readonly type: "unavailable"; readonly message: string; readonly errcode?: unknown };
 
-type ReaderReply =
+type ReaderReply = { readonly nativeMs?: number; readonly prepareMs?: number } & (
   | { readonly id: number; readonly rows: ReadonlyArray<any> }
   | {
       readonly id: number;
@@ -304,7 +289,8 @@ type ReaderReply =
         readonly errcode?: unknown;
         readonly errstr?: unknown;
       };
-    };
+    }
+);
 
 const readerFailureMessages = {
   open: "Failed to open database",
@@ -397,7 +383,11 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
     let stoppedMessage: string | undefined;
     const pending = new Map<
       number,
-      { readonly endsTransaction: boolean; resume: (reply: ReaderReply) => void }
+      {
+        readonly endsTransaction: boolean;
+        readonly owner: string;
+        resume: (reply: ReaderReply) => void;
+      }
     >();
     const stop = (message: string) => {
       stoppedMessage = message;
@@ -423,6 +413,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
       }
       const request = pending.get(reply.id);
       if (request === undefined) return;
+      recordReaderSql(request.owner, reply);
       pending.delete(reply.id);
       if (pending.size === 0) worker.unref();
       if ("rows" in reply) retryMs = 250;
@@ -449,6 +440,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
           const id = nextRequestId++;
           pending.set(id, {
             endsTransaction,
+            owner: connectionOwner(fiber).name,
             resume: (reply) => {
               if ("rows" in reply) {
                 resume(Effect.succeed(reply.rows));
@@ -1097,7 +1089,9 @@ const make = Effect.fn("makeWithDatabase")(function* (
       Effect.try({
         try: () => {
           const classification = { backpressure: false, check: false };
-          const statement = withClassification(classification, () => db.prepare(sql));
+          const statement = measureWriterSql("prepare", () =>
+            withClassification(classification, () => db.prepare(sql)),
+          );
           if (checkpoint !== undefined) checkpointClassifications.set(statement, classification);
           return statement;
         },
@@ -1128,17 +1122,19 @@ const make = Effect.fn("makeWithDatabase")(function* (
           let arrays = false;
           let result: Exit.Exit<ReadonlyArray<unknown>, SqlError>;
           try {
-            const value = withClassification(classification, () => {
-              const bindable = sqliteParameters(params);
-              statement.setReadBigInts(Boolean(Context.get(fiber.context, Client.SafeIntegers)));
-              if (hasRows(statement)) {
-                arrays = mode === "values";
-                if (arrays) statement.setReturnArrays(true);
-                return statement.all(...(bindable as any));
-              }
-              const result = statement.run(...(bindable as any));
-              return mode === "raw" ? (result as unknown as ReadonlyArray<unknown>) : [];
-            });
+            const value = measureWriterSql("execute", () =>
+              withClassification(classification, () => {
+                const bindable = sqliteParameters(params);
+                statement.setReadBigInts(Boolean(Context.get(fiber.context, Client.SafeIntegers)));
+                if (hasRows(statement)) {
+                  arrays = mode === "values";
+                  if (arrays) statement.setReturnArrays(true);
+                  return statement.all(...(bindable as any));
+                }
+                const result = statement.run(...(bindable as any));
+                return mode === "raw" ? (result as unknown as ReadonlyArray<unknown>) : [];
+              }),
+            );
             result = Exit.succeed(value);
           } catch (cause) {
             result = Exit.fail(

@@ -39,22 +39,34 @@ parentPort.on("message", (request) => {
   if (request.type === "initialize") return initialize();
   const { id, sql, params, cached, values, raw, safeIntegers } = request;
   let operation = "open";
+  let started = performance.now();
+  let prepareMs;
+  let nativeMs;
   try {
     if (db === undefined) throw new Error("database reader is unavailable");
     operation = "prepare";
     const statement = prepare(sql, cached);
+    prepareMs = performance.now() - started;
     operation = "execute";
+    started = performance.now();
     statement.setReadBigInts(safeIntegers);
     if (statement.columns().length > 0) {
       statement.setReturnArrays(values);
-      parentPort.postMessage({ id, rows: statement.all(...params) });
+      const rows = statement.all(...params);
+      nativeMs = performance.now() - started;
+      parentPort.postMessage({ id, rows, prepareMs, nativeMs });
     } else {
       const result = statement.run(...params);
-      parentPort.postMessage({ id, rows: raw ? result : [] });
+      nativeMs = performance.now() - started;
+      parentPort.postMessage({ id, rows: raw ? result : [], prepareMs, nativeMs });
     }
   } catch (error) {
+    if (operation === "prepare") prepareMs = performance.now() - started;
+    if (operation === "execute" && nativeMs === undefined) nativeMs = performance.now() - started;
     parentPort.postMessage({
       id,
+      prepareMs,
+      nativeMs,
       error: {
         operation,
         message: String(error && error.message ? error.message : error),
