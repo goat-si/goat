@@ -4,6 +4,7 @@ import {
   ComputerUseRefusalDetail,
   ComputerUseRefusalReason,
   computerUseRefusalReason,
+  SCREEN_TARGET_API,
 } from "@goat/contracts";
 import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { CUA_DRIVER_EXCLUDED_TOOLS } from "@goat/shared/cuaDriverManifest";
@@ -14,6 +15,7 @@ import { buildRuntimeInstructions } from "../runtimeInstructions.ts";
 import { COMPUTER_USE_PLATFORM_NOTES } from "./computerUse.ts";
 import { browserSkillFiles } from "./browserSkillFiles.ts";
 import { computerUseAppNote } from "./computerUseSkillFiles.ts";
+import { screenCodeSkillFiles } from "./screenCodeSkillFiles.ts";
 import {
   builtInSkillSections,
   namedBuiltInSkills,
@@ -181,6 +183,15 @@ describe("computer use skill text", () => {
     expect(buildRuntimeInstructions({ harness: "Codex", computerUse: false })).not.toContain(
       "<computer_use>",
     );
+  });
+
+  it("teaches starting decided desktop steps together, which is what batches them for the driver", () => {
+    // A cell's element input reaches the driver as one run_steps only when it is started without
+    // an await on each call (ScreenBatchGroups); agents write a for loop with await otherwise.
+    for (const guide of [screenCodeSkillFiles()["SKILL.md"] ?? "", SCREEN_TARGET_API]) {
+      expect(guide).toContain('await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))');
+      expect(guide).toMatch(/for\`? loop, sends each alone/);
+    }
   });
 
   it("keeps the resident screen guide within 300 bytes", () => {

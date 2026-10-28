@@ -5,7 +5,7 @@
  */
 export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/1";
 
-const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call; the cell's return value comes back as JSON.
+const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // unverifiable or any unknown outcome: observe again, never resend. Stop from the person ends the cell at once.`;
 
@@ -46,8 +46,9 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" }.
-// Element clicks, type and setValue on one app started together (await Promise.all([...])) reach
-// the app as one batch, in order: each still gets its own result, and the first that fails stops the rest.
+// Steps already decided in one app window: start them together and await once, so they reach the app as
+// one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
+// An await on each call, as in a for loop, sends each alone. Each still gets its own result; the first failure stops the rest.
 interface App extends TargetBase { menu(path: string[]): Promise<Done>; launch(): Promise<Done>;
   screenshot(): Promise<object> }`;
 
