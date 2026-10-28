@@ -109,3 +109,49 @@ it.effect("a tree without its window places elements by the bound window's bound
     ]);
   }),
 );
+
+it.effect("a screenshot that finds the window moved places the next element action there", () =>
+  Effect.gen(function* () {
+    const read = tree([element(1, "AXButton", { frame: { x: 280, y: 130, w: 40, h: 20 } })]);
+    const { host, sent } = fixture({
+      // The window was at x 0 when bound; it has since moved to x 100.
+      list_windows: {
+        windows: [
+          {
+            pid: 42,
+            window_id: 7,
+            title: "Document",
+            bounds: { x: 0, y: 50, width: 400, height: 200 },
+          },
+        ],
+      },
+      get_window_state: (args: { include_screenshot?: boolean }) =>
+        args.include_screenshot
+          ? {
+              pid: 42,
+              window_id: 7,
+              snapshot_id: "s1",
+              tree_markdown: "",
+              screenshot_width: 400,
+              screenshot_height: 200,
+              window_bounds: { x: 100, y: 50, width: 400, height: 200 },
+              image: { mimeType: "image/png", bytes: "cG5n", width: 400, height: 200 },
+            }
+          : read,
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const ref = bound.value as ScreenTargetRef;
+    const tree1 = yield* host.observe(call("get_accessibility_tree", {}, ref), context);
+    // The screenshot keeps the tree's snapshot, so its refs stay valid.
+    yield* host.observe(call("screenshot", {}, ref), context);
+    const [button] = (tree1.value as { elements: Array<{ ref: ScreenElementRef }> }).elements;
+    yield* host.invoke(call("click", { elementRef: button!.ref }, ref), context);
+    expect(sent.find((entry) => entry.tool === "click")?.cursor?.point).toEqual({
+      fx: 0.5,
+      fy: 0.45,
+    });
+  }),
+);

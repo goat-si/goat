@@ -65,16 +65,21 @@ const frameOf = (entry: Record<string, unknown> | undefined) => {
  * window is the root the element's parents reach when that root is a window, else the bounds
  * list_windows gave. A center outside the window, such as a menu bar item's, gives no point.
  */
-const elementAims = (
-  entries: readonly Record<string, unknown>[],
-  bounds?: { x: number; y: number; w: number; h: number },
-) => {
+type Rect = { readonly x: number; readonly y: number; readonly w: number; readonly h: number };
+/** A framed element and, when the tree indexed it, the window it sits in. */
+type Placed = { readonly frame: Rect; readonly window?: Rect };
+/**
+ * Each framed element by driver token, with its window when the tree has one. Frames share the
+ * driver's screen space; the fraction is taken at action time (aimOf), against the window's
+ * bounds as they are then when the tree left the window out.
+ */
+const elementFrames = (entries: readonly Record<string, unknown>[]) => {
   const byIndex = new Map<number, Record<string, unknown>>();
   for (const entry of entries) {
     const index = natural(entry.element_index);
     if (index !== undefined) byIndex.set(index, entry);
   }
-  const aims = new Map<string, ComputerUseOverlayPoint>();
+  const placed = new Map<string, Placed>();
   for (const entry of entries) {
     const token = string(entry.element_token);
     const frame = frameOf(entry);
@@ -83,13 +88,21 @@ const elementAims = (
     for (let hops = 0; root && natural(root.parent_index) !== undefined; hops++)
       root = hops < 64 ? byIndex.get(natural(root.parent_index) ?? -1) : undefined;
     const role = string(root?.role)?.toLowerCase() ?? "";
-    const window = (WINDOW_ROLES.has(role) ? frameOf(root) : undefined) ?? bounds;
-    if (!window || window.w <= 0 || window.h <= 0) continue;
-    const fx = (frame.x + frame.w / 2 - window.x) / window.w;
-    const fy = (frame.y + frame.h / 2 - window.y) / window.h;
-    if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) aims.set(token, { fx, fy });
+    const window = WINDOW_ROLES.has(role) ? frameOf(root) : undefined;
+    placed.set(token, window ? { frame, window } : { frame });
   }
-  return aims;
+  return placed;
+};
+/** An element's center as a fraction of its window; a center outside the window gives none. */
+const aimOf = (
+  placed: Placed | undefined,
+  bounds: Rect | undefined,
+): ComputerUseOverlayPoint | undefined => {
+  const window = placed?.window ?? bounds;
+  if (!placed || !window || window.w <= 0 || window.h <= 0) return undefined;
+  const fx = (placed.frame.x + placed.frame.w / 2 - window.x) / window.w;
+  const fy = (placed.frame.y + placed.frame.h / 2 - window.y) / window.h;
+  return fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1 ? { fx, fy } : undefined;
 };
 /** Window bounds as list_windows and screenshots report them, in the shape element frames use. */
 const boundsOf = (value: unknown) => {
@@ -227,13 +240,13 @@ interface BoundWindow {
   snapshotId?: string;
   /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
   pointsStale?: boolean;
-  /** Element centers from the tree behind observationId, by driver token. */
-  aims?: ReadonlyMap<string, ComputerUseOverlayPoint>;
+  /** Element frames from the tree behind observationId, by driver token. */
+  frames?: ReadonlyMap<string, Placed>;
   /**
    * The window's screen bounds from its binding or latest screenshot. They place a tree that
    * leaves the window out (macOS indexes only actionable elements); a tree read returns none.
    */
-  windowBounds?: { x: number; y: number; w: number; h: number };
+  windowBounds?: Rect;
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -545,7 +558,7 @@ export const createDesktopTargetHost = (deps: {
         delete bound.observationId;
         delete bound.snapshotId;
         // No driver call for the cursor: a window the tree left out uses its known bounds.
-        bound.aims = elementAims(elements, bound.windowBounds);
+        bound.frames = elementFrames(elements);
       }
       const render = Effect.try({
         try: () =>
@@ -793,7 +806,10 @@ export const createDesktopTargetHost = (deps: {
       bound.pointsStale = true;
       const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration, {
         bound,
-        point: elementToken === undefined ? undefined : bound.aims?.get(elementToken),
+        point:
+          elementToken === undefined
+            ? undefined
+            : aimOf(bound.frames?.get(elementToken), bound.windowBounds),
       });
       return driverResult(tool, reply);
     },
