@@ -566,6 +566,16 @@ export const createDesktopTargetHost = (deps: {
               truncated: state.truncated === true,
               loading: false,
               elements: shown,
+              ...(bound.windowBounds === undefined
+                ? {}
+                : {
+                    viewport: {
+                      x: bound.windowBounds.x,
+                      y: bound.windowBounds.y,
+                      width: bound.windowBounds.w,
+                      height: bound.windowBounds.h,
+                    },
+                  }),
             }),
             mode: "full",
             ...(interactive ? { scope: "window interactive" } : {}),

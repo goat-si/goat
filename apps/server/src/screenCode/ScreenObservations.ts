@@ -7,6 +7,12 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
+import {
+  cutDetail,
+  cutTreeText,
+  desktopCutOrder,
+  type Viewport,
+} from "./DesktopObservationBudget.ts";
 
 // Playwright single-quotes a tree line whose name contains ": ".
 const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
@@ -130,6 +136,8 @@ export interface ScreenObservationDraft {
   readonly lineage?: string;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
+  /** The window's bounds, for app reads: elements outside them go before visible ones. */
+  readonly viewport?: Viewport;
   readonly elements: readonly ({
     readonly role: string;
     readonly name: string;
@@ -519,9 +527,12 @@ export class ScreenObservations {
         ...(dropped.length > 0 && draft.targetRef.kind === "tab"
           ? [{ kind: "budget" as const, detail: droppedDetail(dropped) }]
           : []),
+        ...(dropped.length > 0 && draft.targetRef.kind === "app"
+          ? [{ kind: "budget" as const, detail: cutDetail(dropped, Math.min(...dropped)) }]
+          : []),
         ...(truncated &&
         !draft.omitted?.some((item) => item.kind === "budget") &&
-        !(dropped.length > 0 && draft.targetRef.kind === "tab")
+        dropped.length === 0
           ? [{ kind: "budget" as const }]
           : []),
       ].slice(0, 16);
@@ -547,12 +558,77 @@ export class ScreenObservations {
       elements,
     });
     const budget = Math.min(input.limits.treeBytes, 128 * 1024);
-    while (Buffer.byteLength(JSON.stringify(build())) > budget && elements.length > 0) {
+    // An app read over budget gives up redundant annotations, then elements in the order
+    // desktopCutOrder plans (chrome outlasts table body, visible outlasts off-window).
+    if (draft.targetRef.kind === "app" && Buffer.byteLength(JSON.stringify(build())) > budget) {
+      const plain = renderedText.replace(/ actions=\[[^\]]*\]/g, "").replace(/ \[\]/g, "");
+      text = cut(plain);
+      const cutPlan = desktopCutOrder(elements, draft.indexedText, draft.viewport);
+      const sizes = new Map(
+        elements.map((element) => [element.index, Buffer.byteLength(JSON.stringify(element)) + 1]),
+      );
+      const parents = new Map(
+        elements.flatMap((element) =>
+          element.parent === undefined ? [] : [[element.index, element.parent] as const],
+        ),
+      );
+      const words = new Map(
+        elements.map((element) => [element.index, element.name || element.text || ""]),
+      );
+      const gone = new Set<number>();
+      let next = 0;
+      // Elements may use what the text leaves, keeping at most 40% of the budget for the text;
+      // the text is trimmed after, so elements are never all spent on a long text.
+      const textShare = Math.min(Buffer.byteLength(text), Math.floor(budget * 0.4));
+      const withoutText = () => Buffer.byteLength(JSON.stringify({ ...build(), indexedText: "" }));
+      while (withoutText() > budget - textShare && next < cutPlan.order.length) {
+        let need = withoutText() - (budget - textShare);
+        while (need > 0 && next < cutPlan.order.length) {
+          const index = cutPlan.order[next++];
+          if (index === undefined) continue;
+          gone.add(index);
+          need -= sizes.get(index) ?? 0;
+        }
+        for (let at = elements.length - 1; at >= 0; at--) {
+          const element = elements[at];
+          if (!element || !gone.has(element.index)) continue;
+          elements.splice(at, 1);
+          tokens.delete(element.ref.id);
+          editable.delete(element.ref.id);
+          dropped.push(element.index);
+        }
+        // A kept element whose parent went points at its nearest kept ancestor.
+        for (const [at, element] of elements.entries()) {
+          let parent = element.parent;
+          while (parent !== undefined && gone.has(parent)) parent = parents.get(parent);
+          if (parent !== element.parent) {
+            const { parent: _old, ...rest } = element;
+            elements[at] = parent === undefined ? rest : { ...rest, parent };
+          }
+        }
+        text = cut(
+          cutTreeText(plain, gone, cutPlan.compactRows, (index) => words.get(index) ?? ""),
+        );
+        truncated = true;
+      }
+    }
+    // For an app read, text over budget is trimmed below instead of costing elements; any element
+    // still given up loses its number from the text.
+    const app = draft.targetRef.kind === "app";
+    const measured = () =>
+      Buffer.byteLength(JSON.stringify(app ? { ...build(), indexedText: "" } : build()));
+    while (measured() > budget && elements.length > 0) {
       const removed = elements.pop();
       if (removed) tokens.delete(removed.ref.id);
       if (removed) editable.delete(removed.ref.id);
       if (removed) dropped.unshift(removed.index);
       truncated = true;
+    }
+    if (app) {
+      const carried = new Set(elements.map((element) => element.index));
+      text = text.replace(/- \[(\d+)\] /g, (marker, number: string) =>
+        carried.has(Number(number)) ? marker : "- ",
+      );
     }
     if (dropped.length > 0 && draft.targetRef.kind === "tab")
       text = cut(numbered(new Set(tokens.values())));
