@@ -178,5 +178,5 @@ export const scopeMessage = (
       : reason === "app_not_approved"
         ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}. It waits for the person's answer, and once approved this turn can go on.`
         : opaque
-          ? "This thread may control only its approved apps, and a script or batch cannot be checked against them, so it did not run. Make the calls one at a time, each with the pid and window_id of an approved app's window."
+          ? "This thread may control only its approved apps, and this script or batch is not kept to them by an app_scope of approved apps, so it did not run. Name only approved apps in app_scope, or make the calls one at a time, each with the pid and window_id of an approved app's window."
           : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;

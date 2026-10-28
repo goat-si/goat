@@ -38,7 +38,7 @@ import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
-import { scopeProxyBatch } from "./ComputerUseLeaseProxyBatch.ts";
+import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -136,6 +136,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
+  const scopeBatch = makeProxyBatchScope(handshakeAnswers.tools, () => grantApps);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -740,17 +741,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      const tools = handshakeAnswers.tools;
-      const send = lifecycle.current?.driver.send;
-      const batch = yield* scopeProxyBatch({
-        id,
-        line,
-        message,
-        grantApps,
-        send,
-        tools,
-        notSent: () => notSent(id),
-      });
+      const batch = yield* scopeBatch(id, line, message, lifecycle.current, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;

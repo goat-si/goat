@@ -713,6 +713,46 @@ describe("server computer-use call reservations", () => {
   );
 
   it.effect(
+    "admits a background-scoped batch without foreground approval and holds only its window",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        assert.equal((yield* f.reserve()).status, "admitted");
+        const app_scope = { apps: ["org.example.Other"] };
+        const batch = (window: object, step: object = {}) => ({
+          ...window,
+          app_scope,
+          steps: [{ tool: "click", args: { element_token: "s:1", ...step } }],
+        });
+        // The driver keeps it to background delivery in its app, so it needs no foreground grant.
+        const own = yield* f.reserve(f.b, batch({ pid: 43, window_id: 8 }), "run_steps");
+        assert.equal(own.status, "admitted");
+        // It holds its own window, so another thread's window stays a conflict.
+        assert.deepInclude(yield* f.reserve(f.b, batch({ pid: 42, window_id: 7 }), "run_steps"), {
+          status: "refused",
+          detail: "target_busy",
+        });
+        // A step naming another window may act anywhere in the scoped apps: desktop work.
+        assert.deepInclude(
+          yield* f.reserve(f.b, batch({ pid: 44, window_id: 9 }, { pid: 45 }), "run_steps"),
+          { status: "refused", detail: "target_busy" },
+        );
+        // Without a scope, or with foreground delivery, it still needs foreground approval.
+        for (const args of [
+          { pid: 44, window_id: 9, steps: [] },
+          {
+            ...batch({ pid: 44, window_id: 9 }),
+            app_scope: { ...app_scope, delivery: "foreground" },
+          },
+        ])
+          assert.deepInclude(yield* f.reserve(f.b, args, "run_steps"), {
+            status: "refused",
+            detail: "foreground_not_approved",
+          });
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
     "allows unrelated window mutations and reads while opaque and app-only mutations conflict",
     () =>
       Effect.gen(function* () {

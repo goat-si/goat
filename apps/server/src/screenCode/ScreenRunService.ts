@@ -227,6 +227,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     const dispatcher = options.dispatcher;
     bridge.setDispatcher({
       availability: dispatcher.availability,
+      // Batch groups are input only; no member binds a target, so none needs a route below.
+      ...(dispatcher.dispatchBatch === undefined
+        ? {}
+        : { dispatchBatch: dispatcher.dispatchBatch }),
       dispatch: (call, context) =>
         dispatcher.dispatch(call, context).pipe(
           Effect.tap((result) =>
