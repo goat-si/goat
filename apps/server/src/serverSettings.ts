@@ -1894,22 +1894,31 @@ const make = Effect.gen(function* () {
             yield* rollbackSecretChanges;
             return yield* Effect.failCause(materializedExit.cause);
           }
+          let fileCommitted = false;
           const writeExit = yield* Effect.exit(
-            connectAccess.commit(next.hub, writeSettingsAtomically(next, transition), beforeCommit),
+            connectAccess.commit(
+              next.hub,
+              Effect.gen(function* () {
+                yield* writeSettingsAtomically(next, transition);
+                fileCommitted = true;
+                if (transition) yield* Ref.set(hubMarkerRef, transition);
+                // A post-commit Hub error must preserve this file's secrets and publication.
+                yield* Cache.set(settingsCache, cacheKey, {
+                  settings: next,
+                  parseFailure: Option.none(),
+                });
+                if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
+                yield* emitChange(next);
+                return materializedExit.value;
+              }),
+              beforeCommit,
+            ),
           );
           if (Exit.isFailure(writeExit)) {
-            yield* rollbackSecretChanges;
+            if (!fileCommitted) yield* rollbackSecretChanges;
             return yield* Effect.failCause(writeExit.cause);
           }
-          if (transition) yield* Ref.set(hubMarkerRef, transition);
-          // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
-          yield* Cache.set(settingsCache, cacheKey, {
-            settings: next,
-            parseFailure: Option.none(),
-          });
-          if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
-          yield* emitChange(next);
-          return materializedExit.value;
+          return writeExit.value;
         }),
       );
       return resolveTextGenerationProvider(materialized);

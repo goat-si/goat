@@ -11,6 +11,7 @@ import {
   AgentWorkspaceListInput,
   type AuthEnvironmentScope,
   ProviderInstanceId,
+  ProviderDriverKind,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
@@ -774,4 +775,44 @@ it.effect.each(["enabled", "connectDevicesHubProxy"] as const)(
         Effect.provideContext(runtime.context),
       );
     }).pipe(Effect.scoped, Effect.provide(ConnectRuntime.storage)),
+);
+
+it.effect("#2059 retains committed provider credentials when Hub withdrawal fails afterward", () =>
+  Effect.gen(function* () {
+    const runtime = yield* ConnectRuntime.open();
+    yield* runtime.settings.start;
+    yield* runtime.settings.updateSettings({
+      hub: { enabled: true, connectDevicesHubProxy: true },
+    });
+    const instanceId = ProviderInstanceId.make("withdrawal-credential");
+    const mutation = (value: string) => ({
+      operation: "upsert" as const,
+      instanceId,
+      instance: {
+        driver: ProviderDriverKind.make("antigravity"),
+        environment: [{ name: "OPENROUTER_API_KEY", value, sensitive: true }],
+      },
+    });
+    yield* runtime.settings.updateProviderInstance(mutation("fixture-before"));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TRIGGER fail_withdrawal BEFORE UPDATE ON hub_connect_access BEGIN SELECT RAISE(FAIL, 'fixture generation failure'); END`;
+      expect(
+        yield* runtime.settings
+          .updateProviderInstance(mutation("fixture-after"), {
+            hub: { connectDevicesHubProxy: false },
+          })
+          .pipe(Effect.isFailure),
+      ).toBe(true);
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* Config.ServerConfig;
+      const persisted = yield* decodePersistedSettings(
+        JSON.parse(yield* fs.readFileString(config.settingsPath)),
+      );
+      expect(persisted.hub.connectDevicesHubProxy).toBe(false);
+      const current = yield* runtime.settings.getSettings;
+      expect(current.hub.connectDevicesHubProxy).toBe(false);
+      expect(current.providerInstances[instanceId]?.environment?.[0]?.value).toBe("fixture-after");
+    }).pipe(Effect.provideContext(runtime.context));
+  }).pipe(Effect.scoped, Effect.provide(ConnectRuntime.storage)),
 );
