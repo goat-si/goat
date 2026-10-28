@@ -830,3 +830,43 @@ it.effect("an unattended message queued behind a slow start keeps its own turn",
     }),
   ),
 );
+
+it.effect("a person's promotion steers an unattended message into their running turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, steered, layer } = yield* harness("person-promotes", {
+        supportsActiveSteering: true,
+        computerUse: true,
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        yield* worker.drain();
+        // A channel worker's message waits behind the person's turn instead of steering it.
+        const sent = yield* send(
+          "steer_when_ready",
+          "use the screen",
+          ThreadId.make("channel-worker:person-promotes"),
+        );
+        yield* worker.drain();
+        assert.equal(sent.delivery, "queued");
+
+        // Promoting it is the person's own decision, whoever wrote the message.
+        yield* threads.dispatch({
+          type: "queued-message.promote-to-steer",
+          commandId: CommandId.make("person-promotes"),
+          threadId,
+          queuedRunId: sent.run.id,
+          targetRunId: started[0]!.runId,
+        });
+        yield* worker.drain();
+        assert.equal(steered.length, 1);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(projection.runs.find((run) => run.id === sent.run.id)?.status, "cancelled");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);

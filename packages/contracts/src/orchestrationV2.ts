@@ -15,6 +15,7 @@ import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import { RuntimeRequestRespondCommand } from "./orchestrationV2RuntimeRequest.ts";
 export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import {
   OrchestrationV2LimitRecovery,
@@ -90,7 +91,6 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
-  UserInputAttachments,
   UserInputAttachmentAnswerPayload,
   UserInputRespondedBy,
   RuntimeMode,
@@ -164,6 +164,8 @@ export const OrchestrationV2ThreadLauncher = Schema.Struct({
   via: Schema.optional(
     Schema.Literals(["thread_launch", "create_threads", "ssh_thread_launch", "delegate_task"]),
   ),
+  /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
+  runId: Schema.optional(RunId),
 });
 export type OrchestrationV2ThreadLauncher = typeof OrchestrationV2ThreadLauncher.Type;
 /** Model-facing question delivery seam, also usable by a remote reverse channel. */
@@ -1372,6 +1374,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
   senderThreadId: Schema.optional(ThreadId),
+  /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
+  senderRunId: Schema.optional(RunId),
   /** Channel metadata on GOAT bot messages; absent on every other thread. */
   channel: ForwardCompatibleOptional(ChannelMessageMeta),
   idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
@@ -1688,6 +1692,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
+    senderRunId: Schema.optional(RunId),
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
@@ -2568,6 +2574,8 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
+    senderRunId: Schema.optional(RunId),
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
@@ -3306,6 +3314,8 @@ export const OrchestrationV2Command = Schema.Union([
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
+    senderRunId: Schema.optional(RunId),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3445,17 +3455,7 @@ export const OrchestrationV2Command = Schema.Union([
     // Replaces all attachments; absent preserves them for older clients editing text.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
   }),
-  Schema.Struct({
-    type: Schema.Literal("runtime-request.respond"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: RuntimeRequestId,
-    decision: Schema.optional(ProviderApprovalDecision),
-    feedback: Schema.optional(Schema.String),
-    answers: Schema.optional(ProviderUserInputAnswers),
-    attachmentsByQuestionId: Schema.optional(UserInputAttachments),
-    respondedBy: Schema.optional(UserInputRespondedBy),
-  }),
+  RuntimeRequestRespondCommand,
   Schema.Struct({
     type: Schema.Literal("thread.user-input.dismiss"),
     commandId: CommandId,
