@@ -30,10 +30,7 @@ const clickEach = Effect.fn("DesktopTargetHostCursorTest.clickEach")(function* (
     context,
   );
   const ref = bound.value as ScreenTargetRef;
-  const read = yield* host.observe(
-    { ...call("get_accessibility_tree", {}, ref), deadlineMillis: 60_000 },
-    context,
-  );
+  const read = yield* host.observe(call("get_accessibility_tree", {}, ref), context);
   const refs = (read.value as { elements: Array<{ index: number; ref: ScreenElementRef }> })
     .elements;
   for (const index of indexes)
@@ -81,10 +78,10 @@ it.effect("an element click sends that element's center in its window as the cur
   }),
 );
 
-it.effect("a tree without its window places elements by the window's listed bounds", () =>
+it.effect("a tree without its window places elements by the bound window's bounds", () =>
   Effect.gen(function* () {
     // macOS indexes only actionable elements, so a window without actions is not in the tree.
-    const { host, sent, deadlines } = fixture({
+    const { host, sent } = fixture({
       list_windows: {
         windows: [
           {
@@ -102,10 +99,13 @@ it.effect("a tree without its window places elements by the window's listed boun
     });
     const clicks = yield* clickEach(host, sent, [1, 3]);
     expect(clicks.map((entry) => entry.cursor?.point)).toEqual([{ fx: 0.5, fy: 0.45 }, undefined]);
-    // The lookup only places the cursor: a second of the cell's time, not all that remains.
-    expect(deadlines.filter((entry) => entry.tool !== "click").slice(-2)).toEqual([
-      { tool: "get_window_state", deadlineMillis: 60_000 },
-      { tool: "list_windows", deadlineMillis: 1_000 },
+    // The bounds came with the binding: placing the cursor costs no driver call of its own.
+    expect(sent.map((entry) => entry.tool)).toEqual([
+      "list_apps",
+      "list_windows",
+      "get_window_state",
+      "click",
+      "click",
     ]);
   }),
 );

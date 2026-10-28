@@ -91,20 +91,9 @@ const elementAims = (
   }
   return aims;
 };
-/** macOS indexes only actionable elements, so a window without actions is not in the tree. */
-const hasWindowRoot = (entries: readonly Record<string, unknown>[]) =>
-  entries.some(
-    (entry) =>
-      natural(entry.parent_index) === undefined &&
-      WINDOW_ROLES.has(string(entry.role)?.toLowerCase() ?? "") &&
-      frameOf(entry) !== undefined,
-  );
-/** A window's screen bounds from list_windows, in the shape element frames use. */
-const listedBounds = (value: unknown, windowId: number) => {
-  const window = array(object(value)?.windows)
-    .map(object)
-    .find((entry) => entry?.window_id === windowId);
-  const bounds = object(window?.bounds);
+/** Window bounds as list_windows and screenshots report them, in the shape element frames use. */
+const boundsOf = (value: unknown) => {
+  const bounds = object(value);
   return bounds &&
     finite(bounds.x) &&
     finite(bounds.y) &&
@@ -240,6 +229,11 @@ interface BoundWindow {
   pointsStale?: boolean;
   /** Element centers from the tree behind observationId, by driver token. */
   aims?: ReadonlyMap<string, ComputerUseOverlayPoint>;
+  /**
+   * The window's screen bounds from its binding or latest screenshot. They place a tree that
+   * leaves the window out (macOS indexes only actionable elements); a tree read returns none.
+   */
+  windowBounds?: { x: number; y: number; w: number; h: number };
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -429,6 +423,7 @@ export const createDesktopTargetHost = (deps: {
         turnId: context.turnId,
         generation: ++epoch,
       };
+      const listedBounds = boundsOf(named[0]?.bounds);
       const bound: BoundWindow = {
         ref,
         pid,
@@ -437,6 +432,7 @@ export const createDesktopTargetHost = (deps: {
         epoch,
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
+        ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
       };
       targets.set(ref.id, bound);
       deps.labelTarget?.(ref.id, {
@@ -538,25 +534,8 @@ export const createDesktopTargetHost = (deps: {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
-        // Without its window in the tree, the window's own bounds place the elements. The lookup
-        // only places the cursor, so it gets a second of the cell's time, not the rest of it.
-        const lookupEnds = Math.min(call.deadlineMillis, (yield* Clock.currentTimeMillis) + 1_000);
-        const listed =
-          elements.some((entry) => frameOf(entry) !== undefined) && !hasWindowRoot(elements)
-            ? yield* request(
-                "list_windows",
-                { pid: bound.pid },
-                { ...call, deadlineMillis: lookupEnds },
-                context,
-                bound.connectionGeneration,
-              ).pipe(Effect.option)
-            : Option.none();
-        bound.aims = elementAims(
-          elements,
-          Option.isSome(listed)
-            ? listedBounds(driverValue(listed.value), bound.windowId)
-            : undefined,
-        );
+        // No driver call for the cursor: a window the tree left out uses its known bounds.
+        bound.aims = elementAims(elements, bound.windowBounds);
       }
       const render = Effect.try({
         try: () =>
@@ -599,6 +578,8 @@ export const createDesktopTargetHost = (deps: {
       const width = integer(state.screenshot_width);
       const height = integer(state.screenshot_height);
       const bounds = object(state.window_bounds);
+      const shotBounds = boundsOf(bounds);
+      if (shotBounds !== undefined) bound.windowBounds = shotBounds;
       if (
         !imagePart ||
         !width ||

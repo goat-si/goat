@@ -137,15 +137,12 @@ export const fixture = (
     expectedConnectionGeneration?: string;
     cursor?: { owner: unknown; point?: unknown };
   }> = [];
-  /** Each driver request's deadline, by tool, in the order sent. */
-  const deadlines: Array<{ tool: string; deadlineMillis: number }> = [];
   const channel = {
     request: (request: {
       tool: string;
       args: unknown;
       expectedConnectionGeneration?: string;
       cursor?: { owner: unknown; point?: unknown };
-      deadlineMillis?: number;
     }) =>
       request.expectedConnectionGeneration !== undefined &&
       request.expectedConnectionGeneration !== connection.id
@@ -155,7 +152,6 @@ export const fixture = (
             nextStep: "Bind again.",
           })
         : Effect.sync(() => {
-            deadlines.push({ tool: request.tool, deadlineMillis: request.deadlineMillis ?? -1 });
             sent.push({
               tool: request.tool,
               args: request.args,
@@ -209,6 +205,5 @@ export const fixture = (
       ...(observations ? { observations } : {}),
     }),
     sent,
-    deadlines,
   };
 };
