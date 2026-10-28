@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
 import * as HostProcess from "@goat/shared/HostProcess";
-import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
+import { INCOGNITO_BROWSER_PROFILE_ID, type PreviewSessionStore } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
@@ -14,6 +14,9 @@ import { sandboxDisabled } from "./PreviewBrowserHost.ts";
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
 const loadPlaywright = () =>
   requirePlaywright("playwright-core") as typeof import("playwright-core");
+
+/** Records which sign-in store agent tabs use for a profile; Chromium ignores unknown files. */
+const STORE_PIN_FILE = "goat-agent-store";
 
 interface Options {
   readonly profilesDir: string;
@@ -119,6 +122,8 @@ export class ServerBrowserContexts {
   private readonly options: Options;
   private readonly contexts = new Map<string, Promise<BrowserContext>>();
   private readonly clearing = new Map<string, Promise<void>>();
+  private readonly profileTurns = new Map<string, Promise<void>>();
+  private pinDrafts = 0;
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
 
@@ -227,6 +232,42 @@ export class ServerBrowserContexts {
     );
   }
 
+  private storePinPath(profileId: string) {
+    return NodePath.join(this.profileDirectory(profileId), STORE_PIN_FILE);
+  }
+
+  /** The sign-in store an agent first opened this profile in; clearing the profile removes it. */
+  async storePin(profileId: string): Promise<PreviewSessionStore | undefined> {
+    try {
+      const value = (await NodeFSP.readFile(this.storePinPath(profileId), "utf8")).trim();
+      if (value === "server" || value === "desktop") return value;
+      // A damaged pin is never read as no pin: that could move the profile to the other store.
+      throw new Error(
+        "GOAT cannot read which sign-in store this profile is pinned to. Clear the profile under Settings, Integrations, Browser profiles to start it again.",
+      );
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw cause;
+    }
+  }
+
+  /** Pins the first store only; returns the pinned one, which differs when another open won. */
+  async pinStore(profileId: string, store: PreviewSessionStore): Promise<PreviewSessionStore> {
+    await NodeFSP.mkdir(this.profileDirectory(profileId), { recursive: true });
+    // Written whole beside it, then linked in place: the pin is complete or absent, never partial.
+    const draft = this.storePinPath(profileId) + "." + process.pid + "." + ++this.pinDrafts;
+    await NodeFSP.writeFile(draft, store, { flag: "wx" });
+    try {
+      await NodeFSP.link(draft, this.storePinPath(profileId));
+      return store;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
+      return (await this.storePin(profileId)) ?? store;
+    } finally {
+      await NodeFSP.rm(draft, { force: true });
+    }
+  }
+
   async scratchPage() {
     if (this.closing) throw new Error("The preview browser is closed.");
     const context = await (await this.sharedBrowser()).newContext();
@@ -248,6 +289,24 @@ export class ServerBrowserContexts {
 
   async clearProfile(profileId: string) {
     if (profileId === INCOGNITO_BROWSER_PROFILE_ID) return;
+    await this.withProfile(profileId, () => this.clearUnlocked(profileId));
+  }
+
+  /**
+   * Runs one profile's open or clear alone, so an open cannot pin a store a clear just removed,
+   * and two opens of one profile pin the same store.
+   */
+  withProfile<A>(profileId: string, run: () => Promise<A>): Promise<A> {
+    const result = (this.profileTurns.get(profileId) ?? Promise.resolve()).then(run);
+    const settled = result.then(constVoid, constVoid);
+    this.profileTurns.set(profileId, settled);
+    void settled.then(() => {
+      if (this.profileTurns.get(profileId) === settled) this.profileTurns.delete(profileId);
+    });
+    return result;
+  }
+
+  private async clearUnlocked(profileId: string) {
     const key = JSON.stringify([profileId, null]);
     const clearing = (async () => {
       const pending = this.contexts.get(key);

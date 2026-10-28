@@ -7,7 +7,6 @@ import {
   PreviewAutomationNoAvailableHostError,
   PreviewTabId,
   ProviderInstanceId,
-  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type PreviewAutomationHost,
   type PreviewAutomationRequest,
@@ -34,6 +33,9 @@ const scope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
+
+/** Opens route only to the in-process server browser, so hosts that open tabs connect as it. */
+const SERVER_BROWSER = { inProcess: true } as const;
 
 const makeHost = (overrides: Partial<PreviewAutomationHost> = {}): PreviewAutomationHost => ({
   clientId: "client-1",
@@ -63,7 +65,7 @@ it.effect("atomically registers a connected host and correlates its response", (
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* makeBroker;
-      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const requests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
       yield* Stream.runForEach(requests, (request) =>
         broker.respond({
           clientId: "client-1",
@@ -95,7 +97,7 @@ it.effect("targets multiple tabs explicitly while retaining a default tab", () =
       const openedTabIds = [appTabId, simulatorTabId];
       let openIndex = 0;
       const routedRequests: RoutedRequest[] = [];
-      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const requests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
       yield* Stream.runForEach(requests, (request) => {
         routedRequests.push(request);
         return broker.respond({
@@ -203,7 +205,7 @@ it.effect("does not let a no-tab response suppress an earlier tab decision", () 
       const openedTabId = PreviewTabId.make("tab-opened-late");
       const releaseOpenResponse = yield* Deferred.make<void>();
       const routedRequests: RoutedRequest[] = [];
-      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const requests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
       yield* Stream.runForEach(requests, (request) => {
         routedRequests.push(request);
         const marker =
@@ -282,36 +284,6 @@ it.effect("announces a live replacement stream before delivering requests", () =
 
       expect(receivedTypes).toEqual(["connected", "request"]);
       expect(result).toBe("ready");
-    }),
-  ),
-);
-
-it.effect.each([
-  { clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID, shown: true },
-  { clientId: "client-1", shown: false },
-])("tells the agent why its own server browser failed ($clientId)", ({ clientId, shown }) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const broker = yield* makeBroker;
-      const requests = requestsFrom(yield* broker.connect(makeHost({ clientId })));
-      yield* Stream.runForEach(requests, (request) =>
-        broker.respond({
-          clientId,
-          connectionId: request.connectionId,
-          requestId: request.requestId,
-          ok: false,
-          error: {
-            _tag: "PreviewAutomationExecutionError",
-            message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:4719/",
-          },
-        }),
-      ).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      const error = yield* broker
-        .invoke<void>({ scope, operation: "open", input: {} })
-        .pipe(Effect.flip);
-      expect(error._tag).toBe("PreviewAutomationExecutionError");
-      expect(error.message.includes("ERR_CONNECTION_REFUSED")).toBe(shown);
     }),
   ),
 );
@@ -807,13 +779,13 @@ it.effect("fails over a pinned provider session only after its host disconnects"
       let firstConnectionId = "";
       let secondRoutedTabId: PreviewTabId | undefined;
       const firstRequests = requestsFrom(
-        yield* broker.connect(makeHost({ clientId: "client-first" })),
+        yield* broker.connect(makeHost({ clientId: "client-first" }), SERVER_BROWSER),
         (connectionId) => {
           firstConnectionId = connectionId;
         },
       );
       const secondRequests = requestsFrom(
-        yield* broker.connect(makeHost({ clientId: "client-second" })),
+        yield* broker.connect(makeHost({ clientId: "client-second" }), SERVER_BROWSER),
       );
       const firstConsumer = yield* Stream.runForEach(firstRequests, (request) =>
         broker.respond({
@@ -900,7 +872,7 @@ it.effect("does not carry a tab id across a replacement automation stream", () =
     Effect.gen(function* () {
       const broker = yield* makeBroker;
       const openedTabId = PreviewTabId.make("tab-first-webcontents");
-      const firstRequests = requestsFrom(yield* broker.connect(makeHost()));
+      const firstRequests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
       yield* Stream.runForEach(firstRequests, (request) =>
         broker.respond({
           clientId: "client-1",
@@ -921,7 +893,7 @@ it.effect("does not carry a tab id across a replacement automation stream", () =
       });
 
       const routedRequests: RoutedRequest[] = [];
-      const replacementRequests = requestsFrom(yield* broker.connect(makeHost()));
+      const replacementRequests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
       yield* Stream.runForEach(replacementRequests, (request) => {
         routedRequests.push(request);
         return broker.respond({
@@ -1015,7 +987,9 @@ it.effect("keeps each thread's current tab when threads share a provider session
     Effect.gen(function* () {
       const broker = yield* makeBroker;
       const routed: Array<RoutedRequest> = [];
-      const requests = requestsFrom(yield* broker.connect(makeHost(), { preferred: true }));
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost(), { preferred: true, inProcess: true }),
+      );
       yield* Stream.runForEach(requests, (request) => {
         routed.push(request);
         return broker.respond({

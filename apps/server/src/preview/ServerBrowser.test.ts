@@ -55,6 +55,9 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       contexts.push(context);
       return context as unknown as BrowserContext;
     }
+    storePin = async () => undefined;
+    pinStore = async (_profileId: string, store: string) => store;
+    withProfile = <A>(_profileId: string, run: () => Promise<A>) => run();
     async scratchPage() {
       return makeEncoderPage() as unknown as Page;
     }
@@ -289,10 +292,11 @@ const ready = Effect.gen(function* () {
   const browser = yield* ServerBrowser.ServerBrowser;
   const broker = yield* Broker.PreviewAutomationBroker;
   yield* Effect.yieldNow;
+  const session = desktopRendersNext ? { session: "profile" } : {};
   const opened = yield* broker.invoke<PreviewAutomationStatus>({
     scope,
     operation: "open",
-    input: { reuseExistingTab: false, show: false },
+    input: { reuseExistingTab: false, show: false, ...session },
   });
   const tabId = PreviewTabId.make(opened.tabId!);
   return { browser, broker, tabId };
@@ -1669,41 +1673,37 @@ it.live("a session's own tab stays its default while other sessions' tabs are li
 );
 
 it.live(
-  "preview_open picks a reported profile by id or name and defaults to the reported one",
+  "preview_open opens isolated unless a profile is named, and never picks between profiles",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const browser = yield* ServerBrowser.ServerBrowser;
         const broker = yield* Broker.PreviewAutomationBroker;
-        const manager = yield* Manager.PreviewManager;
         yield* Effect.yieldNow;
         yield* browser.reportProfiles({
           profiles: [{ id: "profile-work", name: "Work", kind: "persistent" }],
           defaultProfileId: "profile-work",
         });
-        const openWith = (profileId?: string) =>
+        const openWith = (input: object = {}) =>
           broker.invoke<PreviewAutomationStatus>({
             scope,
             operation: "open",
-            input: {
-              reuseExistingTab: false,
-              show: false,
-              ...(profileId === undefined ? {} : { profileId }),
-            },
+            input: { reuseExistingTab: false, show: false, ...input },
           });
         const byDefault = yield* openWith();
-        const byName = yield* openWith("WORK");
-        const byId = yield* openWith("incognito");
-        const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
-        const profileOf = (tabId: string | null) =>
-          sessions.find((session) => session.tabId === tabId)?.profileId;
-        expect(profileOf(byDefault.tabId)).toBe("profile-work");
-        expect(profileOf(byName.tabId)).toBe("profile-work");
-        expect(profileOf(byId.tabId)).toBe("incognito");
+        desktopRendersNext = true;
+        const byName = yield* openWith({ profileId: "WORK" });
+        const byId = yield* openWith({ profileId: "incognito" });
         expect(contextRequests).toEqual([
-          { profileId: "profile-work", isolated: false },
-          { profileId: "profile-work", isolated: false },
           { profileId: "incognito", isolated: true },
+          { profileId: "incognito", isolated: true },
+        ]);
+        const isolated = { mode: "isolated", store: "server" };
+        const work = { mode: "profile", profileId: "profile-work", store: "desktop" };
+        expect([byDefault, byName, byId].map((opened) => opened.session)).toEqual([
+          isolated,
+          work,
+          isolated,
         ]);
         expect(byDefault).toMatchObject({
           defaultProfileId: "profile-work",
@@ -1713,7 +1713,9 @@ it.live(
             { id: "profile-work", name: "Work" },
           ],
         });
-        const unknown = yield* openWith("Personal").pipe(Effect.flip);
+        const ambiguous = yield* openWith({ session: "profile" }).pipe(Effect.flip);
+        expect(ambiguous).toMatchObject({ remoteTag: "PreviewAutomationAmbiguousProfileError" });
+        const unknown = yield* openWith({ profileId: "Personal" }).pipe(Effect.flip);
         expect(unknown).toMatchObject({
           _tag: "PreviewAutomationExecutionError",
           reason:

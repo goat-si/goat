@@ -243,4 +243,28 @@ describe("ElectronBrowserHost", () => {
     await vi.waitFor(() => expect(held()[agentTab]).toBe(1));
     mocks.threadRunStatus = "idle";
   });
+
+  it("never creates a webview for a tab the server renders, so its sign-ins stay out of this app", async () => {
+    using _state = setup();
+    const serverTab = (tabId: string, serverRendered: boolean): PreviewSessionSnapshot => ({
+      ...snapshot(tabId, "2026-01-01T00:00:01.000Z"),
+      runtime: "server",
+      automationOwner: "agent-session",
+      ...(serverRendered ? { serverRendered: true as const } : {}),
+    });
+    reconcilePreviewServerSessions(threadRef, {
+      sessions: [serverTab("tab_isolated", true), serverTab("tab_desktop_profile", false)],
+      serverEpoch: "server-a",
+      revision: 1,
+    });
+    await using screen = await renderHost();
+    const host = screen.container.querySelector("[data-electron-browser-host]")!;
+    await vi.waitFor(() =>
+      expect(
+        [...host.querySelectorAll("webview")].map((node) =>
+          node.getAttribute("data-preview-server-tab"),
+        ),
+      ).toEqual(["tab_desktop_profile"]),
+    );
+  });
 });
