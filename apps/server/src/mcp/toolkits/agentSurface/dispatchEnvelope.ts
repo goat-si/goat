@@ -16,6 +16,8 @@ import * as Ref from "effect/Ref";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { defectSummary } from "../../../observability/LogRedaction.ts";
+import { argumentKeys } from "../../toolRefusals.ts";
+import { surfaceArgumentAliases } from "./argumentAliases.ts";
 import { ForwardedContent } from "./forwardedContent.ts";
 
 /**
@@ -53,27 +55,29 @@ const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/**
- * Arguments the target refused before it ran, for a key it does not declare or a value that does
- * not decode, come back with its one-line signature so the next call can be right.
- */
+/** A refusal of arguments the target never ran with, carrying its one-line signature. */
 const withExpectedSignature = (
   result: AgentSurfaceResult,
-  dispatch: ToolDispatch["Service"],
+  schema: unknown,
   name: string,
-  args: Readonly<Record<string, unknown>>,
 ): AgentSurfaceResult => {
-  if (result.status !== "error" || result.error.code !== "invalid_request") return result;
-  const schema = dispatch.served(name)?.inputSchema;
+  if (result.status !== "error" || !isRecord(schema)) return result;
   const { details } = result.error;
-  if (!isRecord(schema) || (details !== undefined && !isRecord(details))) return result;
-  const properties = isRecord(schema.properties) ? schema.properties : {};
-  const undeclared =
-    !isRecord(schema.additionalProperties) &&
-    Object.keys(args).some((key) => !Object.hasOwn(properties, key));
-  if (result.error.reason !== "invalid_params" && !undeclared) return result;
+  if (details !== undefined && !isRecord(details)) return result;
   const expectedSignature = toSignature(pathOf(name) ?? name, schema);
   return { ...result, error: { ...result.error, details: { ...details, expectedSignature } } };
+};
+
+/**
+ * Whether /mcp refuses these arguments before the handler for a key the target does not declare,
+ * judged as McpHttpServer judges it: after folding aliases, unless the schema takes extra keys.
+ */
+const refusesUndeclared = (name: string, schema: unknown, args: unknown) => {
+  if (!isRecord(schema) || isRecord(schema.additionalProperties)) return false;
+  const folded = surfaceArgumentAliases(name, args);
+  if (!folded.ok) return false;
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  return argumentKeys(folded.payload).some((key) => !Object.hasOwn(properties, key));
 };
 
 /** Where a routed call ran, so the agent can tell remote results from local ones. */
@@ -119,6 +123,8 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
   const entry = resolveAgentSurfaceEntry(name);
   const deduplicated = entry !== undefined && isDeduplicatedCall(entry, args);
   const context: CallContext = { effect, deduplicated, pathOf };
+  const schema = dispatch.served(name)?.inputSchema;
+  const undeclared = refusesUndeclared(name, schema, args);
   return yield* dispatch.call(name, args).pipe(
     Effect.provideService(McpToolAccess.CallFailureCapture, {
       record: (error) => Ref.set(captured, error),
@@ -130,6 +136,8 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
           )
         : Effect.succeed(fromToolResult(result, context)),
     ),
+    // Refused before the handler, so the target cannot have answered with a refusal of its own.
+    Effect.map((result) => (undeclared ? withExpectedSignature(result, schema, name) : result)),
     Effect.map((result) => withHost(result, host)),
     Effect.flatMap(forwardContent),
     // A dying target still gets an answer, with the same fixed text a direct call shows; the
@@ -146,11 +154,11 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
       ),
     ),
     Effect.catchTags({
-      InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
+      InvalidParams: (error) =>
+        Effect.succeed(withExpectedSignature(fromInvalidParams(error.message), schema, name)),
       InternalError: (error) =>
         Effect.succeed(envelopeError("internal", "internal_error", error.message)),
     }),
-    Effect.map((result) => withExpectedSignature(result, dispatch, name, args)),
   );
 });
 

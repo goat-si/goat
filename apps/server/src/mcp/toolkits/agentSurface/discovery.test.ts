@@ -68,6 +68,49 @@ it.effect("lists goat_call's signatures as the served schemas declare those keys
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it("renders a signature for every schema shape tools declare", () => {
+  const optional = (schema: object) => ({ anyOf: [schema, { type: "null" }] });
+  const schema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      mode: optional({ type: "string", enum: ["a", "b"] }),
+      tags: optional({ type: "array", items: { type: "string" } }),
+      target: {
+        type: "object",
+        properties: { kind: { type: "string" }, note: { type: "string" } },
+        required: ["kind"],
+      },
+      options: { type: "object", additionalProperties: { type: "string" } },
+    },
+    required: ["id", "target"],
+  };
+  expect(toSignature("x.full", schema)).toBe(
+    "(x.full :id :mode?=a|b :tags?[] :target{:kind :note?} :options?{...})",
+  );
+  expect(toSignature("x.list", schema, { depth: 0 })).toBe(
+    "(x.list :id :mode?=a|b :tags?[] :target{} :options?{})",
+  );
+  // A picked object that names none of its fields still shows the ones it requires.
+  expect(toSignature("x.pick", schema, { pick: ["mode"] })).toBe(
+    "(x.pick :id :mode?=a|b :target{:kind ...} ...)",
+  );
+  // Keys that only branches declare are optional; extra keys a record takes show as ...
+  expect(
+    toSignature("x.branches", {
+      type: "object",
+      anyOf: [
+        { type: "object", properties: { a: { type: "boolean" } }, required: ["a"] },
+        { type: "object", properties: { b: { type: "boolean" } }, required: ["b"] },
+      ],
+    }),
+  ).toBe("(x.branches :a? :b?)");
+  expect(toSignature("x.record", { type: "object", additionalProperties: {} })).toBe(
+    "(x.record ...)",
+  );
+  expect(toSignature("x.none", { type: "object", additionalProperties: false })).toBe("(x.none)");
+});
+
 interface Described {
   readonly path: string;
   readonly signature?: string;
@@ -130,5 +173,15 @@ it.effect("goat_call returns the path's signature with arguments it refuses befo
     // An undeclared key, and a declared one whose value does not decode.
     expect(yield* call({ threadId: "t1", tail: 5 })).toMatchObject(expected);
     expect(yield* call({ threadId: 5 })).toMatchObject(expected);
+
+    // An accepted alias is no undeclared key, so the handler's own refusal keeps its details.
+    const domain = structured<AgentSurfaceResult>(
+      yield* http.callTool("thread", "goat_call", {
+        path: "surface.describe",
+        args: { name: "thread.read", query: "read", detail: "full" },
+      }),
+    );
+    expect(domain).toMatchObject({ status: "error", error: { code: "invalid_request" } });
+    expect(domain.status === "error" && domain.error.details).toBeFalsy();
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );

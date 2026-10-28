@@ -12,6 +12,9 @@ const MAX_ENUM_VALUES = 6;
 const isSchema = (value: unknown): value is Schema =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const branchesOf = (schema: Schema) =>
+  [schema.anyOf, schema.oneOf].flatMap((list) => (Array.isArray(list) ? list : []));
+
 // Optional fields are advertised as anyOf [T, null]; the null branch says nothing to a caller.
 const unwrap = (schema: Schema): Schema => {
   const branches = schema.anyOf ?? schema.oneOf;
@@ -32,9 +35,29 @@ const choices = (schema: Schema) => {
     : "";
 };
 
-const render = (schema: Schema, depth: number, pick: ReadonlyArray<string> | undefined): string => {
-  const properties = isSchema(schema.properties) ? schema.properties : {};
+const hasFields = (schema: Schema) =>
+  isSchema(schema.properties) ||
+  isSchema(schema.additionalProperties) ||
+  branchesOf(schema).some((branch) => isSchema(branch) && isSchema(branch.properties));
+
+/**
+ * An object's keys. Keys from anyOf/oneOf branches are optional, since no one branch is required;
+ * a schema for additionalProperties means it takes keys no line can list.
+ */
+const fieldsOf = (schema: Schema) => {
+  const properties: Record<string, unknown> = isSchema(schema.properties)
+    ? { ...schema.properties }
+    : {};
+  for (const branch of branchesOf(schema))
+    if (isSchema(branch) && isSchema(branch.properties))
+      for (const [key, value] of Object.entries(branch.properties))
+        if (!Object.hasOwn(properties, key)) properties[key] = value;
   const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return { properties, required, open: isSchema(schema.additionalProperties) };
+};
+
+const render = (schema: Schema, depth: number, pick: ReadonlyArray<string> | undefined): string => {
+  const { properties, required, open } = fieldsOf(schema);
   const picked = (key: string) =>
     pick === undefined ||
     required.has(key) ||
@@ -46,21 +69,22 @@ const render = (schema: Schema, depth: number, pick: ReadonlyArray<string> | und
     const value = isSchema(property) ? unwrap(property) : {};
     const name = `:${key}${required.has(key) ? "" : "?"}`;
     if (value.type === "array") return `${name}[]`;
-    if (value.type !== "object") return `${name}${choices(value)}`;
-    // A picked object without picked fields of its own is named, not spelled out.
+    if (!hasFields(value))
+      return value.type === "object" ? `${name}{}` : `${name}${choices(value)}`;
+    if (depth === 0) return `${name}{}`;
+    // A picked object that names none of its own fields shows only its required ones.
     const nested = pick
       ?.filter((picked) => picked.startsWith(`${key}.`))
       .map((picked) => picked.slice(key.length + 1));
-    if (depth === 0 || !isSchema(value.properties) || nested?.length === 0) return `${name}{}`;
     return `${name}{${render(value, depth - 1, nested)}}`;
   });
-  return [...parts, ...(shown.length < keys.length ? ["..."] : [])].join(" ");
+  return [...parts, ...(shown.length < keys.length || open ? ["..."] : [])].join(" ");
 };
 
 /**
  * The signature of a path's input. depth is how many levels of object fields it spells out (1 by
- * default); pick limits the line to those keys, dotted for a nested one, plus every required key,
- * and spells out only the objects it names fields of.
+ * default); pick limits the line to those keys, dotted for a nested one, plus every required key at
+ * each level it spells out.
  */
 export const toSignature = (
   path: string,
@@ -72,7 +96,7 @@ export const toSignature = (
 };
 
 const SIGNATURES_LEGEND =
-  "Common paths, callable without goat_describe (:key? optional, [] list, {} object, a|b values, ... more keys):";
+  "Common paths (:key? optional, [] list, {} object, a|b values, ... more keys):";
 
 /** What tools/list shows for an entry: its description, then the signatures it carries. */
 export const listedDescription = (entry: Pick<AgentSurfaceEntry, "description" | "signatures">) =>
