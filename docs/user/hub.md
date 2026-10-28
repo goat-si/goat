@@ -75,6 +75,9 @@ off never removes the host from the hub: use **Leave** for that.
 
 The hub and a Child can run different OpenCodex versions; a Child needs 2.66.0
 or later. Provider accounts stay on the hub, and every Child shares its quota.
+Fleet shows a Child's quota under the hub's pool. A host that does not report
+which of its instances use the pool, such as one on an older GOAT, is matched
+by provider and marked **inferred**; update GOAT there to see its actual routing.
 
 A linked Child is **Ready** only after one small model request from its Codex
 instance succeeds through the hub, and that request counts against the hub's

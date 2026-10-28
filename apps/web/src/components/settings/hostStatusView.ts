@@ -36,6 +36,16 @@ export interface HostCardView {
   readonly quotas: ReadonlyArray<HostStatusQuota>;
   /** Null when the host predates reporting computer use. */
   readonly computerUse: string | null;
+  /** Sections the host left out because they were not JSON; null when it sent everything. */
+  readonly omitted: OmittedSectionsView | null;
+}
+
+export interface OmittedSectionsView {
+  readonly count: number;
+  /** "2 sections omitted: storage, opencodex" */
+  readonly summary: string;
+  /** One "section: message" line per omitted section. */
+  readonly messages: ReadonlyArray<string>;
 }
 
 const PLATFORM_LABELS: Readonly<Record<string, string>> = {
@@ -49,6 +59,18 @@ const PLATFORM_LABELS: Readonly<Record<string, string>> = {
 export function platformLabel(platform: string | undefined): string | null {
   if (platform === undefined) return null;
   return PLATFORM_LABELS[platform] ?? platform;
+}
+
+/** A host that dropped sections still reports; this says what it left out and why. */
+export function omittedSectionsView(entry: HostStatusEntry): OmittedSectionsView | null {
+  const omitted = entry.omittedMetrics ?? [];
+  if (omitted.length === 0) return null;
+  const sections = [...new Set(omitted.map((item) => item.section))];
+  return {
+    count: sections.length,
+    summary: `${sections.length} ${sections.length === 1 ? "section" : "sections"} omitted: ${sections.join(", ")}`,
+    messages: omitted.map((item) => `${item.section}: ${item.message}`),
+  };
 }
 
 export function hostMeters(metrics: HostStatusMetrics): ReadonlyArray<HostMeterView> {
@@ -137,6 +159,7 @@ export function hostCards(
       threads: metrics?.threads ?? null,
       quotas: metrics?.quotas ?? [],
       computerUse: hostComputerUseText(metrics?.computerUse),
+      omitted: omittedSectionsView(entry),
     };
   });
 }

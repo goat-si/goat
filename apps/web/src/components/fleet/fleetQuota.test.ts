@@ -446,6 +446,24 @@ describe("Fleet OpenCodex pool labels", () => {
 });
 
 describe("Fleet route evidence", () => {
+  it("names hosts whose pool routing is inferred because they report no route markers", () => {
+    const unmarked = row("old-mini", [quota("codex", 64)], pool());
+    const base = row("studio", [quota("own-codex", 76)], pool("studio-home"));
+    const marked = {
+      ...base,
+      entry: { ...base.entry!, metrics: { ...base.entry!.metrics!, quotaRouteMarkers: true } },
+    };
+    const result = fleetQuota([unmarked, marked]);
+    const inferredPool = result.quotas.find((q) => q.key === JSON.stringify(["opencodex", "home"]));
+    const markedPool = result.quotas.find(
+      (q) => q.key === JSON.stringify(["opencodex", "studio-home"]),
+    );
+    expect(inferredPool?.inferred).toEqual(["old-mini"]);
+    expect(inferredPool?.detail).toContain("Quota routing inferred for old-mini");
+    expect(markedPool?.inferred).toBeUndefined();
+    expect([...result.inferredRows]).toEqual(["old-mini"]);
+  });
+
   it("never guesses routing on a host that marks its routed instances", () => {
     const base = row("studio", [quota("own-codex", 76)], pool());
     const marked = {

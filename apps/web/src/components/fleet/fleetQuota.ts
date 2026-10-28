@@ -17,6 +17,8 @@ export interface FleetConsoleQuota extends Omit<FleetQuotaRow, "driver" | "peak"
   readonly hiddenLabel?: string;
   /** Replaces "Quota unknown" when the pool's state is known, such as an unreadable pool. */
   readonly status?: string;
+  /** Hosts matched to this pool by driver alone, because they report no route markers. */
+  readonly inferred?: ReadonlyArray<string>;
 }
 
 const plural = (count: number, word: string) => count + " " + word + (count === 1 ? "" : "s");
@@ -105,6 +107,9 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
   const homeName = (id: string) =>
     homeLabels.get(id)?.name ?? displayName(homes.get(id)?.producer.displayName, id);
   const viaHub = new Map<string, string | null>();
+  /** Rows whose pool routing is a driver guess, and those rows' labels per Home, keyed by row. */
+  const inferredRows = new Set<string>();
+  const inferredHosts = new Map<string, Map<string, string>>();
   const routed = new Map<string, Map<string, HostStatusQuota>>();
   const unreadable: FleetConsoleQuota[] = [];
   const localRows = rows.map((row) => {
@@ -153,6 +158,12 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       if (id === undefined) return true;
       const provider = reference?.provider ?? (inferred ? inferred.provider : undefined);
       if (provider === undefined) return true;
+      if (reference === undefined) {
+        inferredRows.add(row.key);
+        let hosts = inferredHosts.get(id);
+        if (hosts === undefined) inferredHosts.set(id, (hosts = new Map()));
+        hosts.set(row.key, row.label);
+      }
       let providers = routed.get(id);
       if (providers === undefined) routed.set(id, (providers = new Map()));
       const previous = providers.get(provider);
@@ -223,6 +234,7 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
     const sorted = windows.toSorted((a, b) => b.usedPercent - a.usedPercent);
     const hiddenWindows = Math.max(0, windows.length - maxWindows);
     const hidden = hiddenWindows + accountCount;
+    const inferred = [...(inferredHosts.get(homeId)?.values() ?? [])];
     pools.push({
       key: JSON.stringify(["opencodex", homeId]),
       label: "OpenCodex pool",
@@ -230,6 +242,7 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       windows: sorted.slice(0, maxWindows),
       peak: sorted[0]?.usedPercent ?? null,
       hidden,
+      ...(inferred.length === 0 ? {} : { inferred }),
       hiddenLabel:
         "+" +
         [hiddenWindows > 0 ? plural(hiddenWindows, "window") : "", plural(accountCount, "account")]
@@ -239,6 +252,11 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
         "OpenCodex pool" + (homeName(homeId) === null ? "" : ` · ${homeName(homeId)}`),
         `${hiddenWindows} more ${hiddenWindows === 1 ? "window" : "windows"} · ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`,
         ...detail,
+        ...(inferred.length === 0
+          ? []
+          : [
+              `Quota routing inferred for ${inferred.join(", ")}: ${inferred.length === 1 ? "this host did" : "these hosts did"} not report which instances use this pool, so Fleet matched them by provider driver. Hosts on an older GOAT report it after an update.`,
+            ]),
       ].join("\n"),
     });
   }
@@ -247,5 +265,5 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
     ...unreadable,
     ...quotaRows(localRows, maxWindows).map((row) => ({ ...row, hidden: 0 })),
   ];
-  return { quotas, viaHub };
+  return { quotas, viaHub, inferredRows };
 }
