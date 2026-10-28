@@ -16,7 +16,12 @@ import * as NodeSqlite from "node:sqlite";
 import { vi } from "vite-plus/test";
 import * as SqliteClient from "./nodeSqliteClient.ts";
 import { writerWorkerSource } from "./sqliteWriterWorkerSource.ts";
-import { recoveryPrelude, observeFailures } from "./nodeSqliteWriter.testFixtures.ts";
+import {
+  recoveryPrelude,
+  observeFailures,
+  initialCheckpointPrelude,
+  holdInitialCheckpoint,
+} from "./nodeSqliteWriter.testFixtures.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
 const nativeFixture = vi.hoisted(() => ({
@@ -596,6 +601,46 @@ it.effect("retries writer opening for WAL_RECOVERY on the parent clock", () =>
 );
 
 it.effect(
+  "releases failed startup at its deadline while native checkpoint observation is held",
+  () =>
+    Effect.gen(function* () {
+      setup();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-startup-held-" });
+      const filename = path.join(directory, "state.sqlite");
+      const seed = new NodeSqlite.DatabaseSync(filename);
+      seed.exec("PRAGMA journal_mode = WAL");
+      seed.close();
+      nativeFixture.prelude = initialCheckpointPrelude;
+      const workerStarted = yield* Deferred.make<void>();
+      let held: ReturnType<typeof holdInitialCheckpoint> | undefined;
+      nativeFixture.onStart = (worker) => {
+        held = holdInitialCheckpoint(worker);
+        Deferred.doneUnsafe(workerStarted, Effect.void);
+      };
+      yield* Effect.addFinalizer(() => Effect.sync(() => held?.[Symbol.dispose]()));
+      const starting = yield* Layer.build(
+        SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true }),
+      ).pipe(Effect.scoped, Effect.exit, Effect.forkChild);
+      yield* Deferred.await(workerStarted);
+      yield* Deferred.await(held!.arrived);
+      yield* TestClock.adjust("10 seconds");
+      const deadlineResult = starting.pollUnsafe();
+      const aliveAtDeadline = startedWorkers[0]!.threadId !== -1;
+      const retirement = held!.retirement;
+      held!.release();
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
+      if (retirement) yield* Effect.promise(() => retirement);
+      assert.isTrue(aliveAtDeadline, "the native wait must outlive the startup deadline");
+      assert.isDefined(retirement, "startup failure must retire its owned worker");
+      assert.isDefined(deadlineResult, "startup must return before native termination completes");
+      assert.equal(startedWorkers.length, 1);
+      assert.equal(startedWorkers[0]!.threadId, -1);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "attributes native preparation and execution to their caller before transport or checkpoints",
   () =>
     withWriterClient(
@@ -656,8 +701,28 @@ it.effect(
       reader.prepare("SELECT value FROM existing_wal").all();
       seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
       assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
+      const startupCheckpoints: Array<string> = [];
+      let ready = false;
+      nativeFixture.prelude = `
+(() => {
+  const { parentPort } = require("node:worker_threads");
+  const sqlite = require("node:sqlite");
+  const prepare = sqlite.DatabaseSync.prototype.prepare;
+  sqlite.DatabaseSync.prototype.prepare = function(sql) {
+    if (/wal_checkpoint\\((PASSIVE|TRUNCATE)\\)/.test(sql))
+      parentPort.postMessage({ type: "checkpoint-observed", sql });
+    return prepare.call(this, sql);
+  };
+})();
+`;
+      nativeFixture.onStart = (worker) =>
+        worker.on("message", (reply) => {
+          if (reply?.type === "ready") ready = true;
+          if (reply?.type === "checkpoint-observed" && !ready) startupCheckpoints.push(reply.sql);
+        });
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
+        assert.deepEqual(startupCheckpoints, [], "startup must only observe WAL pressure");
         const firstReply = yield* Deferred.make<{ backpressure?: boolean }>();
         const worker = startedWorkers[0]!;
         const listener = (reply: { backpressure?: boolean }) =>
