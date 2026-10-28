@@ -1,3 +1,4 @@
+import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import * as HomeRoute from "../provider/OpenCodexRoute.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { withCodexAppServerClient } from "../provider/CodexProvider.ts";
@@ -38,6 +39,8 @@ import { codexModelFamily, getModelSelectionStringOptionValue } from "@goat/shar
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
+
+const isTextGenerationError = Schema.is(TextGenerationError);
 
 const CODEX_TIMEOUT_MS = 180_000;
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
@@ -104,20 +107,14 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
   const resolvedEnvironment = environment ?? process.env;
 
-  const readStreamAsString = <E>(
-    operation: string,
-    stream: Stream.Stream<Uint8Array, E>,
-  ): Effect.Effect<string, TextGenerationError> =>
-    stream.pipe(
-      Stream.decodeText(),
-      Stream.runFold(
-        () => "",
-        (acc, chunk) => acc + chunk,
+  const readStreamAsString = Effect.fn("CodexTextGeneration.readOutput")(
+    <E>(operation: string, stream: Stream.Stream<Uint8Array, E>) =>
+      collectStreamAsString(stream, { maxBytes: 8 * 1024 * 1024 }).pipe(
+        Effect.mapError((cause) =>
+          normalizeCliError("codex", operation, cause, "Failed to collect process output"),
+        ),
       ),
-      Effect.mapError((cause) =>
-        normalizeCliError("codex", operation, cause, "Failed to collect process output"),
-      ),
-    );
+  );
 
   const removeTempFileDir = (filePath: string): Effect.Effect<void, never> =>
     fileSystem.remove(path.dirname(filePath), { recursive: true }).pipe(Effect.ignore);
@@ -338,7 +335,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       );
       const [stdout, , exitCode] = yield* Effect.all(
         [
-          child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+          readStreamAsString("mcp-list", child.stdout),
           child.stderr.pipe(Stream.runDrain),
           child.exitCode,
         ],
@@ -371,7 +368,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         onSome: (names) => Effect.succeed(names),
       }),
     ),
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.catch((cause) =>
+      isTextGenerationError(cause) ? cause : Effect.succeed<ReadonlyArray<string>>([]),
+    ),
   );
 
   const runCodexJson = Effect.fn("runCodexJson")(function* <S extends Schema.Top>({

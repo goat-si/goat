@@ -1,3 +1,4 @@
+import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import { ProviderDriverKind } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
@@ -160,20 +161,14 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)),
   );
 
-  const readStreamAsString = <E>(
-    operation: string,
-    stream: Stream.Stream<Uint8Array, E>,
-  ): Effect.Effect<string, TextGenerationError> =>
-    stream.pipe(
-      Stream.decodeText(),
-      Stream.runFold(
-        () => "",
-        (acc, chunk) => acc + chunk,
+  const readStreamAsString = Effect.fn("ClaudeTextGeneration.readOutput")(
+    <E>(operation: string, stream: Stream.Stream<Uint8Array, E>) =>
+      collectStreamAsString(stream, { maxBytes: 8 * 1024 * 1024 }).pipe(
+        Effect.mapError((cause) =>
+          normalizeCliError("claude", operation, cause, "Failed to collect process output"),
+        ),
       ),
-      Effect.mapError((cause) =>
-        normalizeCliError("claude", operation, cause, "Failed to collect process output"),
-      ),
-    );
+  );
 
   const encodeJsonForOperation = (
     operation: TextGenerationOperations.Operation,

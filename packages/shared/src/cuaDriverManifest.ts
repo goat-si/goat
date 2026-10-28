@@ -5,6 +5,8 @@
 // Shapes follow the v3 schema of the pinned driver (cua-driver-core/src/session_manifest.rs at
 // cua-driver-rs-v0.37.0), which rejects unknown keys, unknown tools and an empty allow list.
 
+import { BoundedLines } from "./boundedLines.ts";
+
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Electron main and the standalone server both call this outside an Effect runtime.
 import * as NodeChildProcess from "node:child_process";
 
@@ -389,12 +391,13 @@ export function listCuaDriverApplications(input: {
       { stdio: ["pipe", "pipe", "ignore"], env: { ...input.environment }, windowsHide: true },
     );
     let settled = false;
-    let buffer = "";
+    let closeLines = () => {};
     const onAbort = () => finish(new Error("Cua Driver listing was cancelled."));
     const finish = (error: Error | undefined, apps?: ReadonlyArray<CuaDriverListedApp>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      closeLines();
       // A caller may reuse one signal for many listings; each listing removes its own handler.
       input.signal?.removeEventListener("abort", onAbort);
       child.stdin.end();
@@ -417,41 +420,39 @@ export function listCuaDriverApplications(input: {
     child.on("exit", (code) =>
       finish(new Error("Cua Driver exited while listing apps (" + code + ").")),
     );
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      buffer += chunk;
-      for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line.length === 0) continue;
-        let message: {
-          id?: unknown;
-          result?: { structuredContent?: { apps?: unknown }; isError?: boolean };
-          error?: unknown;
-        };
-        try {
-          message = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (message.id === 1) {
-          send({ jsonrpc: "2.0", method: "notifications/initialized" });
-          send({
-            jsonrpc: "2.0",
-            id: 2,
-            method: "tools/call",
-            params: { name: "list_apps", arguments: {} },
-          });
-        } else if (message.id === 2) {
-          const apps = message.result?.structuredContent?.apps;
-          if (
-            message.error !== undefined ||
-            message.result?.isError === true ||
-            !Array.isArray(apps)
-          )
-            finish(new Error("Cua Driver could not list apps."));
-          else finish(undefined, apps as ReadonlyArray<CuaDriverListedApp>);
-        }
+    const lines = new BoundedLines(child.stdout, 8 * 1024 * 1024);
+    closeLines = () => lines.close();
+    if (settled) {
+      lines.close();
+      return;
+    }
+    lines.on("limit", () => finish(new Error("Cua Driver listing exceeded its frame budget.")));
+    lines.on("line", (raw: string) => {
+      const line = raw.trim();
+      if (line.length === 0) return;
+      let message: {
+        id?: unknown;
+        result?: { structuredContent?: { apps?: unknown }; isError?: boolean };
+        error?: unknown;
+      };
+      try {
+        message = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (message.id === 1) {
+        send({ jsonrpc: "2.0", method: "notifications/initialized" });
+        send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "list_apps", arguments: {} },
+        });
+      } else if (message.id === 2) {
+        const apps = message.result?.structuredContent?.apps;
+        if (message.error !== undefined || message.result?.isError === true || !Array.isArray(apps))
+          finish(new Error("Cua Driver could not list apps."));
+        else finish(undefined, apps as ReadonlyArray<CuaDriverListedApp>);
       }
     });
     send({
