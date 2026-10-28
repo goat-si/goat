@@ -1,6 +1,5 @@
 import { defineConfig, type ViteUserConfig } from "vite-plus";
 import "vite-plus/test/config";
-import { getViteConfig } from "astro/config";
 
 // Astro and Vite+ resolve separate Vite type copies; keep their recursive plugin types apart.
 const config: Pick<ViteUserConfig, "root" | "test" | "run"> = defineConfig({
@@ -17,5 +16,8 @@ const config: Pick<ViteUserConfig, "root" | "test" | "run"> = defineConfig({
   },
 });
 
+// Release builds install without this package, and their task graph still loads this file.
+const astro = await import("astro/config").catch(() => undefined);
+
 // Root-level runs (CI's changed-test list) start elsewhere; Astro resolves src/pages from its root.
-export default getViteConfig(config, { root: import.meta.dirname });
+export default astro ? astro.getViteConfig(config, { root: import.meta.dirname }) : config;
