@@ -7,9 +7,10 @@ import Mark from "./Mark.astro";
 interface Props {
   locale: Locale;
   path: string;
+  localized?: boolean;
 }
 
-const { locale, path } = Astro.props;
+const { locale, path, localized = true } = Astro.props;
 const t = messages(locale);
 const alternate = otherLocale(locale);
 const alternateMessages = messages(alternate);
@@ -26,7 +27,7 @@ const alternateMessages = messages(alternate);
         <li><a class="nav-link" href={localePath(locale, "/download/")}>{t.nav.download}</a></li>
         <li class="nav-optional"><a class="nav-link" href={LINKS.guides}>{t.nav.guides}</a></li>
         <li class="nav-optional"><a class="nav-link" href={LINKS.repository}>{t.nav.github}</a></li>
-        <li>
+        {localized && <li>
           <a
             class="nav-link nav-locale"
             href={localePath(alternate, path)}
@@ -36,7 +37,7 @@ const alternateMessages = messages(alternate);
           >
             {t.switchLabel}
           </a>
-        </li>
+        </li>}
       </ul>
     </nav>
   </div>

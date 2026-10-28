@@ -1,0 +1,31 @@
+---
+import { render } from "astro:content";
+import Base from "../../../layouts/Base.astro";
+import { withBase } from "../../../lib/paths";
+import { userGuideHtml, userGuides } from "../../../lib/userGuides";
+import "../../../styles/userDocs.css";
+
+export async function getStaticPaths() {
+  return (await userGuides()).map(({ entry, title }) => ({
+    params: { page: entry.id },
+    props: { entry, title },
+  }));
+}
+
+const { entry, title } = Astro.props;
+const { headings } = await render(entry);
+const sections = headings.filter((heading) => heading.depth === 2);
+---
+
+<Base locale="en" path={`/docs/user/${entry.id}/`} title={`${title} | GOAT user guides`} description={`${title}: a GOAT user guide.`} localized={false}>
+  <div class="container page-head docs-page">
+    <nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href={withBase("docs/user/")}>← All user guides</a></nav>
+    <div class="docs-layout">
+      <article class="guide-content" set:html={userGuideHtml(entry)} />
+      {sections.length > 0 && <nav class="guide-toc" aria-label="On this page">
+        <p>On this page</p>
+        <ul>{sections.map((heading) => <li><a href={`#${heading.slug}`}>{heading.text}</a></li>)}</ul>
+      </nav>}
+    </div>
+  </div>
+</Base>

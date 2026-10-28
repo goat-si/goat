@@ -20,6 +20,7 @@ on:
     branches: [dev]
     paths:
       - apps/marketing/**
+      - docs/user/**
       - packages/shared/**
       - packages/contracts/**
       - scripts/install.sh

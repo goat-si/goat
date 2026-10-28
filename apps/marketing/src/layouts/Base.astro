@@ -17,9 +17,10 @@ interface Props {
   canonicalPath?: string;
   noindex?: boolean;
   jsonLd?: Record<string, unknown>;
+  localized?: boolean;
 }
 
-const { locale, path, title, description, canonicalPath, noindex = false, jsonLd } = Astro.props;
+const { locale, path, title, description, canonicalPath, noindex = false, jsonLd, localized = true } = Astro.props;
 const t = messages(locale);
 const site = Astro.site;
 const canonical = absoluteUrl(localePath(locale, canonicalPath ?? path), site);
@@ -40,7 +41,7 @@ const preview = import.meta.env.MARKETING_NOINDEX === "1";
     {(noindex || preview) && <meta name="robots" content="noindex" />}
     {!noindex && <link rel="canonical" href={canonical} />}
     {
-      !noindex &&
+      !noindex && localized &&
       LOCALES.map((alternate) => (
         <link
           rel="alternate"
@@ -50,7 +51,7 @@ const preview = import.meta.env.MARKETING_NOINDEX === "1";
       ))
     }
     {
-      !noindex && (
+      !noindex && localized && (
         <link
           rel="alternate"
           hreflang="x-default"
@@ -82,10 +83,10 @@ const preview = import.meta.env.MARKETING_NOINDEX === "1";
   </head>
   <body>
     <a class="skip-link" href="#main">{t.skip}</a>
-    <Header locale={locale} path={path} />
+    <Header locale={locale} path={path} localized={localized} />
     <main id="main" tabindex="-1">
       <slot />
     </main>
-    <Footer locale={locale} path={path} />
+    <Footer locale={locale} path={path} localized={localized} />
   </body>
 </html>

@@ -638,7 +638,7 @@ function validateCloseOutsidePrsWorkflow(source, yaml) {
 // close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
 // this hash on purpose.
 const pinnedMarketingPagesSha256 =
-  "bb57ba4cbcb8a7c78eda250ec51456828cc6c5d837c1f59c3fed049c0bb38613";
+  "d1020a1155c65a1d861a548b2d4c8303414d35dc447da8a28bb2046d8ded2cd3";
 
 function validateMarketingPagesWorkflow(source, yaml) {
   const fail = (reason) => refuse(reason, marketingPagesPath);
