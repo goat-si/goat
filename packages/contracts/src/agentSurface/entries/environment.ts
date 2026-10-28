@@ -45,4 +45,66 @@ export const environmentEntries = {
       openWorldHint: true,
     },
   }),
+  "environment.settings_read": entry({
+    resource: "environment",
+    verb: "settings_read",
+    name: "goat_environment_settings_read",
+    toolkit: "environment",
+    summary: "List every server setting with who may change it, and the values agents may change.",
+    description:
+      "List every server setting of this environment: access agent (value shown; change it with goat_environment_settings_update), path (the path that owns it) or person (only a person changes it, with the reason). keys limits the list and adds each key's input schema.",
+    guide:
+      "Values come from the same redacted snapshot GOAT's clients receive, and only for agent keys. A key without a value, such as setModelFavorites, is an action applied by an update. Ask for keys to get each one's JSON input schema before writing it.\n\nClient settings such as fonts, notifications and sidebar layout live on each device and are not listed.",
+    parameters: {
+      keys: "Setting keys to read, each with its input schema. Omit for every key without schemas.",
+    },
+    examples: [
+      {
+        title: "Read one setting with its schema",
+        args: { keys: ["branchNamePrefix"] },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "environment.settings_update": entry({
+    resource: "environment",
+    verb: "settings_update",
+    name: "goat_environment_settings_update",
+    toolkit: "environment",
+    summary: "Change server settings agents may change, through normal settings persistence.",
+    description:
+      "Change server settings in one atomic patch. patch maps setting keys to the values Settings would send. Only keys goat_environment_settings_read lists with access agent are accepted; others are refused with the path that owns them or the reason a person must change them.",
+    guide:
+      "Use a live full-access/default calling thread, or a full-access client with live settings:write, checked again inside the settings write lock. Values decode exactly as the Settings page sends them, and nested objects merge the same way. Nothing is written when any key is refused or any value fails to decode. The result lists the changed keys with their new values.",
+    parameters: {
+      patch:
+        "Setting keys with their new values, for example {branchNamePrefix:'goat/'}. goat_environment_settings_read with keys returns each key's schema.",
+    },
+    examples: [
+      {
+        title: "Set the branch name prefix",
+        args: { patch: { branchNamePrefix: "goat/" } },
+      },
+    ],
+    effect: "destructive",
+    capability: "settings.write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The handler applies the supplied values through the settings service; repeating the same patch leaves the same settings, except action keys such as setModelFavorites, which apply again.",
+    annotations: {
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  }),
 } as const;

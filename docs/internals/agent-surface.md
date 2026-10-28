@@ -672,6 +672,49 @@ failed runs. A smaller turn count cannot excuse an admission, Stop, private-mode
 or receipt regression. Investigate a paired task that loses its oracle, crosses
 a safety boundary or meaningfully worsens turns or bytes.
 
+## Settings
+
+**Now.** Every server setting is reachable through two paths instead of a tool each, the
+shape Codex's app server uses for its config (`config/read`, `config/value/write`).
+`environment.settings_read` lists every `ServerSettingsPatch` key with its access, the
+value for keys agents may change, and, for keys asked for by name, the value's JSON schema.
+`environment.settings_update` takes `{patch}` with the values the Settings page would send,
+decodes it with the same `ServerSettingsPatch` schema, and writes it through
+`ServerSettingsService.updateSettings` in one commit. A refused key, or a value that does not
+decode, changes nothing.
+
+[settingsAccess.ts](../../packages/contracts/src/agentSurface/settingsAccess.ts) gives every
+key one access:
+
+- `agent`: the generic path changes it.
+- `path`: a dedicated path owns it because its write does more than store a value, such as
+  `provider.update` for provider instances. The refusal names that path.
+- `person`: only a person changes it, and the refusal says why. These are credentials,
+  grants that widen what agents may do (browser, device, memory or computer-use access,
+  runtime-mode defaults, goatclaw), links to other machines, and addresses that send data
+  out.
+
+`projectSettingsOverrides` is `person` because an entry replaces a project's whole override
+set, so a partial or null entry would drop runtime-mode, agent-access and provider overrides.
+Agents still reach the per-field legacy keys (`projectScriptOverrides`,
+`projectAutoPullOverrides`), which change one field of the stored entry. Client settings
+(fonts, notifications, sidebar layout) live on each device and are out of scope.
+
+A thread calls the update under the same rules as `environment.preferences_update`: live
+full-access/default caller, the `settings.write` goatclaw capability, and the thread lock
+with a recheck. An outside client needs a live `settings:write` grant, checked at admission
+and again inside the settings write lock. No `agent` key needs `providers:manage`.
+
+The rule is that settings never grow the MCP surface. Three tests hold it:
+[settingsAccess.test.ts](../../packages/contracts/src/agentSurface/settingsAccess.test.ts)
+fails on an unclassified key (the type does too), on an `agent` key whose schema holds a
+credential, and on a registry path that declares `settings.write` without a reviewed reason in
+`SETTINGS_WRITE_EXCEPTIONS`, and it keeps every settings path out of the core listing.
+[settingsWriters.test.ts](../../apps/server/src/mcp/toolkits/environment/settingsWriters.test.ts)
+pins every server file that writes settings directly, whatever capability its tool declares.
+A new tool that reuses an already listed writer passes both; reviewers reject it by the rule
+in AGENTS.md.
+
 ## Human steps
 
 **Now.** One durable [Handoff](../../packages/contracts/src/handoff.ts) record
@@ -1059,6 +1102,7 @@ every gate runs per step (D7).
 | D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                                                                                                                                                                                                      | Registering alias tools, which would list them                                               |
 | D21 | Every agent GOAT runs gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback; CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KiB per harness; D8 verifies the default and tunes the core set rather than gating it                                                                                                                                                                          | Opt-in core, measured before it became the default                                           |
 | D22 | Thread callers (agents GOAT runs) get the core listing; MCP clients, including SSH dispatch and linked hosts, keep the full one unless they send `x-goat-tool-listing: core`       | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed. Outside agents opt into core with the header ([#1066](https://github.com/goat-si/goat/issues/1066)); a versioned capability record for remotes cannot change the no-header default while any older origin remains | Origins learning launch arguments through `goat_describe`, which does not help older origins |
+| D23 | Settings reach agents through `environment.settings_read` and `environment.settings_update`, with every key classified `agent`, `path` or `person` in `SETTINGS_ACCESS`            | A tool per setting grows the listing and leaves new settings unreachable until someone writes one; one decoded patch reuses the Settings page's schema and merge rules                                                                                                                                                                                      | `environment.preferences_update` growing a field at a time; a settings layer outside MCP     |
 
 ## Open questions
 

@@ -185,7 +185,7 @@ const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   worker: 97,
   manager: 111,
   "merge-manager": 111,
-  owner: 145,
+  owner: 146,
 };
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(

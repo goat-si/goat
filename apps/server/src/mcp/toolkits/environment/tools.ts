@@ -77,4 +77,40 @@ const EnvironmentPreferencesTool = Tool.make(
     success: Schema.Struct(PreferenceFields),
   },
 ).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.preferences_update"]));
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+/** One server setting as agents see it; contracts' SETTINGS_ACCESS decides the access. */
+const SettingEntry = Schema.Struct({
+  key: Schema.String,
+  access: Schema.Literals(["agent", "path", "person"]),
+  /** The current value, encoded as Settings sends it; only for agent keys. */
+  value: Schema.optionalKey(Schema.Unknown),
+  /** The path that owns a path key. */
+  path: Schema.optionalKey(Schema.String),
+  /** Why only a person changes a person key. */
+  reason: Schema.optionalKey(Schema.String),
+  /** JSON schema of the value, for keys asked for by name. */
+  schema: Schema.optionalKey(Schema.Unknown),
+});
+const EnvironmentSettingsReadTool = Tool.make(
+  agentSurfaceRegistry["environment.settings_read"].name,
+  {
+    ...shared,
+    description: agentSurfaceRegistry["environment.settings_read"].description,
+    parameters: Schema.Struct({ keys: Schema.optionalKey(Schema.Array(Schema.String)) }),
+    success: Schema.Struct({ settings: Schema.Array(SettingEntry) }),
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.settings_read"]));
+const EnvironmentSettingsUpdateTool = Tool.make(
+  agentSurfaceRegistry["environment.settings_update"].name,
+  {
+    ...shared,
+    description: agentSurfaceRegistry["environment.settings_update"].description,
+    parameters: Schema.Struct({ patch: Schema.Record(Schema.String, Schema.Unknown) }),
+    success: Schema.Struct({ settings: Schema.Array(SettingEntry) }),
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.settings_update"]));
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  EnvironmentSettingsReadTool,
+  EnvironmentSettingsUpdateTool,
+);
