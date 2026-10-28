@@ -1,6 +1,6 @@
 import { isSystemMaterialRequested, type DesktopWindowMaterialReason } from "@goat/contracts";
-import { useEffect, useState } from "react";
-import { useClientSettings, useClientSettingsHydrated } from "../hooks/useSettings";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { onClientSettingsPersisted } from "../hooks/useSettings";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -79,34 +79,37 @@ export function WindowMaterialRestartDialog({
 }
 
 const wantsSystemGlass = (
-  settings: Parameters<typeof isSystemMaterialRequested>[0] & {
-    readonly glassOpacity: number;
-  },
+  settings: Parameters<typeof isSystemMaterialRequested>[0] & { readonly glassOpacity: number },
 ) => isSystemMaterialRequested(settings) && settings.glassOpacity < 100;
 
-/**
- * Asks once after a settings change made in this window turns system glass on and the window
- * reports it needs a restart. Settings change only through this window's writes once hydrated.
- */
+// Counts saved changes from this window that turned system glass on. Saved writes only, so a
+// failed "off" that rolls the switch back never reads as a new request.
+let glassRequests = 0;
+const glassRequestListeners = new Set<() => void>();
+onClientSettingsPersisted((previous, next) => {
+  if (wantsSystemGlass(previous) || !wantsSystemGlass(next)) return;
+  glassRequests += 1;
+  for (const listener of glassRequestListeners) listener();
+});
+const subscribeGlassRequests = (listener: () => void) => {
+  glassRequestListeners.add(listener);
+  return () => {
+    glassRequestListeners.delete(listener);
+  };
+};
+const getGlassRequests = () => glassRequests;
+
+/** Asks once per saved change that turns system glass on while the window needs a restart. */
 export function WindowMaterialRestartPrompt({
   reason,
 }: {
   readonly reason: DesktopWindowMaterialReason | null;
 }) {
-  const hydrated = useClientSettingsHydrated();
-  const wanted = useClientSettings(wantsSystemGlass);
-  const [seenWanted, setSeenWanted] = useState<boolean | null>(null);
-  const [requested, setRequested] = useState(false);
-  // Set once asked; cleared when the window leaves "restart", so a rolled-back off cannot re-ask.
-  const [asked, setAsked] = useState(false);
+  const requests = useSyncExternalStore(subscribeGlassRequests, getGlassRequests);
+  const [handled, setHandled] = useState(requests);
   const [open, setOpen] = useState(false);
-  if (hydrated && wanted !== seenWanted) {
-    setSeenWanted(wanted);
-    setRequested(seenWanted === false && wanted && !asked);
-  }
-  if (asked && reason !== null && reason !== "restart") setAsked(false);
   if (open && reason !== null && reason !== "restart") setOpen(false);
-  const due = requested && reason === "restart";
+  const due = requests !== handled && reason === "restart";
 
   // oxlint-disable-next-line goat/react-effect-budget -- a modal must wait for a held slider's pointerup
   useEffect(() => {
@@ -114,8 +117,7 @@ export function WindowMaterialRestartPrompt({
     let cancelled = false;
     const show = () => {
       if (cancelled) return;
-      setRequested(false);
-      setAsked(true);
+      setHandled(requests);
       setOpen(true);
     };
     if (document.querySelector("input[type='range']:active") === null) {
@@ -127,7 +129,7 @@ export function WindowMaterialRestartPrompt({
       cancelled = true;
       window.removeEventListener("pointerup", show);
     };
-  }, [due]);
+  }, [due, requests]);
 
   return <WindowMaterialRestartDialog open={open} onOpenChange={setOpen} />;
 }

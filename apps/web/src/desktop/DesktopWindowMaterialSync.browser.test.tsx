@@ -160,3 +160,32 @@ it("does not ask again when turning glass off after Later fails to save and roll
   expect(fixture.saved().desktopSystemMaterialEnabled).toBe(true);
   await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
 });
+
+it("asks again when glass is turned off and back on before the desktop reports off", async () => {
+  using fixture = materialBridge(macGlass("off", 1), "darwin");
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<DesktopWindowMaterialSync />);
+  await act(() => persistClientSettingsPatch({ desktopSystemMaterialEnabled: true }));
+  await act(() => fixture.push(macGlass("restart", 2)));
+  await screen.getByRole("button", { name: "Later" }).click();
+  await act(() => persistClientSettingsPatch({ desktopSystemMaterialEnabled: false }));
+  await act(() => persistClientSettingsPatch({ desktopSystemMaterialEnabled: true }));
+  await expect.element(screen.getByRole("alertdialog")).toBeVisible();
+});
+
+it("does not ask after Later when reduced transparency passes and a failed off rolls back", async () => {
+  using fixture = materialBridge(macGlass("off", 1), "darwin");
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<DesktopWindowMaterialSync />);
+  await act(() => persistClientSettingsPatch({ desktopSystemMaterialEnabled: true }));
+  await act(() => fixture.push(macGlass("restart", 2)));
+  await screen.getByRole("button", { name: "Later" }).click();
+  await act(() => fixture.push(macGlass("accessibility", 3)));
+  fixture.bridge.setClientSettings.mockRejectedValueOnce(new Error("disk unavailable"));
+  using _log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  await act(() =>
+    persistClientSettingsPatch({ desktopSystemMaterialEnabled: false }).catch(() => undefined),
+  );
+  await act(() => fixture.push(macGlass("restart", 4)));
+  await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
+});
