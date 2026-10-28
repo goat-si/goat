@@ -50,7 +50,9 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" }.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
-// An await on each call, as in a for loop, sends each alone. Each still gets its own result; the first failure stops the rest.
+// An await on each call, as in a for loop, sends each alone. Each gets its own result, and
+// after a failed or unknown one, later steps may already have run: read every result; a step went
+// unsent only when its own result says nothingSent.
 interface App extends TargetBase { menu(path: string[]): Promise<Done>; launch(): Promise<Done>;
   screenshot(): Promise<object> }`;
 
