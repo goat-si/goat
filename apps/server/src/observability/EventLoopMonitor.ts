@@ -3,7 +3,7 @@ import * as NodeOS from "node:os";
 import * as NodePerfHooks from "node:perf_hooks";
 
 import type { ServerEventLoopStall } from "@goat/contracts";
-import { makeAsyncRotatingFileSink } from "@goat/shared/logging";
+import { makeAsyncRotatingFileSink, type RotatingFileSinkError } from "@goat/shared/logging";
 import { recentSlowSql } from "@goat/shared/nodeSqliteClient";
 import * as Queue from "effect/Queue";
 import * as Context from "effect/Context";
@@ -148,7 +148,7 @@ export interface StallLogOptions {
 export const layerWith = (
   makeSampler: Effect.Effect<Effect.Effect<EventLoopReadings>, never, Scope.Scope>,
   stallLog: StallLogOptions,
-  writeOverride?: (line: string) => Effect.Effect<void, unknown>,
+  writeOverride?: (line: string) => Effect.Effect<void, RotatingFileSinkError>,
 ) =>
   Layer.effect(
     EventLoopMonitor,
@@ -163,17 +163,16 @@ export const layerWith = (
       const latestStall = yield* Ref.make<
         { readonly delayMs: number; readonly atMs: number } | undefined
       >(undefined);
-      const stallSink = yield* (
+      const stallSink =
         writeOverride === undefined
-          ? makeAsyncRotatingFileSink({ ...stallLog, maxFiles: 1 })
-          : Effect.succeed({ write: writeOverride })
-      ).pipe(
-        Effect.catch(() =>
-          Effect.logWarning("event loop stall log unavailable", {
-            filePath: stallLog.filePath,
-          }).pipe(Effect.as(undefined)),
-        ),
-      );
+          ? yield* makeAsyncRotatingFileSink({ ...stallLog, maxFiles: 1 }).pipe(
+              Effect.catch(() =>
+                Effect.logWarning("event loop stall log unavailable", {
+                  filePath: stallLog.filePath,
+                }).pipe(Effect.as(undefined)),
+              ),
+            )
+          : { write: writeOverride };
       const pending = yield* Queue.dropping<string>(16);
       let droppedStallRecords = 0;
       if (stallSink !== undefined)

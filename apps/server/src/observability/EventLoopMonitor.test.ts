@@ -3,6 +3,7 @@ import { assert, describe, vi } from "vite-plus/test";
 import * as NodePerfHooks from "node:perf_hooks";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqliteClient from "@goat/shared/nodeSqliteClient";
+import { RotatingFileSinkError } from "@goat/shared/logging";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -181,7 +182,13 @@ it.effect("continues recording after sink failure and expires runtime notices", 
         EventLoopMonitor.layerWith(Effect.succeed(Effect.sync(() => readings)), stallLog, (line) =>
           Effect.suspend(() =>
             ++writes === 1
-              ? Effect.fail("injected sink failure")
+              ? Effect.fail(
+                  new RotatingFileSinkError({
+                    operation: "write",
+                    filePath: stallLog.filePath,
+                    cause: new Error("injected sink failure"),
+                  }),
+                )
               : Queue.offer(lines, line).pipe(Effect.asVoid),
           ),
         ),
