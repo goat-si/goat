@@ -96,7 +96,9 @@ function EdgeDictationPill(props: { readonly collapseRef: RefObject<(() => void)
   const phase = voice.state.phase;
   const isError = phase === "error";
   const openSettings = isError && voice.state.errorAction === "settings";
-  const label = `${voice.label ?? "Draft"}${presentation.destination ? ` · ${presentation.destination}` : ""}`;
+  const label = voice.label ?? "Draft";
+  const destination = isError ? null : presentation.destination;
+  const spokenLabel = destination ? `${label}, transcribed ${destination}` : label;
 
   return (
     <View pointerEvents="box-none" className="absolute inset-0">
@@ -163,21 +165,26 @@ function EdgeDictationPill(props: { readonly collapseRef: RefObject<(() => void)
               />
             </Pressable>
             <Pressable
-              accessibilityLabel={isError ? (presentation.statusLabel ?? label) : label}
+              accessibilityLabel={isError ? (presentation.statusLabel ?? label) : spokenLabel}
               accessibilityHint="Hides dictation controls"
               accessibilityRole="button"
-              className="min-w-0 flex-1 justify-center self-stretch active:opacity-70"
+              className="min-w-0 flex-1 flex-row items-center gap-1 self-stretch active:opacity-70"
               onPress={() => setExpanded(false)}
             >
               <Text
                 className={cn(
-                  "text-xs",
+                  "min-w-0 shrink text-xs",
                   isError ? "text-danger-foreground" : "font-goat-medium text-foreground",
                 )}
                 numberOfLines={1}
               >
                 {isError ? presentation.statusLabel : label}
               </Text>
+              {destination ? (
+                <Text className="shrink-0 text-xs text-foreground-muted" numberOfLines={1}>
+                  {destination}
+                </Text>
+              ) : null}
             </Pressable>
             {phase === "recording" ? (
               <>
