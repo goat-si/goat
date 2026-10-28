@@ -7,4 +7,5 @@ export const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]>
   "fetch",
   "read",
   "waitFor",
+  "signInState",
 ]);

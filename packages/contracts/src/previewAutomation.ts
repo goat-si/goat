@@ -23,11 +23,7 @@ import {
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
-import {
-  PREVIEW_SESSION_GUIDANCE,
-  PreviewSessionMode,
-  PreviewTabSession,
-} from "./previewAutomationSession.ts";
+import * as Session from "./previewAutomationSession.ts";
 import * as Screen from "./previewAutomationScreen.ts";
 import {
   PreviewAutomationFeature,
@@ -43,8 +39,6 @@ const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
   .check(Schema.isMaxLength(2048));
 const URL_GUIDANCE = "Absolute http(s) URL, or a bare host (https; http for loopback).";
-const PROFILE_GUIDANCE =
-  "Profile id or name from goat_preview_status, for a new tab; implies session profile. A tab keeps its profile.";
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(60_000)),
 ).annotate({ description: "Default 15000." });
@@ -97,13 +91,6 @@ const PreviewAutomationTabTargetFields = {
 
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
-
-export const PreviewAutomationProfile = Schema.Struct({
-  id: BrowserProfileId,
-  name: Schema.String,
-  incognito: Schema.optional(Schema.Boolean),
-});
-export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
 
 /**
  * Whether this server's own headless browser can start, which needs no desktop app. `installed`
@@ -176,14 +163,13 @@ export const PreviewAutomationStatus = Schema.Struct({
         ownedByCaller: Schema.optional(Schema.Boolean),
         visible: Schema.optional(Schema.Boolean),
         profileId: Schema.optional(BrowserProfileId),
-        session: Schema.optional(PreviewTabSession),
+        session: Schema.optional(Session.PreviewTabSession),
       }),
     ),
   ),
-  profiles: Schema.optional(Schema.Array(PreviewAutomationProfile)),
+  profiles: Schema.optional(Schema.Array(Session.PreviewAutomationProfile)),
   defaultProfileId: Schema.optional(BrowserProfileId),
-  /** The selected tab's sign-in mode and store; older servers omit it. */
-  session: Schema.optional(PreviewTabSession),
+  session: Schema.optional(Session.PreviewTabSession),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 
@@ -215,21 +201,12 @@ export const PreviewAutomationOpenInput = Schema.Struct({
     }),
   ),
   profileId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))).annotate({
-    description: PROFILE_GUIDANCE,
+    description: Session.PROFILE_GUIDANCE,
   }),
-  session: Schema.optional(PreviewSessionMode).annotate({ description: PREVIEW_SESSION_GUIDANCE }),
-}).check(
-  Schema.makeFilter(
-    (input) =>
-      !(input.tabId !== undefined && input.reuseExistingTab === false) ||
-      "tabId cannot be combined with reuseExistingTab=false.",
-  ),
-  Schema.makeFilter(
-    (input) =>
-      !(input.session === "isolated" && input.profileId !== undefined) ||
-      "profileId selects a saved profile; omit it for session isolated.",
-  ),
-);
+  session: Schema.optional(Session.PreviewSessionMode).annotate({
+    description: Session.PREVIEW_SESSION_GUIDANCE,
+  }),
+}).check(Session.openInputRule);
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
 
 export const BrowserNavigationTarget = Schema.Union([
@@ -912,6 +889,10 @@ export class PreviewAutomationExecutionError extends Schema.TaggedError<PreviewA
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
     reason: Schema.optional(Schema.String),
+    /** Why a secret fill could not use its secretRef: none to use, not for this page, or unreadable. */
+    secretFailure: Schema.optional(
+      Schema.Literals(["no_candidate", "not_permitted", "unavailable"]),
+    ),
   },
 ) {
   override get message(): string {

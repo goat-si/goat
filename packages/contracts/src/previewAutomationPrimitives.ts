@@ -118,6 +118,10 @@ export const PreviewAutomationFillSecretInput = Schema.Struct({
     description:
       "CSS selector matching exactly one password input in the page (open shadow roots included). Omit to fill the password field that has focus, including one inside a frame.",
   }),
+  expectedAccount: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(320))).annotate({
+    description:
+      "The account this password is for, such as the email you entered. GOAT fills nothing unless the page still shows it, and without it a password-only page reports account unverified.",
+  }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(60_000)),
   ).annotate({ description: "Default 15000." }),
@@ -129,6 +133,10 @@ export const PreviewAutomationFillSecretResult = Schema.Struct({
   origin: Schema.String,
   privateMode: Schema.Boolean.annotate({
     description: "A secret field still has focus, so the tab stays private until it loses focus.",
+  }),
+  account: Schema.optional(Schema.Literals(["matched", "unverified"])).annotate({
+    description:
+      "matched: the sign-in form or page showed the same identifier when the password went in. unverified: GOAT could not see which account this page is for.",
   }),
 });
 export type PreviewAutomationFillSecretResult = typeof PreviewAutomationFillSecretResult.Type;

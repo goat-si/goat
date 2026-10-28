@@ -8,6 +8,8 @@ import {
   PreviewAutomationFillSecretInput,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
+  type PreviewTabSession,
+  type SecretRequestFailureReason,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -26,6 +28,7 @@ import {
 } from "./secretForms.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import { readSignInPage, signInState, type SignInRecord } from "./signInState.ts";
 
 /** The part of a server browser tab this module reads. */
 export interface SecretFillTab {
@@ -35,6 +38,9 @@ export interface SecretFillTab {
   readonly control: SessionControl;
   readonly recording: unknown;
   readonly recordingStart: unknown;
+  readonly session?: PreviewTabSession;
+  /** Moves on each main-frame navigation, so a submission is tied to the document it left. */
+  readonly documentGeneration?: number;
 }
 
 type RecordAction<T> = <A>(tab: T, action: string, run: () => Promise<A>) => Promise<A>;
@@ -52,16 +58,49 @@ const FENCED =
   "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates, or the field is cleared.";
 const SHOWN =
   "This tab shows a password GOAT filled as plain text. Snapshots stay off until the field hides or clears it, or the page navigates.";
+const VISUAL =
+  "GOAT filled a password on this site in this thread, so image snapshots and recordings of it stay off. Take a text snapshot (captureImage false), or leave the site.";
+const ACCOUNT_CHANGED =
+  "The sign-in form no longer shows the account it showed when GOAT found the field, or not the expectedAccount, so nothing was filled and the secretRef is used up. Check which account the page is for before asking the person again.";
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
+type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
+
 /** A refusal before anything was typed; only UNCERTAIN may have typed the value. */
-const refused = (message: string) =>
+const refused = (message: string, failure?: SecretFailure) =>
   new ServerBrowserOperationError(
     REFUSED,
     message,
-    message === UNCERTAIN ? undefined : { beforeInput: true },
+    message === UNCERTAIN
+      ? undefined
+      : { beforeInput: true, ...(failure ? { secretFailure: failure } : {}) },
   );
+
+/** Why a secretRef could not be used, in the three states a caller can act on. */
+const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
+  switch (reason) {
+    case "not_found":
+    case "already_answered":
+    case "invalid_ref":
+    case "ref_unavailable":
+    case "ref_expired":
+      return "no_candidate";
+    case "agent_stopped":
+    case "not_a_file_request":
+    case "origin_required":
+    case "origin_mismatch":
+    case "origin_bound":
+    case "too_short_for_sign_in":
+      return "not_permitted";
+    case "load_failed":
+    case "store_failed":
+    case "record_failed":
+    case "read_failed":
+    case "consume_failed":
+      return "unavailable";
+  }
+};
 const decodeInput = Schema.decodeUnknownOption(PreviewAutomationFillSecretInput);
 
 /** Playwright's protocol log would carry the CDP arguments, so any pattern that could enable it refuses. */
@@ -91,10 +130,32 @@ const PASSWORD_ORIGIN = `function () {
     !this.disabled && !this.readOnly && this.isConnected && this.ownerDocument === document;
   return field ? self.origin : null;
 }`;
-const FILL = `function (value, origin) {
+// The identifier field a password field belongs to, as the sign-in state reads it.
+const IDENTIFIER_OF = `(field) => {
+  const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const named = (input) => /username|email/i.test(input.autocomplete || "");
+  const scope = field.form || field.closest("form") || field.ownerDocument;
+  const inputs = [...scope.querySelectorAll("input")].filter(
+    (input) => input !== field && visible(input) && !input.disabled &&
+      (["text", "email", "tel"].includes(input.type) || named(input)),
+  );
+  const before = inputs.filter((input) => input.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const id = inputs.find(named) || before[before.length - 1];
+  return id ? id.value.trim() : null;
+}`;
+const IDENTIFIER = `function () { return (${IDENTIFIER_OF})(this); }`;
+// Rechecks, in the same call that types, that the form still shows the account it showed when
+// the field was found, and the expected account when the caller named one.
+const FILL = `function (value, origin, identifier, account) {
   if (!(this instanceof HTMLInputElement) || this.type !== "password" || this.disabled ||
     this.readOnly || !this.isConnected || this.ownerDocument !== document || self.origin !== origin)
     return false;
+  const shown = (${IDENTIFIER_OF})(this);
+  if (shown !== identifier) return "account";
+  const same = (a, b) => a !== null && a.toLowerCase() === b.toLowerCase();
+  if (account !== null && !same(shown, account) &&
+    !(document.body && document.body.innerText.toLowerCase().includes(account.toLowerCase())))
+    return "account";
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(this, value);
   this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
   this.dispatchEvent(new Event("change", { bubbles: true }));
@@ -206,6 +267,28 @@ const locate = async (tab: SecretFillTab, selector: string | undefined): Promise
   }
   throw refused("The focused field is nested too deeply in frames.");
 };
+
+/** The identifier field's value beside a password field: null when the page has none. */
+const identifierOf = async (target: Target) => {
+  const read = await target.session.send("Runtime.callFunctionOn", {
+    objectId: target.objectId,
+    functionDeclaration: IDENTIFIER,
+    returnByValue: true,
+  });
+  const value: unknown = read.exceptionDetails ? null : read.result.value;
+  return typeof value === "string" ? value : null;
+};
+
+const originOf = (url: string) => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+};
+
+/** A sign-in request is small; a longer body is checked on its first part only. */
+const SIGN_IN_BODY_CHARS = 256 * 1024;
 
 const passwordOrigin = async (target: Target) => {
   const checked = await target.session.send("Runtime.callFunctionOn", {
@@ -330,6 +413,35 @@ export const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const filledValues = new Map<ThreadId, Set<string>>();
+  /** Origins a password went into per thread: their pixels may show it after its field is gone. */
+  const filledOrigins = new Map<ThreadId, Set<string>>();
+  const signIns = new WeakMap<Page, SignInRecord>();
+  const watchedForSignIn = new WeakSet<Page>();
+  /** Orders submissions and hand backs; only which came first matters. */
+  let signInOrder = 0;
+  const noteSignIn = (page: Page, change: Partial<SignInRecord>) =>
+    signIns.set(page, { ...signIns.get(page), ...change });
+  /**
+   * Marks the document a request left from when it carries a password GOAT filled, whatever sent
+   * it, and when a person hands the tab back; the sign-in state reads both.
+   */
+  const watchSignIn = (tab: SecretFillTab, threadId: ThreadId) => {
+    if (watchedForSignIn.has(tab.page)) return;
+    watchedForSignIn.add(tab.page);
+    tab.page.on("request", (request) => {
+      if (request.method() === "GET" || request.method() === "HEAD") return;
+      const masker = maskerFor(threadId);
+      const carried =
+        request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
+      if (masker === undefined || masker(carried, true) === carried) return;
+      noteSignIn(tab.page, {
+        submitted: { documentGeneration: tab.documentGeneration ?? 0, at: ++signInOrder },
+      });
+    });
+    tab.control.onHandoffChange((end) => {
+      if (end === "handedBack") noteSignIn(tab.page, { handedBackAt: ++signInOrder });
+    });
+  };
   const fences = new WeakMap<Page, Array<Fence>>();
   // A frame's session closes with its document: whatever it filled there is gone.
   const closedSessions = new WeakSet<CDPSession>();
@@ -359,7 +471,7 @@ export const make = Effect.gen(function* () {
     runPromise(
       secretRequests.consumeForOrigin(input).pipe(
         Effect.match({
-          onFailure: (error) => ({ error: error.message }),
+          onFailure: (error) => ({ error: error.message, failure: secretFailure(error.reason) }),
           onSuccess: (value) => ({ value }),
         }),
       ),
@@ -378,7 +490,7 @@ export const make = Effect.gen(function* () {
         "Browser debug logging (DEBUG) is on, so GOAT will not type secrets. Unset it.",
       );
     SessionControl.requireAgentSession(request);
-    const origin = await record(tab, "fillSecret", () =>
+    const filled = await record(tab, "fillSecret", () =>
       tab.control.secret(
         request.agentSessionId,
         async (fence) => {
@@ -389,6 +501,7 @@ export const make = Effect.gen(function* () {
           let used = false;
           try {
             const destination = await passwordOrigin(target);
+            const identifier = await identifierOf(target);
             fence.hold();
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
@@ -397,7 +510,7 @@ export const make = Effect.gen(function* () {
               threadId: request.threadId,
               origin: destination,
             });
-            if ("error" in consumed) throw refused(consumed.error);
+            if ("error" in consumed) throw refused(consumed.error, consumed.failure);
             used = true;
             const value = consumed.value;
             const values = filledValues.get(request.threadId) ?? new Set<string>();
@@ -418,23 +531,33 @@ export const make = Effect.gen(function* () {
               .send("Runtime.callFunctionOn", {
                 objectId: target.objectId,
                 functionDeclaration: FILL,
-                arguments: [{ value }, { value: destination }],
+                arguments: [
+                  { value },
+                  { value: destination },
+                  { value: identifier },
+                  { value: input.expectedAccount ?? null },
+                ],
                 returnByValue: true,
               })
               .catch(() => {
                 throw refused(UNCERTAIN);
               });
-            // Only FILL's explicit early false proves the value was never set.
+            // Only FILL's explicit early answers prove the value was never set.
             if (typed.exceptionDetails || typed.result.value !== true) {
-              if (typed.exceptionDetails || typed.result.value !== false) throw refused(UNCERTAIN);
+              const early = typed.result.value === false || typed.result.value === "account";
+              if (typed.exceptionDetails || !early) throw refused(UNCERTAIN);
               fences.set(
                 tab.page,
                 (fences.get(tab.page) ?? []).filter((each) => each !== entry),
               );
               kept = false;
-              throw refused(USED_UP);
+              throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
             }
-            return destination;
+            const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
+            origins.add(destination);
+            filledOrigins.set(request.threadId, origins);
+            watchSignIn(tab, request.threadId);
+            return { destination, verified: input.expectedAccount !== undefined };
           } catch (cause) {
             if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
               throw cause;
@@ -448,7 +571,12 @@ export const make = Effect.gen(function* () {
         deadlineMs,
       ),
     );
-    return { filled: true, origin, privateMode: await settledPrivate(tab.control) };
+    return {
+      filled: true,
+      origin: filled.destination,
+      privateMode: await settledPrivate(tab.control),
+      account: filled.verified ? "matched" : "unverified",
+    };
   };
 
   /**
@@ -463,9 +591,16 @@ export const make = Effect.gen(function* () {
       request.operation === "evaluate" ||
       request.operation === "recordingStart" ||
       (request.operation === "snapshot" && !textSnapshot);
+    const visual =
+      request.operation === "recordingStart" || (request.operation === "snapshot" && !textSnapshot);
+    // Pixels of a site it filled a password on stay off after the field lets go, too.
+    const visualOff = () => {
+      if (visual && filledOrigins.get(request.threadId)?.has(originOf(tab.page.url())))
+        throw refused(VISUAL);
+    };
     const outstanding = fences.get(tab.page);
     if ((!guarded && !textSnapshot) || outstanding === undefined || outstanding.length === 0)
-      return;
+      return visualOff();
     let unconfirmed = false;
     let shown = false;
     let holding = false;
@@ -494,7 +629,7 @@ export const make = Effect.gen(function* () {
     fences.set(tab.page, kept);
     // A text snapshot hides password inputs itself; a value shown as plain text, or a field GOAT
     // cannot check, stops it.
-    if (textSnapshot ? !shown && !unconfirmed : !holding) return;
+    if (textSnapshot ? !shown && !unconfirmed : !holding) return visualOff();
     throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
   };
 
@@ -522,5 +657,14 @@ export const make = Effect.gen(function* () {
     return masker(text.slice(0, limit + masker.slack), true);
   };
 
-  return { fill, guard, mask, maskText };
+  /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
+  const signInStateOf = async (tab: SecretFillTab) =>
+    signInState(
+      await readSignInPage(tab.cdp),
+      signIns.get(tab.page) ?? {},
+      tab.documentGeneration ?? 0,
+      tab.session,
+    );
+
+  return { fill, guard, mask, maskText, signInState: signInStateOf };
 });

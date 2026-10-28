@@ -239,6 +239,18 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
 const MAX_REASON_CHARS = 500;
 const isReadFailure = Schema.is(PreviewAutomationReadFailure);
 
+type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
+const isSecretFailure = (value: unknown): value is SecretFailure =>
+  value === "no_candidate" || value === "not_permitted" || value === "unavailable";
+/** The server browser names why a secret fill could not use its secretRef. */
+const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFailure } => {
+  const value =
+    typeof detail === "object" && detail !== null && "secretFailure" in detail
+      ? detail.secretFailure
+      : undefined;
+  return isSecretFailure(value) ? { secretFailure: value } : {};
+};
+
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
   error: NonNullable<PreviewAutomationResponse["error"]>,
@@ -411,7 +423,10 @@ const classifyResponseError = (
         ...remoteDiagnostics,
         ...notSent,
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
-          ? { reason: error.message.slice(0, MAX_REASON_CHARS) }
+          ? {
+              reason: error.message.slice(0, MAX_REASON_CHARS),
+              ...secretFailureOf(hostDetail),
+            }
           : {}),
       });
   }

@@ -32,6 +32,7 @@ const makeTab = (
   let sessionClosed = false;
   const context = {};
   const page = {
+    on: () => page,
     frames: () => [],
     mainFrame: () => page,
     context: () => context,
@@ -55,6 +56,8 @@ const makeTab = (
       if (faults.fillReply) throw new Error("Target closed");
       return { result: { value: true } };
     }
+    // The field has no identifier beside it.
+    if (fn.includes("DOCUMENT_POSITION_FOLLOWING")) return { result: { value: null } };
     if (fn.includes('return "empty"')) {
       if (sessionClosed) throw new Error("Target page, context or browser has been closed");
       if (faults.stillFilled) throw new Error("Session closed");

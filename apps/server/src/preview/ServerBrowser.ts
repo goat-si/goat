@@ -1936,6 +1936,8 @@ const make = Effect.gen(function* () {
       }
       case "logs":
         return tab.diagnostics.readMasked(decodeLogsInput(input));
+      case "signInState":
+        return secretFill.signInState(tab);
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
         return inPageFetch(tab.page, tab.control, {

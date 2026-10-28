@@ -60,3 +60,28 @@ export const PreviewAutomationSignInStateInput = Schema.Struct({
   tabId: Schema.optional(PreviewTabId),
 });
 export type PreviewAutomationSignInStateInput = typeof PreviewAutomationSignInStateInput.Type;
+
+export const PROFILE_GUIDANCE =
+  "Profile id or name from goat_preview_status, for a new tab; implies session profile. A tab keeps its profile.";
+
+export const PreviewAutomationProfile = Schema.Struct({
+  id: BrowserProfileId,
+  name: Schema.String,
+  incognito: Schema.optional(Schema.Boolean),
+});
+export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
+
+/** The open input's combinations that cannot mean one thing. */
+export const openInputRule = Schema.makeFilter(
+  (input: {
+    readonly tabId?: string | undefined;
+    readonly reuseExistingTab?: boolean | undefined;
+    readonly session?: PreviewSessionMode | undefined;
+    readonly profileId?: string | undefined;
+  }) =>
+    input.tabId !== undefined && input.reuseExistingTab === false
+      ? "tabId cannot be combined with reuseExistingTab=false."
+      : input.session !== "isolated" ||
+        input.profileId === undefined ||
+        "profileId selects a saved profile; omit it for session isolated.",
+);
