@@ -66,16 +66,40 @@ const INSTALL = `(() => {
   };
   // A write that leaves the value as it was, such as the same attribute or text set again, is not a
   // change; each attribute and text node is judged by its value before the batch and now.
-  const text = (nodes) => Array.from(nodes, (node) => node.nodeType === 3 ? node.data : "\u0000");
+  // A node taken out and put back where it was, or text replaced by the same text, is no change.
+  const moved = (records) => {
+    const nodes = new Map();
+    for (const record of records) {
+      if (record.type !== "childList") continue;
+      const place = { net: 0, parent: record.target, previous: record.previousSibling,
+        next: record.nextSibling };
+      for (const node of record.removedNodes) {
+        const entry = nodes.get(node) ?? { ...place };
+        entry.net -= 1;
+        nodes.set(node, entry);
+      }
+      for (const node of record.addedNodes) {
+        const entry = nodes.get(node) ?? { ...place };
+        entry.net += 1;
+        nodes.set(node, entry);
+      }
+    }
+    let added = "", removed = "";
+    for (const [node, entry] of nodes) {
+      if (entry.net === 0) {
+        if (node.parentNode !== entry.parent || node.previousSibling !== entry.previous ||
+            node.nextSibling !== entry.next) return true;
+      } else if (node.nodeType !== 3) return true;
+      else if (entry.net > 0) added += node.data;
+      else removed += node.data;
+    }
+    return added !== removed;
+  };
   const changedIn = (records) => {
+    if (moved(records)) return true;
     const before = new Map();
     for (const record of records) {
-      if (record.type === "childList") {
-        const added = text(record.addedNodes), removed = text(record.removedNodes);
-        if (added.join("") !== removed.join("") || added.includes("\u0000") ||
-            removed.includes("\u0000")) return true;
-        continue;
-      }
+      if (record.type === "childList") continue;
       const key = record.target;
       const name = record.type === "attributes" ? record.attributeName : "";
       const entries = before.get(key) ?? new Map();
@@ -124,19 +148,35 @@ const INSTALL = `(() => {
       if (toggled === at.popoverTargetElement || toggled === at.commandForElement) return true;
     return false;
   };
+  // toggle fires only once the state changed, so a toggle a beforetoggle listener cancelled is not
+  // counted; a light dismiss is noted at its beforetoggle, as its toggle comes after pointerup.
+  const dismissed = new Set();
+  const onBeforeToggle = (event) => {
+    const toggled = event.composedPath()[0];
+    if (event.newState === "closed" && dismissible.has(toggled)) dismissed.add(toggled);
+  };
   const onToggle = (event) => {
     const toggled = event.composedPath()[0];
-    if (target !== null && (within(target, toggled) || controls(toggled))) note("dom");
-    else if (event.newState === "closed" && dismissible.has(toggled)) note("dom");
+    if ((target !== null && (within(target, toggled) || controls(toggled))) ||
+        dismissed.has(toggled))
+      note("dom");
   };
-  const onInput = (event) => related(event) && note("input");
+  // Input counts when the clicked control's value or checked state really changed.
+  const controlsAt = new Map();
+  const remember = (control) => control && "value" in control &&
+    controlsAt.set(control, [control.value, control.checked]);
+  const onInput = (event) => {
+    const control = event.composedPath()[0];
+    const before = controlsAt.get(control);
+    if (before && (before[0] !== control.value || before[1] !== control.checked)) note("input");
+  };
   const onFocus = (event) => related(event) && note("focus");
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
   const onNavigate = (event) => (event.userInitiated || handled()) && note("navigation");
   const navigation = window.navigation;
   const listeners = [[document, "input", onInput], [document, "change", onInput],
-    [document, "focusin", onFocus], [document, "beforetoggle", onToggle],
+    [document, "focusin", onFocus], [document, "beforetoggle", onBeforeToggle],
     [document, "toggle", onToggle], ...[...types].map((type) => [window, type, begin])];
   for (const [on, type, listener] of listeners) on.addEventListener(type, listener, true);
   navigation?.addEventListener("navigate", onNavigate);
@@ -153,6 +193,11 @@ const INSTALL = `(() => {
     seen.clear();
     target = at && typeof at.x === "number" ? deepest(at.x, at.y) : at;
     if (target) watch(target.getRootNode());
+    controlsAt.clear();
+    dismissed.clear();
+    remember(target);
+    remember(target?.control);
+    remember(target?.closest?.("label")?.control);
     armed = true;
   };
   const stop = () => {

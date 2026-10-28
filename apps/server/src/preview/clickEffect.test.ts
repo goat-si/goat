@@ -408,3 +408,39 @@ it("confirms a click outside an open popover that dismisses it", () =>
     });
     expect(await page.evaluate("pop.matches(':popover-open')")).toBe(false);
   }));
+
+it("does not confirm a cancelled popover, a value-less input event, or a node put back in place", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<button id="p" popovertarget="pop">menu</button><div id="pop" popover>items</div>
+       <input id="i" value="kept" onclick="this.dispatchEvent(new Event('input', { bubbles: true }))">
+       <p id="m" onclick="this.append(this.firstChild)"><span>same</span></p><script>
+         pop.addEventListener("beforetoggle", (event) => event.newState === "open" && event.preventDefault());
+       </script>`,
+    );
+    await page.focus("#p");
+    await expect(ServerBrowserPage.click(page, { selector: "#p" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.focus("#i");
+    await expect(ServerBrowserPage.click(page, { selector: "#i" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await expect(ServerBrowserPage.click(page, { selector: "#m" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
+
+it("still confirms a checkbox toggled through its label and a node moved to a new place", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<label id="l"><input type="checkbox" id="c"> agree</label>
+       <ul id="list" onclick="this.append(this.firstElementChild)"><li>a</li><li>b</li></ul>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#l" })).resolves.toMatchObject({
+      effect: "confirmed",
+    });
+    await expect(ServerBrowserPage.click(page, { selector: "#list" })).resolves.toMatchObject({
+      effect: "confirmed",
+    });
+  }));
