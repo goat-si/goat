@@ -34,133 +34,11 @@ import {
   encodeRun,
   countingTracer,
   seed,
+  work,
+  seedDerivedSummary,
+  incrementalSummary,
+  seedRolledBackRegeneration,
 } from "./MemoryWorker.testkit.ts";
-const work = (kind: Store.MemoryWork["kind"] = "summary"): Store.MemoryWork => ({
-  id: "work",
-  space,
-  memoryId,
-  kind,
-  status: "running",
-  attempt: 1,
-  nextAttemptAt: 0,
-  claimedBy: "worker",
-  claimedUntil: Number.MAX_SAFE_INTEGER,
-  payloadRef: null,
-  metadata: {
-    kind: "summary",
-    sourceThread: { environmentId, threadId },
-    sourceWatermark: {
-      fromEventId: M.EventId.make(id(10)),
-      toEventId: M.EventId.make(id(11)),
-      throughSequence: 2,
-    },
-    memoryId,
-    operationId: M.MemoryOperationId.make(id(4)),
-    revisionId: M.MemoryRevisionId.make(id(5)),
-    modelSelection: selection,
-  },
-});
-// Build canonical lineage through the real Worker/Service/Store, with synthetic content only.
-const seedDerivedSummary = Effect.gen(function* () {
-  yield* TestClock.setTime(Date.parse(now));
-  yield* seed;
-  const worker = yield* Worker.MemoryWorker;
-  const service = yield* Service.MemoryService;
-  const store = yield* Store.MemoryStore;
-  yield* worker.sweepDue();
-  const target = M.MemoryId.make(Service.memoryStableUuid(`${environmentId}:${threadId}:summary`));
-  const current = yield* store.loadAggregate(space, target);
-  const first = current.revisions.find((p) => p.revision.revisionId === current.heads[0])!;
-  yield* service.upsert(
-    {
-      memorySpaceId: space,
-      memoryId,
-      operationId: M.MemoryOperationId.make(id(8100)),
-      expectedHeads: [],
-      scope: { kind: "user" },
-      assertionKind: "inference",
-      payload: { text: "synthetic source A", evidence: [], derivedFromMemoryRevisions: [] },
-      baseBoundary: null,
-    },
-    Effect.void,
-  );
-  const rA = (yield* store.loadAggregate(space, memoryId)).heads[0]!;
-  yield* service.upsert(
-    {
-      memorySpaceId: space,
-      memoryId: target,
-      operationId: M.MemoryOperationId.make(id(8101)),
-      expectedHeads: current.heads,
-      scope: first.revision.scope,
-      assertionKind: "inference",
-      payload: { ...first.payload!, text: "synthetic derived A", derivedFromMemoryRevisions: [rA] },
-      baseBoundary: null,
-    },
-    Effect.void,
-  );
-  return { target, rA, d0: (yield* store.loadAggregate(space, target)).heads[0]! };
-});
-const incrementalSummary = (target: M.MemoryId) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const store = yield* Store.MemoryStore;
-    const worker = yield* Worker.MemoryWorker;
-    const original = (yield* sql<{
-      payload_json: string;
-    }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
-    const message = yield* decodeMessage(original.payload_json);
-    // Force two generation calls in the same claim, covering the in-memory carry too.
-    for (let index = 3; index <= 103; index++)
-      yield* sql`INSERT INTO orchestration_events VALUES (${index},${id(8200 + index)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make(`increment-${index}`), runId: null })},${now},2,'thread')`;
-    const queued: Store.MemoryWork = {
-      ...work(),
-      id: "lineage-increment",
-      memoryId: target,
-      status: "pending",
-      claimedBy: null,
-      claimedUntil: null,
-      metadata: {
-        ...(work().metadata as Extract<Store.MemoryWork["metadata"], { kind: "summary" }>),
-        memoryId: target,
-        operationId: M.MemoryOperationId.make(id(8102)),
-        revisionId: M.MemoryRevisionId.make(id(8103)),
-        fromSequence: 2,
-        sourceWatermark: {
-          fromEventId: M.EventId.make(id(8203)),
-          toEventId: M.EventId.make(id(8303)),
-          throughSequence: 103,
-        },
-      },
-    };
-    yield* store.enqueueWork(queued);
-    yield* store.claimWork(queued.id, "worker", Date.parse(now), Number.MAX_SAFE_INTEGER);
-    yield* worker.execute((yield* store.readWork(queued.id))!);
-    return yield* store.loadAggregate(space, target);
-  });
-// Summary A covers a run that is then rolled back, and run B adds 101 messages. The next
-// summary must drop A and regenerate from the start: two bounded chunks in one work item.
-const seedRolledBackRegeneration = Effect.gen(function* () {
-  yield* seed;
-  const sql = yield* SqlClient.SqlClient;
-  const worker = yield* Worker.MemoryWorker;
-  const earlyMessageRow = (yield* sql<{
-    payload_json: string;
-  }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
-  const earlyMessage = yield* decodeMessage(earlyMessageRow.payload_json);
-  yield* sql`UPDATE orchestration_events SET sequence=3 WHERE sequence=2`;
-  yield* sql`INSERT INTO orchestration_events VALUES (2,${id(1299)},${threadId},'message.updated',${encodeMessage({ ...earlyMessage, id: M.MessageId.make("survivor"), runId: null })},${now},2,'thread')`;
-  yield* worker.sweepDue();
-  const runRow = (yield* sql<{
-    payload_json: string;
-  }>`SELECT payload_json FROM orchestration_events WHERE sequence=3`)[0]!;
-  const run = yield* decodeRun(runRow.payload_json);
-  yield* sql`INSERT INTO orchestration_events VALUES (4,${id(1300)},${threadId},'run.updated',${encodeRun({ ...run, status: "rolled_back" })},${now},2,'thread')`;
-  const nextRunId = M.RunId.make("run-b");
-  for (let index = 0; index < 101; index++) {
-    yield* sql`INSERT INTO orchestration_events VALUES (${index + 5},${id(1400 + index)},${threadId},'message.updated',${encodeMessage({ ...earlyMessage, id: M.MessageId.make(`run-b-${index}`), runId: nextRunId })},${now},2,'thread')`;
-  }
-  yield* sql`INSERT INTO orchestration_events VALUES (106,${id(1600)},${threadId},'run.updated',${encodeRun({ ...run, id: nextRunId, userMessageId: M.MessageId.make("run-b-0"), status: "completed" })},${now},2,'thread')`;
-});
 describe("MemoryWorker", () => {
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(
@@ -1535,9 +1413,13 @@ it.effect("r3 previous summary plus thread lineage exceeding 100 never reaches g
 });
 
 it.effect.each(threadProvenanceCases(threadId))(
-  "production origin $name: $state gates summary generation",
+  "production origin $name: $state lineage and delegation gate summary generation",
   (origin) => {
     let generated = 0;
+    // Delegated children report to their parent; the parent's summary keeps what lasts.
+    const summarized =
+      origin.state === "tracked" &&
+      !origin.createdJson.includes('"relationshipToParent":"subagent"');
     return Effect.gen(function* () {
       yield* lineageSetup;
       const sql = yield* SqlClient.SqlClient;
@@ -1559,10 +1441,10 @@ it.effect.each(threadProvenanceCases(threadId))(
         ),
       );
       yield* (yield* Worker.MemoryWorker).sweepDue();
-      assert.strictEqual(generated, origin.state === "tracked" ? 1 : 0);
+      assert.strictEqual(generated, summarized ? 1 : 0);
       assert.strictEqual(
         (yield* store.loadAggregate(space, summaryMemoryId)).heads.length,
-        origin.state === "tracked" ? 1 : 0,
+        summarized ? 1 : 0,
       );
     }).pipe(
       Effect.provide(

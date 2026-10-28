@@ -104,13 +104,13 @@ describe("memory generation prompts", () => {
       };
       const fresh = (yield* buildMemorySummaryPrompt(summary)).outputSchema;
       expect(strictOutputSchemaViolations(toJsonSchemaObject(fresh))).toEqual([]);
-      expect(Schema.is(fresh)(quoted)).toBe(false);
+      expect(Schema.is(fresh)({ summary: quoted })).toBe(false);
       expect(
         Schema.is(fresh)({
-          ...quoted,
-          evidence: [{ ...quoted.evidence[0]!, origin: "thread" }],
+          summary: { ...quoted, evidence: [{ ...quoted.evidence[0]!, origin: "thread" }] },
         }),
       ).toBe(true);
+      expect(Schema.is(fresh)({ summary: null })).toBe(true);
       expect(yield* buildMemorySummaryPrompt(summary)).toMatchObject({
         prompt: expect.stringContaining("has origin thread"),
       });
@@ -122,7 +122,7 @@ describe("memory generation prompts", () => {
           evidence: [{ origin: "user", messageIds: [] }],
         },
       })).outputSchema;
-      expect(Schema.is(carried)(quoted)).toBe(true);
+      expect(Schema.is(carried)({ summary: quoted })).toBe(true);
       const resolution = (yield* buildMemoryConflictPrompt(conflict)).outputSchema;
       expect(
         Schema.is(resolution)({ ...result, judgment: "j", evidence: [quoted.evidence[0]] }),
@@ -150,11 +150,20 @@ describe("memory generation prompts", () => {
     const repaired = decide([cited]);
     expect(repaired.evidence[0]?.watermark).toEqual(summary.sourceWatermark);
     expect(M.validateMemoryGenerationResult(summary, repaired)).toBe(true);
-    // A message the input does not contain matches no source: the entry stays as written and
-    // validation refuses it.
+    // A message the input does not contain supports nothing: its id is dropped, and a fact left
+    // without non-model evidence becomes an inference instead of failing the whole run.
     const unknown = decide([{ ...cited, messageIds: ["m-unknown"] }]);
-    expect(unknown.evidence[0]?.watermark?.toEventId).toBe("e2-miscopied");
-    expect(M.validateMemoryGenerationResult(summary, unknown)).toBe(false);
+    expect(unknown.evidence).toEqual([]);
+    expect(unknown.assertionKind).toBe("inference");
+    expect(M.validateMemoryGenerationResult(summary, unknown)).toBe(true);
+    const partly = decide([{ ...cited, messageIds: ["m1", "m-unknown"] }]);
+    expect(partly.assertionKind).toBe("fact");
+    expect(partly.evidence.flatMap((e) => e.messageIds)).toEqual(["m1"]);
+    expect(M.validateMemoryGenerationResult(summary, partly)).toBe(true);
+    // Repair never relabels: a supplied message cited under another origin supports nothing.
+    const relabeled = decide([{ ...cited, origin: "user" as never }]);
+    expect(relabeled.evidence).toEqual([]);
+    expect(relabeled.assertionKind).toBe("inference");
   });
   it("repairs consolidation evidence that the previous summary already cites", () => {
     // Consolidation rereads messages its previous summary cites, so two sources held each cited
@@ -193,9 +202,9 @@ describe("memory generation prompts", () => {
     const spanning = decide(["m0", "m1"]);
     expect(M.validateMemoryGenerationResult(consolidation, spanning)).toBe(true);
     expect(spanning.evidence.flatMap((e) => e.messageIds).toSorted()).toEqual(["m0", "m1"]);
-    expect(M.validateMemoryGenerationResult(consolidation, decide(["m0", "m-unknown"]))).toBe(
-      false,
-    );
+    const withUnknown = decide(["m0", "m-unknown"]);
+    expect(withUnknown.evidence.flatMap((e) => e.messageIds)).toEqual(["m0"]);
+    expect(M.validateMemoryGenerationResult(consolidation, withUnknown)).toBe(true);
   });
   it.effect("rejects oversize input output and unknown evidence", () =>
     Effect.gen(function* () {

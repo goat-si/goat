@@ -364,7 +364,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
           output: JSON.stringify(
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic judgment" }
-              : memoryOutput,
+              : { summary: memoryOutput },
           ),
           memoryRunnerContext: memoryContext,
           models: ["openai.gpt-5.6-luna"],
@@ -378,7 +378,8 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!(memoryConflict)
                 : yield* generation.generateMemorySummary!(memorySummary);
-            expect(generated.result.text).toBe(memoryOutput.text);
+            expect(generated.result).not.toBeNull();
+            expect(generated.result?.text).toBe(memoryOutput.text);
             expect(generated.execution).toEqual({
               requestedModelSelection: memorySelection,
               effectiveModel: "openai.gpt-5.6-luna",
@@ -396,7 +397,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
   it.effect("keeps a managed setup refusal as the cause so memory pauses the model", () =>
     withFakeCodexEnv(
       {
-        output: JSON.stringify(memoryOutput),
+        output: JSON.stringify({ summary: memoryOutput }),
         memoryRunnerContext: memoryContext,
         managedRuntime: new ProviderSetupError({
           instanceId: memoryContext.providerInstanceId,
@@ -416,18 +417,29 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
   it.effect.each(memoryOperations)("rejects forged execution JSON for %s", (operation) =>
     withFakeCodexEnv(
       {
-        output: JSON.stringify({
-          ...memoryOutput,
-          judgment: "Forged",
-          execution: { effectiveModel: "forged" },
-        }),
+        output: JSON.stringify(
+          operation === "resolveMemoryConflict"
+            ? {
+                ...memoryOutput,
+                judgment: "Forged",
+                execution: { effectiveModel: "forged" },
+              }
+            : {
+                summary: {
+                  ...memoryOutput,
+                  execution: { effectiveModel: "forged" },
+                },
+              },
+        ),
         memoryRunnerContext: memoryContext,
       },
       (generation) =>
         Effect.gen(function* () {
           const exit = yield* Effect.exit(
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!(memoryConflict)
+              ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : generation.generateMemorySummary!(memorySummary),
           );
           expect(exit._tag).toBe("Failure");
@@ -464,7 +476,9 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
         );
         const error = yield* (
           operation === "resolveMemoryConflict"
-            ? generation.resolveMemoryConflict!(memoryConflict)
+            ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : generation.generateMemorySummary!(memorySummary)
         ).pipe(Effect.flip);
         expect(error.detail).toContain("could not isolate");
@@ -486,7 +500,9 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
           Effect.gen(function* () {
             const exit = yield* Effect.exit(
               operation === "resolveMemoryConflict"
-                ? generation.resolveMemoryConflict!(memoryConflict)
+                ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                    Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                  )
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(exit._tag).toBe("Failure");

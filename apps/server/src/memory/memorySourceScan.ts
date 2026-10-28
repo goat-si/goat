@@ -6,6 +6,20 @@ import type * as SqlClient from "effect/sql/SqlClient";
 export const MEMORY_SOURCE_SCAN_PAGE_EVENTS = 1000;
 const encodeSequences = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.Number)));
 
+/**
+ * App-delegated tasks and provider subagents report to their parent, whose own summary keeps
+ * what lasts. Their transcripts are parent instructions and one-off verdicts, never user memory.
+ */
+export const delegatedChildThreadSql = (threadColumn: string) =>
+  `EXISTS (SELECT 1 FROM orchestration_events c WHERE c.application_event_version=2 AND c.aggregate_kind='thread' AND c.stream_id=${threadColumn} AND c.event_type='thread.created' AND json_extract(c.payload_json,'$.lineage.relationshipToParent')='subagent')`;
+
+export const isDelegatedChildThread = (sql: SqlClient.SqlClient, threadId: string) =>
+  sql<{
+    found: number;
+  }>`SELECT 1 AS found FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${threadId} AND event_type='thread.created' AND json_extract(payload_json,'$.lineage.relationshipToParent')='subagent' LIMIT 1`.pipe(
+    Effect.map((rows) => rows.length > 0),
+  );
+
 export interface SourceMessageRow {
   readonly sequence: number;
   readonly eventId: string;

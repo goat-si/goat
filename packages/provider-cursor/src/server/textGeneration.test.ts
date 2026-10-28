@@ -92,7 +92,13 @@ const runMemory = (
   generation: Effect.Success<ReturnType<typeof makeCursorTextGeneration>>,
   operation: (typeof memoryOperations)[number],
   selection = memorySelection,
-) =>
+): Effect.Effect<
+  {
+    readonly result: { readonly text: string } | null;
+    readonly execution: M.MemoryGenerationExecution;
+  },
+  TextGenerationError
+> =>
   operation === "resolveMemoryConflict"
     ? generation.resolveMemoryConflict!({ ...memoryConflict, modelSelection: selection })
     : generation.generateMemorySummary!({ ...memorySummary, modelSelection: selection });
@@ -101,11 +107,11 @@ const mockMemoryOutput = (operation: (typeof memoryOperations)[number], extra = 
   cursorSdkMock.prompt.mockResolvedValue({
     id: "synthetic-memory-run",
     status: "finished",
-    result: JSON.stringify({
-      ...memoryOutput,
-      ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic judgment" } : {}),
-      ...extra,
-    }),
+    result: JSON.stringify(
+      operation === "resolveMemoryConflict"
+        ? { ...memoryOutput, judgment: "Synthetic judgment", ...extra }
+        : { summary: { ...memoryOutput, ...extra } },
+    ),
   });
 
 const decodeToolPolicy = Schema.decodeUnknownSync(
@@ -469,7 +475,7 @@ describe("CursorTextGeneration", () => {
         ],
       });
       const generated = yield* runMemory(generation, operation, selection);
-      expect(generated.result.text).toBe(memoryOutput.text);
+      expect(generated.result?.text).toBe(memoryOutput.text);
       expect(generated.execution).toEqual({
         requestedModelSelection: selection,
         effectiveProvider: "cursor",

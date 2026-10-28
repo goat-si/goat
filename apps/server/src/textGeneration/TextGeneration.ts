@@ -27,6 +27,7 @@ export type {
   GenerateMemorySummaryInput,
   GenerateMemorySummaryResult,
   GenerateMemorySummaryExecutionResult,
+  GenerateMemorySummaryOutcome,
   MemoryGenerationExecution,
 } from "@goat/provider-core/server/textGeneration";
 

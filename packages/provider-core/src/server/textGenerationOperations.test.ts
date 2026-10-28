@@ -89,7 +89,7 @@ describe("memory shared operations", () => {
         return Schema.decodeUnknownEffect(request.outputSchema)(
           request.operation === "resolveMemoryConflict"
             ? { ...result, judgment: "Synthetic judgment" }
-            : result,
+            : { summary: result },
         ).pipe(
           Effect.map((result) => ({ result, effectiveModel: "effective" })),
           Effect.mapError(
@@ -160,25 +160,33 @@ describe("memory shared operations", () => {
         }),
       });
       const raw = JSON.stringify({
-        text: "Durable fact",
-        assertionKind: "fact",
-        evidence: [
-          {
-            origin: "thread",
-            sourceThread: summary.sourceThread,
-            watermark: summary.sourceWatermark,
-            messageIds: ["m1"],
-            importSourceId: null,
-          },
-          { origin: "import", sourceThread: null, watermark: null, messageIds: [], importSourceId },
-          {
-            origin: "model",
-            sourceThread: null,
-            watermark: null,
-            messageIds: [],
-            importSourceId: null,
-          },
-        ],
+        summary: {
+          text: "Durable fact",
+          assertionKind: "fact",
+          evidence: [
+            {
+              origin: "thread",
+              sourceThread: summary.sourceThread,
+              watermark: summary.sourceWatermark,
+              messageIds: ["m1"],
+              importSourceId: null,
+            },
+            {
+              origin: "import",
+              sourceThread: null,
+              watermark: null,
+              messageIds: [],
+              importSourceId,
+            },
+            {
+              origin: "model",
+              sourceThread: null,
+              watermark: null,
+              messageIds: [],
+              importSourceId: null,
+            },
+          ],
+        },
       });
       const selected: MemorySelectedRunner = (request) =>
         Schema.decodeEffect(Schema.fromJsonString(request.outputSchema))(
@@ -202,7 +210,7 @@ describe("memory shared operations", () => {
         ),
       });
       const generated = yield* provider.generateMemorySummary!(input);
-      expect(generated.result.evidence).toEqual([
+      expect(generated.result?.evidence).toEqual([
         {
           origin: "thread",
           sourceThread: summary.sourceThread,
@@ -213,6 +221,63 @@ describe("memory shared operations", () => {
         { origin: "model", messageIds: [] },
       ]);
     }),
+  );
+  it.effect(
+    "answers null when the model finds nothing durable, explicitly or in legacy prose",
+    () =>
+      Effect.gen(function* () {
+        const answer =
+          (summary: unknown): MemorySelectedRunner =>
+          (request) =>
+            Schema.decodeUnknownEffect(request.outputSchema)(
+              { summary },
+              outputDecodeOptions(request.operation),
+            ).pipe(
+              Effect.map((result) => ({ result, effectiveModel: "effective" })),
+              Effect.mapError(
+                (cause) =>
+                  new M.TextGenerationError({
+                    operation: request.operation,
+                    detail: "decode",
+                    cause,
+                  }),
+              ),
+            );
+        const generate = (summaryAnswer: unknown) =>
+          fromRunner("fixture", legacy, {
+            memoryRunner: withMemoryExecution(
+              {
+                providerInstanceId: selection.instanceId,
+                environmentId: M.EnvironmentId.make("owner"),
+              },
+              M.ProviderDriverKind.make("codex"),
+              answer(summaryAnswer),
+            ),
+          }).generateMemorySummary!(summary);
+        expect((yield* generate(null)).result).toBeNull();
+        const prose = (text: string) => ({ text, assertionKind: "inference", evidence: [] });
+        expect(
+          (yield* generate(
+            prose(
+              "No durable preferences, decisions, recurring constraints, or verified results were identified in the supplied messages.",
+            ),
+          )).result,
+        ).toBeNull();
+        // A text that also reports a verified result is kept.
+        const kept =
+          "No durable preferences were established. Verified result: the suite has no safe pruning.";
+        expect((yield* generate(prose(kept))).result?.text).toBe(kept);
+        // A real constraint that happens to start the same way is not a no-op.
+        const constraint =
+          "No durable storage is available; all state must be committed to the remote database.";
+        expect((yield* generate(prose(constraint))).result?.text).toBe(constraint);
+        // Durable content after or inside a no-memory sentence is kept as written.
+        for (const content of [
+          "No durable preferences were established. The one-off migration revealed that TLS must stay enabled.",
+          "No durable storage constraints were identified except that backups must be retained for seven years.",
+        ])
+          expect((yield* generate(prose(content))).result?.text).toBe(content);
+      }),
   );
   it.effect("absent memoryRunner never invokes the legacy runner", () =>
     Effect.gen(function* () {

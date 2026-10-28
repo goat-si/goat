@@ -131,6 +131,7 @@ describe("V2 preview upgrade", () => {
         [114, "DecisionRoutes"],
         [115, "HubConnectAccess"],
         [116, "ChannelBotSessions"],
+        [117, "MemoryGenerationReportBacklog"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -272,6 +273,7 @@ describe("V2 preview upgrade", () => {
         [114, "DecisionRoutes"],
         [115, "HubConnectAccess"],
         [116, "ChannelBotSessions"],
+        [117, "MemoryGenerationReportBacklog"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

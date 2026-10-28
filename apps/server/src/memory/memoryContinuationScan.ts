@@ -1,5 +1,6 @@
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { delegatedChildThreadSql } from "./memorySourceScan.ts";
 
 export interface ContinuationCandidate {
   readonly sequence: number;
@@ -38,7 +39,7 @@ export const selectContinuationCandidates = (
         FROM memory_outbox WHERE kind IN ('summary','consolidate') AND status IN ('pending','running','retry','failed','cancelled') AND json_extract(metadata_json,'$.sourceThread.environmentId')=${input.environmentId}
       ), latest AS MATERIALIZED (
         SELECT t.thread_id,(SELECT x.sequence FROM orchestration_events x WHERE x.application_event_version=2 AND x.aggregate_kind='thread' AND x.stream_id=t.thread_id AND x.event_type='run.updated' ORDER BY x.sequence DESC LIMIT 1) AS sequence
-        FROM orchestration_v2_projection_threads t WHERE t.deleted_at IS NULL
+        FROM orchestration_v2_projection_threads t WHERE t.deleted_at IS NULL AND NOT ${sql.unsafe(delegatedChildThreadSql("t.thread_id"))}
       )
       SELECT e.sequence,e.event_id,e.stream_id,e.event_type,e.payload_json,e.occurred_at
       FROM latest l CROSS JOIN orchestration_events e ON e.sequence=l.sequence LEFT JOIN progress p ON p.thread_id=l.thread_id

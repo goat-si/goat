@@ -213,8 +213,10 @@ describe("TextGeneration memory routing", () => {
       for (const fixture of fixtures) {
         const summary = yield* generation.generateMemorySummary!(fixture.summary);
         const conflict = yield* generation.resolveMemoryConflict!(fixture.conflict);
-        expect(summary.result.text).toBe(fixture.name);
-        expect(conflict.result.text).toBe(fixture.name);
+        expect(summary.result).not.toBeNull();
+        expect(summary.result?.text).toBe(fixture.name);
+        expect(conflict.result).not.toBeNull();
+        expect(conflict.result?.text).toBe(fixture.name);
         expect(summary.execution).toBe(fixture.execution);
         expect(conflict.execution).toBe(fixture.execution);
       }
@@ -268,8 +270,12 @@ describe("TextGeneration memory routing", () => {
       for (const instanceId of [ProviderInstanceId.make("absent"), missingMethod]) {
         const inputs = memoryFixture(instanceId);
         const results = [
-          yield* Effect.result(generation.generateMemorySummary!(inputs.summary)),
-          yield* Effect.result(generation.resolveMemoryConflict!(inputs.conflict)),
+          yield* Effect.result(
+            generation.generateMemorySummary!(inputs.summary).pipe(Effect.asVoid),
+          ),
+          yield* Effect.result(
+            generation.resolveMemoryConflict!(inputs.conflict).pipe(Effect.asVoid),
+          ),
         ];
         for (const result of results) {
           expect(Result.isFailure(result)).toBe(true);
