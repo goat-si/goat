@@ -27,7 +27,17 @@ export class PullRequestWriteFailedError extends Schema.TaggedError<PullRequestW
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "The pull request write failed and may have been partly posted. Read pull_request.activity or pull_request.read to reconcile; do not resend with a new key. Tell the user if the outcome cannot be confirmed.";
+    return "The pull request write failed and may have been partly posted. Read pull_request.activity or pull_request.read to reconcile. Never resend with a new key. Tell the user if the outcome cannot be confirmed.";
+  }
+}
+
+/** Refused before any request reached the host, so nothing was posted and the same call may run again. */
+export class PullRequestWriteRefusedError extends Schema.TaggedError<PullRequestWriteRefusedError>()(
+  "PullRequestWriteRefusedError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
   }
 }
 

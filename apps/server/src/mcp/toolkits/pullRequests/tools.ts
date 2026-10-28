@@ -1,5 +1,9 @@
 import { withClientRequestId } from "../keyedParameters.ts";
-import { makeWriteTools, PullRequestWriteFailedError } from "./writeTools.ts";
+import {
+  makeWriteTools,
+  PullRequestWriteFailedError,
+  PullRequestWriteRefusedError,
+} from "./writeTools.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -248,6 +252,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestReadFailedError,
   PullRequestReadTooLargeError,
   PullRequestWriteFailedError,
+  PullRequestWriteRefusedError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 

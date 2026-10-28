@@ -149,11 +149,20 @@ const keyOf = (value: Json) =>
     ? value
     : undefined;
 
-const unknownOutcome = (path: string, reconcile: string | undefined, from?: ErrorEnvelope) =>
+// Writes that require a key may have posted for others to see, so the stop repeats their caution.
+const KEY_REQUIRED_CAUTION =
+  " Absence from a truncated read is not proof it did not happen. Never resend with a new key. Tell the user if the outcome cannot be confirmed.";
+
+const unknownOutcome = (
+  path: string,
+  reconcile: string | undefined,
+  from?: ErrorEnvelope,
+  keyRequired = false,
+) =>
   failure(
     "unknown_outcome",
     from?.error.reason ?? "outcome_unknown",
-    `${path} may have run, so this run will not call it again.${reconcile === undefined ? "" : ` Read ${reconcile} to see whether it happened.`} Put the remaining work in a new program.`,
+    `${path} may have run, so this run will not call it again.${reconcile === undefined ? "" : ` Read ${reconcile} to see whether it happened.`}${keyRequired ? KEY_REQUIRED_CAUTION : ""} Put the remaining work in a new program.`,
     reconcile === undefined ? undefined : { reconcile },
   );
 
@@ -482,7 +491,19 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         } else if (entry.effect !== "read") {
           const settledUnknown = (from?: ErrorEnvelope) =>
             stored(journal.settleStep(evalRunId, at, "unknown", null), at).pipe(
-              Effect.andThen(Effect.fail(halt(unknownOutcome(entry.path, reconcile, from), at))),
+              Effect.andThen(
+                Effect.fail(
+                  halt(
+                    unknownOutcome(
+                      entry.path,
+                      reconcile,
+                      from,
+                      "keyRequired" in entry && entry.keyRequired === true,
+                    ),
+                    at,
+                  ),
+                ),
+              ),
             );
           if (requestId === null) return yield* settledUnknown();
           const outcome = yield* stored(admission.keyedOutcome(entry.path, requestId, args), at);
@@ -578,7 +599,15 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         if (entry.effect === "read" && settlement === "unknown") settlement = "released";
         if (answered.status === "error" && settlement === "unknown") {
           yield* stored(journal.settleStep(evalRunId, at, "unknown", null), at);
-          return yield* halt(unknownOutcome(entry.path, reconcile, answered), at);
+          return yield* halt(
+            unknownOutcome(
+              entry.path,
+              reconcile,
+              answered,
+              "keyRequired" in entry && entry.keyRequired === true,
+            ),
+            at,
+          );
         }
         // What control flow consumes is kept, so a resumed run takes the same branch.
         if (caught) settlement = "completed";

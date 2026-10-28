@@ -12,7 +12,22 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { loadCaller, reauthorizationFailure } from "../../threadAccess.ts";
 import type { PullRequestTargetInput, PullRequestToolError, PullRequestsToolkit } from "./tools.ts";
-import { PullRequestWriteFailedError } from "./writeTools.ts";
+import { PullRequestWriteFailedError, PullRequestWriteRefusedError } from "./writeTools.ts";
+
+// Host answers that mean the request was never taken: no tool, no login, throttled, or no such PR.
+const NOT_TAKEN = new Set(["missing-tool", "unauthenticated", "rate-limited", "not-found"]);
+
+/** The service's own checks fail without a host cause; a host failure past them may have landed. */
+const classified = (error: PullRequests.PullRequestError) => {
+  const cause: unknown = error.cause;
+  const hostReason =
+    typeof cause === "object" && cause !== null && "reason" in cause ? cause.reason : undefined;
+  return error._tag === "PullRequestUnavailableError" ||
+    cause === undefined ||
+    (typeof hostReason === "string" && NOT_TAKEN.has(hostReason))
+    ? new PullRequestWriteRefusedError({ detail: error.message })
+    : new PullRequestWriteFailedError({ cause: error });
+};
 
 const prWriteGate = Effect.fn("PullRequestsToolkit.prWriteGate")(function* () {
   const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
@@ -63,9 +78,7 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
           yield* prWriteGate();
           const { target, ref } = yield* locateOne(input);
           yield* McpToolAccess.admit(input);
-          yield* handle(input, ref).pipe(
-            Effect.mapError((cause) => new PullRequestWriteFailedError({ cause })),
-          );
+          yield* handle(input, ref).pipe(Effect.mapError(classified));
           return { ...target, status: "accepted" as const };
         }),
       { admission: "handler" },

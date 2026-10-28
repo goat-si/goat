@@ -3,10 +3,12 @@ import {
   EnvironmentAuthorizationError,
   EnvironmentId,
   PullRequestOperationError,
+  SourceControlProviderKind,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
 import { agentSurfaceRegistry, type AgentSurfaceEntry } from "@goat/contracts/agentSurface";
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -50,7 +52,12 @@ const receipt = {
 };
 
 const harness = Effect.fn("prWritesTest.harness")(function* (
-  options: { profile?: string; plan?: boolean; partial?: "comment" | "submitReview" } = {},
+  options: {
+    profile?: string;
+    plan?: boolean;
+    partial?: "comment" | "submitReview";
+    refuse?: "comment";
+  } = {},
 ) {
   const calls = yield* Ref.make<ReadonlyArray<{ method: string; input: unknown }>>([]);
   const syncs = yield* Ref.make<ReadonlyArray<unknown>>([]);
@@ -59,9 +66,28 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
       Effect.andThen(
         options.partial === method
           ? Effect.fail(
-              new PullRequestOperationError({ operation: method, detail: "partly posted" }),
+              // The host failed mid-request, so the write may have landed.
+              new PullRequestOperationError({
+                operation: method,
+                detail: "partly posted",
+                cause: new PullRequestProviderError({
+                  provider: SourceControlProviderKind.make("github"),
+                  operation: method,
+                  reason: "failed",
+                  detail: "partly posted",
+                }),
+              }),
             )
-          : Effect.void,
+          : options.refuse === method
+            ? // The service's own check, before any request to the host.
+              Effect.fail(
+                new PullRequestOperationError({
+                  operation: method,
+                  detail:
+                    "You need write access on this repository to comment on a change request.",
+                }),
+              )
+            : Effect.void,
       ),
     );
   const project = makeProject();
@@ -454,6 +480,54 @@ it.effect(
         expect(yield* reservations).toHaveLength(2);
       }).pipe(Effect.provide(h.registered));
     }),
+);
+
+it.effect(
+  "settles a refusal before posting, so a new key runs while the old key answers the same",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ refuse: "comment" });
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const args = { ...target, body: "Hello", clientRequestId: "refused" };
+        for (let repeat = 0; repeat < 2; repeat++)
+          expect(yield* call("goat_call", { path: "pull_request.comment", args })).toMatchObject({
+            status: "error",
+            error: {
+              code: "failed_precondition",
+              message: expect.stringContaining("write access"),
+            },
+          });
+        expect(yield* reservations).not.toContainEqual(
+          expect.objectContaining({ state: "unknown" }),
+        );
+        yield* call("goat_call", {
+          path: "pull_request.comment",
+          args: { ...args, clientRequestId: "after-access" },
+        });
+        expect(yield* Ref.get(h.calls)).toHaveLength(2);
+      }).pipe(Effect.provide(h.registered));
+    }),
+);
+
+it.effect("keeps the pull request guidance when goat_eval stops on an unknown outcome", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ partial: "comment" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const program =
+        '(pull_request.comment :url "https://github.com/sample-tools/goat/pull/42" :body "Eval")';
+      const guidance = expect.stringContaining("Never resend with a new key");
+      for (let repeat = 0; repeat < 2; repeat++)
+        expect(
+          yield* call("goat_eval", { program, clientRequestId: "eval-partial" }),
+        ).toMatchObject({
+          status: "error",
+          error: { code: "unknown_outcome", message: guidance },
+        });
+      expect(yield* Ref.get(h.calls)).toHaveLength(1);
+    }).pipe(Effect.provide(h.registered));
+  }),
 );
 
 it("starts thread reconciliation from activity and warns that GitLab approval cannot be confirmed there", () => {
