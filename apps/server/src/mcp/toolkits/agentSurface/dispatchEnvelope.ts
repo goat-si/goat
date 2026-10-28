@@ -8,6 +8,7 @@ import {
 } from "@goat/contracts/agentSurface/envelope";
 import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
 import { isDeduplicatedCall, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { toSignature } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -15,6 +16,8 @@ import * as Ref from "effect/Ref";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { defectSummary } from "../../../observability/LogRedaction.ts";
+import { argumentKeys } from "../../toolRefusals.ts";
+import { surfaceArgumentAliases } from "./argumentAliases.ts";
 import { ForwardedContent } from "./forwardedContent.ts";
 
 /**
@@ -48,6 +51,34 @@ const reclassified = (
 };
 
 const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A refusal of arguments the target never ran with, carrying its one-line signature. */
+const withExpectedSignature = (
+  result: AgentSurfaceResult,
+  schema: unknown,
+  name: string,
+): AgentSurfaceResult => {
+  if (result.status !== "error" || !isRecord(schema)) return result;
+  const { details } = result.error;
+  if (details !== undefined && !isRecord(details)) return result;
+  const expectedSignature = toSignature(pathOf(name) ?? name, schema);
+  return { ...result, error: { ...result.error, details: { ...details, expectedSignature } } };
+};
+
+/**
+ * Whether /mcp refuses these arguments before the handler for a key the target does not declare,
+ * judged as McpHttpServer judges it: after folding aliases, unless the schema takes extra keys.
+ */
+const refusesUndeclared = (name: string, schema: unknown, args: unknown) => {
+  if (!isRecord(schema) || isRecord(schema.additionalProperties)) return false;
+  const folded = surfaceArgumentAliases(name, args);
+  if (!folded.ok) return false;
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  return argumentKeys(folded.payload).some((key) => !Object.hasOwn(properties, key));
+};
 
 /** Where a routed call ran, so the agent can tell remote results from local ones. */
 const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
@@ -92,6 +123,8 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
   const entry = resolveAgentSurfaceEntry(name);
   const deduplicated = entry !== undefined && isDeduplicatedCall(entry, args);
   const context: CallContext = { effect, deduplicated, pathOf };
+  const schema = dispatch.served(name)?.inputSchema;
+  const undeclared = refusesUndeclared(name, schema, args);
   return yield* dispatch.call(name, args).pipe(
     Effect.provideService(McpToolAccess.CallFailureCapture, {
       record: (error) => Ref.set(captured, error),
@@ -103,6 +136,8 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
           )
         : Effect.succeed(fromToolResult(result, context)),
     ),
+    // Refused before the handler, so the target cannot have answered with a refusal of its own.
+    Effect.map((result) => (undeclared ? withExpectedSignature(result, schema, name) : result)),
     Effect.map((result) => withHost(result, host)),
     Effect.flatMap(forwardContent),
     // A dying target still gets an answer, with the same fixed text a direct call shows; the
@@ -119,9 +154,34 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
       ),
     ),
     Effect.catchTags({
-      InvalidParams: (error) => Effect.succeed(fromInvalidParams(error.message)),
+      InvalidParams: (error) =>
+        Effect.succeed(withExpectedSignature(fromInvalidParams(error.message), schema, name)),
       InternalError: (error) =>
         Effect.succeed(envelopeError("internal", "internal_error", error.message)),
     }),
   );
 });
+
+/**
+ * A keyed write's recorded result, answered as goat_call answers the call that recorded it, for a
+ * caller that must not send the write again (goat_eval's recovery of an interrupted step).
+ */
+export const storedEnvelope = (
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+  effect: AgentSurfaceEffect,
+  result: Parameters<typeof fromToolResult>[0],
+  failure: { readonly _tag: string; readonly code?: string } | undefined,
+): AgentSurfaceResult => {
+  const entry = resolveAgentSurfaceEntry(name);
+  const context: CallContext = { effect, deduplicated: true, pathOf };
+  const direct = fromToolResult(result, context);
+  const host =
+    entry?.hostRoutable === true && typeof args.host === "string" ? args.host : undefined;
+  return withHost(
+    result.isError === true && failure !== undefined
+      ? reclassified(direct, failure, context)
+      : direct,
+    host,
+  );
+};

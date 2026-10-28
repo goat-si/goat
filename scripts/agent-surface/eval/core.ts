@@ -55,7 +55,7 @@ export const CORE_TOOLS: ReadonlyArray<string> = ["goat_describe", "goat_call"];
  */
 export type Listing =
   | { readonly mode: "full" }
-  | { readonly mode: "core"; readonly resident: ReadonlyArray<string> };
+  | { readonly mode: "core" | "core_eval"; readonly resident: ReadonlyArray<string> };
 
 export interface Arm {
   readonly id: string;
@@ -119,9 +119,11 @@ const listing = (value: unknown, where: string): Listing | null => {
   if (value === undefined) return null;
   if (isObject(value) && value["mode"] === "full") return { mode: "full" };
   const resident = isObject(value) ? (value["resident"] ?? []) : null;
-  if (isObject(value) && value["mode"] === "core" && isTextList(resident))
-    return { mode: "core", resident };
-  throw new CampaignError(where + ': listing is { mode: "full" } or { mode: "core", resident }');
+  const mode = isObject(value) ? value["mode"] : undefined;
+  if ((mode === "core" || mode === "core_eval") && isTextList(resident)) return { mode, resident };
+  throw new CampaignError(
+    where + ': listing is { mode: "full" } or { mode: "core" | "core_eval", resident }',
+  );
 };
 
 const placeholders = (template: string): ReadonlyArray<string> =>
@@ -457,7 +459,9 @@ export const runMetrics = (items: ReadonlyArray<TimelineItem>, arm: Arm): RunMet
   let inRound = false;
   const violations = new Set<string>();
   const listed =
-    arm.listing?.mode === "core" ? new Set([...CORE_TOOLS, ...arm.listing.resident]) : null;
+    arm.listing !== null && arm.listing.mode !== "full"
+      ? new Set([...CORE_TOOLS, ...arm.listing.resident])
+      : null;
   for (const item of items) {
     if (isWorkspacePreparation(item)) continue;
     if (TOOL_TYPES.has(item.type)) {
@@ -542,13 +546,13 @@ export const listingMatches = (
 ) => {
   const expected = new Set([
     ...CORE_TOOLS,
-    ...(listing.mode === "core" ? listing.resident : campaignResidents),
+    ...(listing.mode === "full" ? campaignResidents : listing.resident),
   ]);
   const seen = new Set(listed);
   const holdsExpected = [...expected].every((name) => seen.has(name));
-  return listing.mode === "core"
-    ? holdsExpected && seen.size === expected.size
-    : holdsExpected && seen.size > expected.size;
+  return listing.mode === "full"
+    ? holdsExpected && seen.size > expected.size
+    : holdsExpected && seen.size === expected.size;
 };
 
 /**
@@ -560,7 +564,10 @@ export const listingMatches = (
 export const agentListedNames = (result: JsonObject): ReadonlyArray<string> => {
   const tools = (Array.isArray(result["tools"]) ? result["tools"] : []).filter(isObject);
   const meta = result["_meta"];
-  const core = isObject(meta) && meta[AGENT_TOOL_LISTING_META_KEY] === "core";
+  const core =
+    isObject(meta) &&
+    (meta[AGENT_TOOL_LISTING_META_KEY] === "core" ||
+      meta[AGENT_TOOL_LISTING_META_KEY] === "core_eval");
   const marked = (tool: Record<string, unknown>) => {
     const toolMeta = tool["_meta"];
     return isObject(toolMeta) && toolMeta[ALWAYS_LOAD_META_KEY] === true;

@@ -25,6 +25,7 @@ import {
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
+import { listedDescription } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
@@ -60,7 +61,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(221);
+  expect(entries).toHaveLength(222);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -76,7 +77,7 @@ it("gives every entry a unique path, listed name and resolvable schema reference
     expect(Tool.getJsonSchema(tool!)).toMatchObject({ type: "object" });
     expect(tool!.successSchema).toBeDefined();
     expect(tool!.failureSchema).toBeDefined();
-    expect(Tool.getDescription(tool!)).toBe(entry.description);
+    expect(Tool.getDescription(tool!)).toBe(listedDescription(entry));
   }
 });
 
@@ -407,6 +408,8 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "pending_request.list": { scope: "launched", hosts: ["box"] },
   "provider.host_matrix": { localOnly: false },
   "host.status": { local: null },
+  // A sampled cursor without its query is refused before access matters.
+  "surface.describe": { query: "thread" },
 };
 
 const REASONS = {
@@ -444,6 +447,7 @@ const ACCESS_EXCEPTIONS: Readonly<
     fullClient: "denied",
   },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
+  "surface.eval": { reason: "dispatches", readOnlyClient: "reached" },
   "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };
 
@@ -530,8 +534,12 @@ describe("agent surface access", () => {
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
           for (const route of ROUTES) {
-            // goat_call refuses to call itself by design.
-            if (route === "goat_call" && entry.path === "surface.call") continue;
+            // goat_call refuses to call itself or goat_eval by design.
+            if (
+              route === "goat_call" &&
+              (entry.path === "surface.call" || entry.path === "surface.eval")
+            )
+              continue;
             if (route === "legacy" && legacy === undefined) continue;
             const call: Effect.Effect<
               McpSchema.CallToolResult,
@@ -815,6 +823,7 @@ it("gives goat_describe and goat_call a tool presentation", () => {
   for (const entry of [
     agentSurfaceRegistry["surface.describe"],
     agentSurfaceRegistry["surface.call"],
+    agentSurfaceRegistry["surface.eval"],
   ]) {
     expect(
       resolveGoatMcpToolDefinition(entry.name)?.summaryAction ?? null,

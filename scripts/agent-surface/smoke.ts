@@ -250,9 +250,10 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
   } else {
     const envelopeStatus = (result: CallResult) =>
       (result.structuredContent as JsonObject | undefined)?.["status"];
-    const program = (count: number) => ({
-      seq: Array.from({ length: count }, () => ({ call: "environment.read", args: {} })),
-    });
+    const program = (count: number) => [
+      "seq",
+      ...Array.from({ length: count }, () => ["environment.read", {}]),
+    ];
     const atCap = await callTool("goat_eval", { program: program(32) });
     const [first, second] = [
       await callTool("goat_eval", { program: program(33) }),
@@ -262,8 +263,11 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
     // A cap that refuses everything would pass the over-limit case alone.
     if (atCap.isError === true || envelopeStatus(atCap) !== "ok")
       capFailures.push(`32 calls were refused: ${resultText(atCap).slice(0, 120)}`);
-    if (first.isError !== true && envelopeStatus(first) !== "error")
-      capFailures.push("33 calls were accepted");
+    const reason = (
+      (first.structuredContent as JsonObject | undefined)?.["error"] as JsonObject | undefined
+    )?.["reason"];
+    if (reason !== "eval_call_limit")
+      capFailures.push(`33 calls were not refused for the call limit: ${String(reason)}`);
     if (resultText(first) !== resultText(second))
       capFailures.push("the same over-limit program failed differently");
     check("goat_eval enforces its call cap", capFailures);
@@ -272,7 +276,7 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
     for (const [name, args] of SAFE_READS) {
       const entry = byName.get(name);
       if (entry === undefined || !direct.has(name)) continue;
-      const result = await callTool("goat_eval", { program: { call: entry.path, args } });
+      const result = await callTool("goat_eval", { program: [entry.path, args] });
       const envelope = result.structuredContent as JsonObject | undefined;
       const viaEval =
         envelope?.["status"] === "ok"

@@ -3,7 +3,7 @@
  * What GOAT puts into each harness's context: the served tool listing, the instruction block,
  * what a later turn adds, and (with --db) the wake messages GOAT writes into threads.
  *
- *   node scripts/agent-surface/context-budget.ts [--json] [--check] [--listing full|core] [--db <copy>]
+ *   node scripts/agent-surface/context-budget.ts [--json] [--check] [--listing full|core|core_eval] [--db <copy>]
  *
  * The listing comes from servedCatalog.ts: the registrations /mcp mounts, built in-process at the
  * checked-out commit, and passes through the server's own tools/list filter as a GOAT thread
@@ -284,8 +284,8 @@ const { DEFAULT_AGENT_TOOL_LISTING } = await fromRepo<{
 }>("packages/contracts/src/agentSurface/listing.ts");
 const listingIndex = argv.indexOf("--listing");
 const listingMode = listingIndex === -1 ? DEFAULT_AGENT_TOOL_LISTING : argv[listingIndex + 1];
-if (listingMode !== "full" && listingMode !== "core") {
-  console.error("--listing takes full or core");
+if (listingMode !== "full" && listingMode !== "core" && listingMode !== "core_eval") {
+  console.error("--listing takes full, core or core_eval");
   process.exit(1);
 }
 

@@ -9,6 +9,7 @@
 > `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓴다. 화면 작업에는 `goat_screen_run`이 유한한 JavaScript 셀을 제공하며, 호출마다 권한을 다시 검사한다.
 > 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
 > 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21). `goat_screen_run`은 턴에 내장 브라우저나 컴퓨터 사용이 붙었을 때만 나열된다.
+> `goat_eval`은 코드 모드가 없는 하네스를 위해 여러 호출을 서버에서 묶는 작은 S-식 실행기로, opt-in으로 추가한다. 호출마다 같은 검사를 거치고, 프로그램 위치로 키를 잡은 저널 덕분에 재시도와 재개가 읽기를 다시 부르거나 쓰기를 중복하지 않으며, 재개할 때 기록된 권한을 다시 확인한다. core 대 core+eval 측정이 합격선을 넘으면 별도 PR로 기본 목록에 올린다(D8).
 > 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D22)과 선행 사례 비교를 끝에 둔다.
 
 This page uses two labels. **Now** describes implemented source in this checkout;
@@ -419,7 +420,7 @@ other way. An outside agent that does not need that sends `x-goat-tool-listing: 
 `tools/list` result names the listing agents get in `_meta["goat/agentToolListing"]`, which is
 how the D8 runner checks a core arm.
 
-**Now.** `goat_describe` answers at the three depths from the
+**Now.** `goat_describe` answers at the three depths, or for up to 10 `paths` at once, from the
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
 `available` reports the refusals the server is sure of before a call: thread-only,
@@ -443,6 +444,17 @@ tools only when its tool search exists, and keeps core tools active
 Codex also compacts an MCP input schema above 5,000 bytes, which the two launch tools exceed in
 the full listing. The core listing avoids that: `goat_describe` returns their schemas whole as
 result data. `context-budget.ts` names the tools over the limit.
+
+**Now.** The D8 turns left after [#1065](https://github.com/goat-si/goat/pull/1065) come from
+asking `goat_describe` before a first call, so the core listing carries the arguments of about 25
+common paths. `goat_call`'s listed description ends with one line per path, such as
+`(thread.read :threadId :host? ...)`, kept on its registry entry's `signatures`; a test renders each
+line again from the schema the server serves, so a line cannot name an argument the path lacks or
+omit a required key at a level it spells out. Deeper objects show as `{}` and lists as `[]`, with
+their fields left to `goat_describe`; keys only `anyOf` branches declare show as optional ([signature.ts](../../packages/contracts/src/agentSurface/signature.ts),
+[discovery test](../../apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts)).
+Search and resource entries carry the same `signature`, and a `goat_call` refused for an argument
+the path does not take or cannot decode returns it as `details.expectedSignature`.
 
 **Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
 authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
@@ -537,6 +549,93 @@ because the core checks one visibility predicate for both `tools/list` and
 listed tool's argument refusal, access checks, and result, plus
 `_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
 toolkit registers, whichever name the caller used, so each tool keeps one series.
+
+## Composition: `goat_eval`
+
+**Now.** [evalRunner.ts](../../apps/server/src/mcp/toolkits/agentSurface/evalRunner.ts)
+runs a small program of GOAT calls in one tool call and returns only what the program keeps.
+`surface.eval` exposes it as `goat_eval`, with each step passed to `goat_call`'s own function
+([handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts)). It is for two cases that code-mode harnesses do not cover
+(D8). In Claude Code, ACP agents, Pi and Cursor, a call whose arguments depend on an earlier
+result costs another model turn, and every intermediate result lands in the transcript;
+independent calls can share one response, so the turn saving is a hypothesis the
+[composition campaign](../operations/agent-surface-eval.md#composition-campaigns) tests. Separately,
+only the server can drop fields before they cross the wire, which that campaign measures in
+result bytes.
+
+A program is an S-expression, as text or as the same tree in JSON arrays:
+
+```lisp
+(let ((ts (thread.list :statuses ["running"] :limit 3)))
+  (map t (. ts "threads") (pick (thread.read :threadId (. t "threadId")) "title" "status")))
+```
+
+The forms are `let`, `.`/`get`, `pick`, `map`, `filter`, `if`, `eq`, `not`, `seq`,
+`quote`, `try`, and a call by path. The grammar and each form's meaning live with the contract in
+[eval.ts](../../packages/contracts/src/agentSurface/eval.ts). There is no recursion, no user
+function, and no way to call `goat_call` or `goat_eval`. Limits are fixed: 16 KiB of program,
+depth 8, 32 calls, 16 elements per `map`, 256 KiB of step results, and 120 s. A program whose
+call sites alone exceed 32 is refused before anything runs. `dryRun` returns only `{plan}`.
+
+Every call takes the path `goat_call` takes (D6, D7), one at a time, so argument refusal, the
+goatclaw gate, host routing, keyed admission and operation handles behave as for a direct call.
+An `ok` result evaluates to its value; every result, halted ones included, lists the
+`meta.operation` handles its steps returned, so unwrapping never hides running work (D1). An
+`error` stops the program unless `try` wraps the call. `needs_human` and `unknown_outcome`
+stop it even inside `try`.
+
+### Replay safety
+
+Replay by call index was rejected because after a fresh read the third call may name a
+different target, and an index-keyed receipt would answer it with another call's result. The
+journal keys a step by its place in the program instead. A run has an `evalRunId`, derived from
+the caller and its `clientRequestId` when one is given. A call's coordinate is its position in
+the parsed program; inside `map` it adds the element's index and the first 12 hex digits of the
+element's digest. Every keyed write gets
+`clientRequestId = "eval:" + sha256(evalRunId \0 stepCoord \0 path \0 argumentsDigest)[0:48]`, so
+ToolAdmission deduplicates it like any keyed write and changed arguments get a different key. A
+program may not pass its own `clientRequestId` to a call, so each key is first used by its
+step.
+`mcp_eval_runs` holds the run and its program; `mcp_eval_steps` holds each step's outcome by
+`(eval_run_id, step_coord)` and the grant that call ran under, computed from its arguments as
+ToolAdmission computes it (a role launch's role profile and a forwarded ceiling included) and
+recorded before it runs.
+
+A retry with the same `clientRequestId`, or `resume` with an `evalRunId`, continues the run:
+
+- Only the caller that started a run sees it, and only with the same program and bindings
+  (`conflict`, `eval_program_changed` otherwise). A stored step is returned only while the
+  caller holds the grant that step ran under, recomputed for the same arguments and checked as
+  ToolAdmission checks a replay, with a client's scopes reauthorized live; a caller that lost it
+  gets `permission_denied`. A completed run is answered by evaluating the program again from the
+  journal, so every step passes that check.
+- Every outcome the program's control flow saw is journaled, refusals caught by `try` included,
+  and replays as recorded, so a resumed run takes the same branches. A write whose failure does
+  not prove what happened (ToolAdmission would settle it unknown, as for `host_unavailable`)
+  stops the run with `unknown_outcome` even inside `try`. Only a failure that stopped the program
+  and proves nothing ran is dropped, so resume tries it again. A step whose arguments no longer
+  match its record is `conflict` (`eval_step_changed`).
+- A read that started and never finished runs again. A keyed write that did is never sent
+  again: its outcome is read from ToolAdmission's reservation for its derived key, under the
+  same grant check. No reservation within 24 hours of the step proves nothing ran, because its
+  key was first used there and only completed reservations expire, so the step runs. Every
+  other case, and any other write that started, stops the run with `unknown_outcome` naming the
+  read that settles it.
+- `needs_human` ends the run. The person's action finishes that step through the handoff's own
+  continuation, and calling the step again could start a second flow or apply a change twice.
+  Resume returns the handoff's state: the same `needs_human` while it is pending, its settled
+  read after. Remaining work goes in a new program.
+- A run that hits its time limit while a write is in flight stops with `unknown_outcome`;
+  otherwise with `timeout`.
+
+A halted run answers `{status, evalRunId, haltedAt, completedSteps, operations}` with its
+`error` or `handoff`. Completed runs expire after 24 hours. Halted runs expire after 7 days
+unless a step's outcome is unknown; those stay, as unknown reservations do.
+
+**Rollout.** `goat_eval` starts opt-in: the default core listing does not change. The
+`agentToolListing` value `core_eval` lists it beside the core tools, loaded up front, for the
+composition campaign and for users who want it; `full` lists it like any other tool. Whether it joins the
+core listing is decided by that campaign and lands as its own change.
 
 ## Screen composition: `goat_screen_run`
 
@@ -873,6 +972,7 @@ Each PR shipped on its own and left `tools/list` unchanged until the flip (row 1
 | 9   | Registry-generated CLI commands and credentials                               | Shipped: credentials ([#935](https://github.com/goat-si/goat/pull/935)); generated commands ([#938](https://github.com/goat-si/goat/pull/938))                                                                            |
 | 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
 | 11  | `goat_screen_run`                                                             | Implemented on this branch; runtime proof pending                                                                                                                                                                         |
+| 12  | `goat_eval` runner and step journal; opt-in mount                             | Runner, journal and contract; mounted as `goat_eval` behind the `core_eval` listing; campaign not run                                                                                                                     |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
 draining instead of sleeps, and one real-client pass for cards.
@@ -893,6 +993,8 @@ draining instead of sleeps, and one real-client pass for cards.
 | [Temporal](https://docs.temporal.io/activity-definition)                                                                                   | Replay from recorded history; a crash after a side effect and before its record needs a downstream key                         | Journal; unknown reservations              |
 | [Cloudflare Code Mode](https://blog.cloudflare.com/code-mode/), [Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp) | Models compose tools better in code; tool search with detail levels saves most of the context                                  | Screen-specific code mode; `query`         |
 | [R7RS Scheme](https://small.r7rs.org/)                                                                                                     | A few special forms suffice when the host supplies primitives                                                                  | The eval forms                             |
+| [Restate](https://docs.restate.dev/services/versioning), [DBOS](https://docs.dbos.dev/typescript/tutorials/workflow-tutorial)              | A journaled step returns its recorded result on replay; a replay that yields a different step fails                            | Program and step checks                    |
+| [JSON-e](https://json-e.js.org/language.html)                                                                                              | A JSON template language stays safe with fixed operators and no evaluation of computed code                                    | The eval forms; JSON programs              |
 
 ### Lessons from aside-codemode
 
@@ -933,7 +1035,7 @@ every gate runs per step (D7).
 | D5  | `operation.*` over existing stores with signed handles                                                                                                                             | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                                                                                                                                                                                                                              | A new operations table first                                                                 |
 | D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                                    | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                                                                                                                                                                                                                                   | Meta tools with their own access class                                                       |
 | D7  | Gates apply per step; composition holds no lane or grant                                                                                                                           | Lanes and ceilings are claimed by the work they bound                                                                                                                                                                                                                                                                                                       | Pre-admitting a whole program                                                                |
-| D8  | General `goat_eval` remains unbuilt; its original measurement gate is waived for the separate screen-specific `goat_screen_run`                                                    | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                                                                                                                                                                                                                                        | S-expression syntax; replay by index                                                         |
+| D8  | `goat_eval` is built opt-in: an S-expression runner over `goat_call`'s path whose steps are journaled by program position; it joins core only if its campaign passes               | Without code mode, each dependent call costs a model turn and copies its result into the transcript, and only the server can drop fields before they cross the wire. A step keyed by program position, element digest and argument digest cannot reuse another call's receipt, the reason replay by call index was rejected                                 | Replay by call index; general JavaScript cells over `goat_call`; core before measurement     |
 | D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                                                | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                                                                                                                                                                                                                                        | A third store; leaving the paths inconsistent                                                |
 | D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                                                | Progressive discovery; cache safety; remotes differ                                                                                                                                                                                                                                                                                                         | Loading every schema                                                                         |
 | D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                                             | `get` and `read` both exist today                                                                                                                                                                                                                                                                                                                           | Renaming now                                                                                 |

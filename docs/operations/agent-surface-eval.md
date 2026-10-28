@@ -1,7 +1,8 @@
 # Measuring the agent surface
 
-[D8](../internals/agent-surface.md#decision-log) originally gated the general
-`goat_eval` proposal on paired provider tasks. That tool remains unbuilt. The
+[D8](../internals/agent-surface.md#decision-log) builds `goat_eval` opt-in and lets a paired
+campaign of provider tasks decide whether it joins the core listing
+([composition campaigns](#composition-campaigns)). The
 separate `goat_screen_run` is bundled on this branch without that pre-ship gate.
 A screen-task regression campaign can reuse this method only after defining
 browser/desktop tasks and answer oracles; this runner's provider tasks do not
@@ -38,7 +39,7 @@ the control as suspect.
 
 A campaign compares two arms. They use the same provider, model, prompt, and answer contract,
 and they differ only in the tool listing: the baseline lists `goat_call` without
-`goat_eval`, and the historical candidate lists both. Both arms run on a provider instance without
+`goat_eval`, and the candidate lists both. Both arms run on a provider instance without
 code execution, because that is the population D8 is about. Harnesses that run code, such as
 Codex code mode, already compose calls themselves. To measure one as a reference, run it as a
 separate campaign against the baseline. Its result does not count toward the gate.
@@ -112,13 +113,37 @@ row's `cleanup` lists the delegated tasks that were still unfinished.
 Each failed tool call is recorded with its tool, error code, and message in `failedCalls`, so
 an argument the server refused can be told apart from a tool the agent could not find.
 
-Tool calls, result bytes, and wall time are recorded but never decide the gate; the
+Tool calls, result bytes, and wall time are recorded but never decide the listing gate; the
+[composition gate](#composition-campaigns) also compares result bytes. The
 [protocol](../internals/agent-surface.md#post-ship-regression-measurement) explains why. Result bytes
 are the compact JSON the server returned to the run's tool calls. In Codex code mode a script
 can keep a result out of the transcript, so there they count what was served, not what the
 model read. First-prompt bytes come from
 [context-budget.ts](../../scripts/agent-surface/context-budget.ts) run on the measured commit;
 pass its `--json` output to the report with `--budget`.
+
+### Composition campaigns
+
+A campaign with `"gate": "eval"` decides whether `goat_eval` joins the core listing. The
+baseline arm is the default core listing and the candidate is core plus `goat_eval`,
+`{ "mode": "core_eval", "resident": ["goat_eval"] }`. That is the `agentToolListing` value that makes
+`goat_eval` opt-in, so the runner switches it per run as for a listing campaign, on a provider without code
+mode (Claude is the reference population). The prompt still names no tool.
+
+The candidate passes when every one of these holds on one paired campaign (composition rule,
+version 1):
+
+- The control shows no gain, as for every gate, and its median turns rise by at most one at
+  either end of the range.
+- At least two of the three automatic multi-step tasks (`wait-running`, `fan-out-review`,
+  `launch-and-wait`) show the reduction defined in [What is counted](#what-is-counted).
+- On those tasks the median result bytes fall by at least a third. Without code mode, served
+  bytes are what the model reads, so here they measure the claim that the server drops
+  intermediate results.
+- No task's failure rate rises, and no candidate run halts with `unknown_outcome`.
+
+A failed campaign leaves `goat_eval` opt-in. Record the verdict and the results folder in the
+D8 entry either way.
 
 ## Running a campaign
 
@@ -225,9 +250,12 @@ out of committed replay data. Changing a case or grading rule raises `REPLAY_VER
 
 ## Not yet possible
 
-- `goat_eval` is unbuilt. Its candidate arm remains historical; this runner does
-  not validate `goat_screen_run`. Record screen-run evidence separately until a
-  screen-task campaign is designed.
+- This runner does not validate `goat_screen_run`; record screen-run
+  evidence separately until a screen-task campaign is designed.
+- The report's `eval` verdict does not apply the [composition rule](#composition-campaigns)
+  yet: it requires every reduces task, manual ones included; it ignores result bytes; it lets
+  the control's turns rise without limit; and rows do not record halts with `unknown_outcome`.
+  Accept a composition campaign only after the report enforces all four.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.

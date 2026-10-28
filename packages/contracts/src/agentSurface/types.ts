@@ -24,10 +24,16 @@ export interface AgentSurfaceEntry {
   /** Guidance longer than the description, served only by goat_describe for one path. */
   readonly guide?: string;
   /**
-   * "core" lists the tool in the core listing and marks it to load up front in every listing.
-   * Everything else is found with goat_describe and called by name or through goat_call.
+   * One-line signatures of other paths that the listing shows after the description, so an agent
+   * can call them without asking goat_describe first (signature.ts renders the syntax).
    */
-  readonly listing?: "core";
+  readonly signatures?: ReadonlyArray<string>;
+  /**
+   * "core" lists the tool in the core listing and marks it to load up front in every listing.
+   * "core_eval" loads it up front only under the opt-in core_eval listing; full lists it like any
+   * tool. Everything else is found with goat_describe and called by name or through goat_call.
+   */
+  readonly listing?: "core" | "core_eval";
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";

@@ -519,7 +519,9 @@ interface Residents {
 const residentsOf = async (client: Client, campaign: Campaign): Promise<Residents> => {
   const named = [
     ...new Set(
-      campaign.arms.flatMap((arm) => (arm.listing?.mode === "core" ? arm.listing.resident : [])),
+      campaign.arms.flatMap((arm) =>
+        arm.listing !== null && arm.listing.mode !== "full" ? arm.listing.resident : [],
+      ),
     ),
   ];
   const visible: Array<string> = [];
@@ -551,7 +553,7 @@ const applyListing = async (
     const names = await client.list();
     const observed = { tools: names.length, names: names.length <= 12 ? names : null };
     const unseen =
-      arm.listing?.mode === "core"
+      arm.listing !== null && arm.listing.mode !== "full"
         ? arm.listing.resident.filter((name) => residents.invisible.includes(name))
         : [];
     if (unseen.length > 0)

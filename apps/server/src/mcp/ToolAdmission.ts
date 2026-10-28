@@ -30,12 +30,12 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
-import type { CallerLimits } from "./threadAccess.ts";
+import { type CallerLimits, loadCaller } from "./threadAccess.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
 /** Completed keys live at least this long (docs/internals/agent-surface.md#idempotency). */
-const KEY_LIFETIME_HOURS = 24;
+export const KEY_LIFETIME_HOURS = 24;
 /** One per process: a running row from another boot was left by a server that stopped mid-call. */
 const PROCESS_BOOT_ID = NodeCrypto.randomUUID();
 /**
@@ -173,7 +173,7 @@ export const argumentsDigest = (params: unknown) =>
   );
 
 /** A thread acts as itself; an outside client as its session. In-process calls have no key. */
-const principalOf = (scope: McpInvocationContext.McpInvocationScope) =>
+export const principalOf = (scope: McpInvocationContext.McpInvocationScope) =>
   scope.thread !== undefined
     ? `thread:${scope.thread.threadId}`
     : scope.client !== undefined
@@ -333,19 +333,11 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
 const unkeyed = <A, E, R>(run: Effect.Effect<A, E, R>) =>
   Effect.provideService(run, McpToolAccess.KeyedAdmission, { admit: () => Effect.void });
 
-/**
- * The gate every registered tool call passes, direct or through goat_call: the goatclaw
- * capability, then, for a write the registry keys, its clientRequestId. The key is reserved
- * where the declaration admits the write, after every caller check, so a replay passes them
- * all again. Without a database a keyed call is refused before it runs, as goatclaw fails closed.
- */
-export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = PROCESS_BOOT_ID) {
-  const permissions = yield* Profiles.PermissionProfiles;
-  // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
-  const settings = yield* Effect.serviceOption(ServerSettingsService);
-  const database = yield* Effect.serviceOption(SqlClient.SqlClient);
-  const store = Option.map(database, (sql) => makeStore(sql, bootId));
-
+/** The caller's grant for one call, and whether it still covers one recorded earlier. */
+const makeGrants = (
+  permissions: Profiles.PermissionProfiles["Service"],
+  settings: Option.Option<ServerSettingsService["Service"]>,
+) => {
   /**
    * The caller's grant now, and the audit columns it fills, resolved the way a launch resolves
    * it: an outside dispatch's forwarded ceiling narrows the destination's profile, and a role
@@ -428,6 +420,23 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
+  return { grantOf, stillGranted };
+};
+
+/**
+ * The gate every registered tool call passes, direct or through goat_call: the goatclaw
+ * capability, then, for a write the registry keys, its clientRequestId. The key is reserved
+ * where the declaration admits the write, after every caller check, so a replay passes them
+ * all again. Without a database a keyed call is refused before it runs, as goatclaw fails closed.
+ */
+export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = PROCESS_BOOT_ID) {
+  const permissions = yield* Profiles.PermissionProfiles;
+  // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
+  const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const store = Option.map(database, (sql) => makeStore(sql, bootId));
+
+  const { grantOf, stillGranted } = makeGrants(permissions, settings);
 
   const keyed =
     /* The request's span already covers each call. */
@@ -620,3 +629,101 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       }),
     );
 });
+
+/** goat_eval's key for one keyed write step (docs/internals/agent-surface.md#replay-safety). */
+export const derivedStepRequestId = (
+  evalRunId: string,
+  stepCoord: string,
+  path: string,
+  argsDigest: string,
+) =>
+  `eval:${NodeCrypto.createHash("sha256")
+    .update(`${evalRunId}\0${stepCoord}\0${path}\0${argsDigest}`)
+    .digest("hex")
+    .slice(0, 48)}`;
+
+export type KeyedOutcome =
+  | {
+      readonly kind: "replay";
+      readonly result: McpSchema.CallToolResult;
+      readonly failure: Literal | undefined;
+    }
+  | { readonly kind: "absent" | "in_progress" | "unknown" | "grant_lost" };
+
+/**
+ * What goat_eval needs to answer a step from its records without running it: the grant one call
+ * runs under, computed as a keyed write records it (a role launch's role and a forwarded ceiling
+ * included), whether the caller still holds a grant recorded earlier, and a keyed write's
+ * outcome read from its reservation without reserving the key again.
+ */
+export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(function* (
+  bootId: string = PROCESS_BOOT_ID,
+) {
+  const permissions = yield* Profiles.PermissionProfiles;
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
+  const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const { grantOf, stillGranted } = makeGrants(permissions, settings);
+
+  const current = Effect.fnUntraced(function* (args: unknown) {
+    const scope = yield* McpInvocationContext.McpInvocationContext;
+    const { limits } = yield* loadCaller();
+    const { grant } = yield* grantOf(scope, args, limits);
+    return { scope, grant };
+  });
+
+  const grantFor = Effect.fn("ToolAdmission.evalGrant")(function* (args: unknown) {
+    const { grant } = yield* current(args);
+    return yield* encodeGrant(grant);
+  });
+
+  const covers = Effect.fn("ToolAdmission.evalCovers")(function* (
+    args: unknown,
+    recordedJson: string,
+  ) {
+    const recorded = yield* decodeGrant(recordedJson);
+    const { scope, grant } = yield* current(args);
+    return yield* stillGranted(scope, grant, recorded);
+  });
+
+  const keyedOutcome = Effect.fn("ToolAdmission.keyedOutcome")(function* (
+    path: string,
+    clientRequestId: string,
+    args: unknown,
+  ) {
+    const scope = yield* McpInvocationContext.McpInvocationContext;
+    const principal = principalOf(scope);
+    if (Option.isNone(database) || principal === undefined)
+      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
+    const [row] = yield* database.value<{
+      readonly state: "running" | "completed" | "unknown";
+      readonly boot_id: string;
+      readonly receipt_id: string;
+      readonly result_json: string | null;
+      readonly failure_json: string | null;
+      readonly grant_json: string;
+    }>`SELECT state, boot_id, receipt_id, result_json, failure_json, grant_json
+      FROM mcp_request_reservations
+      WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
+        AND path = ${path} AND client_request_id = ${clientRequestId}`;
+    if (row === undefined) return { kind: "absent" } satisfies KeyedOutcome as KeyedOutcome;
+    if (
+      row.state === "running" &&
+      row.boot_id === bootId &&
+      !ABANDONED_RECEIPTS.has(row.receipt_id)
+    )
+      return { kind: "in_progress" } satisfies KeyedOutcome as KeyedOutcome;
+    if (row.state !== "completed" || row.result_json === null)
+      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
+    const { grant } = yield* current(args);
+    if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
+      return { kind: "grant_lost" } satisfies KeyedOutcome as KeyedOutcome;
+    return {
+      kind: "replay",
+      result: yield* decodeResult(row.result_json),
+      failure: row.failure_json === null ? undefined : yield* decodeLiteral(row.failure_json),
+    } satisfies KeyedOutcome as KeyedOutcome;
+  });
+
+  return { bootId, grantFor, covers, keyedOutcome };
+});
+export type EvalAdmission = Effect.Success<ReturnType<typeof makeEvalAdmission>>;

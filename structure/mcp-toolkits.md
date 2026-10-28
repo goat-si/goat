@@ -36,6 +36,12 @@ destructive hints from those declarations, overriding presentation metadata. The
 compares the registry against the production registration layers, including the three image tools
 and the separately composed memory tools, and checks that published strict inputs reject extra keys.
 
+`goat_eval`'s runner ([`evalRunner.ts`](../apps/server/src/mcp/toolkits/agentSurface/evalRunner.ts))
+calls every step through `goat_call`'s function, so each step keeps its target's checks. Its
+journal (`mcp_eval_runs`, `mcp_eval_steps`) sits beside ToolAdmission's reservations and reuses
+their replay grant check; the contract is `@goat/contracts/agentSurface/eval`. The tool is not
+registered yet ([composition](../docs/internals/agent-surface.md#composition-goat_eval)).
+
 `goat_schedule_create` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion
 notifications are left on; a launch from outside any thread is watched only when the completion

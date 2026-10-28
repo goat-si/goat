@@ -186,6 +186,10 @@ setting applies to the whole environment. Running agents are told that the list 
 the change up in its next session. Set it back to **Core**, or reset it, to return to the two
 tools. Outside agents that connect to GOAT's MCP URL always see every tool.
 
+**Core + goat_eval** adds `goat_eval`, which runs several GOAT calls as one small program and
+returns only what the program keeps, so agents without a code mode spend fewer turns. It is
+opt-in while GOAT measures whether it helps; choose it in the same row.
+
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser

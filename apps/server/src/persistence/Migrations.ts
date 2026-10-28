@@ -120,6 +120,7 @@ import Migration0109 from "./Migrations/109_ScheduledTaskRuns.ts";
 import Migration0110 from "./Migrations/110_ScheduledTaskNotificationPolicy.ts";
 import Migration0112 from "./Migrations/112_ConnectLinkTrust.ts";
 import Migration0111 from "./Migrations/111_NotificationCursorRepair.ts";
+import Migration0113 from "./Migrations/113_McpEvalJournal.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -237,6 +238,7 @@ export const migrationEntries = [
   [110, "ScheduledTaskNotificationPolicy", Migration0110],
   [111, "NotificationCursorRepair", Migration0111],
   [112, "ConnectLinkTrust", Migration0112],
+  [113, "McpEvalJournal", Migration0113],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

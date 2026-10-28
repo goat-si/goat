@@ -1,3 +1,4 @@
+import { EVAL_GUIDE } from "./eval.ts";
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
 
 type Named = Pick<AgentSurfaceEntry, "resource" | "verb" | "name">;
@@ -18,6 +19,38 @@ export const listedToolName = (entry: Named) =>
 export const legacyToolNames = (entry: Named): ReadonlyArray<string> =>
   listedToolName(entry) === entry.name ? [] : [entry.name];
 
+/**
+ * Common paths goat_call lists with their arguments, so a first call needs no lookup. goat_eval is
+ * only ever listed beside goat_call, and its programs call the same forms.
+ */
+const CORE_SIGNATURES = [
+  "(thread.read :threadId :host? ...)",
+  "(thread.send :threadId :host? :message ...)",
+  "(thread.status :threadId :host?)",
+  "(thread.list :projectId? :host? ...)",
+  "(thread.search :query :host? ...)",
+  "(thread.wait :threadId :host? ...)",
+  "(thread.unwatch :threadId :host? ...)",
+  "(thread.launch :projectId? :title :modelSelection?{:model ...} :workspaceStrategy?{:type=root|existing_worktree|worktree ...} :message? ...)",
+  "(thread.report_result :outcome=succeeded|failed|blocked|cancelled :summary? ...)",
+  "(task.create :task :target?{:providerInstanceId? :model? :options? ...} :isolation?=shared|worktree ...)",
+  "(task.read :taskId)",
+  "(task.cancel :taskId ...)",
+  "(origin.report :status=progress|completed|failed|needs_input :summary ...)",
+  "(pull_request.link :threadId? :url? ...)",
+  "(pull_request.watch :threadId? :url? ...)",
+  "(pull_request.unwatch :threadId? :url? ...)",
+  "(pull_request.list :threadId?)",
+  "(review_findings.record :taskId :entries[] ...)",
+  "(host.status :host? :placement?{...} ...)",
+  "(provider.list :search?)",
+  "(ssh.thread_launch :host :cwd :title :message? ...)",
+  "(schedule.create :prompt :schedule{:type=interval|fixed_time|webhook ...} ...)",
+  "(computer_use.request :purpose :apps?[] ...)",
+  "(decision.request :title :context :options[] :requiredProfile ...)",
+  "(handoff.create :label :reason ...)",
+];
+
 /** The meta tools that reach every other path, kept beside the registry like notes.ts. */
 export const metaSurfaceEntries = {
   describe: {
@@ -28,9 +61,9 @@ export const metaSurfaceEntries = {
     listing: "core",
     summary: "Find GOAT capabilities and whether this caller can use them",
     description:
-      'Find GOAT capabilities and how to call them. query takes words or a tool name: exact names first, then paths with every word, then paths sharing some. total, truncated and nextCursor say what else matched; a short result never means nothing else exists. path takes a resource, or a path or tool name for its schemas and availability. Example: goat_describe {query:"send a message to a thread"}',
+      'Find GOAT capabilities and how to call them. query takes words or a tool name: exact names first, then paths with every word, then paths sharing some. total, truncated and nextCursor say what else matched; a short result never means nothing else exists. path takes a resource or a path or tool name for its schema; paths takes up to 10. Example: goat_describe {query:"send a message to a thread"}',
     guide:
-      "Partial matches carry matchedWords and unmatchedWords. detail is names (path, name, summary), summary (the default: adds effect, requires, available and description) or full, for one path: input and output schema, guide, legacy names and human steps. limit is 1-50, default 10; pass nextCursor with the same query for the next page. coverage lists the fields and resources searched, the words ignored, and how many matches this server does not serve or this caller cannot use now; those are still returned, with available.now false. A query nothing matches returns the nearest paths. available.now reports only the static refusals the server is sure of for this caller; other checks run when the call is made. Call a path with goat_call.\n\nhost (an SSH alias or linked host name) asks that machine's GOAT the same question, with this machine's credentials, which read-only clients may not use; the result names host. There available.now is false when that host refuses the session this caller gets there (the reason starts with On <host>:) or when this machine cannot call the path there for this caller, as for a path it lacks or that takes no host here. coverage.unavailableToCaller is then the host's count, and unavailableFromHere counts this page's matches this machine refuses. build is the GOAT build that searched; coverage.hostOlder is true when the host's build is older than this machine's, so a missing path may exist in a newer build, false when it is the same or newer, and null when the host did not report a build or the two have no order. Pass nextCursor back with the same host, query and path. remote_outdated means the host has no goat_describe; host_unavailable means it could not be reached.",
+      "Partial matches carry matchedWords and unmatchedWords. detail is names (path, name, summary), summary (the default: adds effect, requires, available, description and signature) or full, for one path: input and output schema, guide, legacy names and human steps. signature is the path's arguments on one line, such as (thread.read :threadId :host? ...): :key? is optional, [] a list, {} an object, a|b its values, and ... keys left out. paths takes 1-10 paths or tool names and answers each at detail full, or the detail given, in the order asked; one that names no path is listed in missing with the nearest paths. limit is 1-50, default 10; pass nextCursor with the same query for the next page. coverage lists the fields and resources searched, the words ignored, and how many matches this server does not serve or this caller cannot use now; those are still returned, with available.now false. A query nothing matches returns the nearest paths. available.now reports only the static refusals the server is sure of for this caller; other checks run when the call is made. Call a path with goat_call.\n\nhost (an SSH alias or linked host name) asks that machine's GOAT the same question, with this machine's credentials, which read-only clients may not use; the result names host. There available.now is false when that host refuses the session this caller gets there (the reason starts with On <host>:) or when this machine cannot call the path there for this caller, as for a path it lacks or that takes no host here. coverage.unavailableToCaller is then the host's count, and unavailableFromHere counts this page's matches this machine refuses. build is the GOAT build that searched; coverage.hostOlder is true when the host's build is older than this machine's, so a missing path may exist in a newer build, false when it is the same or newer, and null when the host did not report a build or the two have no order. Pass nextCursor back with the same host, query and path. remote_outdated means the host has no goat_describe; host_unavailable means it could not be reached.",
     effect: "read",
     hostRoutable: true,
     requires: "either",
@@ -48,7 +81,8 @@ export const metaSurfaceEntries = {
     description:
       'Call one GOAT capability by path or tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff a person must finish, so do not retry. Example: goat_call {path:"thread.read", args:{threadId:"t1"}}',
     guide:
-      "A path may be a canonical or legacy tool name. A needs_human handoff's state says what the person must do. Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe.",
+      "A path may be a canonical or legacy tool name. A needs_human handoff's state says what the person must do. Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe. An invalid_request for an argument the path does not take, or one that does not decode, carries details.expectedSignature, the path's arguments on one line.",
+    signatures: CORE_SIGNATURES,
     // Destructive so clients that prompt for destructive tools still prompt here; each call keeps its target's checks.
     effect: "destructive",
     capability: "none",
@@ -56,6 +90,26 @@ export const metaSurfaceEntries = {
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  },
+  eval: {
+    resource: "surface",
+    verb: "eval",
+    name: "goat_eval",
+    toolkit: "agentSurface",
+    // Opt-in until its campaign passes (D8): listed only under the core_eval listing.
+    listing: "core_eval",
+    summary: "Run several GOAT calls as one program and keep only what it returns",
+    description:
+      'Run several GOAT calls as one S-expression program; only its value comes back, so intermediate results stay on the server. Calls use goat_call\'s listed forms, such as (thread.read :threadId "t1"), with the same checks. Retry with the same clientRequestId to resume. goat_describe {path:"goat_eval"} has the language. Example: goat_eval {program:"(pick (thread.read :threadId \\"t1\\") :title)"}',
+    guide: EVAL_GUIDE,
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Runs other tools, and each one checks its own capability for this caller.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "supported",
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   },

@@ -43,6 +43,10 @@
       "types": "./src/agentSurface/envelope.ts",
       "import": "./src/agentSurface/envelope.ts"
     },
+    "./agentSurface/eval": {
+      "types": "./src/agentSurface/eval.ts",
+      "import": "./src/agentSurface/eval.ts"
+    },
     "./agentSurface/operation": {
       "types": "./src/agentSurface/operation.ts",
       "import": "./src/agentSurface/operation.ts"
@@ -50,6 +54,10 @@
     "./agentSurface/resolve": {
       "types": "./src/agentSurface/resolve.ts",
       "import": "./src/agentSurface/resolve.ts"
+    },
+    "./agentSurface/signature": {
+      "types": "./src/agentSurface/signature.ts",
+      "import": "./src/agentSurface/signature.ts"
     },
     "./agentSurface/callText": {
       "types": "./src/agentSurface/callText.ts",

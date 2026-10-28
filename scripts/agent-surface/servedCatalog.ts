@@ -39,7 +39,9 @@ export interface ServedCatalog {
    * HTTP, MCP protocol 2025-06-18, with the server's own listing filter, so a measurement cannot
    * drift from what agents receive.
    */
-  readonly listedAsThread: (listing: "full" | "core") => Promise<ReadonlyArray<ListedTool>>;
+  readonly listedAsThread: (
+    listing: "full" | "core" | "core_eval",
+  ) => Promise<ReadonlyArray<ListedTool>>;
   /**
    * What tools/list sends an MCP client outside GOAT that asks for the core listing with the
    * listing header, over the same transport and filter.
