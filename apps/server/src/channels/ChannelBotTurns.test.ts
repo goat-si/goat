@@ -300,7 +300,9 @@ describe("GOAT Bot turns", () => {
       const sends = harness.world.sends.filter((send) => send.text.includes("/var/log"));
       assert.lengthOf(sends, 1);
       assert.strictEqual(sends[0]!.threadId, turn.worker!.threadId);
-      assert.strictEqual(sends[0]!.mode, "auto");
+      // Into this task's own run by id, never whichever run the session happens to be running.
+      assert.strictEqual(sends[0]!.mode, "steer");
+      assert.strictEqual(sends[0]!.targetRunId, turn.worker!.runId);
       // It joined the running run: no second run on the thread.
       assert.lengthOf(harness.world.runs.get(turn.worker!.threadId)!, 1);
       const texts = (yield* botMessages).messages.map((message) => message.text);
@@ -503,7 +505,7 @@ describe("GOAT Bot follow-ups under failure", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("starts the asked-for turn when the one it would join ends while reading", () => {
+  it.effect("a turn asked for while another runs becomes its own task", () => {
     const harness = harnessWith(botModel);
     return Effect.gen(function* () {
       const { gateway, reports, runtime, turn } = yield* runningTurn;
@@ -604,9 +606,14 @@ describe("GOAT Bot follow-ups under failure", () => {
         const threads = yield* ThreadManagement.ThreadManagementService;
         const threadId = turn.worker!.threadId;
         const [pending] = yield* record(["also: and the cache"]);
-        const ids = turnSteerIdsFor(followUpInput(pending!));
+        const ids = turnSteerIdsFor(followUpInput(pending!), "queued");
         harness.world.setStatus(threadId, 1, "completed", "First answer.");
-        // The earlier process sent it (starting the next run) and died before binding.
+        // The earlier process recorded and sent it (starting the next run), then died before binding.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_bot_session_runs
+          (thread_id, message_id, task_id, task_generation, kind, created_at)
+          VALUES (${threadId}, ${ids.messageId}, ${turn.taskId}, ${turn.generation}, 'followup',
+            '2026-10-12T00:00:00.000Z')`;
         yield* threads.sendToThread({
           projectId: ProjectId.make(turn.target!.projectId),
           commandId: ids.commandId,
@@ -614,7 +621,7 @@ describe("GOAT Bot follow-ups under failure", () => {
           messageId: ids.messageId,
           text: "Follow-up from Owner: also: and the cache",
           attachments: [],
-          mode: "auto",
+          mode: "queue",
           createdBy: "user",
           creationSource: "server",
         });
@@ -697,6 +704,7 @@ describe("GOAT Bot follow-ups under failure", () => {
         // An unclaimed reservation ("reserved") never holds completion forever.
         const unclaimed = yield* childWork.admit({
           callerThreadId: workerThreadId,
+          callerRunId: turn.worker!.runId,
           surface: "delegate_local",
           prompt: "abandoned before claim",
           destinationKey: "codex/gpt-6-luna",
@@ -705,6 +713,7 @@ describe("GOAT Bot follow-ups under failure", () => {
 
         const admission = yield* childWork.admit({
           callerThreadId: workerThreadId,
+          callerRunId: turn.worker!.runId,
           surface: "thread_launch",
           prompt: "implement the fix in a worktree",
           destinationKey: "codex/gpt-6.1-sol",
@@ -856,24 +865,45 @@ describe("GOAT Bot follow-ups under failure", () => {
         assert.isUndefined(extraTask.kind);
         assert.strictEqual(extraTask.title, "Rotate logs");
 
-        // 2. Joined hybrid run_turn while the turn is running steers the turn and creates index 1.
+        // 2. A second run_turn while the turn runs is its own task, queued as its own run in the
+        // same session, never steered into the running one.
         const second = yield* gateway.ingest(
           goatInput("hybrid-join: also /tmp and prune cache", "h2"),
           rpcContext,
         );
         yield* runtime.drain;
-        assert.isUndefined(yield* ledger.getTask(taskIdFor(second.inputId, 0)));
+        const secondTurn = (yield* ledger.getTask(taskIdFor(second.inputId, 0)))?.task;
+        assert.strictEqual(secondTurn?.kind, "turn");
+        assert.strictEqual(secondTurn?.worker?.threadId, turnTask.worker?.threadId);
+        assert.notStrictEqual(secondTurn?.worker?.runId, turnTask.worker?.runId);
         const joinedExtra = (yield* ledger.getTask(taskIdFor(second.inputId, 1)))?.task;
         assert.strictEqual(joinedExtra?.title, "Prune cache");
-        assert.isTrue(harness.world.sends.some((send) => send.text.includes("hybrid-join:")));
+        const queued = harness.world.sends.filter((send) => send.text.includes("Check /tmp too."));
+        assert.deepStrictEqual(
+          queued.map((send) => send.mode),
+          ["queue"],
+        );
 
-        // 3. A lower-ceiling caller in the same conversation cannot steer the full-access turn or stage its extras.
-        const unauth = yield* gateway.ingest(goatInput("hybrid-join: unauthorized", "h3"), {
+        // 3. A lower-ceiling caller in the same conversation never runs on the full-access session.
+        // The two coding tasks finish first so the per-person cap leaves room for this turn.
+        for (const extra of [extraTask, joinedExtra!]) {
+          const worker = (yield* ledger.getTask(extra.taskId))!.task.worker!;
+          harness.world.setStatus(worker.threadId, 1, "completed", "Done.");
+        }
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        const unauth = yield* gateway.ingest(goatInput("look: lowered ceiling", "h3"), {
           ...rpcContext,
           runtimeModeCeiling: "approval-required",
         });
         yield* runtime.drain;
-        assert.isUndefined(yield* ledger.getTask(taskIdFor(unauth.inputId, 1)));
+        const lowered = (yield* ledger.getTask(taskIdFor(unauth.inputId, 0)))?.task;
+        assert.isDefined(lowered?.worker);
+        assert.notStrictEqual(lowered?.worker?.threadId, turnTask.worker?.threadId);
+        const loweredLaunch = harness.world.launches.find(
+          (launch) => launch.threadId === lowered?.worker?.threadId,
+        );
+        assert.strictEqual(loweredLaunch?.runtimeMode, "approval-required");
       }).pipe(Effect.provide(harness.layer));
     },
   );

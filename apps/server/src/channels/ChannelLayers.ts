@@ -18,6 +18,7 @@ import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
+import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -82,7 +83,10 @@ export const makeLayerServices = <E, R>(
     ChannelReceptionService.layer,
     ChannelChildWork.layer,
     // The stop traversal reads and settles child-work records; one shared instance.
-    ChannelDispatcher.layer.pipe(Layer.provide(ChannelChildWork.layer)),
+    ChannelDispatcher.layer.pipe(
+      Layer.provideMerge(ChannelBotSession.layer),
+      Layer.provide(ChannelChildWork.layer),
+    ),
     ChannelWorkerReports.layer,
     ChannelDeliveryWorker.layer,
   ).pipe(

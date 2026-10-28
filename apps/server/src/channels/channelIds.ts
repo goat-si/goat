@@ -93,6 +93,13 @@ export const goatBotSessionThreadIdFor = (
   generation: number,
 ) => ThreadId.make(GOAT_BOT_SESSION_THREAD_PREFIX + digest([conversationId, String(generation)]));
 
+/**
+ * Tasks share a session only where each MCP call is tied to its run: Codex and Claude take a fresh
+ * credential per run. Other drivers keep one credential per process, so each task gets its own.
+ */
+export const goatBotSessionSharingFor = (driverKind: string | undefined) =>
+  driverKind === "codex" || driverKind === "claudeAgent" ? "per_run" : "per_task";
+
 /** The launch of a session generation, carried by the task generation it was started for. */
 export const sessionLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
   commandId: CommandId.make(stableId("channel-session-launch", [taskId, String(generation)])),

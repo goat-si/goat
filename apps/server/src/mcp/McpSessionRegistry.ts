@@ -4,6 +4,7 @@ import {
   ThreadId,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
+  type RunId,
   type ScreenBindingHints,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -42,6 +43,7 @@ export interface McpCredentialRequest {
   readonly readOnly?: boolean;
 
   readonly threadId: ThreadId;
+  readonly runId?: RunId;
   readonly providerInstanceId: ProviderInstanceId;
   /** False omits the preview capability wherever the token is honored. Defaults to full access. */
   readonly browserToolsAvailable?: boolean;
@@ -426,6 +428,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           requestNamespace: providerSessionId,
           thread: {
             threadId: ThreadId.make(request.threadId),
+            ...(request.runId === undefined ? {} : { runId: request.runId }),
             providerSessionId,
             providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
             subagent: request.subagent === true,

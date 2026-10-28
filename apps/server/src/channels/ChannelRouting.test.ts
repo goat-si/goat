@@ -116,7 +116,7 @@ describe("GOAT Bot routing", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("joins a second investigation to the running turn instead of a parallel one", () => {
+  it.effect("queues a second investigation as its own run in the same session", () => {
     const harness = harnessWith();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -131,13 +131,13 @@ describe("GOAT Bot routing", () => {
       yield* gateway.ingest(goatInput("look: and why is the fan loud?", "turn-2"), rpcContext);
       yield* runtime.drain;
 
-      // One workstream: no second turn, no second launch; the request went into the running one.
+      // A new task in the same session: no second launch, and its own run queued behind the first.
       assert.lengthOf(harness.world.launches, 1);
-      assert.lengthOf((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks, 1);
+      assert.lengthOf((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks, 2);
       const sends = harness.world.sends.filter((send) => send.text.includes("fan loud"));
       assert.lengthOf(sends, 1);
       assert.strictEqual(sends[0]!.threadId, turn.worker!.threadId);
-      assert.strictEqual(sends[0]!.mode, "auto");
+      assert.strictEqual(sends[0]!.mode, "queue");
       const entry = (yield* ledger.readConversationTail(turn.conversationId, 5)).find((candidate) =>
         candidate.text.includes("fan loud"),
       );

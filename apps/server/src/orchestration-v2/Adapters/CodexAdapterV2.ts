@@ -6,7 +6,7 @@ import {
 } from "../../provider/CodexHomeRouteConfig.ts";
 import { codexNativeSubagentConfig } from "./CodexNativeSubagentConfig.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import { MemoryContextSnapshot } from "@goat/contracts";
+import { isGoatBotSessionThreadId, MemoryContextSnapshot } from "@goat/contracts";
 import type { CuaDriverMcpConfiguration, RunId } from "@goat/contracts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
@@ -7109,6 +7109,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               stale &&
               (yield* threadStatuses.busy(client, conversation, !driverChanged || limitChanged));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
+            if (isGoatBotSessionThreadId(turnInput.threadId) && applied !== next && busy)
+              return yield* toProtocolError(
+                "This GOAT Bot session's MCP credential could not be installed while the thread is busy; the turn did not start.",
+              );
             if (stale && !busy) {
               const previousCuaDriver = managedCuaByThread.get(threadId);
               const detached = {

@@ -2,9 +2,8 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * GOAT Bot's warm session per conversation: one row per session generation, and one row per
- * message sent into a session, written before the send so a run maps to its task the moment it
- * exists. Native provider sessions stay in the orchestration tables.
+ * GOAT Bot sessions: a row per session generation, and a row per message sent into one, written
+ * before the send so a run maps to its task the moment it exists.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

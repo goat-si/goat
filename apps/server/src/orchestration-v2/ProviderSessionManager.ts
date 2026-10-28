@@ -7,6 +7,7 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
+  isGoatBotSessionThreadId,
   ModelSelection,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
@@ -24,6 +25,7 @@ import {
   ThreadId,
   type ProviderThreadId,
 } from "@goat/contracts";
+import { goatBotSessionSharingFor } from "../channels/channelIds.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -700,12 +702,16 @@ export const layerWithOptions = (
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
                 const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
+                const driver = yield* registry.get(providerInstanceId).pipe(
+                  Effect.map((adapter) => adapter.driver),
+                  Effect.orElseSucceed(() => undefined),
+                );
+                const perRun =
+                  isGoatBotSessionThreadId(threadId) &&
+                  goatBotSessionSharingFor(driver) === "per_run";
                 const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
                   threadId,
-                  driver: yield* registry.get(providerInstanceId).pipe(
-                    Effect.map((adapter) => adapter.driver),
-                    Effect.orElseSucceed(() => undefined),
-                  ),
+                  driver,
                   interactionMode: preparedInput.interactionMode,
                   ...(usableThread
                     ? { runtimeMode: thread.value.runtimeMode, projectId: thread.value.projectId }
@@ -735,6 +741,7 @@ export const layerWithOptions = (
                   mcpSessionRegistry.urlOpener,
                 );
                 const existing = yield* mcpSessions.read(threadId);
+                let existingRunId: RunId | undefined;
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
                   reserveMcpCredential(threadId, existing.providerSessionId);
@@ -749,8 +756,10 @@ export const layerWithOptions = (
                         ),
                       ),
                     );
+                  existingRunId = resolved?.thread.runId;
                   if (
                     resolved !== undefined &&
+                    (!perRun || existingRunId === preparedInput.runId) &&
                     resolved.thread.threadId === threadId &&
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
@@ -777,12 +786,11 @@ export const layerWithOptions = (
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
                 }
-                // A provider process keeps the header it was given for its whole
-                // turn, and several harnesses for its whole life, so changed
-                // authority is replaced under the same token. Only a different
-                // provider instance, or a credential already revoked, gets a new one.
+                // Renew retained authority, except when a shared session moves to another run.
                 const renew =
-                  existing !== undefined && existing.providerInstanceId === providerInstanceId
+                  existing !== undefined &&
+                  existing.providerInstanceId === providerInstanceId &&
+                  (!perRun || existingRunId === preparedInput.runId)
                     ? {
                         authorizationHeader: existing.authorizationHeader,
                         providerSessionId: existing.providerSessionId,
@@ -791,6 +799,9 @@ export const layerWithOptions = (
                 if (renew === undefined) yield* mcpSessionRegistry.revokeThread(threadId);
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
+                  ...(perRun && preparedInput.runId !== undefined
+                    ? { runId: preparedInput.runId }
+                    : {}),
                   providerInstanceId,
                   browserToolsAvailable,
                   capabilities,

@@ -236,22 +236,6 @@ const boundTail = (
   return kept;
 };
 
-/**
- * The GOAT Bot turn a follow-up in this conversation steers: the newest turn whose coding thread
- * is running here. Messages in other conversations, or when no turn runs, start their own.
- */
-const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
-  tasks
-    .filter(
-      (task) =>
-        task.kind === "turn" &&
-        task.status === "running" &&
-        task.worker !== undefined &&
-        task.worker.host === undefined &&
-        task.target !== undefined,
-    )
-    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const home = yield* ChannelBotHome.ChannelBotHome;
@@ -1400,23 +1384,17 @@ const make = Effect.gen(function* () {
         };
       }
 
-      let joining: ChannelTask | undefined;
       if (action.type === "create_task" || action.type === "run_turn") {
         // People start work; agents may only report on or answer existing work.
         const mayStart =
           requester.originKind !== "mcp" &&
           requester.grantedScopes.includes("orchestration:operate");
-        // Busy input: asking for a turn while this conversation's turn runs joins that turn.
-        joining = mayStart && action.type === "run_turn" ? turnToSteer(tasks) : undefined;
-        // The task list was read before the model answered; join only a turn still running now.
-        if (joining !== undefined) {
-          const now = yield* ledger.getTask(joining.taskId);
-          if (now?.task.status !== "running") joining = undefined;
-        }
         if (!mayStart) {
           replyText = CHANNEL_COPY.agentCannotCreateWork;
           finalDecision = { replyText, action: { type: "report_only" } };
-        } else if (joining === undefined) {
+        } else {
+          // A new turn is its own task, queued as its own run in the conversation's session;
+          // only a follow_up naming a task joins that task's run.
           // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
             action.notesChangeRequested !== undefined &&
@@ -1450,7 +1428,7 @@ const make = Effect.gen(function* () {
 
       // A follow-up joins its workstream through the ledger: recorded here with the reply, then sent
       // by the dispatcher, which binds the task to the run that took it. Completion waits for that.
-      const followTaskId = action.type === "follow_up" ? action.taskId : joining?.taskId;
+      const followTaskId = action.type === "follow_up" ? action.taskId : undefined;
       if (followTaskId !== undefined) {
         const storedTask = yield* ledger.getTask(followTaskId);
         const sender = requester.originKind === "mcp" ? undefined : yield* judgedNow;
@@ -1461,18 +1439,8 @@ const make = Effect.gen(function* () {
           storedTask.task.worker !== undefined &&
           storedTask.task.worker.host === undefined;
         if (!running) {
-          // The turn this message was joining ended after the check above. Retrying the input
-          // starts the turn it asked for instead of dropping it.
-          if (action.type === "run_turn") {
-            return yield* new ChannelLedger.ChannelLedgerError({
-              reason: "version_conflict",
-              detail: "The turn this message was joining ended; reading it again.",
-            });
-          }
           replyText =
-            action.type === "follow_up"
-              ? "That work isn't running anymore. Tell me what you'd like done and I'll start it."
-              : replyText;
+            "That work isn't running anymore. Tell me what you'd like done and I'll start it.";
           finalDecision = { replyText, action: { type: "report_only" } };
         } else if (sender === undefined || !mayAnswerFor(sender, storedTask.task.requester)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
@@ -1502,20 +1470,6 @@ const make = Effect.gen(function* () {
             taskEvents.push(prepared.write);
             deliveries.push(...prepared.deliveries);
             finalDecision = { replyText, action: { type: "follow_up", taskId: followTaskId } };
-            if (action.type === "run_turn" && (action.additionalTasks?.length ?? 0) > 0) {
-              createdTasks = makeCreatedTasks({
-                action,
-                inputId,
-                conversationId,
-                originBindingId: stored.snapshot.bindingId,
-                originAddress: origin,
-                requester,
-                includePrimary: false,
-                bot,
-                deliveries,
-                now,
-              });
-            }
           } else {
             finalDecision = { replyText, action: { type: "report_only" } };
           }

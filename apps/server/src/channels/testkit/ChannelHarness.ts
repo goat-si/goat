@@ -101,6 +101,8 @@ const refusingAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
+const LIVE_RUN = new Set(["queued", "preparing", "starting", "running", "waiting"]);
+
 class WorkerWorld {
   readonly runs = new Map<string, Array<OrchestrationV2Run>>();
   readonly finalText = new Map<string, string>();
@@ -142,9 +144,18 @@ class WorkerWorld {
    * freezes this behind the clock.
    */
   readonly activityAt = new Map<string, DateTime.Utc>();
+  /** Provider turns with token usage, by thread, for session rotation. */
+  readonly providerTurns = new Map<string, ReadonlyArray<unknown>>();
+  /** Delegated stops by parent thread and the child threads they named. */
+  readonly childStops: Array<{
+    readonly threadId: string;
+    readonly childThreadIds?: ReadonlyArray<string>;
+  }> = [];
 
   addRun(threadId: ThreadId, userMessageId: MessageId) {
     const existing = this.runs.get(threadId) ?? [];
+    // A run sent while another is live waits its turn, as a queued send does.
+    const busy = existing.some((run) => LIVE_RUN.has(run.status));
     const run = {
       id: RunId.make("run:" + threadId + ":" + (existing.length + 1)),
       threadId,
@@ -155,7 +166,7 @@ class WorkerWorld {
       userMessageId,
       rootNodeId: null,
       activeAttemptId: null,
-      status: "running",
+      status: busy ? "queued" : "running",
       requestedAt: DateTime.makeUnsafe("2026-10-12T00:00:00.000Z"),
       startedAt: null,
       completedAt: null,
@@ -173,11 +184,19 @@ class WorkerWorld {
     text?: string,
   ) {
     const runs = this.runs.get(threadId) ?? [];
+    const next = runs.map((run) =>
+      run.ordinal === ordinal ? ({ ...run, status } as OrchestrationV2Run) : run,
+    );
+    // When a run ends, the next queued run starts once nothing else is live, as the queue does.
+    const queued = next.find((run) => run.status === "queued");
+    const live = next.some((run) => run.status !== "queued" && LIVE_RUN.has(run.status));
     this.runs.set(
       threadId,
-      runs.map((run) =>
-        run.ordinal === ordinal ? ({ ...run, status } as OrchestrationV2Run) : run,
-      ),
+      queued === undefined || live || LIVE_RUN.has(status)
+        ? next
+        : next.map((run) =>
+            run.id === queued.id ? ({ ...run, status: "running" } as OrchestrationV2Run) : run,
+          ),
     );
     const run = runs.find((candidate) => candidate.ordinal === ordinal);
     if (run !== undefined && text !== undefined) this.finalText.set(run.id, text);
@@ -401,6 +420,7 @@ export function makeHarness(
                   : []),
               ],
               subagents: world.subagents.get(threadId) ?? [],
+              providerTurns: world.providerTurns.get(threadId) ?? [],
               messages: runs
                 .filter((run) => messageRunIds === undefined || messageRunIds.includes(run.id))
                 .flatMap((run) => {
@@ -437,10 +457,16 @@ export function makeHarness(
           } as OrchestrationV2ThreadShell);
         },
         dispatch: (command) => {
-          if (!("threadId" in command) || !isWorker(command.threadId)) {
+          const commandThread =
+            "threadId" in command
+              ? command.threadId
+              : "parentThreadId" in command
+                ? command.parentThreadId
+                : undefined;
+          if (commandThread === undefined || !isWorker(commandThread)) {
             return real.dispatch(command);
           }
-          if (world.dispatchFailures.has(command.threadId)) {
+          if (world.dispatchFailures.has(commandThread)) {
             return Effect.fail(
               new Orchestrator.OrchestratorDispatchError({
                 commandId: command.commandId,
@@ -496,6 +522,14 @@ export function makeHarness(
                 world.setStatus(command.threadId, latest.ordinal, "cancelled");
               }
             }
+            // A run-scoped stop ends only that run; the queue behind it moves on.
+            if (command.type === "run.interrupt" || command.type === "queued-run.cancel") {
+              const target = (world.runs.get(command.threadId) ?? []).find(
+                (run) => run.id === command.runId,
+              );
+              if (target !== undefined)
+                world.setStatus(command.threadId, target.ordinal, "cancelled");
+            }
             if (command.type === "thread.metadata.update" && command.limitRecovery !== undefined) {
               const previous = world.shells.get(command.threadId);
               const recovery = command.limitRecovery;
@@ -526,6 +560,19 @@ export function makeHarness(
           if (steeredInto !== undefined) {
             const run = (world.runs.get(input.threadId) ?? []).find((r) => r.id === steeredInto);
             return Effect.succeed({ run, delivery: "steered" } as never);
+          }
+          // An explicit steer joins only the named run while it runs, as the command policy allows.
+          if (input.mode === "steer") {
+            const target =
+              input.targetRunId === undefined
+                ? latest
+                : (world.runs.get(input.threadId) ?? []).find(
+                    (run) => run.id === input.targetRunId,
+                  );
+            if (target?.status !== "running")
+              return Effect.fail({ _tag: "ThreadManagementNoSteerableRunError" } as never);
+            world.steered.set(input.messageId, target.id);
+            return Effect.succeed({ run: target, delivery: "steered" } as never);
           }
           if (
             input.mode === "auto" &&
@@ -562,6 +609,10 @@ export function makeHarness(
         stopDelegatedTasks: (input) => {
           if (!isWorker(input.threadId)) return real.stopDelegatedTasks(input);
           world.subagentStops.push(input.threadId);
+          world.childStops.push({
+            threadId: input.threadId,
+            ...(input.childThreadIds === undefined ? {} : { childThreadIds: input.childThreadIds }),
+          });
           return Effect.void;
         },
       });

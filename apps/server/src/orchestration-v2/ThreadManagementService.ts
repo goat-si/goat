@@ -185,6 +185,7 @@ export interface ThreadManagementSendInput {
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
+  readonly targetRunId?: RunId;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }
@@ -793,8 +794,7 @@ const make = Effect.gen(function* () {
             : {
                 ...saved,
                 currentMemoryAccess: {
-                  // Inputs explain the restriction; execution's current policy
-                  // is the authority for the access level itself.
+                  // Inputs explain the restriction; current execution policy sets the access.
                   ...currentMemoryAccess({
                     ...policy,
                     ...inputs,
@@ -1550,7 +1550,7 @@ const make = Effect.gen(function* () {
       );
     }
     yield* assertReviewTaskSendAllowed(input);
-    const steerableRun = latestSteerableRun(target);
+    const steerableRun = input.targetRunId ? { id: input.targetRunId } : latestSteerableRun(target);
     let dispatchMode: Extract<
       OrchestrationV2Command,
       { readonly type: "message.dispatch" }

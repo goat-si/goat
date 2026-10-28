@@ -2336,6 +2336,7 @@ const make = Effect.gen(function* () {
         .toSorted((left, right) => right.ordinal - left.ordinal)[0];
       if (
         parentRun === undefined ||
+        (scope.thread.runId !== undefined && parentRun.id !== scope.thread.runId) ||
         parentRun.rootNodeId === null ||
         parentRun.providerInstanceId !== scope.thread.providerInstanceId
       ) {
@@ -2359,6 +2360,7 @@ const make = Effect.gen(function* () {
         );
         const admission = yield* admitDelegate(channelChildWork, {
           callerThreadId: scope.thread.threadId,
+          callerRunId: scope.thread.runId,
           prompt: taskPrompt(input),
           clientRequestId: input.clientRequestId,
           target: input.target,
@@ -2609,6 +2611,7 @@ const make = Effect.gen(function* () {
       const providers = yield* loadProviders;
       const admission = yield* admitDelegate(channelChildWork, {
         callerThreadId: scope.thread.threadId,
+        callerRunId: scope.thread.runId,
         prompt: taskPrompt(input),
         clientRequestId: input.clientRequestId,
         target: input.target,

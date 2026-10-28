@@ -9,6 +9,7 @@ import {
   PreviewAutomationUnavailableError,
   type ProviderInstanceId,
   type RuntimeMode,
+  type RunId,
   type ScreenBindingHints,
   type ThreadId,
 } from "@goat/contracts";
@@ -29,6 +30,8 @@ export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
 export interface McpThreadCaller {
   readonly threadId: ThreadId;
+  /** Server-issued; never from tool arguments. */
+  readonly runId?: RunId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
   /** A delegated child task; its parent owns the work it hands back. */
