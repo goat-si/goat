@@ -15,6 +15,7 @@ import { answerInstruction, type JsonObject } from "../agent-surface/eval/core.t
 import {
   ARMS,
   type ArmSpec,
+  type Observations,
   COMMON_RULES,
   ORACLES,
   type Task,
@@ -55,16 +56,56 @@ const active: {
   launching: string | null;
   threadId: string | null;
   group: number | null;
+  /** The launch call itself, awaited on shutdown so its thread is known before it is stopped. */
+  launch: Promise<unknown> | null;
   observer: { readonly stop: () => Promise<unknown> } | null;
-} = { client: null, launching: null, threadId: null, group: null, observer: null };
+  stopping: boolean;
+} = {
+  client: null,
+  launching: null,
+  threadId: null,
+  group: null,
+  launch: null,
+  observer: null,
+  stopping: false,
+};
 
 const stopActive = async () => {
-  if (active.group !== null) await stopGroup(active.group);
-  if (active.client !== null && active.threadId === null && active.launching !== null)
-    active.threadId = await findLaunched(active.client, active.launching);
-  if (active.client !== null && active.threadId !== null)
-    await settleThread(active.client, active.threadId);
-  await active.observer?.stop();
+  active.stopping = true;
+  const errors: Array<string> = [];
+  const attempt = async (what: string, run: () => Promise<unknown>) => {
+    try {
+      await run();
+    } catch (error) {
+      errors.push(what + ": " + String(error));
+    }
+  };
+  try {
+    await attempt("codex exec", async () => {
+      if (active.group !== null) await stopGroup(active.group);
+    });
+    await attempt("GOAT thread", async () => {
+      const client = active.client;
+      if (client === null) return;
+      // A launch in flight either answers, naming its thread, or settles its own failure.
+      if (active.threadId === null && active.launch !== null)
+        await active.launch.catch(() => undefined);
+      if (active.threadId === null && active.launching !== null) {
+        const found = await findLaunched(client, active.launching);
+        if (found === null)
+          throw new Error(
+            "no thread titled " +
+              active.launching +
+              " was found, so its launch is not confirmed stopped",
+          );
+        active.threadId = found;
+      }
+      if (active.threadId !== null) await settleThread(client, active.threadId);
+    });
+  } finally {
+    await attempt("observer", async () => active.observer?.stop());
+  }
+  if (errors.length > 0) throw new Error(errors.join("; "));
 };
 
 /** The thread an unanswered launch started, if the server has it; read-only, so nothing new starts. */
@@ -242,18 +283,35 @@ const runGoat = async (
     message: prompt,
   };
   active.launching = tagged;
-  const launched = await client.call("thread.launch", launch).catch(async (first: unknown) => {
+  const ask = async () => {
     try {
       return await client.call("thread.launch", launch);
-    } catch (error) {
-      throw new HaltError(
-        "launch failed and its thread cannot be identified: " +
-          String(first) +
-          "; " +
-          String(error),
-      );
+    } catch (first) {
+      try {
+        return await client.call("thread.launch", launch);
+      } catch (error) {
+        // Both answers were lost: the thread may still exist, so find it and stop it first.
+        const found = await findLaunched(client, tagged).catch(() => null);
+        if (found !== null) await settleThread(client, found);
+        throw new HaltError(
+          "launch answers were lost (" +
+            String(first) +
+            "; " +
+            String(error) +
+            "); " +
+            (found === null
+              ? "no thread titled " + tagged + " was found, check before running again"
+              : "thread " + found + " was stopped"),
+        );
+      }
     }
+  };
+  const pending = ask();
+  active.launch = pending;
+  const launched = await pending.finally(() => {
+    active.launch = null;
   });
+
   const threadId = String(launched["threadId"]);
   active.threadId = threadId;
   active.launching = null;
@@ -573,7 +631,7 @@ const runStep = async (
           ...(task.oracle === "textEditDiscard" ? { savedFiles: documentsSince(startedMs) } : {}),
         };
   const after = await snapshot(arm, task);
-  const observed = keepObservations({
+  const observed: Observations = {
     baseline,
     samples,
     final,
@@ -583,7 +641,7 @@ const runStep = async (
     steps: ran.transcript.steps,
     finalText: ran.transcript.finalText,
     notes: ran.notes,
-  });
+  };
   const leftovers = await leftoversOf(
     client,
     arm,
@@ -605,7 +663,8 @@ const runStep = async (
     tokens: ran.transcript.tokens,
     wallMs: ran.wallMs,
     ref: ran.ref,
-    observations: { ...observed, notes: [...observed.notes, ...leftovers.notes] },
+    // Scored from the full observations; the row keeps a cut copy that is marked when cut.
+    observations: keepObservations({ ...observed, notes: [...observed.notes, ...leftovers.notes] }),
   };
 };
 
@@ -648,13 +707,25 @@ const main = async () => {
       ? rows.map((row) => {
           const task = taskSet.tasks.find((candidate) => candidate.id === row.task);
           const arm = ARMS.find((candidate) => candidate.id === row.arm);
+          if (row.status !== "ran") return row;
           if (
-            row.status !== "ran" ||
             row.observations == null ||
             task === undefined ||
-            arm === undefined
+            arm === undefined ||
+            row.taskSetVersion !== taskSet.version
           )
-            return row;
+            throw new Error(
+              "cannot rescore " +
+                row.task +
+                " / " +
+                row.arm +
+                " (" +
+                (row.ref ?? "no ref") +
+                "): it has no stored observations or ran task set v" +
+                row.taskSetVersion +
+                ", not v" +
+                taskSet.version,
+            );
           return { ...row, ...scoreRun(task, arm, row.observations) };
         })
       : rows;
@@ -732,6 +803,7 @@ const main = async () => {
     model: options.model,
   };
   for (const step of steps) {
+    if (active.stopping) break;
     for (let attempt = 0; ; attempt += 1) {
       const row = await runStep(client, step.task, step.arm, options, base);
       NodeFS.appendFileSync(out, JSON.stringify(row) + "\n");

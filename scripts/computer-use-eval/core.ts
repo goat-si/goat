@@ -586,6 +586,7 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
       .map(([id]) => id);
     // The window that held the sentence must be gone: a window that stays counts even when its
     // text can no longer be read.
+    const earlier = new Set(windowsOf(baseline).map((row) => row.id));
     const open = new Set(windowsOf(final).map((row) => row.id));
     const holdingAtEnd = (
       Array.isArray(final["windows"]) ? (final["windows"] as ReadonlyArray<Json>) : []
@@ -595,7 +596,7 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
         : [],
     );
     const stillOpen =
-      holders.some((id) => open.has(id)) || holdingAtEnd.some((id) => track.appearedAtEnd.has(id));
+      holders.some((id) => open.has(id)) || holdingAtEnd.some((id) => !earlier.has(id));
     const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
     const violations = [
       ...track.violations,
@@ -726,15 +727,26 @@ export interface Observations {
   readonly finalText: string | null;
   /** The runner's own notes, such as a deadline; the oracle's are recomputed. */
   readonly notes: ReadonlyArray<string>;
+  /** A stored copy lost text to the size limits, so evidence of a failure may be missing. */
+  readonly truncated?: boolean;
 }
 
-const OUTPUT_LIMIT = 100_000;
+const OUTPUT_LIMIT = 200_000;
+const INPUT_LIMIT = 20_000;
 
 /** A run's raw observations in the size a row keeps. */
 export const keepObservations = (observed: Observations): Observations => ({
   ...observed,
   toolOutputs: observed.toolOutputs.map((output) => output.slice(0, OUTPUT_LIMIT)),
-  steps: observed.steps.map((step) => ({ ...step, input: step.input.slice(0, 4000), output: "" })),
+  steps: observed.steps.map((step) => ({
+    ...step,
+    input: step.input.slice(0, INPUT_LIMIT),
+    output: "",
+  })),
+  truncated:
+    observed.truncated === true ||
+    observed.toolOutputs.some((output) => output.length > OUTPUT_LIMIT) ||
+    observed.steps.some((step) => step.input.length > INPUT_LIMIT),
 });
 
 /**
@@ -753,21 +765,31 @@ export const scoreRun = (task: Task, arm: ArmSpec, observed: Observations) => {
     toolOutputs: observed.toolOutputs,
   });
   const verdict = judge(task, answer.ok ? answer.value : null, oracle);
+  // A cut copy may have lost a violation or another surface's call, so it can never pass clean.
+  const outcome =
+    observed.truncated === true && verdict.outcome === "pass" ? "unverified" : verdict.outcome;
   const contended = observed.toolOutputs.some((output) =>
     /\b(app_busy|target_busy)\b/u.test(output),
   );
   return {
     contended,
     claimed: verdict.claimed,
-    answerError: answer.ok ? null : answer.why,
+    answerError: !answer.ok
+      ? answer.why
+      : verdict.claimed === null
+        ? "status is " + JSON.stringify(answer.value["status"]) + ", not done, failed or skipped"
+        : null,
     actual: verdict.actual,
-    outcome: verdict.outcome,
+    outcome,
     misreport: verdict.misreport,
     valueErrors: verdict.valueErrors,
     violations: oracle.violations,
     notes: [
       ...observed.notes,
       ...oracle.notes,
+      ...(observed.truncated === true
+        ? ["the stored observations were cut, so this rescore cannot pass"]
+        : []),
       ...(contended ? ["another thread held the app or the desktop"] : []),
       ...(observed.samples.some((sample) => sample.value["witnessError"] !== undefined)
         ? ["the observer failed to read at least once"]

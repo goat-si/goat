@@ -112,4 +112,6 @@ The KakaoTalk task expects a skip while KakaoTalk is signed out.
 
 Each row keeps the run's raw observations: the observer's samples and final read, the tool
 results and the agent's final answer. `--rescore` judges stored rows with the current rules, so
-a fixed oracle applies to past runs without repeating them; a changed prompt still needs a new run.
+a fixed oracle applies to past runs without repeating them. It refuses a row without stored
+observations or from another task set version, and a stored copy that had to be cut can no longer
+pass, since the cut may have held a violation.

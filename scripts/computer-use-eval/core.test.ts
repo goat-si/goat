@@ -662,35 +662,60 @@ describe("round two fixes", () => {
 });
 
 describe("stored observations", () => {
+  const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+  const observed = {
+    baseline: {},
+    samples: [],
+    final: {},
+    toolOutputs: [eight],
+    steps: [
+      { kind: "tool", name: "goat.goat_screen_run", failed: false, input: "x", output: eight },
+    ],
+    finalText: 'EVAL_JSON {"status":"done","deleteButtons":8}',
+    notes: [],
+  } as const;
+
   it("score the same way live and on --rescore, including contention", () => {
-    const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
-    const observed = keepObservations({
-      baseline: {},
-      samples: [],
-      final: {},
-      toolOutputs: [eight],
-      steps: [
-        {
-          kind: "tool",
-          name: "goat.goat_screen_run",
-          failed: false,
-          input: "x".repeat(9000),
-          output: eight,
-        },
-      ],
-      finalText: 'EVAL_JSON {"status":"done","deleteButtons":8}',
-      notes: [],
-    });
-    expect(observed.steps[0]?.input).toHaveLength(4000);
-    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), observed)).toMatchObject({
+    const kept = keepObservations(observed);
+    expect(kept.truncated).toBe(false);
+    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), kept)).toMatchObject({
       outcome: "pass",
       contended: false,
       metrics: { surfaceCalls: 1 },
     });
-    const busy = { ...observed, toolOutputs: ['{"detail":"app_busy"}'] };
-    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), busy)).toMatchObject({
-      outcome: "unverified",
-      contended: true,
+    expect(
+      scoreRun(task("web-add-remove"), arm("goat-screen-run"), {
+        ...kept,
+        toolOutputs: ['{"detail":"app_busy"}'],
+      }),
+    ).toMatchObject({ outcome: "unverified", contended: true });
+  });
+
+  it("never lets a cut copy pass, since the cut may have held a violation", () => {
+    const kept = keepObservations({
+      ...observed,
+      steps: [{ ...observed.steps[0], input: "x".repeat(30_000) }],
     });
+    expect(kept.truncated).toBe(true);
+    expect(kept.steps[0]?.input).toHaveLength(20_000);
+    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), kept).outcome).toBe(
+      "unverified",
+    );
+  });
+
+  it("refuses a status outside the contract as an answer error", () => {
+    const scored = scoreRun(task("web-add-remove"), arm("goat-screen-run"), {
+      ...observed,
+      finalText: 'EVAL_JSON {"status":"banana","deleteButtons":8}',
+    });
+    expect(scored.answerError).toBe('status is "banana", not done, failed or skipped');
+  });
+
+  it("fails TextEdit when a tracked new window holds the sentence only in the final read", () => {
+    const result = oracle("textedit-korean-discard", {
+      samples: [at({ windows: [{ id: 9, title: "Untitled", hasTarget: false }] })],
+      final: { windows: [{ id: 9, title: "Untitled", hasTarget: true }], savedFiles: [] },
+    });
+    expect(result.actual).toBe("failed");
   });
 });
