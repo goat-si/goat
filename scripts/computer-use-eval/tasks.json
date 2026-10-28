@@ -146,23 +146,23 @@
     {
       "id": "web-parallel-read",
       "surface": "web",
-      "prompt": "Read these two public pages at the same time, in parallel if your tools allow, and report each page's main heading: https://example.com and https://the-internet.herokuapp.com/ . Close any tabs you opened.",
-      "answerKeys": ["status", "exampleHeading", "internetHeading"],
+      "prompt": "Read these two public pages at the same time, in parallel if your tools allow, and report each page's title: https://example.com and https://the-internet.herokuapp.com/ . Close any tabs you opened.",
+      "answerKeys": ["status", "exampleTitle", "internetTitle"],
       "expect": {
-        "exampleHeading": "Example Domain",
-        "internetHeading": "Welcome to the-internet"
+        "exampleTitle": "Example Domain",
+        "internetTitle": "The Internet"
       },
       "evidence": [
         [
           {
             "pattern": "Example Domain",
-            "label": "example.com's heading"
+            "label": "example.com's title"
           }
         ],
         [
           {
-            "pattern": "Welcome to the-internet",
-            "label": "the-internet's heading"
+            "pattern": "The Internet",
+            "label": "the-internet's title"
           }
         ]
       ],

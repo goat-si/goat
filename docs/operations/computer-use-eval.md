@@ -21,7 +21,7 @@ expected value or an oracle raises the version, and runs of two versions are not
 | `web-add-remove`          | clicks Add Element 8 times and counts the Delete buttons                        | tool results                 |
 | `web-checkboxes`          | toggles both checkboxes and reads their state                                   | tool results                 |
 | `web-form`                | fills a public form without submitting it and reads the values back             | tool results                 |
-| `web-parallel-read`       | reads two public pages and reports their headings                               | tool results                 |
+| `web-parallel-read`       | reads two public pages and reports their titles                                 | tool results                 |
 
 Every answer ends with an `EVAL_JSON` line whose `status` is `done`, `failed` or `skipped`.
 
