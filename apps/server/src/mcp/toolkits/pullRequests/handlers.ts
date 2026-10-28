@@ -15,7 +15,7 @@ import * as Option from "effect/Option";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
-import { clipText, fitItems, READ_BUDGET_BYTES } from "./readBudget.ts";
+import { bytesOf, clipFields, clipText, fitItems, READ_BUDGET_BYTES } from "./readBudget.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -204,8 +204,8 @@ function projectForPullRequest(
 
 /** Default rows a search returns in total. */
 const SEARCH_LIMIT = 10;
-// Room for identity, author and counts beside the lists that share the budget.
-const ACTIVITY_LIST_BYTES = READ_BUDGET_BYTES - 16 * 1024;
+// Measured in place of each omitted count, so the shell never grows after the lists are fitted.
+const WIDEST_COUNT = 999_999_999;
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -646,8 +646,29 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
-        // Every list shares one budget, in this order; each says how many it left out.
-        let left = ACTIVITY_LIST_BYTES;
+        const author =
+          activity.author === undefined || activity.author === null
+            ? {}
+            : { author: clipFields(activity.author).value };
+        const shell = {
+          ...identityOf(target),
+          activity: {
+            ...activity,
+            ...author,
+            reviewers: [],
+            comments: [],
+            reviewThreads: [],
+            commits: [],
+            reactions: [],
+          },
+          commentsOmitted: WIDEST_COUNT,
+          reviewThreadsOmitted: WIDEST_COUNT,
+          commitsOmitted: WIDEST_COUNT,
+          reviewersOmitted: WIDEST_COUNT,
+          reactionsOmitted: WIDEST_COUNT,
+        };
+        // Every list shares what the shell leaves, in this order; each says how many it left out.
+        let left = READ_BUDGET_BYTES - bytesOf(shell);
         const take = <A>(items: ReadonlyArray<A>) => {
           const fit = fitItems(items, left);
           left -= fit.used;
@@ -662,6 +683,7 @@ const make = Effect.gen(function* () {
           ...identityOf(target),
           activity: {
             ...activity,
+            ...author,
             ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
             comments: comments.kept,
             reviewThreads: reviewThreads.kept,
@@ -682,7 +704,13 @@ const make = Effect.gen(function* () {
         const page = yield* pullRequests
           .threadComments({ ...ref, threadId, cursor })
           .pipe(Effect.mapError(readFailure));
-        const comments = fitItems(page.comments, READ_BUDGET_BYTES);
+        const shell = {
+          ...identityOf(target),
+          comments: [],
+          nextCursor: page.nextCursor,
+          commentsOmitted: WIDEST_COUNT,
+        };
+        const comments = fitItems(page.comments, READ_BUDGET_BYTES - bytesOf(shell));
         return {
           ...identityOf(target),
           comments: comments.kept,
@@ -722,8 +750,11 @@ const make = Effect.gen(function* () {
           .list({ ...input, limit })
           .pipe(Effect.mapError(readFailure));
         // Cursors are per repository, so cutting rows here would skip them on the next page.
+        // Clipping each row's fields instead keeps one row small enough that narrowing always fits.
+        const rows = result.entries.map(clipFields);
         const page = {
-          entries: result.entries,
+          entries: rows.map((row) => row.value),
+          rowsClipped: rows.some((row) => row.clipped),
           errors: result.errors,
           truncated: result.truncated,
           nextCursors: result.nextCursors,

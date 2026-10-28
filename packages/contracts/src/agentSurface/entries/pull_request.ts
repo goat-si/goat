@@ -244,7 +244,7 @@ export const pullRequestEntries = {
     description:
       "Search pull requests in this environment's project repositories by state, involvement, filters or text, as the Pull requests view does. Returns up to limit rows per repository (default 10, at most 50).",
     guide:
-      "Omit projectId to search every project. limit applies to each repository. When truncated is true, pass nextCursors back with the same arguments for the next page; repositories without a cursor are done. A page over 256 KiB is refused rather than cut, so narrow with projectId, query or filters, or lower limit. errors lists repositories that could not be read.",
+      "Omit projectId to search every project. limit applies to each repository. When truncated is true, pass nextCursors back with the same arguments for the next page; repositories without a cursor are done. Each row's text is cut to 1 KiB and its lists to 20 items (rowsClipped); read one with goat_pull_request_read for all of it. A page over 256 KiB is refused rather than cut, so narrow with projectId, query or filters, or lower limit. errors lists repositories that could not be read.",
     parameters: {
       state: "open, closed, merged or all.",
       involvement: "all (default), reviewing or authored, for the signed-in account.",

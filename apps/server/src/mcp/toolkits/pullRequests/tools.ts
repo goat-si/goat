@@ -503,6 +503,9 @@ const PullRequestSearchTool = Tool.make(agentSurfaceRegistry["pull_request.searc
   }),
   success: Schema.Struct({
     entries: PullRequestListResult.fields.entries,
+    rowsClipped: Schema.Boolean.annotate({
+      description: "Some row text was cut to 1 KiB or a row list to 20 items.",
+    }),
     errors: PullRequestListResult.fields.errors,
     truncated: PullRequestListResult.fields.truncated,
     nextCursors: PullRequestListResult.fields.nextCursors,

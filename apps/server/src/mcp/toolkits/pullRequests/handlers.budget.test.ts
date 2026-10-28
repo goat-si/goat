@@ -46,6 +46,7 @@ describe("pull request reads within the budget", () => {
           service: {
             activity: () =>
               Effect.succeed({
+                author: { login: "someone", name: "n".repeat(300 * 1024), avatarUrl: null },
                 comments: [comment("c1"), comment("c2")],
                 commentCount: 2,
                 commentsTruncated: false,
@@ -55,6 +56,12 @@ describe("pull request reads within the budget", () => {
                   messageHeadline: big,
                   committedDate: "2026-10-01T00:00:00.000Z",
                 })),
+              }),
+            // A page that fits by itself but not beside the response's identity and cursor.
+            threadComments: () =>
+              Effect.succeed({
+                comments: [{ ...comment("t1"), body: "x".repeat(256 * 1024 - 200) }],
+                nextCursor: "next",
               }),
             diffFileContents: () =>
               Effect.succeed({ oldContents: "é".repeat(200 * 1024), newContents: "ok" }),
@@ -68,7 +75,12 @@ describe("pull request reads within the budget", () => {
                         { ...entry(4), title: big },
                         { ...entry(5), title: big },
                       ]
-                    : [entry(1), entry(2), entry(3)],
+                    : input.query === "many"
+                      ? Array.from({ length: 300 }, (_, i) => ({
+                          ...entry(i + 1),
+                          title: "t".repeat(1000),
+                        }))
+                      : [entry(1), entry(2), entry(3)],
                 errors: [],
                 truncated: true,
                 nextCursors: { "github.com/sample-tools/goat": "next" },
@@ -76,11 +88,20 @@ describe("pull request reads within the budget", () => {
           },
         });
         const target = { url: "https://github.com/sample-tools/goat/pull/12" };
+        const within = (value: unknown) =>
+          expect(Buffer.byteLength(JSON.stringify(value), "utf8")).toBeLessThanOrEqual(256 * 1024);
         const activity = yield* harness.call("goat_pull_request_activity", target);
         // Every list shares one budget: commits after the kept comment are counted as left out.
         expect(activity.activity.comments.map((kept) => kept.id)).toEqual(["c1"]);
         expect([activity.commentsOmitted, activity.commitsOmitted]).toEqual([1, 2]);
-        expect(Buffer.byteLength(JSON.stringify(activity), "utf8")).toBeLessThanOrEqual(256 * 1024);
+        within(activity);
+        const thread = yield* harness.call("goat_pull_request_review_thread", {
+          ...target,
+          threadId: "thread-1",
+          cursor: "start",
+        });
+        expect([thread.comments.length, thread.commentsOmitted]).toEqual([0, 1]);
+        within(thread);
         const file = yield* harness.call("goat_pull_request_file", {
           ...target,
           changeType: "change",
@@ -97,10 +118,18 @@ describe("pull request reads within the budget", () => {
           truncated: true,
           nextCursors: { "github.com/sample-tools/goat": "next" },
         });
-        const huge = yield* harness
-          .call("goat_pull_request_search", { state: "open", query: "huge" })
+        // One oversized row is clipped to a bounded form, so narrowing always makes progress.
+        const huge = yield* harness.call("goat_pull_request_search", {
+          state: "open",
+          query: "huge",
+        });
+        expect(huge.entries.map((row) => row.number)).toEqual([4, 5]);
+        expect(huge.rowsClipped).toBe(true);
+        within(huge);
+        const many = yield* harness
+          .call("goat_pull_request_search", { state: "open", query: "many" })
           .pipe(Effect.flip);
-        expect(huge._tag).toBe("PullRequestSearchTooLargeError");
+        expect(many._tag).toBe("PullRequestSearchTooLargeError");
       }),
   );
 });
