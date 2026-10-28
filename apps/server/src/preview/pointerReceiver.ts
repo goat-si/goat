@@ -117,8 +117,11 @@ const describe = (element: ElementHandle) =>
         if (child !== undefined) stack.push(child);
       }
     }
-    const kept = secrets.filter((value) => value.length >= 3);
-    const clean = (token: string) => complete && !kept.some((value) => token.includes(value));
+    const kept = secrets.filter((value) => value.trim() !== "");
+    // A short value is matched as a whole part of the identifier, so "Ab" drops "#Ab" or "#x-Ab".
+    const holds = (token: string, value: string) =>
+      value.length >= 3 ? token.includes(value) : token.split(/[^A-Za-z0-9]+/).includes(value);
+    const clean = (token: string) => complete && !kept.some((value) => holds(token, value));
     return {
       tag: target.tagName.toLowerCase(),
       role: (target.getAttribute("role") ?? "").toLowerCase(),
