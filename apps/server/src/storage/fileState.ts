@@ -7,6 +7,8 @@ import * as Effect from "effect/Effect";
 export interface FileIdentity {
   readonly dev: bigint;
   readonly ino: bigint;
+  /** A freed inode number is often handed to the next new file; its change time is not. */
+  readonly ctimeNs: bigint;
 }
 
 export interface Lstat {
@@ -22,7 +24,7 @@ export interface Lstat {
 export const lstatOf = (target: string) =>
   Effect.tryPromise(() => NodeFSP.lstat(target, { bigint: true })).pipe(
     Effect.map((stat): Lstat => ({
-      identity: { dev: stat.dev, ino: stat.ino },
+      identity: { dev: stat.dev, ino: stat.ino, ctimeNs: stat.ctimeNs },
       isDirectory: stat.isDirectory(),
       isFile: stat.isFile(),
       isLink: stat.isSymbolicLink(),
@@ -34,7 +36,7 @@ export const lstatOf = (target: string) =>
   );
 
 export const sameIdentity = (left: FileIdentity, right: FileIdentity) =>
-  left.dev === right.dev && left.ino === right.ino;
+  left.dev === right.dev && left.ino === right.ino && left.ctimeNs === right.ctimeNs;
 
 /** A .git entry in any spelling: case-insensitive volumes (macOS, Windows) let git find .GIT. */
 export const isGitEntry = (name: string) => name.toLowerCase() === ".git";
