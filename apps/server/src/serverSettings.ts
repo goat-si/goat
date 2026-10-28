@@ -1882,39 +1882,35 @@ const make = Effect.gen(function* () {
         return yield* connectAccess.commit(
           current.hub,
           materializeSettingsSecrets(current).pipe(Effect.map(resolveTextGenerationProvider)),
+          beforeCommit,
         );
       const persisted = yield* persistSettingsSecrets(current, updated);
       const next = yield* normalizeServerSettings(persisted.settings);
-      const materialized = yield* connectAccess.commit(
-        next.hub,
-        Effect.uninterruptibleMask(() =>
-          Effect.gen(function* () {
-            const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
-            const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
-            if (Exit.isFailure(materializedExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(materializedExit.cause);
-            }
-            const writeExit = yield* Effect.exit(
-              (beforeCommit ?? Effect.void).pipe(
-                Effect.andThen(writeSettingsAtomically(next, transition)),
-              ),
-            );
-            if (Exit.isFailure(writeExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(writeExit.cause);
-            }
-            if (transition) yield* Ref.set(hubMarkerRef, transition);
-            // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
-            yield* Cache.set(settingsCache, cacheKey, {
-              settings: next,
-              parseFailure: Option.none(),
-            });
-            if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
-            yield* emitChange(next);
-            return materializedExit.value;
-          }),
-        ),
+      const materialized = yield* Effect.uninterruptibleMask(() =>
+        Effect.gen(function* () {
+          const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+          const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
+          if (Exit.isFailure(materializedExit)) {
+            yield* rollbackSecretChanges;
+            return yield* Effect.failCause(materializedExit.cause);
+          }
+          const writeExit = yield* Effect.exit(
+            connectAccess.commit(next.hub, writeSettingsAtomically(next, transition), beforeCommit),
+          );
+          if (Exit.isFailure(writeExit)) {
+            yield* rollbackSecretChanges;
+            return yield* Effect.failCause(writeExit.cause);
+          }
+          if (transition) yield* Ref.set(hubMarkerRef, transition);
+          // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
+          yield* Cache.set(settingsCache, cacheKey, {
+            settings: next,
+            parseFailure: Option.none(),
+          });
+          if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
+          yield* emitChange(next);
+          return materializedExit.value;
+        }),
       );
       return resolveTextGenerationProvider(materialized);
     });

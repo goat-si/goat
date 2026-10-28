@@ -2,6 +2,7 @@ import { fixture, terminalFixture } from "./agentWorkspaceTerminal.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  ServerSettings,
   GoatclawSettings,
   clientRpcRequiredScopes,
   WS_METHODS,
@@ -14,6 +15,8 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as FileSystem from "effect/FileSystem";
+import * as Config from "../config.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -38,6 +41,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ConnectRuntime from "../auth/ConnectHubRuntime.testkit.ts";
 import * as SettingsRpc from "../auth/SettingsRpc.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
+const decodePersistedSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
 
@@ -731,6 +735,40 @@ it.effect(
           yield* update({ patch: { agentWorkspaceAccess: "read_write" } }).pipe(Effect.isFailure),
         ).toBe(true);
         expect((yield* runtime.settings.getSettings).agentWorkspaceAccess).toBe("read");
+      }).pipe(
+        Effect.provide(Layer.mock(Routes.CodexRouteService)({})),
+        Effect.provideContext(runtime.context),
+      );
+    }).pipe(Effect.scoped, Effect.provide(ConnectRuntime.storage)),
+);
+
+it.effect.each(["enabled", "connectDevicesHubProxy"] as const)(
+  "#2059 persists a live Connect caller's own Hub opt-out (%s)",
+  (key) =>
+    Effect.gen(function* () {
+      const runtime = yield* ConnectRuntime.open();
+      yield* runtime.settings.start;
+      yield* runtime.settings.updateSettings({
+        hub: { enabled: true, connectDevicesHubProxy: true },
+      });
+      const caller = yield* runtime.sessions
+        .issue({
+          subject: "cloud-connect",
+          scopes: ["hub:proxy", "settings:write"],
+          connectAccessGeneration: (yield* runtime.access.current).generation,
+        })
+        .pipe(Effect.flatMap((issued) => runtime.sessions.verify(issued.token)));
+      yield* Effect.gen(function* () {
+        const update = yield* SettingsRpc.make(caller);
+        yield* update({ patch: { hub: { [key]: false } } });
+        const fs = yield* FileSystem.FileSystem;
+        const config = yield* Config.ServerConfig;
+        const persisted = yield* decodePersistedSettings(
+          JSON.parse(yield* fs.readFileString(config.settingsPath)),
+        );
+        expect(persisted.hub[key]).toBe(false);
+        expect((yield* runtime.settings.getSettings).hub[key]).toBe(false);
+        expect((yield* runtime.access.current).allowed).toBe(false);
       }).pipe(
         Effect.provide(Layer.mock(Routes.CodexRouteService)({})),
         Effect.provideContext(runtime.context),
