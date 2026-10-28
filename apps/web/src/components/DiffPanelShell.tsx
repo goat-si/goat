@@ -93,6 +93,7 @@ function DiffCodeLineSkeleton({ width }: { width: "short" | "medium" | "long" })
 export function DiffPanelLoadingState(props: { label: string }) {
   return (
     <div
+      data-glass-layer
       className="min-h-0 flex-1 overflow-hidden bg-background"
       role="status"
       aria-live="polite"
