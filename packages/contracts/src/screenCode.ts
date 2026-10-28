@@ -236,6 +236,8 @@ export const ScreenObservation = Schema.Struct({
       range: Schema.optionalKey(Schema.Struct({ min: finite, max: finite })),
       /** The index of the element that contains this one, in the same observation. */
       parent: Schema.optionalKey(natural),
+      /** The element's accessibility identifier, when the app sets one; stable across languages. */
+      id: Schema.optionalKey(text(400)),
       ref: ScreenElementRef,
     }),
   ).check(Schema.isMaxLength(4096)),

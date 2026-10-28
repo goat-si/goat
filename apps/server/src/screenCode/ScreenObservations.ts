@@ -7,6 +7,12 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
+import {
+  cutDetail,
+  cutTreeText,
+  desktopCutOrder,
+  type Viewport,
+} from "./DesktopObservationBudget.ts";
 
 // Playwright single-quotes a tree line whose name contains ": ".
 const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
@@ -114,7 +120,7 @@ const tabTreeElement = (
 /** State and geometry a driver reports for an element; carried to the agent unchanged. */
 export type ScreenElementDetail = Pick<
   ScreenObservation["elements"][number],
-  "actions" | "enabled" | "selected" | "frame" | "range" | "parent"
+  "actions" | "enabled" | "selected" | "frame" | "range" | "parent" | "id"
 >;
 
 export interface ScreenObservationDraft {
@@ -130,6 +136,8 @@ export interface ScreenObservationDraft {
   readonly lineage?: string;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
+  /** The window's bounds, for app reads: elements outside them go before visible ones. */
+  readonly viewport?: Viewport;
   readonly elements: readonly ({
     readonly role: string;
     readonly name: string;
@@ -145,6 +153,8 @@ class ObservationIndex {
     string,
     {
       observationId: string;
+      /** Later pages of the same read, by the ref ids each one issued. */
+      pageOf: Map<string, string>;
       surfaceGeneration: number;
       tokens: Map<string, string>;
       editable: Set<string>;
@@ -173,6 +183,7 @@ class ObservationIndex {
   ): void {
     this.byTarget.set(targetId, {
       observationId,
+      pageOf: new Map(),
       surfaceGeneration,
       tokens,
       editable,
@@ -180,23 +191,37 @@ class ObservationIndex {
     });
   }
 
-  resolveElement(ref: ScreenElementRef): string | undefined {
+  /** Adds a later page of the target's current read; false when that read is no longer current. */
+  addPage(
+    targetId: string,
+    baseObservationId: string,
+    observationId: string,
+    tokens: ReadonlyMap<string, string>,
+    editable: ReadonlySet<string>,
+  ): boolean {
+    const entry = this.byTarget.get(targetId);
+    if (!entry || entry.observationId !== baseObservationId) return false;
+    for (const [id, token] of tokens) {
+      entry.tokens.set(id, token);
+      entry.pageOf.set(id, observationId);
+    }
+    for (const id of editable) entry.editable.add(id);
+    return true;
+  }
+  /** The entry when the ref was issued by that observation: the read, or the page that carried it. */
+  private current(ref: ScreenElementRef) {
     const entry = this.byTarget.get(ref.targetId);
-    if (
-      !entry ||
-      entry.observationId !== ref.observationId ||
-      entry.surfaceGeneration !== ref.surfaceGeneration
-    )
-      return undefined;
-    return entry.tokens.get(ref.id);
+    return entry &&
+      (entry.pageOf.get(ref.id) ?? entry.observationId) === ref.observationId &&
+      entry.surfaceGeneration === ref.surfaceGeneration
+      ? entry
+      : undefined;
+  }
+  resolveElement(ref: ScreenElementRef): string | undefined {
+    return this.current(ref)?.tokens.get(ref.id);
   }
   isEditable(ref: ScreenElementRef): boolean {
-    const entry = this.byTarget.get(ref.targetId);
-    return (
-      entry?.observationId === ref.observationId &&
-      entry.surfaceGeneration === ref.surfaceGeneration &&
-      entry.editable.has(ref.id)
-    );
+    return this.current(ref)?.editable.has(ref.id) === true;
   }
 
   putRegion(
@@ -364,6 +389,8 @@ export class ScreenObservations {
     resetReason?: string;
     /** What the read covered; omitted means the whole window or page. */
     scope?: string;
+    /** The observation this one continues as a later page of the same read. */
+    page?: string;
     limits: { readonly treeBytes: number };
   }): ScreenObservation {
     const { draft } = input;
@@ -375,7 +402,8 @@ export class ScreenObservations {
     let selected = draft.elements;
     let renderedText = draft.indexedText;
     let queryTruncated = false;
-    if (mode === "query") {
+    // An app query or page arrives already filtered by the host.
+    if (mode === "query" && draft.targetRef.kind === "tab") {
       const query = input.query;
       const lines = currentLines.slice(0, 4096);
       queryTruncated = lines.length < currentLines.length;
@@ -465,7 +493,7 @@ export class ScreenObservations {
       const id = NodeCrypto.randomUUID();
       tokens.set(id, element.driverToken);
       if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
-      const { actions, enabled, selected: isSelected, frame, range, parent } = element;
+      const { actions, enabled, selected: isSelected, frame, range, parent, id: axId } = element;
       return {
         index: element.index ?? position,
         role: element.role.slice(0, 200),
@@ -479,6 +507,7 @@ export class ScreenObservations {
         ...(frame === undefined ? {} : { frame }),
         ...(range === undefined ? {} : { range }),
         ...(parent === undefined ? {} : { parent }),
+        ...(axId === undefined ? {} : { id: axId.slice(0, 400) }),
         ref: {
           id,
           targetId: draft.targetRef.id,
@@ -518,9 +547,12 @@ export class ScreenObservations {
         ...(dropped.length > 0 && draft.targetRef.kind === "tab"
           ? [{ kind: "budget" as const, detail: droppedDetail(dropped) }]
           : []),
+        ...(dropped.length > 0 && draft.targetRef.kind === "app"
+          ? [{ kind: "budget" as const, detail: cutDetail(dropped, Math.min(...dropped)) }]
+          : []),
         ...(truncated &&
         !draft.omitted?.some((item) => item.kind === "budget") &&
-        !(dropped.length > 0 && draft.targetRef.kind === "tab")
+        dropped.length === 0
           ? [{ kind: "budget" as const }]
           : []),
       ].slice(0, 16);
@@ -546,12 +578,77 @@ export class ScreenObservations {
       elements,
     });
     const budget = Math.min(input.limits.treeBytes, 128 * 1024);
-    while (Buffer.byteLength(JSON.stringify(build())) > budget && elements.length > 0) {
+    // An app read over budget gives up redundant annotations, then elements in the order
+    // desktopCutOrder plans (chrome outlasts table body, visible outlasts off-window).
+    if (draft.targetRef.kind === "app" && Buffer.byteLength(JSON.stringify(build())) > budget) {
+      const plain = renderedText.replace(/ actions=\[[^\]]*\]/g, "").replace(/ \[\]/g, "");
+      text = cut(plain);
+      const cutPlan = desktopCutOrder(elements, draft.indexedText, draft.viewport);
+      const sizes = new Map(
+        elements.map((element) => [element.index, Buffer.byteLength(JSON.stringify(element)) + 1]),
+      );
+      const parents = new Map(
+        elements.flatMap((element) =>
+          element.parent === undefined ? [] : [[element.index, element.parent] as const],
+        ),
+      );
+      const words = new Map(
+        elements.map((element) => [element.index, element.name || element.text || ""]),
+      );
+      const gone = new Set<number>();
+      let next = 0;
+      // Elements may use what the text leaves, keeping at most 40% of the budget for the text;
+      // the text is trimmed after, so elements are never all spent on a long text.
+      const textShare = Math.min(Buffer.byteLength(text), Math.floor(budget * 0.4));
+      const withoutText = () => Buffer.byteLength(JSON.stringify({ ...build(), indexedText: "" }));
+      while (withoutText() > budget - textShare && next < cutPlan.order.length) {
+        let need = withoutText() - (budget - textShare);
+        while (need > 0 && next < cutPlan.order.length) {
+          const index = cutPlan.order[next++];
+          if (index === undefined) continue;
+          gone.add(index);
+          need -= sizes.get(index) ?? 0;
+        }
+        for (let at = elements.length - 1; at >= 0; at--) {
+          const element = elements[at];
+          if (!element || !gone.has(element.index)) continue;
+          elements.splice(at, 1);
+          tokens.delete(element.ref.id);
+          editable.delete(element.ref.id);
+          dropped.push(element.index);
+        }
+        // A kept element whose parent went points at its nearest kept ancestor.
+        for (const [at, element] of elements.entries()) {
+          let parent = element.parent;
+          while (parent !== undefined && gone.has(parent)) parent = parents.get(parent);
+          if (parent !== element.parent) {
+            const { parent: _old, ...rest } = element;
+            elements[at] = parent === undefined ? rest : { ...rest, parent };
+          }
+        }
+        text = cut(
+          cutTreeText(plain, gone, cutPlan.compactRows, (index) => words.get(index) ?? ""),
+        );
+        truncated = true;
+      }
+    }
+    // For an app read, text over budget is trimmed below instead of costing elements; any element
+    // still given up loses its number from the text.
+    const app = draft.targetRef.kind === "app";
+    const measured = () =>
+      Buffer.byteLength(JSON.stringify(app ? { ...build(), indexedText: "" } : build()));
+    while (measured() > budget && elements.length > 0) {
       const removed = elements.pop();
       if (removed) tokens.delete(removed.ref.id);
       if (removed) editable.delete(removed.ref.id);
       if (removed) dropped.unshift(removed.index);
       truncated = true;
+    }
+    if (app) {
+      const carried = new Set(elements.map((element) => element.index));
+      text = text.replace(/- \[(\d+)\] /g, (marker, number: string) =>
+        carried.has(Number(number)) ? marker : "- ",
+      );
     }
     if (dropped.length > 0 && draft.targetRef.kind === "tab")
       text = cut(numbered(new Set(tokens.values())));
@@ -561,8 +658,13 @@ export class ScreenObservations {
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget)
       throw new Error("Screen observation metadata exceeds tree budget");
-    this.index.put(draft.targetRef.id, observationId, draft.surfaceGeneration, tokens, editable);
     const observation = build();
+    if (input.page !== undefined) {
+      if (!this.index.addPage(draft.targetRef.id, input.page, observationId, tokens, editable))
+        throw new Error("Screen observation page outlived its read");
+      return observation;
+    }
+    this.index.put(draft.targetRef.id, observationId, draft.surfaceGeneration, tokens, editable);
     this.previous.set(draft.targetRef.id, { observation, draft });
     return observation;
   }
