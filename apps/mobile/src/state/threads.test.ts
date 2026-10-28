@@ -27,6 +27,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AtomRegistry } from "effect/reactivity";
@@ -90,6 +91,8 @@ const snapshot: OrchestrationV2ThreadDetailSnapshot = {
 
 const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
   readonly cacheRead?: Effect.Effect<Option.Option<OrchestrationV2ThreadDetailSnapshot>>;
+  /** Run Effect work on microtasks so one macrotask turn settles every load. */
+  readonly microtaskScheduler?: boolean;
 }) {
   vi.resetModules();
   const target = new PrimaryConnectionTarget({
@@ -154,7 +157,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
       Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
   });
   const availableThreads = new Set<ThreadId>();
-  testRuntime.layer = Layer.mergeAll(
+  const environmentLayer = Layer.mergeAll(
     Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registryService),
     Layer.succeed(
       Persistence.EnvironmentCacheStore,
@@ -187,6 +190,12 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
       }),
     ),
   );
+  testRuntime.layer = options?.microtaskScheduler
+    ? Layer.merge(
+        environmentLayer,
+        Layer.succeed(Scheduler.Scheduler, new Scheduler.MixedScheduler("sync")),
+      )
+    : environmentLayer;
   const [registryModule, threads, outbox, pending, sharedThreads] = yield* Effect.promise(() =>
     Promise.all([
       import("./atom-registry"),
@@ -311,5 +320,35 @@ describe("startOpeningEnvironmentThread", () => {
         expect(Option.getOrThrow(loaded.data).thread.id).toBe(threadId);
         expect(hydrating(loaded)).toBe(false);
       }),
+  );
+});
+
+// oxlint-disable-next-line goat/no-real-time-wait-in-tests -- a zero-delay macrotask boundary, not a wait for time
+const settle = Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
+describe("environmentThreadDetails", () => {
+  it.effect("goes live when a creation read while still queued is delivered", () =>
+    Effect.gen(function* () {
+      const h = yield* setup({ microtaskScheduler: true });
+      h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {
+        [threadKey]: [creation],
+      });
+      const unmount = h.registry.mount(h.stateAtom);
+      yield* Effect.addFinalizer(() => Effect.sync(unmount));
+      yield* settle;
+      // The server does not have the thread yet; an early load would park it as deleted.
+      expect(h.registry.get(h.stateAtom).status).toBe("empty");
+
+      h.availableThreads.add(threadId);
+      h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+      h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
+        [threadKey]: { kind: "delivered", message: creation },
+      });
+      const state = yield* h.observe(
+        (value) => value.status === "live" || value.status === "deleted",
+      );
+      expect(state.status).toBe("live");
+      expect(Option.getOrThrow(state.data).thread).toEqual(v2Projection.thread);
+    }),
   );
 });
