@@ -149,9 +149,11 @@ import {
   foldLaunchedThreads,
   foldedKeysIn,
   foldedSections,
+  foldedUnseenUnder,
   liftedChildAttention,
   liftedPriorityRank,
 } from "./sidebar/launchFold";
+import { foldedPriorityMember, wakesBeforeFold } from "./sidebar/foldedPriority";
 import { SidebarLaunchGroup } from "./sidebar/SidebarLaunchGroup";
 import { SidebarNestedThreadRow } from "./sidebar/SidebarNestedThreadRow";
 import { useLaunchGroups } from "./sidebar/useLaunchGroups";
@@ -667,20 +669,30 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     globalAgentRef,
     goatBotRef,
   );
+  const acknowledged = new Set(acknowledgedWakes);
+  const wakes = wakesBeforeFold({
+    threads: visible,
+    now: preciseNow,
+    holds: priorityHolds,
+    acknowledged,
+    skipKey: optimisticDrop?.key ?? null,
+  });
+  const capabilitiesOf = (id: EnvironmentId) => serverConfigs.get(id)?.environment.capabilities;
   const launchFold = foldLaunchedThreads({
     visible,
     all: threads,
     now: preciseNow,
     delegatedAttentionByKey: attentionByOwnerKey,
+    unseen: foldedPriorityMember({
+      now: preciseNow,
+      localLastVisitedAtByKey,
+      capabilitiesOf,
+      wakes,
+    }),
   });
-  const foldedSectionByKey = foldedSections(
-    launchFold.folded,
-    (id) => serverConfigs.get(id)?.environment.capabilities,
-    preciseNow,
-  );
+  const foldedSectionByKey = foldedSections(launchFold.folded, capabilitiesOf, preciseNow);
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const wokeAtByThreadKey = new Map<string, string | null>();
-  const acknowledged = new Set(acknowledgedWakes);
   const priority: EnvironmentThreadShell[] = [];
   const priorityRanks = new Map<string, number>();
   const pinned: EnvironmentThreadShell[] = [];
@@ -1364,6 +1376,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     snoozeNow,
     releasePriorityThreads,
     restorePriorityThread,
+    unseenUnder: (key) => foldedUnseenUnder(launchFold, key),
   });
 
   // Ranked across environments as the palette ranks them, so one

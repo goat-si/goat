@@ -1143,6 +1143,8 @@ export function isSidebarPriorityMember(input: {
   readonly hasChildAttention: boolean;
   /** A folded launched thread is working (rank 1, like the row's own work). */
   readonly hasChildWork?: boolean;
+  readonly hasChildUnseen?: boolean;
+  readonly wokeAt?: string | null;
   readonly supportsSnooze: boolean;
   readonly supportsSettlement: boolean;
 }): boolean {
@@ -1150,10 +1152,12 @@ export function isSidebarPriorityMember(input: {
   const ownRank = resolveSidebarPriorityRank({
     thread: input.thread,
     localLastVisitedAt: input.localLastVisitedAt,
-    wokeAt: threadWokeAt(input.thread, { now: input.now }),
+    wokeAt:
+      input.wokeAt === undefined ? threadWokeAt(input.thread, { now: input.now }) : input.wokeAt,
     hasChildAttention: input.hasChildAttention,
   });
-  const rank = input.hasChildWork === true && (ownRank === null || ownRank === 2) ? 1 : ownRank;
+  const lifted = ownRank ?? (input.hasChildUnseen === true ? 2 : null);
+  const rank = input.hasChildWork === true && (lifted === null || lifted === 2) ? 1 : lifted;
   return (
     resolveSidebarThreadSection({
       snoozed: input.supportsSnooze && effectiveSnoozed(input.thread, { now: input.now }),
@@ -1172,6 +1176,7 @@ export function countVisibleSidebarPriorityThreads<
   readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
   readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
   readonly childWorkKeys?: ReadonlySet<string>;
+  readonly childUnseenKeys?: ReadonlySet<string>;
   readonly supportsSnooze: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
   readonly supportsSettlement: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
 }): number {
@@ -1185,6 +1190,7 @@ export function countVisibleSidebarPriorityThreads<
         localLastVisitedAt: input.localLastVisitedAtByKey[key],
         hasChildAttention: input.attentionByOwnerKey.has(key),
         hasChildWork: input.childWorkKeys?.has(key) === true,
+        hasChildUnseen: input.childUnseenKeys?.has(key) === true,
         supportsSnooze: input.supportsSnooze(thread.environmentId),
         supportsSettlement: input.supportsSettlement(thread.environmentId),
       })

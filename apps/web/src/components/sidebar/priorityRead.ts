@@ -9,6 +9,8 @@ type SidebarPriorityRow = Parameters<typeof resolveSidebarPriorityRank>[0]["thre
 export interface SidebarPriorityReadPlan<T> {
   readonly markRead: readonly T[];
   readonly releaseKeys: readonly string[];
+  /** The row to restore when a visit fails, by visited key; absent means the visited row. */
+  readonly restoreKeyByKey?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -53,7 +55,8 @@ export async function markSidebarPriorityRead<T extends SidebarPriorityRow>(inpu
   input.release(input.plan.releaseKeys);
   for (const thread of input.plan.markRead) {
     if ((await input.visit(thread)) === "failed") {
-      input.restore(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      input.restore(input.plan.restoreKeyByKey?.get(key) ?? key);
     }
   }
 }

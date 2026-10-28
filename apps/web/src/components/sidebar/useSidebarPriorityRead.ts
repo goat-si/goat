@@ -12,8 +12,9 @@ import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/sess
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useUiStateStore } from "../../uiStateStore";
-import { selectSidebarMarkReadTargets } from "../Sidebar.logic";
+import { resolveSidebarPriorityRank, selectSidebarMarkReadTargets } from "../Sidebar.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { withFoldedUnseen } from "./foldedPriority";
 import {
   markSidebarPriorityRead,
   selectSidebarPriorityClear,
@@ -35,12 +36,15 @@ export function useSidebarPriorityRead(input: {
   readonly snoozeNow: string;
   readonly releasePriorityThreads: (keys: readonly string[]) => void;
   readonly restorePriorityThread: (key: string) => void;
+  /** Unread threads folded under a Priority row; they are read with it. */
+  readonly unseenUnder: (key: string) => readonly EnvironmentThreadShell[];
 }) {
-  const { priorityThreads } = input;
+  const { priorityThreads, unseenUnder } = input;
   const localLastVisitedAtByKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
+  const foldedUnseen = priorityThreads.flatMap((row) => unseenUnder(threadKey(row)));
   const operableEnvironments = useEnvironmentsWithScope(
-    priorityThreads,
+    [...priorityThreads, ...foldedUnseen],
     AuthOrchestrationOperateScope,
   );
   const visitThread = useOrchestrationCommand(threadEnvironment.visit, { reportFailure: false });
@@ -50,21 +54,44 @@ export function useSidebarPriorityRead(input: {
       threadWokeAt(thread, { now: input.snoozeNow }),
     ]),
   );
-  const markReadTargets = (operable: (thread: EnvironmentThreadShell) => boolean) =>
-    selectSidebarMarkReadTargets({
+  // A row in Priority only through unread work folded under it.
+  const liftedOnly = (row: EnvironmentThreadShell) =>
+    resolveSidebarPriorityRank({
+      thread: row,
+      localLastVisitedAt: localLastVisitedAtByKey[threadKey(row)],
+      wokeAt: input.wokeAtByThreadKey.get(threadKey(row)) ?? null,
+      hasChildAttention: input.attentionByOwnerKey.has(threadKey(row)),
+    }) === null;
+  const withFolded = (
+    plan: SidebarPriorityReadPlan<EnvironmentThreadShell>,
+    operable: (thread: EnvironmentThreadShell) => boolean,
+  ) =>
+    withFoldedUnseen(plan, {
+      rows: priorityThreads,
+      unseenUnder,
+      canOperate: operable,
+      liftedOnly,
+    });
+  const markAllPlan = (operable: (thread: EnvironmentThreadShell) => boolean) => {
+    const targets = selectSidebarMarkReadTargets({
       threads: priorityThreads,
       localLastVisitedAtByKey,
       wokeAtByKey: rawWokeAtByKey,
       canOperate: operable,
     });
+    return withFolded({ markRead: targets, releaseKeys: targets.map(threadKey) }, operable);
+  };
   const clearPlan = (operable: (thread: EnvironmentThreadShell) => boolean) =>
-    selectSidebarPriorityClear({
-      threads: priorityThreads,
-      localLastVisitedAtByKey,
-      wokeAtByKey: input.wokeAtByThreadKey,
-      attentionByOwnerKey: input.attentionByOwnerKey,
-      canOperate: operable,
-    });
+    withFolded(
+      selectSidebarPriorityClear({
+        threads: priorityThreads,
+        localLastVisitedAtByKey,
+        wokeAtByKey: input.wokeAtByThreadKey,
+        attentionByOwnerKey: input.attentionByOwnerKey,
+        canOperate: operable,
+      }),
+      operable,
+    );
   const isOperable = (thread: EnvironmentThreadShell) =>
     operableEnvironments.has(thread.environmentId);
 
@@ -99,12 +126,12 @@ export function useSidebarPriorityRead(input: {
   };
 
   return {
-    canMarkAllRead: markReadTargets(isOperable).length > 0,
-    markAllRead: () => {
-      const targets = markReadTargets(canOperate);
-      run({ markRead: targets, releaseKeys: targets.map(threadKey) });
-    },
-    canClearRead: clearPlan(isOperable).releaseKeys.length > 0,
+    canMarkAllRead: markAllPlan(isOperable).markRead.length > 0,
+    markAllRead: () => run(markAllPlan(canOperate)),
+    canClearRead: hasWork(clearPlan(isOperable)),
     clearRead: () => run(clearPlan(canOperate)),
   };
 }
+
+const hasWork = (plan: SidebarPriorityReadPlan<EnvironmentThreadShell>) =>
+  plan.markRead.length > 0 || plan.releaseKeys.length > 0;
