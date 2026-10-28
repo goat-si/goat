@@ -641,7 +641,6 @@ it.effect("returns startup failure promptly but scope close awaits native retire
     yield* Deferred.await(held!.arrived);
     yield* TestClock.adjust("10 seconds");
     const deadlineResult = starting.pollUnsafe();
-    const aliveAtDeadline = startedWorkers[0]!.threadId !== -1;
     assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
     const closing = yield* Scope.close(scope, Exit.void).pipe(
       Effect.forkChild({ startImmediately: true }),
@@ -649,7 +648,7 @@ it.effect("returns startup failure promptly but scope close awaits native retire
     const returnedBeforeRetirement = closing.pollUnsafe() !== undefined;
     held!.release();
     yield* Fiber.join(closing);
-    assert.isTrue(aliveAtDeadline, "the native wait must outlive the startup deadline");
+    assert.isTrue(held!.aliveAtRetirement, "the native wait must outlive the startup deadline");
     assert.isDefined(held!.retirement, "startup failure must retire its owned worker");
     assert.isDefined(deadlineResult, "startup must return before native termination completes");
     assert.isFalse(returnedBeforeRetirement, "scope close must await its retiring worker");
