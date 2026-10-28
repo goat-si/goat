@@ -645,6 +645,27 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     },
   );
 
+  it.each([
+    `getByRole('button', { name: 'Save' })`,
+    `page.getByRole("button", { name: "Save", exact: true })`,
+    `getByText('Save')`,
+    `getByTestId('save')`,
+    `getByTitle("Save it")`,
+  ])("reads a Playwright getBy locator written as code (%s)", async (locator) => {
+    await page.setContent(
+      `<button data-testid="save" title="Save it" onclick="this.textContent='saved'">Save</button><button>Cancel</button>`,
+    );
+    await ServerBrowserPage.click(page, { locator });
+    expect(await page.locator("button").first().textContent()).toBe("saved");
+  });
+
+  it("refuses chained getBy code at once, with the forms it takes", async () => {
+    await page.setContent("<button>Save</button>");
+    await expect(
+      ServerBrowserPage.click(page, { locator: "getByRole('button').first()" }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationInvalidSelectorError" });
+  });
+
   it("preserves quoted attribute values containing ref engine text", async () => {
     await page.setContent(
       '<button data-example=" >> aria-ref=e1" onclick="this.textContent=\'saved\'">save</button>',
