@@ -31,6 +31,7 @@ import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
+import { keepLocalLaunchers } from "./goat/shellLaunchKeep.ts";
 import { bufferLatestLiveStream } from "./LiveStreamBudget.ts";
 
 type ShellDelta = Extract<OrchestrationV2ShellStreamItem, { readonly sequence: number }>;
@@ -170,7 +171,8 @@ export function omitOlderSettledShells(input: {
 
 /**
  * The snapshot a shell subscriber gets for its opt-ins, and the subagent ids whose transcript
- * events its stream drops (from every row, so an omitted child that wakes keeps that filter).
+ * events its stream drops (from every row, so an omitted child that wakes keeps that filter). The
+ * launchers of the rows that stay come back last, so a launch never folds over a gap.
  */
 export function shellSnapshotForSubscriber(
   base: OrchestrationV2ShellSnapshot,
@@ -186,7 +188,7 @@ export function shellSnapshotForSubscriber(
   const rows = activeShellRowsForSubscriber(base.threads, options.omitIdleSubagents);
   if (!options.omitOlderSettled) {
     return {
-      snapshot: { ...base, threads: rows.threads },
+      snapshot: { ...base, threads: keepLocalLaunchers(base.threads, rows.threads) },
       subagentThreadIds: rows.subagentThreadIds,
     };
   }
@@ -196,7 +198,11 @@ export function shellSnapshotForSubscriber(
     now: options.now,
   });
   return {
-    snapshot: { ...base, threads: older.threads, olderSettled: older.olderSettled },
+    snapshot: {
+      ...base,
+      threads: keepLocalLaunchers(base.threads, older.threads),
+      olderSettled: older.olderSettled,
+    },
     subagentThreadIds: rows.subagentThreadIds,
   };
 }
