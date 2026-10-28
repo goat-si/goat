@@ -2,7 +2,8 @@
 
 - Contract owner: [ssh.md](../ssh.md#app-server)
 - Issues: goat-si/goat#1841, goat-si/goat#1842
-- Commit: on `fix/ssh-attach-reliability`
+- Commit: `6f5d837405` and `7c2bbb81bd` on `fix/ssh-attach-reliability` (PR #2051). The
+  alternatives below are recorded here only, not in those commit messages.
 - Related: [ADR-0024](ADR-0024-one-host-server.md)
 
 ## Decision record
