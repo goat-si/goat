@@ -40,6 +40,7 @@ import {
 import { ACCOUNT_ENDPOINT_POLICY } from "./AccountPolicy.ts";
 import { layerDpopClientAuth } from "./Api.ts";
 import { RelayTokens } from "../auth/RelayTokens.ts";
+import { ClientKeys } from "../auth/ClientKeys.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 
 it("classifies every authenticated endpoint by its typed endpoint name", () => {
@@ -55,6 +56,19 @@ it("classifies every authenticated endpoint by its typed endpoint name", () => {
         true,
       );
 });
+const fixtureAssurance = {
+  policyVersion: 1 as const,
+  source: "clerk-session" as const,
+  userId: "fixture",
+  sessionId: "fixture-session",
+  firstVerifiedAtFloor: 0,
+  secondVerifiedAtFloor: 0,
+  checkedAt: 0,
+  authGeneration: 1,
+};
+// These cases isolate account policy; client-key admission has its own PostgreSQL coverage.
+const admittedClientKeys = Layer.mock(ClientKeys, { check: () => Effect.succeed(true) });
+
 it.effect(
   "encodes policy errors through real DPoP middleware with matching Retry-After and no-store",
   () =>
@@ -77,6 +91,7 @@ it.effect(
         ),
       );
       const auth = layerDpopClientAuth.pipe(
+        Layer.provide(admittedClientKeys),
         Layer.provide(policyUnitLayer),
         Layer.provide(
           Layer.mock(RelayTokens, {
@@ -87,6 +102,9 @@ it.effect(
                 aud: "https://relay.example.test",
                 sub: "fixture",
                 account_epoch: 1,
+                assurance: fixtureAssurance,
+                clientKeyAuthorizedAt: 0,
+                clientKeyAdmissionId: "fixture-admission",
                 jti: "fixture-token",
                 iat: 0,
                 exp: 100,
@@ -168,6 +186,7 @@ it.live(
           ),
       );
       const auth = layerDpopClientAuth.pipe(
+        Layer.provide(admittedClientKeys),
         Layer.provide(postgresPolicyLayer(pg)),
         Layer.provide(
           Layer.mock(RelayTokens, {
@@ -178,6 +197,9 @@ it.live(
                 aud: "https://relay.example.test",
                 sub: "fixture",
                 account_epoch: 1,
+                assurance: fixtureAssurance,
+                clientKeyAuthorizedAt: 0,
+                clientKeyAdmissionId: "fixture-admission",
                 jti: "fixture-token",
                 iat: 0,
                 exp: 100,
@@ -242,7 +264,7 @@ it.live(
 );
 
 it.live(
-  "HTTP recovery at held capacity returns the actionable tunnel quota 403 with real credentials and reservation",
+  "HTTP recovery stays refused at held capacity while credential policy still denies suspension, staleness and outages",
   () =>
     Effect.gen(function* () {
       using pg = createPostgresFixture();
@@ -255,20 +277,7 @@ it.live(
         "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1)",
       );
       const tunnelCalls: TunnelCall[] = [];
-      let throttled = false;
-      const services = layerPostgresProvider(pg, makeTunnelClient(tunnelCalls), makeDnsClient(), {
-        charge: (input) =>
-          throttled
-            ? Effect.fail(
-                new RelayRateLimitExceededError({
-                  code: "rate_limit_exceeded",
-                  operation: input.operation,
-                  retryAfterSeconds: 60,
-                  traceId: "fixture",
-                }),
-              )
-            : Effect.void,
-      });
+      const services = layerPostgresProvider(pg, makeTunnelClient(tunnelCalls), makeDnsClient());
       const credential = yield* Effect.gen(function* () {
         const owners = yield* EnvironmentOwnership;
         const identities = yield* EndpointIdentity;
@@ -348,11 +357,11 @@ it.live(
           }),
         ),
       );
+      // Environment-credential recovery carries no MFA assurance, so Connect policy 1 refuses it.
       expect(response.status).toBe(403);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(yield* Effect.promise(() => response.json())).toMatchObject({
-        code: "environment_link_limit_exceeded",
-        maxTunnels: 1,
+        code: "authentication_strength_required",
       });
       expect(tunnelCalls).toEqual([]);
       const request = (path: string, body: unknown) =>
@@ -369,16 +378,6 @@ it.live(
           ),
         );
       const recovery = { cloudUserId: "owner", origin, proof };
-      const mismatch = yield* request("tunnel", { ...recovery, cloudUserId: "other" });
-      expect(mismatch.status).toBe(403);
-      expect(yield* Effect.promise(() => mismatch.json())).toMatchObject({
-        code: "environment_owner_mismatch",
-      });
-      throttled = true;
-      const limited = yield* request("tunnel", recovery);
-      expect(limited.status).toBe(429);
-      expect(limited.headers.get("retry-after")).toBe("60");
-      throttled = false;
       pg.query("UPDATE relay_account_access SET status='suspended',account_epoch=2");
       for (const [path, body] of [
         ["tunnel", recovery],
