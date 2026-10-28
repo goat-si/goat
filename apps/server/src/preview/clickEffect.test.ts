@@ -626,3 +626,44 @@ it("does not confirm a link to the fragment the page is already at", () =>
       effect: "suspected_noop",
     });
   }));
+
+it("a press that only restyles the button or focuses it is not a confirmed click; a state change or a focus move is", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<style>.down { color: red } [data-pressed] { color: blue }</style>
+       <button id="own" onmousedown="this.classList.add('down')">own</button>
+       <button id="icon" onmousedown="this.firstElementChild.classList.add('down')"><i></i>icon</button>
+       <button id="sibling" onmousedown="mark.style.color = 'red'">sibling</button><span id="mark">x</span>
+       <button id="flag" onmousedown="this.dataset.pressed = ''">flag</button>
+       <button id="digit" onclick="display.textContent += '7'">7</button><output id="display"></output>
+       <button id="toggle" aria-pressed="false" onclick="this.setAttribute('aria-pressed', 'true')">bold</button>
+       <label for="field" id="label">Name</label><input id="field">
+       <button id="reveal" onclick="later.hidden = false; later.focus()">edit</button><input id="later" hidden>
+       <a id="nav" href="#" onclick="event.preventDefault(); this.setAttribute('aria-current', 'page')">nav</a>`,
+    );
+    for (const id of ["own", "icon", "sibling", "flag"]) {
+      for (const focusedFirst of [false, true]) {
+        if (focusedFirst) await page.focus(`#${id}`);
+        else await page.focus("#label");
+        await expect(
+          ServerBrowserPage.click(page, { selector: `#${id}` }),
+          `${id}, focused first: ${focusedFirst}`,
+        ).resolves.toMatchObject({ effect: "suspected_noop" });
+      }
+    }
+    for (const id of ["digit", "toggle", "nav"])
+      await expect(
+        ServerBrowserPage.click(page, { selector: `#${id}` }),
+        id,
+      ).resolves.toMatchObject({
+        effect: "confirmed",
+        evidence: expect.arrayContaining(["dom"]),
+      });
+    for (const id of ["label", "reveal"])
+      await expect(
+        ServerBrowserPage.click(page, { selector: `#${id}` }),
+        id,
+      ).resolves.toMatchObject({
+        effect: "confirmed",
+      });
+  }));
