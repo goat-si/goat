@@ -197,6 +197,22 @@ refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settin
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [goat-ci.yml](../../.github/workflows/goat-ci.yml) for its current jobs.
 
+### Responsiveness report
+
+Run `node apps/server/scripts/bench-server-responsiveness.ts --output-dir /tmp/goat-responsiveness`
+from the checkout with dependencies installed. `--threads` (default 32) controls generated history;
+`--rounds` (default 20) controls bounded cohorts of thread creation, search, projection reads,
+settlement and attachment uploads. Each run creates its own temporary HOME, GOAT home and database,
+prepares a turn through the existing Codex replay harness, then starts the normal server and drives
+authenticated WebSocket RPCs and signed HTTP uploads over loopback. It removes its fixture on exit.
+
+The command prints a latency table and writes `summary.json`. Target event-loop percentiles use a
+10 ms histogram, including that sampling interval. SQL evidence is the existing bounded slow-SQL
+ring, and trace volume counts retained files over the server's lifetime. Missing telemetry is
+explicit. This is a report, with no acceptance thresholds or CI gate; its closed-loop workload,
+small corpus and replay during preparation do not establish production capacity or recovery.
+Windows calibration and large generated-state trials remain separate work.
+
 ### Windows hosts
 
 Use Git Bash for shell scripts and POSIX-shell test suites such as `packages/ssh`.
