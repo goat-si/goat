@@ -220,11 +220,18 @@ checks pass, the setting shows why, and agents are told computer use is
 unavailable there instead of retrying. It clears as soon as an agent connection
 works again.
 
-From another computer or the mobile app, the switch turns computer use on, but
-someone at that Mac still has to grant both permissions there. A GOAT server
-started from a terminal or a service cannot use computer use on a Mac, because
-macOS would give the permissions to the terminal; open the GOAT desktop app on
-that Mac instead.
+From another computer or the mobile app connected directly to that Mac, with
+permission to change its settings, the switch turns computer use on and you can
+approve its requests there, but someone at that Mac still has to grant both
+permissions once.
+
+A GOAT server started from a terminal, a service, or another GOAT over SSH
+(listed as **Headless server**) cannot use computer use on a Mac, because macOS
+would give the permissions to whatever started it. Agents there are told which
+GOAT desktop apps the Mac has and whether they are older than that server. At
+the Mac or over Screen Sharing, update the desktop app if needed and open it.
+New threads then run under the app; threads already on the background server
+keep running there without computer use.
 
 ## Windows and Linux
 

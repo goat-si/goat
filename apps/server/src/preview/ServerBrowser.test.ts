@@ -37,6 +37,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import { makeSession, type MockFrame, mockCopy } from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
@@ -243,11 +244,7 @@ const dependencies = Layer.mergeAll(
     getEnvironmentId: Effect.succeed(scope.environmentId),
     getDescriptor: Effect.die("unused descriptor"),
   }),
-  Layer.succeed(PreviewBrowser.PreviewBrowser, {
-    executable: Effect.die("mock Chromium does not need an executable"),
-    installed: Effect.die("mock Chromium does not need an executable"),
-    installStatus: Effect.succeed({ _tag: "installed" as const }),
-  }),
+  Layer.succeed(PreviewBrowser.PreviewBrowser, unusedPreviewBrowser),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
     available: true,
     awaitAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),

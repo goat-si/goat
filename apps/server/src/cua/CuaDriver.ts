@@ -969,20 +969,9 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    // Cached apart from the 10 s probe cache, so a host status read waits on it once a minute.
-    const installedApps =
-      config.mode === "desktop"
-        ? undefined
-        : yield* Effect.cachedWithTTL(
-            InstalledDesktopApps.readInstalledDesktopApps.pipe(
-              Effect.provideService(FileSystem.FileSystem, fs),
-              Effect.provideService(Path.Path, path),
-            ),
-            "60 seconds",
-          );
     const probe = CuaDisplay.probeDisplay(
       config.mode === "desktop" ? "desktop" : "standalone",
-      installedApps,
+      yield* InstalledDesktopApps.cached(fs, path),
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),

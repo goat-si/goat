@@ -8,7 +8,7 @@
 export const COMPUTER_USE_SKILL_CORE = `<computer_use>
 # Computer use (GOAT built-in skill)
 
-The \`cua-driver\` tools act on the computer the person is using right now. Use them only for work that needs an app's window. A shell command, an API, another MCP tool, or GOAT's preview browser for web pages comes first when it can.
+The \`cua-driver\` tools act on the computer this GOAT server runs on. Use them only for work that needs an app's window. A shell command, an API, another MCP tool, or GOAT's preview browser for web pages comes first when it can.
 
 ## Observe
 - Pick the window yourself: \`list_windows\`, then pass that window's \`pid\` and \`window_id\` to every call. Never act on whatever happens to be frontmost.

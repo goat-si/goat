@@ -26,7 +26,7 @@ export interface InstalledDesktopApps {
   readonly incomplete: boolean;
 }
 
-export const UNKNOWN_DESKTOP_APPS: InstalledDesktopApps = { apps: [], incomplete: true };
+const UNKNOWN_DESKTOP_APPS: InstalledDesktopApps = { apps: [], incomplete: true };
 
 const plistString = (plist: string, key: string): string | undefined =>
   plist.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`))?.[1]?.trim() ||
@@ -46,28 +46,46 @@ const readApp = Effect.fnUntraced(function* (bundlePath: string, app: (typeof AP
 });
 
 /** Bounded so a slow disk cannot hold up host status; a timeout reads as unknown. */
-export const readInstalledDesktopApps = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const home = yield* HostProcess.HomeDirectory;
-  const found = yield* Effect.forEach(
-    ["/Applications", path.join(home, "Applications")].flatMap((directory) =>
-      APPS.map((app) => ({ app, bundlePath: path.join(directory, app.bundle) })),
-    ),
-    ({ app, bundlePath }) =>
-      readApp(bundlePath, app).pipe(Effect.orElseSucceed(() => "unknown" as const)),
-    { concurrency: "unbounded" },
-  );
-  return {
-    apps: found.filter((entry) => typeof entry === "object"),
-    incomplete: found.includes("unknown"),
-  } satisfies InstalledDesktopApps;
-}).pipe(
+export const readInstalledDesktopAppsIn = Effect.fn("installedDesktopApps.read")(
+  function* (directories: ReadonlyArray<string>) {
+    const path = yield* Path.Path;
+    const found = yield* Effect.forEach(
+      directories.flatMap((directory) =>
+        APPS.map((app) => ({ app, bundlePath: path.join(directory, app.bundle) })),
+      ),
+      ({ app, bundlePath }) =>
+        readApp(bundlePath, app).pipe(Effect.orElseSucceed(() => "unknown" as const)),
+      { concurrency: "unbounded" },
+    );
+    return {
+      apps: found.filter((entry) => typeof entry === "object"),
+      incomplete: found.includes("unknown"),
+    } satisfies InstalledDesktopApps;
+  },
   Effect.timeoutOrElse({
     duration: "1 second",
     orElse: () => Effect.succeed(UNKNOWN_DESKTOP_APPS),
   }),
-  Effect.withSpan("installedDesktopApps.read"),
 );
+
+const readInstalledDesktopApps = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
+  return yield* readInstalledDesktopAppsIn(["/Applications", path.join(home, "Applications")]);
+});
+
+/**
+ * Read only when a standalone Mac server probes its screen. Cached apart from the driver's 10 s
+ * probe cache, so a host status read waits on the disk at most once a minute.
+ */
+export const cached = (fs: FileSystem.FileSystem, path: Path.Path) =>
+  Effect.cachedWithTTL(
+    readInstalledDesktopApps.pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+    ),
+    "60 seconds",
+  );
 
 export type ConsoleOwner = "self" | "none" | "other" | "unknown";
 

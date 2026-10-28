@@ -572,13 +572,6 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
       }),
     );
 
-  const clearFailure = (error: PreviewBrowserInstallError) =>
-    gate.withPermit(
-      Effect.sync(() => {
-        if (state._tag === "failed" && state.error === error) state = { _tag: "idle" };
-      }),
-    );
-
   const executable = Effect.gen(function* () {
     if (customExecutablePath !== undefined) {
       const runnable = yield* runnableExecutable(customExecutablePath);
@@ -597,7 +590,6 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
         return current.executable;
       case "installing":
         return yield* Deferred.await(current.done).pipe(
-          Effect.tapError(clearFailure),
           Effect.timeoutOrElse({
             duration: wait,
             orElse: () =>

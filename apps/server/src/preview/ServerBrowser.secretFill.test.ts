@@ -29,6 +29,7 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { playwrightDebugLogging } from "./ServerBrowserSecretFill.ts";
@@ -135,11 +136,7 @@ const layerFor = (secrets: ReturnType<typeof makeSecrets>) =>
           getEnvironmentId: Effect.succeed(scope.environmentId),
           getDescriptor: Effect.die("unused descriptor"),
         }),
-        Layer.succeed(PreviewBrowser.PreviewBrowser, {
-          executable: Effect.die("unused executable"),
-          installed: Effect.die("unused executable"),
-          installStatus: Effect.succeed({ _tag: "installed" as const }),
-        }),
+        Layer.succeed(PreviewBrowser.PreviewBrowser, unusedPreviewBrowser),
         Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
           available: false,
           awaitAttached: () => Effect.succeed(false),

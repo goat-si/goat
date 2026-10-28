@@ -26,6 +26,7 @@ import * as Manager from "./Manager.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
@@ -172,11 +173,7 @@ const dependencies = Layer.mergeAll(
     getEnvironmentId: Effect.succeed(scope.environmentId),
     getDescriptor: Effect.die("unused descriptor"),
   }),
-  Layer.succeed(PreviewBrowser.PreviewBrowser, {
-    executable: Effect.die("unused executable"),
-    installed: Effect.die("unused executable"),
-    installStatus: Effect.succeed({ _tag: "installed" as const }),
-  }),
+  Layer.succeed(PreviewBrowser.PreviewBrowser, unusedPreviewBrowser),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
     available: false,
     awaitAttached: () => Effect.succeed(false),
