@@ -1,11 +1,7 @@
 // @effect-diagnostics globalTimers:off - Playwright callbacks run outside the Effect runtime.
 /**
- * What a click visibly did, read the way computer use reads an input: a change tied to the click
- * seen right after it confirms the click; nothing seen is a suspected no-op, which an agent
- * observes before retrying. Late effects (a fetch that renders after the window) are not seen,
- * and ambient page activity (a ticking clock, a background poll) does not count.
- *
- * @module clickEffect
+ * What a click did, read as computer use reads input: a change it caused confirms it, nothing seen
+ * is a suspected no-op. Late effects and ambient activity (a clock, a poll) are not counted.
  */
 import { constVoid } from "effect/Function";
 import type { Frame, JSHandle, Page, Request } from "playwright-core";
