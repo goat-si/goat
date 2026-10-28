@@ -637,7 +637,7 @@ export const threadEntries = {
           references: [
             {
               mode: "snapshot",
-              repositoryKey: "github.com/goat-si/goat",
+              repositoryKey: "github.com/acme/app",
               files: ["apps/server/src/mcp/ToolAdmission.ts", "docs/internals/agent-surface.md"],
             },
           ],
