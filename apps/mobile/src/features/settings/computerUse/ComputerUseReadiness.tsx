@@ -44,7 +44,9 @@ export function ComputerUseReadiness({
           ? "Computer use is ready on this host."
           : result.startsWithNextTurn
             ? "Computer use is ready on this host. It starts with the next agent turn."
-            : "Computer use setup needs attention."}
+            : result.rechecksWithNextTurn
+              ? "Computer use checks itself again before the next agent uses it on this host."
+              : "Computer use setup needs attention."}
       </Text>
       {details ? <ComputerUseReadinessDetails result={result} /> : null}
     </View>

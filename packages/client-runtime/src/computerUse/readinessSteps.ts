@@ -429,6 +429,17 @@ export function computerUseReadinessSteps({
       failure === undefined &&
       noScreen === undefined &&
       block === undefined,
+    // A Mac that lost its proof to a restart, wake or update: GOAT proves it again before the
+    // next agent start, so nothing waits on a person.
+    rechecksWithNextTurn:
+      macGrantsOn &&
+      readiness !== undefined &&
+      readiness.capture === "pending" &&
+      readiness.blockers.length === 0 &&
+      tools !== "off" &&
+      failure === undefined &&
+      noScreen === undefined &&
+      block === undefined,
     report,
     steps,
     blockers,

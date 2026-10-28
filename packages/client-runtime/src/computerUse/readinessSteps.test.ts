@@ -465,6 +465,7 @@ it("shows a Mac's dropped proof as an automatic recheck, and a missing grant as 
   expect(rechecking.steps[2]?.state).toBe("pending");
   expect(rechecking.steps[2]?.detail.join(" ")).toContain("Rechecks automatically");
   expect(lines).not.toMatch(/Run the (readiness )?check/);
+  expect(rechecking.rechecksWithNextTurn).toBe(true);
 
   // Asked at the Mac and still off: nothing GOAT runs can fix that, so the person is asked.
   const off = view(
@@ -475,6 +476,7 @@ it("shows a Mac's dropped proof as an automatic recheck, and a missing grant as 
   expect(off.steps[0]?.state).toBe("pending");
   expect(off.steps[0]?.grants[1]?.detail.join(" ")).toContain("Waiting for your answer");
   expect(off.steps[1]?.state).toBe("blocked");
+  expect(off.rechecksWithNextTurn).toBe(false);
 });
 
 // The server's readiness after a check the Linux helper did not answer (#1514).
