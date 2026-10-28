@@ -443,8 +443,8 @@ export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (opti
   yield* CliState.clearPersistedCloudLink;
   if (options.clearAuthorization) yield* tokens.clear;
   const liveResult = yield* runLiveCloudUnlink();
-  const relayResult = Exit.isFailure(credential)
-    ? credential
+  const relayResult: Exit.Exit<RelayUnlinkResult, unknown> = Exit.isFailure(credential)
+    ? Exit.failCause(credential.cause)
     : yield* Effect.exit(
         unlinkRelayEnvironment(credential.value).pipe(Effect.timeout("5 seconds")),
       );

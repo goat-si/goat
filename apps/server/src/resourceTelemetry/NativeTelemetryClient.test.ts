@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import type * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -158,7 +159,7 @@ it.effect("publishes recovery after a TERM-resistant telemetry child is retired"
       Effect.gen(function* () {
         spawns++;
         const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
-        const kill = (options?: { readonly forceKillAfter?: import("effect/Duration").Input }) =>
+        const kill = (options?: ChildProcess.KillOptions) =>
           Effect.gen(function* () {
             if (yield* Deferred.isDone(exit)) return;
             yield* Deferred.succeed(killEntered, undefined);

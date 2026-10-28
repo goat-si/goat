@@ -58,6 +58,8 @@ import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as AttachmentFileLeases from "./assets/AttachmentFileLeases.ts";
+import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as StorageReclaim from "./storage/StorageReclaim.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
@@ -231,6 +233,8 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
+  Layer.mock(AttachmentFileLeases.AttachmentFileLeases)({}),
+  Layer.mock(PendingAttachmentSweep.PendingAttachmentSweep)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
   Layer.mock(StorageReclaim.StorageReclaim)({}),
   Layer.mock(HostPressureMonitor.HostPressureMonitor)({}),

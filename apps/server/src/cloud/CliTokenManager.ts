@@ -669,13 +669,14 @@ export const make = Effect.gen(function* () {
   ) {
     return yield* semaphore
       .withPermits(1)(
-        Effect.scoped(login(intent)).pipe(
-          Effect.flatMap((approved) =>
-            approved._tag === "Authorized"
-              ? persist(approved.token).pipe(Effect.as(approved))
-              : Effect.fail(new CloudCliAuthorizationUnsupportedError({})),
-          ),
-        ),
+        Effect.gen(function* () {
+          const approved = yield* Effect.scoped(login(intent));
+          if (approved._tag !== "Authorized") {
+            return yield* new CloudCliAuthorizationUnsupportedError({});
+          }
+          yield* persist(approved.token);
+          return approved;
+        }),
       )
       .pipe(
         Effect.mapError((cause) =>

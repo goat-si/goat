@@ -198,7 +198,9 @@ describe("releaseManagedTunnelOnShutdown", () => {
         Effect.provideService(
           EnvironmentAuth.EnvironmentAuth,
           EnvironmentAuth.EnvironmentAuth.of({
-            setCloudLinkTrust: () => Effect.void,
+            setCloudLinkTrust: (
+              _userId: string | null,
+            ): Effect.Effect<void, EnvironmentAuth.ServerAuthInternalError> => Effect.void,
           } as EnvironmentAuth.EnvironmentAuth["Service"]),
         ),
         Effect.provideService(
@@ -455,7 +457,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
   );
   it.effect("retains a confirmed policy-1 connector through normal shutdown and startup", () => {
     const config = {
-      providerKind: "cloudflare_tunnel",
+      providerKind: "cloudflare_tunnel" as const,
       connectorToken: "existing-token",
       tunnelId: "existing-tunnel",
     };

@@ -11,6 +11,8 @@ export function makeManagedRelayTestClient(
   return ManagedRelay.ManagedRelayClient.of({
     resetTokenCache: Effect.void,
     ...input,
-    requestKeyReadmission: () => Effect.void,
+    requestKeyReadmission: Effect.fn("ManagedRelayTestClient.requestKeyReadmission")(
+      function* () {},
+    ),
   });
 }
