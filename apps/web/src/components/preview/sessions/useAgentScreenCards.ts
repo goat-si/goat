@@ -23,8 +23,8 @@ const MIN_CARD_SPACE_PX = 160;
  * where desktop apps run, are 16:10. Any page or window letterboxes inside it.
  */
 const AGENT_VIEW_ASPECT = 16 / 10;
-/** The card's padding and one-line header around its picture, in px. */
-const CARD_CHROME = { width: 12, height: 40 } as const;
+/** The card's padding and two-line header around its picture's well, in px. */
+const CARD_CHROME = { width: 24, height: 70 } as const;
 const LARGE_MAX_WIDTH_PX = 720;
 /** The large view takes up to this share of the pane, so the conversation stays in sight. */
 const LARGE_PANE_SHARE = 0.5;

@@ -11,6 +11,7 @@ import type {
 } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
 import {
+  type ReactNode,
   type RefObject,
   useContext,
   useEffect,
@@ -66,6 +67,39 @@ function Placeholder(props: {
   );
 }
 
+/** Pages open at 1280x800 in the server browser, so a tab's screen is 16:10. */
+export const BROWSER_SCREEN_ASPECT = 16 / 10;
+
+/**
+ * A screen floating in its card's well: as large as the well allows at the picture's own aspect,
+ * centered, rounded and lifted. Container units fit both edges without measuring.
+ */
+export function FittedScreen(props: {
+  readonly aspect: number;
+  /** False leaves only the box, for a screen not drawn yet. */
+  readonly lifted?: boolean | undefined;
+  readonly className?: string | undefined;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="flex size-full items-center justify-center [container-type:size]">
+      <div
+        className={cn(
+          "relative shrink-0 overflow-hidden rounded-lg",
+          props.lifted !== false && "shadow-md ring-1 ring-black/10 dark:ring-white/10",
+          props.className,
+        )}
+        style={{
+          aspectRatio: props.aspect,
+          width: `min(100cqw, ${props.aspect} * 100cqh)`,
+        }}
+      >
+        {props.children}
+      </div>
+    </div>
+  );
+}
+
 /**
  * A browser tab's picture. The card is a passive, low-rate view; the large size is the tab's
  * interactive stream. The stream says a secret field has focus before the session list does, so
@@ -84,7 +118,7 @@ function BrowserThumbnail(props: {
 }) {
   const [streamPrivate, setStreamPrivate] = useState(false);
   return (
-    <>
+    <FittedScreen aspect={BROWSER_SCREEN_ASPECT} className="bg-background">
       <Placeholder icon="globe" className="absolute inset-0" />
       <div
         className={cn(
@@ -125,7 +159,7 @@ function BrowserThumbnail(props: {
       {streamPrivate ? (
         <Placeholder icon="lock" text="Private" className="absolute inset-0 bg-muted" />
       ) : null}
-    </>
+    </FittedScreen>
   );
 }
 
@@ -202,30 +236,39 @@ function DesktopThumbnail(props: {
   const { session } = props;
   const watching = props.live && !props.stopped && session.capabilities.frames;
   const { event } = useDesktopSessionFrame(session.environmentId, watching ? session.id : null);
-  const [last, setLast] = useState<string | null>(null);
+  const [last, setLast] = useState<{ readonly src: string; readonly aspect: number } | null>(null);
   const live = event?.type === "frame" ? event : null;
-  const frame = live === null ? null : `data:${live.mime};base64,${live.data}`;
+  const frame =
+    live === null
+      ? null
+      : {
+          src: `data:${live.mime};base64,${live.data}`,
+          aspect: live.height > 0 ? live.width / live.height : BROWSER_SCREEN_ASPECT,
+        };
   const reason = event?.type === "unavailable" ? event.reason : undefined;
   // Kept for a stopped session; adjusted while rendering, as the last event decides it.
   const kept = frame ?? (reason === "private" ? null : last);
-  if (kept !== last) setLast(kept);
+  if (kept?.src !== last?.src) setLast(kept);
   const shown = frame ?? (props.stopped ? last : null);
   const stale = useFrameStale(watching ? live : null);
   if (shown !== null)
     return (
       <div className="relative size-full">
-        <img
-          alt=""
-          className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
-          src={shown}
-        />
-        {props.stopped || live === null || session.target.kind !== "desktop" ? null : (
-          <AgentCursor
-            session={session}
-            frame={{ width: live.width, height: live.height }}
-            {...frameCursor(session.target, live)}
+        {/* The window at its own shape, so the cursor maps onto the picture box itself. */}
+        <FittedScreen aspect={shown.aspect}>
+          <img
+            alt=""
+            className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
+            src={shown.src}
           />
-        )}
+          {props.stopped || live === null || session.target.kind !== "desktop" ? null : (
+            <AgentCursor
+              session={session}
+              frame={{ width: live.width, height: live.height }}
+              {...frameCursor(session.target, live)}
+            />
+          )}
+        </FittedScreen>
         {stale ? (
           <span className="pointer-events-none absolute top-2 right-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
             Picture not updating
@@ -265,9 +308,11 @@ function AgentCursor(props: {
   useEffect(() => {
     const element = box.current;
     if (element === null) return;
-    return observeResize(element, () =>
-      setMeasured({ width: element.clientWidth, height: element.clientHeight }),
-    );
+    // The fitted screen can be a fractional size; whole pixels would shift the cursor off it.
+    return observeResize(element, () => {
+      const box = element.getBoundingClientRect();
+      setMeasured({ width: box.width, height: box.height });
+    });
   }, []);
   const { cursor, cursorState } = props;
   const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
