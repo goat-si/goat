@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { BATCH_SCOPE_UNSUPPORTED } from "./ComputerUseLeaseProxyBatch.ts";
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const window = { pid: 42, window_id: 1 };
 const steps = [{ tool: "click", args: { ...window, element_token: "s1:3" } }];
@@ -100,4 +100,31 @@ it.effect(
       assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "desktop_not_approved" });
       assert.equal(yield* h.driverQueued, 0);
     }),
+);
+
+it.effect("asks a replacement driver child again before it gets a scoped batch", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    const apps = active(undefined, ["com.apple.calculator"]);
+    yield* h.push(apps);
+    const scoped = (id: number) =>
+      call(id, "run_steps", { ...window, steps, app_scope: scope(["com.apple.calculator"]) });
+    yield* h.send(scoped(1));
+    yield* listedTools(h, true);
+    assert.equal((yield* h.nextToDriver).id, 1);
+    yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+    assert.equal((yield* h.nextToProvider).id, 1);
+
+    yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+    yield* h.killed;
+    yield* h.push(apps);
+    yield* h.restarted;
+    // The new child may be another install: its own tool list decides, here without app_scope.
+    yield* h.send(scoped(2));
+    yield* listedTools(h, false);
+    const refused = yield* h.nextToProvider;
+    assert.equal(refused.id, 2);
+    assert.deepInclude(refusalOf(refused), { detail: "outside_manifest" });
+    assert.equal(yield* h.driverQueued, 0);
+  }),
 );

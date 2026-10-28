@@ -136,7 +136,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
-  const scopeBatch = makeProxyBatchScope(handshakeAnswers.tools, () => grantApps);
+  const currentChild = () => lifecycle.current;
+  const scopeBatch = makeProxyBatchScope(handshakeAnswers.listTools, () => grantApps, currentChild);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -741,7 +742,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      const batch = yield* scopeBatch(id, line, message, lifecycle.current, () => notSent(id));
+      const batch = yield* scopeBatch(id, line, message, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;

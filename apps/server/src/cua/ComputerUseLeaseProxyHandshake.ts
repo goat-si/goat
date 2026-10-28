@@ -203,14 +203,10 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       });
     },
     pending: (key: string) => cancels.has(key),
-    /**
-     * The driver's tool list: the one a child gave, or else asked of the current child once. A
-     * thread proxy's later controls never see the provider list its tools.
-     */
-    tools: Effect.fn("ComputerUseLeaseProxy.driverTools")(function* (
-      send: ((line: string) => Effect.Effect<void>) | undefined,
+    /** Asks one child for its own tool list, apart from the provider's handshake. */
+    listTools: Effect.fn("ComputerUseLeaseProxy.listDriverTools")(function* (
+      send: (line: string) => Effect.Effect<void>,
     ) {
-      if (answers.has("tools/list") || send === undefined) return answers.get("tools/list");
       const id = options.ownId("tools");
       const answered = yield* Deferred.make<Envelope | undefined>();
       options.ownAnswers.set(id, answered);
@@ -220,11 +216,7 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
         Deferred.await(options.ended).pipe(Effect.as(undefined)),
       ).pipe(Effect.timeoutOption(ANSWER_WITHIN), Effect.map(Option.getOrUndefined));
       options.ownAnswers.delete(id);
-      if (answer?.result !== undefined && !answers.has("tools/list")) {
-        answers.set("tools/list", answer.result);
-        listings++;
-      }
-      return answers.get("tools/list");
+      return answer?.result;
     }),
     cancel: (key: string) => {
       const cancelled = cancels.get(key);

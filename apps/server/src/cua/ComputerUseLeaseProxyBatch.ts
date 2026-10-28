@@ -2,7 +2,8 @@
 /**
  * Under an app list the proxy gives an unscoped run_steps or run_script the control's approved
  * apps as its `app_scope` (ComputerUseScope then admits it). A driver whose tool list lacks
- * `app_scope` could ignore one and run the batch unscoped, so a scope never goes to it.
+ * `app_scope` could ignore one and run the batch unscoped, so a scope goes only to a child that
+ * itself listed `app_scope`: a replacement child, even of the same install, is asked again.
  */
 import * as Effect from "effect/Effect";
 
@@ -32,20 +33,23 @@ const acceptsAppScope = (toolList: unknown, name: string): boolean => {
 /**
  * A proxy's scoping of batch calls.
  *
- * @param tools The driver's tools/list result; given a send, the child is asked when none is known.
+ * @param listTools Asks one child for its tools/list result.
  * @param grantApps The apps the control's grant names, as it spells them; undefined for the whole
  *   screen.
+ * @param current The child calls go to now, undefined while there is none.
  */
 export const makeProxyBatchScope = (
-  tools: (send: Send | undefined) => Effect.Effect<unknown>,
+  listTools: (send: Send) => Effect.Effect<unknown>,
   grantApps: () => ReadonlyArray<string> | undefined,
-) =>
+  current: () => Running | undefined,
+) => {
+  /** Each child's own tool list, once it gave one. */
+  const listed = new WeakMap<Running, unknown>();
   /** The call as the driver should get it, or the proxy's refusal (notSent while it has no child). */
-  Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
+  return Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
     id: JsonRpcId,
     line: string,
     message: Envelope,
-    current: Running | undefined,
     notSent: () => string,
   ) {
     const unchanged = { line, message };
@@ -56,11 +60,18 @@ export const makeProxyBatchScope = (
     const apps = grantApps();
     // Without a list the batch may act anywhere; past the driver's limit it stays refused.
     if (!named && (apps === undefined || apps.length > MAX_BATCH_SCOPE_APPS)) return unchanged;
+    const child = current();
     // Without a child nothing can be sent; a scope must not reach one that was never asked.
-    if (current === undefined) return named ? { refused: notSent() } : unchanged;
+    if (child === undefined) return named ? { refused: notSent() } : unchanged;
     // Only a batch that names a scope waits for the child's tool list; one GOAT would scope gets
-    // the scope once the driver is known to keep it, and is refused as before until then.
-    if (!acceptsAppScope(yield* tools(named ? current.driver.send : undefined), name))
+    // the scope once this child has listed it, and is refused as before until then.
+    if (named && !listed.has(child)) {
+      const tools = yield* listTools(child.driver.send);
+      if (tools !== undefined) listed.set(child, tools);
+      // The answer speaks for the child that gave it only.
+      if (current() !== child) return { refused: notSent() };
+    }
+    if (!acceptsAppScope(listed.get(child), name))
       return named
         ? { refused: refusal(id, message.method, "outside_manifest", BATCH_SCOPE_UNSUPPORTED) }
         : unchanged;
@@ -80,3 +91,4 @@ export const makeProxyBatchScope = (
       } as Envelope,
     };
   });
+};
