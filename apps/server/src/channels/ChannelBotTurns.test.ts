@@ -363,12 +363,12 @@ describe("GOAT Bot turns", () => {
       yield* reception.receive(input!, runtime.ownerToken);
       const [pending] = yield* ledger.listPendingForwards(10);
       assert.strictEqual(pending!.event.type, "task.followup.received");
-      // The send went out but the process died before recording it; recovery sends it again.
+      // The send went out but the process died before completing the forward; recovery finds
+      // the run the recorded steer joined and sends nothing again.
       yield* dispatcher.forward(pending!, runtime.ownerToken);
       yield* dispatcher.forward(pending!, runtime.ownerToken);
       const sends = harness.world.sends.filter((send) => send.text.includes("swap file"));
-      assert.lengthOf(sends, 2);
-      assert.strictEqual(sends[0]!.messageId, sends[1]!.messageId);
+      assert.lengthOf(sends, 1);
       assert.lengthOf(harness.world.runs.get(turn.worker!.threadId)!, 1);
       assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
     }).pipe(Effect.provide(harness.layer));
@@ -505,7 +505,8 @@ describe("GOAT Bot follow-ups under failure", () => {
       const order = harness.world.sends
         .filter((send) => send.text.includes("addition"))
         .map((send) => (send.text.includes("first") ? "first" : "second"));
-      assert.deepStrictEqual(order, ["first", "first", "second"]);
+      // The unanswered steer replays under its own ids before it may queue as the next run.
+      assert.deepStrictEqual(order, ["first", "first", "first", "second"]);
       const task = yield* ledger.getTask(turn.taskId);
       assert.isUndefined(task!.pendingAnswerMessageId);
       assert.lengthOf(yield* ledger.listPendingForwards(10), 0);

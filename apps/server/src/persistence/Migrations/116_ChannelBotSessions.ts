@@ -13,6 +13,7 @@ export default Effect.gen(function* () {
     binding_key TEXT NOT NULL,
     thread_id TEXT NOT NULL UNIQUE,
     task_id TEXT,
+    task_generation INTEGER,
     state TEXT NOT NULL,
     driver_kind TEXT,
     sharing TEXT NOT NULL,

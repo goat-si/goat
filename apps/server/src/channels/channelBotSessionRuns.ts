@@ -5,11 +5,13 @@
 import {
   type ChannelTask,
   type ChannelTaskId,
+  type MessageId,
   isGoatBotSessionThreadId,
   type OrchestrationV2Run,
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -85,3 +87,76 @@ export const isSessionTask = (task: ChannelTask) =>
   task.worker === undefined
     ? task.kind === "turn" && task.target !== undefined && task.target.remote === undefined
     : task.worker.host === undefined && isGoatBotSessionThreadId(task.worker.threadId);
+
+export interface SessionRow {
+  readonly conversation_id: string;
+  readonly generation: number;
+  readonly binding_key: string;
+  readonly thread_id: ThreadId;
+  readonly state: "starting" | "active" | "retired";
+  /** The task generation that started this session; its launch is recovered for it alone. */
+  readonly task_id: ChannelTaskId | null;
+  readonly task_generation: number | null;
+  readonly sharing: string;
+  readonly context_text: string | null;
+  readonly version: number;
+}
+
+/** The session rows and message intents, read and written under the caller's transaction. */
+export const sessionStore = (sql: SqlClient.SqlClient) => {
+  const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  const currentRow = (key: string) =>
+    sql<SessionRow>`
+      SELECT * FROM channel_bot_sessions WHERE binding_key = ${key} AND state != 'retired'
+    `.pipe(Effect.map((rows) => rows[0]));
+
+  const setState = (row: SessionRow, state: SessionRow["state"]) =>
+    nowIso.pipe(
+      Effect.flatMap(
+        (now) => sql`
+          UPDATE channel_bot_sessions SET state = ${state}, version = version + 1,
+            retired_at = ${state === "retired" ? now : null}
+          WHERE conversation_id = ${row.conversation_id} AND generation = ${row.generation}
+            AND version = ${row.version}
+        `,
+      ),
+    );
+
+  const touch = (threadId: ThreadId) =>
+    nowIso.pipe(
+      Effect.flatMap(
+        (now) =>
+          sql`UPDATE channel_bot_sessions SET last_request_at = ${now} WHERE thread_id = ${threadId}`,
+      ),
+    );
+
+  const writeIntent = (
+    threadId: ThreadId,
+    messageId: MessageId,
+    task: ChannelTask,
+    kind: SessionIntent["kind"],
+  ) =>
+    nowIso.pipe(
+      Effect.flatMap(
+        (now) => sql`
+          INSERT INTO channel_bot_session_runs
+            (thread_id, message_id, task_id, task_generation, kind, created_at)
+          VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
+          ON CONFLICT (thread_id, message_id) DO NOTHING
+        `,
+      ),
+    );
+
+  const recordRun = (
+    threadId: ThreadId,
+    messageId: MessageId,
+    run: OrchestrationV2Run,
+    steered: boolean,
+  ) =>
+    steered
+      ? sql`UPDATE channel_bot_session_runs SET steered_into_run_id = ${run.id}
+            WHERE thread_id = ${threadId} AND message_id = ${messageId}`
+      : sql`UPDATE channel_bot_session_runs SET run_id = ${run.id}
+            WHERE thread_id = ${threadId} AND message_id = ${messageId} AND run_id IS NULL`;
+  return { currentRow, setState, touch, writeIntent, recordRun };
+};

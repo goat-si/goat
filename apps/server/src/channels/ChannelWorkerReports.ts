@@ -350,20 +350,32 @@ const make = Effect.gen(function* () {
       const session = isGoatBotSessionThreadId(worker.threadId);
       const allRuns = records.value.runs.toSorted((left, right) => left.ordinal - right.ordinal);
       const scoped = session
-        ? yield* threads.getThreadRecords(worker.threadId, ["messages"]).pipe(
-            Effect.flatMap(({ messages }) =>
-              sessionTaskRuns(sql, worker.threadId, { runs: allRuns, messages }, task),
+        ? yield* threads.getThreadRecords(worker.threadId, ["messages", "providerTurns"]).pipe(
+            Effect.flatMap(({ messages, providerTurns }) =>
+              sessionTaskRuns(sql, worker.threadId, { runs: allRuns, messages }, task).pipe(
+                Effect.map((own) => ({ own, providerTurns })),
+              ),
             ),
             Effect.option,
           )
-        : Option.some(allRuns);
+        : Option.some({ own: allRuns, providerTurns: [] });
       if (Option.isNone(scoped)) return false;
-      const runs = scoped.value;
-      const executing = allRuns.findLast((run) => run.status !== "queued");
-      const runtimeRequests =
-        !session || runs.some((run) => run.id === executing?.id)
-          ? records.value.runtimeRequests
-          : [];
+      const runs = scoped.value.own;
+      // A request belongs to the run whose provider turn raised it; one whose turn cannot be
+      // traced to this task's runs is left out rather than shown on the wrong task.
+      const runtimeRequests = !session
+        ? records.value.runtimeRequests
+        : records.value.runtimeRequests.filter((request) => {
+            const turn = scoped.value.providerTurns.find(
+              (candidate) => candidate.id === request.providerTurnId,
+            );
+            return runs.some((run) =>
+              turn === undefined
+                ? run.rootNodeId !== null && run.rootNodeId === request.nodeId
+                : run.rootNodeId === turn.nodeId ||
+                  (turn.runAttemptId !== null && run.activeAttemptId === turn.runAttemptId),
+            );
+          });
       const subagents = session
         ? records.value.subagents.filter((child) => runs.some((run) => run.id === child.runId))
         : records.value.subagents;

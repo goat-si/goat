@@ -16,6 +16,7 @@ import {
   type ChannelTaskChip,
   ChannelTaskEvent,
   type ChannelTaskEventId,
+  isGoatBotSessionThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -80,6 +81,10 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
           environmentId: task.worker.environmentId,
           threadId: task.worker.threadId,
           ...(task.worker.host === undefined ? {} : { host: task.worker.host }),
+          // A session thread serves several tasks; the run tells this one's activity apart.
+          ...(task.worker.runId === undefined || !isGoatBotSessionThreadId(task.worker.threadId)
+            ? {}
+            : { runId: task.worker.runId }),
         },
       }),
   ...(task.target?.placementReason === undefined

@@ -151,6 +151,10 @@ class WorkerWorld {
     readonly threadId: string;
     readonly childThreadIds?: ReadonlyArray<string>;
   }> = [];
+  /** A launch that commits its thread and run, then fails, as a failed projection read does. */
+  failLaunchAfterAccept = false;
+  /** Runs after each command a worker thread accepts, to model work landing meanwhile. */
+  afterCommand: (command: OrchestrationV2ServerCommand) => void = () => {};
 
   addRun(threadId: ThreadId, userMessageId: MessageId) {
     const existing = this.runs.get(threadId) ?? [];
@@ -530,6 +534,21 @@ export function makeHarness(
               if (target !== undefined)
                 world.setStatus(command.threadId, target.ordinal, "cancelled");
             }
+            // Disposing a delegated task's promised wake marks it disposed on the parent.
+            if (command.type === "delegated_task.completion-delivery.dispose") {
+              const children = world.subagents.get(command.parentThreadId) ?? [];
+              world.subagents.set(
+                command.parentThreadId,
+                children.map((child) =>
+                  child.id === command.taskId
+                    ? {
+                        ...child,
+                        completionDelivery: { ...child.completionDelivery, state: "disposed" },
+                      }
+                    : child,
+                ) as never,
+              );
+            }
             if (command.type === "thread.metadata.update" && command.limitRecovery !== undefined) {
               const previous = world.shells.get(command.threadId);
               const recovery = command.limitRecovery;
@@ -545,6 +564,7 @@ export function makeHarness(
                       },
               });
             }
+            world.afterCommand(command);
             return { sequence: 0, storedEvents: [] };
           });
         },
@@ -613,6 +633,16 @@ export function makeHarness(
             threadId: input.threadId,
             ...(input.childThreadIds === undefined ? {} : { childThreadIds: input.childThreadIds }),
           });
+          // Stopped children read as cancelled on the parent, as their thread stop records.
+          world.subagents.set(
+            input.threadId,
+            (world.subagents.get(input.threadId) ?? []).map((child) =>
+              input.childThreadIds === undefined ||
+              (child.childThreadId !== null && input.childThreadIds.includes(child.childThreadId))
+                ? { ...child, status: "cancelled" as const }
+                : child,
+            ),
+          );
           return Effect.void;
         },
       });
@@ -621,18 +651,20 @@ export function makeHarness(
 
   const layerScriptedLaunch = Layer.mock(ThreadLaunch.ThreadLaunchService)({
     launch: (input) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         world.launches.push(input);
         const threadId = input.threadId ?? ThreadId.make("thread:worker:" + input.commandId);
         // Same command, same thread and run: a retried launch finds what the first one made.
         if (!world.runs.has(threadId) && input.initialMessage?.messageId !== undefined) {
           world.addRun(threadId, input.initialMessage.messageId);
         }
-        return {
+        if (world.failLaunchAfterAccept)
+          return Effect.fail({ _tag: "ThreadLaunchProjectionReadError" } as never);
+        return Effect.succeed({
           threadId,
           projection: { runs: world.runs.get(threadId) ?? [] },
           resumed: false,
-        } as never;
+        } as never);
       }),
   });
 

@@ -73,10 +73,12 @@ import {
 } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { turnInstruction } from "./channelWorkerBrief.ts";
+import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
   isSessionTask,
   isTerminalRun,
-  type SessionIntent,
+  type SessionRow,
+  sessionStore,
   sessionTaskRuns,
 } from "./channelBotSessionRuns.ts";
 
@@ -94,17 +96,6 @@ const requireTarget = (task: ChannelTask) =>
         }),
       )
     : Effect.succeed(task.target);
-
-interface SessionRow {
-  readonly conversation_id: string;
-  readonly generation: number;
-  readonly binding_key: string;
-  readonly thread_id: ThreadId;
-  readonly state: "starting" | "active" | "retired";
-  readonly sharing: string;
-  readonly context_text: string | null;
-  readonly version: number;
-}
 
 const readRecords = (
   threads: ThreadManagement.ThreadManagementService["Service"],
@@ -181,59 +172,7 @@ const make = Effect.gen(function* () {
     return NodeCrypto.createHash("sha256").update(parts.join("\u0000")).digest("base64url");
   };
 
-  const currentRow = (key: string) =>
-    sql<SessionRow>`
-      SELECT * FROM channel_bot_sessions WHERE binding_key = ${key} AND state != 'retired'
-    `.pipe(Effect.map((rows) => rows[0]));
-
-  const setState = (row: SessionRow, state: SessionRow["state"]) =>
-    nowIso.pipe(
-      Effect.flatMap(
-        (now) => sql`
-          UPDATE channel_bot_sessions SET state = ${state}, version = version + 1,
-            retired_at = ${state === "retired" ? now : null}
-          WHERE conversation_id = ${row.conversation_id} AND generation = ${row.generation}
-            AND version = ${row.version}
-        `,
-      ),
-    );
-
-  const touch = (threadId: ThreadId) =>
-    nowIso.pipe(
-      Effect.flatMap(
-        (now) =>
-          sql`UPDATE channel_bot_sessions SET last_request_at = ${now} WHERE thread_id = ${threadId}`,
-      ),
-    );
-
-  const writeIntent = (
-    threadId: ThreadId,
-    messageId: MessageId,
-    task: ChannelTask,
-    kind: SessionIntent["kind"],
-  ) =>
-    nowIso.pipe(
-      Effect.flatMap(
-        (now) => sql`
-          INSERT INTO channel_bot_session_runs
-            (thread_id, message_id, task_id, task_generation, kind, created_at)
-          VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
-          ON CONFLICT (thread_id, message_id) DO NOTHING
-        `,
-      ),
-    );
-
-  const recordRun = (
-    threadId: ThreadId,
-    messageId: MessageId,
-    run: OrchestrationV2Run,
-    steered: boolean,
-  ) =>
-    steered
-      ? sql`UPDATE channel_bot_session_runs SET steered_into_run_id = ${run.id}
-            WHERE thread_id = ${threadId} AND message_id = ${messageId}`
-      : sql`UPDATE channel_bot_session_runs SET run_id = ${run.id}
-            WHERE thread_id = ${threadId} AND message_id = ${messageId} AND run_id IS NULL`;
+  const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
 
   const fail = (stored: ChannelLedger.ChannelStoredTask, owner: string, summary: string) =>
     commitTransition(
@@ -411,17 +350,32 @@ const make = Effect.gen(function* () {
         creationSource: "server",
       })
       .pipe(Effect.result);
+    // A launch can commit and still fail afterwards (reading its projection, say): look for its
+    // run before deciding nothing started. Only a refusal or a thread that never appeared is final.
+    const landed =
+      launched._tag === "Success"
+        ? launched.success.projection.runs
+        : yield* threads.getThreadRecords(row.thread_id, ["runs"]).pipe(
+            Effect.map((records) => records.runs),
+            Effect.catch((cause) =>
+              Effect.succeed(isThreadMissing(cause) ? ("missing" as const) : ("unknown" as const)),
+            ),
+          );
     if (launched._tag === "Failure") {
       yield* Effect.logWarning("GOAT Bot session launch failed", {
         taskId: task.taskId,
         cause: launched.failure,
       });
-      yield* setState(row, "retired");
-      return yield* fail(stored, owner, "GOAT Bot could not start its session.");
+      if (landed === "missing" || rejected(launched.failure)) {
+        yield* setState(row, "retired");
+        return yield* fail(stored, owner, "GOAT Bot could not start its session.");
+      }
+      if (landed === "unknown") return "deferred" as const;
     }
-    const run = launched.success.projection.runs.find(
-      (candidate) => candidate.userMessageId === ids.messageId,
-    );
+    const run =
+      typeof landed === "string"
+        ? undefined
+        : landed.find((candidate) => candidate.userMessageId === ids.messageId);
     if (run === undefined) return "deferred" as const;
     yield* recordRun(row.thread_id, ids.messageId, run, false);
     yield* setState(row, "active");
@@ -491,10 +445,10 @@ const make = Effect.gen(function* () {
         );
         yield* sql`
           INSERT INTO channel_bot_sessions (conversation_id, generation, binding_key, thread_id,
-            task_id, state, driver_kind, sharing, model_instance_id, model, requester_json,
-            context_revision, context_text, created_at)
+            task_id, task_generation, state, driver_kind, sharing, model_instance_id, model,
+            requester_json, context_revision, context_text, created_at)
           VALUES (${task.conversationId}, ${generation}, ${key}, ${threadId},
-            ${sharing === "per_task" ? task.taskId : null}, 'starting', ${driver ?? null},
+            ${task.taskId}, ${task.generation}, 'starting', ${driver ?? null},
             ${sharing}, ${target.modelSelection.instanceId}, ${target.modelSelection.model},
             ${encodeRequester(task.requester)}, ${sessionContextRevision(prefix)}, ${prefix}, ${now})
         `;
@@ -528,6 +482,25 @@ const make = Effect.gen(function* () {
         yield* bindWorker(initial, row.thread_id, run.id, owner);
         return "served" as const;
       }
+    }
+    // A generation that never finished launching belongs to the task that started it: only that
+    // task resumes its launch, while it can still run; otherwise the row is retired unused.
+    if (
+      row?.state === "starting" &&
+      (row.task_id !== initial.task.taskId || row.task_generation !== initial.task.generation)
+    ) {
+      const starter = row.task_id === null ? undefined : yield* ledger.getTask(row.task_id);
+      const launchedRuns = Option.isSome(records) ? records.value.runs.length : 0;
+      if (
+        launchedRuns === 0 &&
+        starter !== undefined &&
+        starter.task.generation === row.task_generation &&
+        (starter.task.status === "received" || starter.task.status === "dispatching")
+      )
+        return "deferred" as const;
+      if (launchedRuns > 0) yield* setState(row, "active");
+      else yield* setState(row, "retired");
+      row = yield* currentRow(key);
     }
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     const message = turnInstruction(initial.task, botFiles, settings.goatclaw.enabled);
@@ -627,8 +600,17 @@ const make = Effect.gen(function* () {
       yield* recordRun(threadId, already.userMessageId as MessageId, already, false);
       return { _tag: "sent", run: already } as const;
     }
+    // A steer recorded before a crash replays under its own ids, whatever runs now: the thread
+    // answers an accepted one with the run it joined, and refuses one that never landed.
+    const firstIntent = yield* sql<{ readonly steered_into_run_id: RunId | null }>`
+      SELECT steered_into_run_id FROM channel_bot_session_runs
+      WHERE thread_id = ${threadId} AND message_id = ${ids.first.messageId}
+    `;
+    const steeredInto = records.runs.find((run) => run.id === firstIntent[0]?.steered_into_run_id);
+    if (steeredInto !== undefined) return { _tag: "sent", run: steeredInto } as const;
     // A person stopped this task's run in GOAT; sending would start it again.
-    if (current?.status === "cancelled") return { _tag: "stopped", run: current } as const;
+    if (current?.status === "cancelled" && firstIntent.length === 0)
+      return { _tag: "stopped", run: current } as const;
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup").pipe(
@@ -651,7 +633,8 @@ const make = Effect.gen(function* () {
       );
     let which = ids.first;
     let sent =
-      current !== undefined && !isTerminalRun(current) && current.status !== "queued"
+      current !== undefined &&
+      (firstIntent.length > 0 || (!isTerminalRun(current) && current.status !== "queued"))
         ? yield* attempt("steer", ids.first)
         : undefined;
     if (
@@ -673,6 +656,30 @@ const make = Effect.gen(function* () {
       sent.success.delivery === "steered",
     );
     return { _tag: "sent", run: sent.success.run } as const;
+  });
+
+  /**
+   * Binds the task to the run that took its message, lifting the completion fence the message set
+   * in the same write. False when another write moved the task first; the next pass tries again.
+   */
+  const bindAfterSend = Effect.fn("ChannelBotSession.bindAfterSend")(function* (
+    taskId: ChannelTaskId,
+    own: ReadonlyArray<string>,
+    run: OrchestrationV2Run,
+    owner: string,
+  ) {
+    const latest = yield* ledger.getTask(taskId);
+    if (latest?.task.worker === undefined) return true;
+    const ownsFence =
+      latest.pendingAnswerMessageId !== undefined && own.includes(latest.pendingAnswerMessageId);
+    if (!ownsFence && latest.task.worker.runId === run.id) return true;
+    const bound = yield* commitTransition(
+      ledger,
+      latest,
+      { type: "task.worker.bound", payload: { worker: { ...latest.task.worker, runId: run.id } } },
+      { owner, ...(ownsFence ? { pendingAnswerMessageId: null } : {}) },
+    );
+    return bound !== undefined;
   });
 
   const forwardFollowUp = Effect.fn("ChannelBotSession.forwardFollowUp")(function* (
@@ -704,22 +711,7 @@ const make = Effect.gen(function* () {
       "Follow-up from " + event.payload.from + ": " + event.payload.text,
       ids,
     );
-    if (result._tag === "stopped") {
-      const latest = (yield* ledger.getTask(event.taskId)) ?? stored;
-      if (latest.pendingAnswerMessageId !== undefined && latest.task.worker !== undefined) {
-        const lifted = yield* commitTransition(
-          ledger,
-          latest,
-          {
-            type: "task.worker.bound",
-            payload: { worker: { ...latest.task.worker, runId: result.run.id } },
-          },
-          { owner, pendingAnswerMessageId: null },
-        );
-        if (lifted === undefined) return;
-      }
-      return yield* done;
-    }
+    const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "failed") {
       if (result.refusal === undefined && !rejected(result.failure)) {
         yield* Effect.logWarning("GOAT Bot session follow-up failed; retrying", {
@@ -738,25 +730,8 @@ const make = Effect.gen(function* () {
       if (asked !== undefined) yield* done;
       return;
     }
-    const run = result.run;
-    const latest = yield* ledger.getTask(event.taskId);
-    if (latest?.task.worker === undefined) return yield* done;
-    const own = [ids.first.messageId, ids.queued.messageId] as ReadonlyArray<string>;
-    const ownsFence =
-      latest.pendingAnswerMessageId !== undefined && own.includes(latest.pendingAnswerMessageId);
-    if (ownsFence || latest.task.worker.runId !== run.id) {
-      const bound = yield* commitTransition(
-        ledger,
-        latest,
-        {
-          type: "task.worker.bound",
-          payload: { worker: { ...latest.task.worker, runId: run.id } },
-        },
-        { owner, ...(ownsFence ? { pendingAnswerMessageId: null } : {}) },
-      );
-      if (bound === undefined) return;
-    }
-    yield* done;
+    // A stopped run is not restarted: the follow-up is dropped and its fence lifted.
+    if (yield* bindAfterSend(event.taskId, own, result.run, owner)) yield* done;
   });
 
   const forwardAnswer = Effect.fn("ChannelBotSession.forwardAnswer")(function* (
@@ -777,15 +752,17 @@ const make = Effect.gen(function* () {
     );
     if (result._tag === "failed") {
       if (result.refusal === undefined && !rejected(result.failure)) return;
-      yield* askRequester(
+      const asked = yield* askRequester(
         stored,
         "The session didn't take your answer (\"" +
           event.payload.answer +
           '"). Answer again, or answer in the thread.',
         owner,
       );
+      if (asked !== undefined) yield* done;
+      return;
     }
-    yield* done;
+    if (yield* bindAfterSend(event.taskId, [ids.messageId], result.run, owner)) yield* done;
   });
 
   /** Stops one task's runs and the children they started; other tasks in the session run on. */
@@ -837,16 +814,21 @@ const make = Effect.gen(function* () {
           retry = true;
         }
       }
-      const runIds = new Set<string>(runs.map((run) => run.id));
-      const children = records.subagents.filter(
+      // Children read after the interrupts, so a delegate that landed meanwhile is stopped too.
+      const after = yield* readRecords(threads, threadId);
+      const afterRuns = yield* sessionTaskRuns(sql, threadId, after, task);
+      if (afterRuns.some((run) => !isTerminalRun(run))) retry = true;
+      const runIds = new Set<string>(afterRuns.map((run) => run.id));
+      const owned = after.subagents.filter(
         (child) =>
           child.origin === "app_owned" &&
           child.runId !== null &&
           runIds.has(child.runId) &&
-          child.promotedAt === undefined &&
-          LIVE_SUBAGENT.has(child.status),
+          child.promotedAt === undefined,
       );
-      const local = children.flatMap((child) =>
+      const live = owned.filter((child) => LIVE_SUBAGENT.has(child.status));
+      if (live.length > 0) retry = true;
+      const local = live.flatMap((child) =>
         child.childThreadId === null ? [] : [child.childThreadId],
       );
       if (local.length > 0) {
@@ -863,27 +845,41 @@ const make = Effect.gen(function* () {
       const coordinator = yield* Effect.serviceOption(
         RemoteDispatchCoordinator.RemoteDispatchCoordinator,
       );
-      for (const child of children) {
-        if (child.remote !== undefined && Option.isSome(coordinator)) {
-          const cancelled = yield* coordinator.value
-            .cancel(child.remote.correlationId, Effect.succeed(task.requester.runtimeModeCeiling))
-            .pipe(Effect.result);
-          if (cancelled._tag === "Failure") retry = true;
-        }
-        if (
-          child.completionDelivery !== undefined &&
-          child.completionDelivery.state !== "disposed"
-        ) {
-          const disposed = yield* threads
-            .dispatch({
-              type: "delegated_task.completion-delivery.dispose",
-              commandId: CommandId.make(ids.subagents + ":dispose:" + child.id),
-              parentThreadId: threadId,
-              taskId: child.id,
-            })
-            .pipe(Effect.result);
-          if (disposed._tag === "Failure") retry = true;
-        }
+      for (const child of live) {
+        if (child.remote === undefined || Option.isNone(coordinator)) continue;
+        const cancelled = yield* coordinator.value
+          .cancel(child.remote.correlationId, Effect.succeed(task.requester.runtimeModeCeiling))
+          .pipe(Effect.result);
+        if (cancelled._tag === "Failure") retry = true;
+      }
+      // A wake owed to a stopped task would restart it; drop each one, live child or not, except
+      // a cloud task still finishing, whose promised result the observer records (task_cancel's rule).
+      for (const child of owned) {
+        const state = child.completionDelivery?.state;
+        if (state !== "pending" && state !== "claimed") continue;
+        const cloud =
+          child.childThreadId === null
+            ? false
+            : yield* threads.getThreadRecords(child.childThreadId, ["providerThreads"]).pipe(
+                Effect.map((records) =>
+                  records.providerThreads.some(
+                    (provider) =>
+                      provider.cloudTask?.status === "running" ||
+                      provider.cloudTask?.status === "submitting",
+                  ),
+                ),
+                Effect.orElseSucceed(() => false),
+              );
+        if (cloud) continue;
+        const disposed = yield* threads
+          .dispatch({
+            type: "delegated_task.completion-delivery.dispose",
+            commandId: CommandId.make(ids.subagents + ":dispose:" + child.id),
+            parentThreadId: threadId,
+            taskId: child.id,
+          })
+          .pipe(Effect.result);
+        if (disposed._tag === "Failure") retry = true;
       }
     }
     const records = yield* childWork
