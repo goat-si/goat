@@ -1,9 +1,18 @@
-import { type DecisionListInput, type EnvironmentId, WS_METHODS } from "@goat/contracts";
+import {
+  type DecisionFeed,
+  type DecisionListInput,
+  type EnvironmentId,
+  WS_METHODS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentQueryAtomFamily, createEnvironmentRpcCommand } from "./runtime.ts";
+import {
+  createEnvironmentQueryAtomFamily,
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcSubscriptionAtomFamily,
+} from "./runtime.ts";
 
 export function createDecisionEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -34,10 +43,22 @@ export function createDecisionEnvironmentAtoms<R, E>(
       queryDecisions(target),
     refreshTrigger: (target) => refreshTrigger(target.environmentId),
   });
+  const feedSubscription = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:decision:feed",
+    tag: WS_METHODS.decisionSubscribe,
+  });
+  // Older servers and connections without orchestration:read fail the subscription: no feed.
+  const decisionFeed = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): DecisionFeed | null => {
+      const result = get(feedSubscription({ environmentId, input: {} }));
+      return AsyncResult.isSuccess(result) ? result.value : null;
+    }).pipe(Atom.withLabel(`environment-data:decision:feed-value:${environmentId}`)),
+  );
 
   return {
     decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
       decisionItems({ environmentId: target.environmentId, input: target }),
+    decisionFeed,
     getDecision: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:decision:get",
       tag: WS_METHODS.decisionGet,

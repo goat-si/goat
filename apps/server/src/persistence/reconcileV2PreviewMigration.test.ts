@@ -128,6 +128,7 @@ describe("V2 preview upgrade", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [112, "ConnectLinkTrust"],
         [113, "McpEvalJournal"],
+        [114, "DecisionRoutes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -266,6 +267,7 @@ describe("V2 preview upgrade", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [112, "ConnectLinkTrust"],
         [113, "McpEvalJournal"],
+        [114, "DecisionRoutes"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

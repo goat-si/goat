@@ -2131,6 +2131,7 @@ export const layerWsRpc = (
         [WS_METHODS.decisionRequest]: (input) => decisions.create(decisionCaller, input),
         [WS_METHODS.decisionAnswer]: (input) => decisions.answer(decisionCaller, input),
         [WS_METHODS.decisionWithdraw]: (input) => decisions.withdraw(decisionCaller, input.id),
+        [WS_METHODS.decisionSubscribe]: () => decisions.feed(decisionCaller),
       });
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.connectionCatalogServe]: () =>

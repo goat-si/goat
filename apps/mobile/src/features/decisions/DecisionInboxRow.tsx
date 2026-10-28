@@ -6,8 +6,12 @@ import { decisionInbox } from "../../state/threads";
 
 export function DecisionInboxRow(props: { readonly onPress: () => void }) {
   const summary = useAtomValue(decisionInbox.summaryAtom);
-  if (summary.count === 0) return null;
-  const label = `${summary.count} decision${summary.count === 1 ? "" : "s"} waiting`;
+  // Items a parent agent is handling stay reachable, without counting as waiting on you.
+  if (summary.total === 0) return null;
+  const label =
+    summary.count > 0
+      ? `${summary.count} decision${summary.count === 1 ? "" : "s"} waiting`
+      : `${summary.total} with agents`;
   return (
     <Pressable
       accessibilityRole="button"

@@ -29,4 +29,9 @@ export const layer = McpToolAccess.toLayer(DecisionToolkit, {
       }),
     ),
   ),
+  goat_decision_escalate: McpToolAccess.writesAsCaller((input) =>
+    Effect.gen(function* () {
+      return yield* (yield* DecisionService.DecisionService).escalate(yield* caller, input);
+    }),
+  ),
 });

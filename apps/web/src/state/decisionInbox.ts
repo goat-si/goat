@@ -2,6 +2,7 @@ import { createDecisionInboxAtoms } from "@goat/client-runtime/state/decision-in
 
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations } from "./presentation";
+import { serverEnvironment } from "./server";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 // Lives outside ./threads: presentation pulls in the server session atoms, and
@@ -11,4 +12,5 @@ export const decisionInbox = createDecisionInboxAtoms({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   presentationAtom: environmentPresentations.presentationAtom,
   details: environmentThreadDetails,
+  feedAtom: serverEnvironment.decisionFeed,
 });

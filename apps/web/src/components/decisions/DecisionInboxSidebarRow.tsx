@@ -6,10 +6,11 @@ import { decisionInbox } from "../../state/decisionInbox";
 import { useSidebar } from "../ui/sidebar";
 
 export function DecisionInboxSidebarRow() {
-  const { count } = useAtomValue(decisionInbox.summaryAtom);
+  const { count, total } = useAtomValue(decisionInbox.summaryAtom);
   const active = useLocation({ select: (location) => location.pathname === "/decisions" });
   const { isMobile, setOpenMobile } = useSidebar();
-  if (count === 0) return null;
+  // Items a parent agent is handling stay reachable, without counting as waiting on you.
+  if (total === 0) return null;
 
   return (
     <li className="list-none" data-thread-selection-safe>
@@ -26,7 +27,9 @@ export function DecisionInboxSidebarRow() {
             : "text-sidebar-foreground hover:bg-sidebar-row-hover",
         )}
       >
-        {count} {count === 1 ? "decision" : "decisions"} waiting
+        {count > 0
+          ? `${count} ${count === 1 ? "decision" : "decisions"} waiting`
+          : `${total} with agents`}
       </Link>
     </li>
   );

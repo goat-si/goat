@@ -15,12 +15,23 @@ import { ComposerPendingApprovalPanel } from "../chat/ComposerPendingApprovalPan
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DecisionDurableForm } from "./DecisionDurableForm";
 import { DecisionUserInputForm } from "./DecisionUserInputForm";
 import { useDecisionInbox } from "./useDecisionInbox";
 
 export function DecisionInbox() {
-  const { snapshot, ordered, current, drafts, submissions, skip, setAnswers, submit } =
-    useDecisionInbox();
+  const {
+    snapshot,
+    ordered,
+    current,
+    drafts,
+    decisionDrafts,
+    setDecisionDraft,
+    submissions,
+    skip,
+    setAnswers,
+    submit,
+  } = useDecisionInbox();
   return (
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
@@ -31,7 +42,7 @@ export function DecisionInbox() {
           <WorkspacePageContainer>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                Pending questions and approvals from threads.
+                Pending questions, approvals and decisions from threads.
               </p>
               <Button size="sm" variant="outline" render={<Link to="/settings/decision-inbox" />}>
                 Decision inbox and history
@@ -55,6 +66,8 @@ export function DecisionInbox() {
                 key={current.id}
                 item={current}
                 drafts={drafts[current.id] ?? {}}
+                decisionDraft={decisionDrafts[current.id]}
+                onDecisionDraftChange={(next) => setDecisionDraft(current.id, next)}
                 submission={submissions[current.id]}
                 total={ordered.length}
                 onChange={(next) => setAnswers(current.id, next)}
@@ -101,6 +114,8 @@ type Inbox = ReturnType<typeof useDecisionInbox>;
 function DecisionCard({
   item,
   drafts,
+  decisionDraft,
+  onDecisionDraftChange,
   submission,
   onChange,
   onSubmit,
@@ -111,6 +126,8 @@ function DecisionCard({
 }: {
   item: DecisionItem;
   drafts: Inbox["drafts"][string];
+  decisionDraft: Inbox["decisionDrafts"][string] | undefined;
+  onDecisionDraftChange: (draft: Inbox["decisionDrafts"][string]) => void;
   submission: Inbox["submissions"][string] | undefined;
   onChange: (drafts: Inbox["drafts"][string]) => void;
   onSubmit: (response: Parameters<Inbox["submit"]>[1]) => Promise<unknown>;
@@ -121,18 +138,25 @@ function DecisionCard({
 }) {
   const titleId = useId();
   const shell = useThreadShell(item.ref);
+  const parentShell = useThreadShell(item.routing.parentRef ?? null);
+  const parentTitle = parentShell?.title || item.routing.parentTitle;
   const environment = useEnvironment(item.ref.environmentId);
   const canOperate = useEnvironmentScope(item.ref.environmentId, AuthOrchestrationOperateScope);
   const busy = submission?.phase === "submitting" || submission?.phase === "awaitingProjection";
+  const durable = item.kind === "decision";
   const canRespond =
-    canOperate && !blockedBySync && item.request.responseCapability !== "not_resumable";
+    canOperate &&
+    (durable || (!blockedBySync && item.request.responseCapability !== "not_resumable"));
   const disabled = busy || !canRespond;
   return (
     <article aria-labelledby={titleId} className="flex min-w-0 flex-col gap-6 wrap-anywhere">
       <div className="flex flex-col gap-1">
         <h2 id={titleId} className="text-lg font-medium">
-          {shell?.title || "Untitled thread"}
+          {shell?.title || item.routing.threadTitle || "Untitled thread"}
         </h2>
+        {parentTitle ? (
+          <p className="text-sm text-muted-foreground">Asked by an agent in {parentTitle}</p>
+        ) : null}
         <p className="text-sm text-muted-foreground">
           {environment?.label || item.ref.environmentId}
         </p>
@@ -153,10 +177,28 @@ function DecisionCard({
         </p>
       </div>
       {!canOperate ? <p role="status">This connection cannot answer decisions.</p> : null}
-      {blockedBySync ? (
+      {item.routing.routedTo === "parent" ? (
+        <p role="status">
+          {parentTitle || "Its parent agent"} is handling this first. You can still answer.
+        </p>
+      ) : null}
+      {item.routing.escalation ? (
+        <p role="status">
+          Handed to you by {item.routing.escalation.by}: {item.routing.escalation.reason}
+        </p>
+      ) : null}
+      {blockedBySync && !durable ? (
         <p role="status">Wait for this thread to reconnect before answering.</p>
       ) : null}
-      {item.kind === "user_input" && item.request.responseCapability === "not_resumable" ? (
+      {item.kind === "decision" ? (
+        <DecisionDurableForm
+          item={item}
+          draft={decisionDraft}
+          disabled={disabled}
+          onChange={onDecisionDraftChange}
+          onSubmit={onSubmit}
+        />
+      ) : item.kind === "user_input" && item.request.responseCapability === "not_resumable" ? (
         <p role="status">
           Provider process is gone. Open the thread to interrupt or restart the run.
         </p>
@@ -175,7 +217,7 @@ function DecisionCard({
             />
           </div>
         </>
-      ) : (
+      ) : item.kind === "user_input" ? (
         <DecisionUserInputForm
           item={item}
           drafts={drafts}
@@ -183,7 +225,7 @@ function DecisionCard({
           onChange={onChange}
           onSubmit={onSubmit}
         />
-      )}
+      ) : null}
       {submission?.phase === "submitting" ? <p role="status">Sending answer…</p> : null}
       {submission?.phase === "awaitingProjection" ? (
         <p role="status">Answer sent. Waiting for the thread to update…</p>

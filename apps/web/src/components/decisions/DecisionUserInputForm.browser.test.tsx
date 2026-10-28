@@ -10,6 +10,7 @@ type InputItem = Extract<DecisionItem, { kind: "user_input" }>;
 const questionItem: InputItem = {
   id: "test-input",
   ref: { environmentId: EnvironmentId.make("test-env"), threadId: ThreadId.make("test-thread") },
+  routing: { routedTo: "person" },
   kind: "user_input",
   createdAt: "2026-10-01T00:00:00.000Z",
   request: {

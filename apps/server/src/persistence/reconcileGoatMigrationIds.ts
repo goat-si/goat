@@ -51,6 +51,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "NotificationCursorRepair",
   "ConnectLinkTrust",
   "McpEvalJournal",
+  "DecisionRoutes",
 ]);
 
 type MigrationEntry<E> = readonly [

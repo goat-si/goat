@@ -1,4 +1,6 @@
 import {
+  type DecisionFeed,
+  type DecisionItem as DurableDecision,
   EnvironmentId,
   NodeId,
   RuntimeRequestId,
@@ -112,10 +114,12 @@ function harness() {
     sources(threadKey({ environmentId: env, threadId: thread })),
   );
   let detailReads = 0;
+  const feeds = Atom.family((_id: EnvironmentId) => Atom.make<DecisionFeed | null>(null));
   const inbox = createDecisionInboxAtoms({
     catalogValueAtom: catalog,
     threadShellsAtom: shells,
     presentationAtom: presentations,
+    feedAtom: feeds,
     details: {
       ...details,
       pendingRequestsAtom: (scope) => {
@@ -154,6 +158,7 @@ function harness() {
     presentations,
     shells,
     inbox,
+    feeds,
     details,
     set,
     flush,
@@ -162,10 +167,15 @@ function harness() {
     detailReads: () => detailReads,
   };
 }
+const requestOf = (entry: DecisionItem) => {
+  if (entry.kind === "decision") throw new Error("Expected a thread request");
+  return entry.request;
+};
 const item = (id: string, createdAt: string): DecisionItem => ({
   id,
   createdAt,
   ref: ref(),
+  routing: { routedTo: "person" },
   kind: "approval",
   request: {
     requestId: RuntimeRequestId.make(id),
@@ -249,6 +259,7 @@ describe("decision inbox", () => {
       expect(h.registry.get(h.inbox.itemsAtom)).toEqual({
         items: [],
         authoritativeRefs: [ref(a), ref(b)],
+        feedEnvironments: [],
         loadingRefs: [],
         errors: [],
         isLoading: false,
@@ -343,7 +354,7 @@ describe("decision inbox", () => {
       let value = h.registry.get(h.inbox.itemsAtom);
       expect(value.isLoading).toBe(true);
       expect(value.items).toHaveLength(1);
-      expect(value.items[0]!.request.responseCapability).toBe("not_resumable");
+      expect(requestOf(value.items[0]!).responseCapability).toBe("not_resumable");
       h.set(ref(b), [], "synchronizing", "Could not load thread.");
       value = h.registry.get(h.inbox.itemsAtom);
       expect(value.isLoading).toBe(false);
@@ -430,12 +441,12 @@ describe("decision inbox", () => {
       h.set(ref(b), []);
       const value = h.registry.get(h.inbox.itemsAtom);
       expect(h.registry.get(h.inbox.summaryAtom).count).toBe(2);
-      expect(value.items.map((entry) => [entry.kind, entry.request.requestId])).toEqual([
+      expect(value.items.map((entry) => [entry.kind, requestOf(entry).requestId])).toEqual([
         ["approval", "approval-one"],
         ["approval", "approval-two"],
         ["user_input", "question"],
       ]);
-      expect(value.items[2]?.request).toEqual({
+      expect(requestOf(value.items[2]!)).toEqual({
         requestId: "question",
         createdAt: "2026-10-13T00:02:00.000Z",
         responseCapability: "message",
@@ -453,7 +464,7 @@ describe("decision inbox", () => {
           },
         ],
       });
-      expect(value.items[2]?.request).toBe(
+      expect(requestOf(value.items[2]!)).toBe(
         h.registry.get(h.details.pendingRequestsAtom(ref(a)))?.userInputs[0],
       );
       h.set(ref(a), [
@@ -463,6 +474,7 @@ describe("decision inbox", () => {
       expect(h.registry.get(h.inbox.itemsAtom)).toEqual({
         items: [],
         authoritativeRefs: [ref(a), ref(b)],
+        feedEnvironments: [],
         loadingRefs: [],
         errors: [],
         isLoading: false,
@@ -489,11 +501,12 @@ describe("decision inbox", () => {
         shell(ref(a), { pendingRuntimeRequest: null }),
         shell(ref(b), { pendingRuntimeRequest: null }),
       ]);
-      expect(h.registry.get(h.inbox.summaryAtom)).toEqual({ count: 0, refs: [] });
+      expect(h.registry.get(h.inbox.summaryAtom)).toEqual({ count: 0, total: 0, refs: [] });
       const reads = h.detailReads();
       expect(h.registry.get(h.inbox.itemsAtom)).toEqual({
         items: [],
         authoritativeRefs: [],
+        feedEnvironments: [],
         loadingRefs: [],
         errors: [],
         isLoading: false,
@@ -531,7 +544,7 @@ describe("decision inbox", () => {
         expect([...h.activeSources]).toEqual([threadKey(ref(a))]);
         h.registry.set(h.presentations(b), connected);
         expect(
-          h.registry.get(h.inbox.itemsAtom).items.map((entry) => entry.request.requestId),
+          h.registry.get(h.inbox.itemsAtom).items.map((entry) => requestOf(entry).requestId),
         ).toEqual(["cached"]);
         const catalog = h.registry.get(h.catalog);
         h.registry.set(h.catalog, {
@@ -562,7 +575,7 @@ describe("decision inbox", () => {
       for (const status of ["cached", "synchronizing"] as const) {
         h.set(ref(a), pending, status);
         const value = h.registry.get(h.inbox.itemsAtom);
-        expect(value.items.map((entry) => entry.request.requestId)).toEqual(["retained"]);
+        expect(value.items.map((entry) => requestOf(entry).requestId)).toEqual(["retained"]);
         expect(value.loadingRefs).toEqual([ref(a)]);
         expect(value.isLoading).toBe(true);
       }
@@ -579,6 +592,7 @@ describe("decision inbox", () => {
       expect(h.registry.get(h.inbox.itemsAtom)).toEqual({
         items: [],
         authoritativeRefs: [ref(b)],
+        feedEnvironments: [],
         loadingRefs: [],
         errors: [],
         isLoading: false,
@@ -651,11 +665,11 @@ describe("decision inbox", () => {
       h.set(ref(a), [first, second]);
       h.set(ref(b), []);
       let items = h.registry.get(h.inbox.itemsAtom).items;
-      expect(items.map((entry) => entry.request.requestId)).toEqual(["a", "b"]);
+      expect(items.map((entry) => requestOf(entry).requestId)).toEqual(["a", "b"]);
       // Transport success without a projection update leaves the same pending request visible.
       h.set(ref(a), [first, second]);
       expect(
-        h.registry.get(h.inbox.itemsAtom).items.map((entry) => entry.request.requestId),
+        h.registry.get(h.inbox.itemsAtom).items.map((entry) => requestOf(entry).requestId),
       ).toEqual(["a", "b"]);
       let skips = skipDecisionItem(items, [], items[0]!.id);
       skips = skipDecisionItem(items, skips, items[1]!.id);
@@ -666,17 +680,17 @@ describe("decision inbox", () => {
         request("c-new", "2026-10-13T00:03:00Z"),
       ]);
       items = h.registry.get(h.inbox.itemsAtom).items;
-      expect(items.map((entry) => entry.request.requestId)).toEqual(["c-old", "b", "c-new"]);
+      expect(items.map((entry) => requestOf(entry).requestId)).toEqual(["c-old", "b", "c-new"]);
       skips = skipDecisionItem(items, skips, "departed");
       expect(skips).toEqual([JSON.stringify(["a", "thread", "b"])]);
-      expect(orderDecisionQueue(items, skips).map((entry) => entry.request.requestId)).toEqual([
+      expect(orderDecisionQueue(items, skips).map((entry) => requestOf(entry).requestId)).toEqual([
         "c-old",
         "c-new",
         "b",
       ]);
       skips = skipDecisionItem(items, skips, items[0]!.id);
       skips = skipDecisionItem(items, skips, items[1]!.id);
-      expect(orderDecisionQueue(items, skips).map((entry) => entry.request.requestId)).toEqual([
+      expect(orderDecisionQueue(items, skips).map((entry) => requestOf(entry).requestId)).toEqual([
         "c-new",
         "c-old",
         "b",
@@ -687,7 +701,7 @@ describe("decision inbox", () => {
       ]);
       items = h.registry.get(h.inbox.itemsAtom).items;
       skips = skipDecisionItem(items, skips, items[0]!.id);
-      expect(orderDecisionQueue(items, skips).map((entry) => entry.request.requestId)).toEqual([
+      expect(orderDecisionQueue(items, skips).map((entry) => requestOf(entry).requestId)).toEqual([
         "last",
       ]);
     } finally {
@@ -732,9 +746,97 @@ describe("decision inbox", () => {
       h.set(ref(a), [request("one", "2026-10-13T00:00:00Z")]);
       h.set(ref(b), []);
       stopItems = h.registry.mount(inbox.itemsAtom);
-      expect(h.registry.get(inbox.itemsAtom).items.map((entry) => entry.request.requestId)).toEqual(
-        ["one"],
+      expect(
+        h.registry.get(inbox.itemsAtom).items.map((entry) => requestOf(entry).requestId),
+      ).toEqual(["one"]);
+    } finally {
+      stopItems();
+      stopSummary();
+      h.registry.dispose();
+    }
+  });
+  it("lists a child's durable decision with its parent and holds, without counting, a question its parent is handling", () => {
+    const h = harness();
+    const stopSummary = h.registry.mount(h.inbox.summaryAtom);
+    const stopItems = h.registry.mount(h.inbox.itemsAtom);
+    try {
+      const open = {
+        options: [],
+        recommended: null,
+        requiredProfile: "worker",
+        expiresAt: null,
+        status: "open",
+        answer: null,
+        answeredBy: null,
+        updatedAt: "2026-10-13T00:00:00.000Z",
+        humanRequired: false,
+      } as const;
+      const decision: DurableDecision = {
+        ...open,
+        id: "decision:child",
+        source: "decision",
+        from: {
+          environmentId: a,
+          threadId: ThreadId.make("child"),
+          threadTitle: "Child",
+          parentThreadId: ThreadId.make("parent"),
+          parentThreadTitle: "Parent",
+        },
+        title: "Pick a database",
+        context: "Both pass the tests.",
+        options: [{ id: "sqlite", label: "SQLite", consequence: "One file." }],
+        createdAt: "2026-10-13T00:05:00.000Z",
+        routedTo: "person",
+      };
+      const question: DurableDecision = {
+        ...open,
+        id: "pending:thread:question",
+        source: "pending_request",
+        from: {
+          environmentId: a,
+          threadId: ref(a).threadId,
+          parentThreadId: ThreadId.make("parent"),
+          parentThreadTitle: "Parent",
+        },
+        title: "Next",
+        context: "What should happen next?",
+        createdAt: "2026-10-13T00:02:00.000Z",
+        routedTo: "parent",
+        pending: {
+          threadId: ref(a).threadId,
+          requestId: RuntimeRequestId.make("question"),
+          questions: [],
+        },
+      };
+      h.registry.set(h.feeds(a), { items: [decision, question] });
+      h.registry.set(h.feeds(b), { items: [] });
+      h.set(
+        ref(a),
+        [
+          {
+            ...request("question", "2026-10-13T00:02:00Z"),
+            kind: "user_input",
+            responseCapability: { type: "message" },
+          },
+        ],
+        "live",
+        null,
+        [questionItem],
       );
+      h.set(ref(b), []);
+      // Only the decision waits on the person; the question is listed while its parent works.
+      expect(h.registry.get(h.inbox.summaryAtom)).toMatchObject({ count: 1, total: 2 });
+      const value = h.registry.get(h.inbox.itemsAtom);
+      expect(
+        value.items.map((entry) => [entry.kind, entry.routing.routedTo, entry.routing.parentTitle]),
+      ).toEqual([
+        ["decision", "person", "Parent"],
+        ["user_input", "parent", "Parent"],
+      ]);
+      const decisionId = value.items[0]!.id;
+      expect(isDecisionItemRemoved(value, decisionId)).toBe(false);
+      h.registry.set(h.feeds(a), { items: [question] });
+      expect(isDecisionItemRemoved(h.registry.get(h.inbox.itemsAtom), decisionId)).toBe(true);
     } finally {
       stopItems();
       stopSummary();

@@ -141,7 +141,6 @@ vi.mock("../../state/use-thread-selection", () => ({
     throw new Error("Inbox must not read selection");
   },
 }));
-
 // Interactive native host adapters preserve the real cards, body and list branches.
 type HostProps = {
   children?: ReactNode;
@@ -274,7 +273,6 @@ import {
   togglePendingUserInputOptionSelection,
 } from "../../lib/threadActivity";
 import { makeThreadShellFixture } from "../../test-fixtures";
-
 const envA = EnvironmentId.make("A");
 const envB = EnvironmentId.make("B");
 const requestId = RuntimeRequestId.make("same-request");
@@ -298,6 +296,7 @@ function approval(
     id: JSON.stringify([environmentId, threadId, requestId]),
     ref: { environmentId, threadId },
     createdAt: date,
+    routing: { routedTo: "person" },
     kind: "approval",
     request: { requestId, createdAt: date, requestKind: "command", responseCapability: "live" },
   };
@@ -992,6 +991,7 @@ vi.mock("../../state/use-pending-new-tasks", () => ({ usePendingNewTasks: () => 
 vi.mock("../../state/server", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
+    serverEnvironment: { answerDecision: "answerDecision" },
     threadListEnvironmentsAtom: Atom.make({
       providersByEnvironmentId: new Map(),
       machineByEnvironmentId: new Map(),

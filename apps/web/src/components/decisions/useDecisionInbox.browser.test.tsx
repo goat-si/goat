@@ -66,6 +66,7 @@ vi.mock("../../state/session", () => ({
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) => (command === "approval" ? state.approval : state.userInput),
 }));
+vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "decisionAnswer" } }));
 
 import { useDecisionInbox } from "./useDecisionInbox";
 
@@ -79,6 +80,7 @@ function item(
   return {
     id: JSON.stringify([environmentId, ref.threadId, id]),
     ref,
+    routing: { routedTo: "person" },
     kind: "approval",
     createdAt,
     request: {

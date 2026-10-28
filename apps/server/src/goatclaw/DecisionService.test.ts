@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 import type * as Toolkit from "effect/ai/Toolkit";
 import type * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Inbox from "./DecisionInbox.ts";
+import * as Feed from "./DecisionFeed.ts";
 import * as Service from "./DecisionService.ts";
 import * as Profiles from "./PermissionProfiles.ts";
 import * as Settings from "../serverSettings.ts";
@@ -137,6 +138,7 @@ const run = <A, E>(
     Layer.mock(Dispatch.SshRemoteDispatch)({
       connectedHosts: Effect.succeed(options.aliases ?? ["alpha", "beta"]),
     }),
+    Layer.mock(Feed.DecisionFeed)({}),
     profileLayer,
     Settings.layerTest({ goatclaw: { enabled } }),
     liveThreadsLayer,

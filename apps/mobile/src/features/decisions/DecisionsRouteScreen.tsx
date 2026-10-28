@@ -12,6 +12,7 @@ import { useSavedRemoteConnection } from "../../state/use-remote-environment-reg
 import { PendingApprovalCard } from "../threads/PendingApprovalCard";
 import { PendingUserInputBody } from "../threads/PendingUserInputBody";
 import { Button } from "../../components/ui/Button";
+import { DecisionDurableCard } from "./DecisionDurableCard";
 import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 
 export function DecisionsRouteScreen() {
@@ -51,12 +52,17 @@ function FocusedDecisionsContent(props: {
     retry,
     onRespond,
     onSubmit,
+    onAnswerDecision,
+    onChangeDecisionDraft,
+    decisionDraft,
     onSelectOption,
     onChangeCustomAnswer,
   } = useDecisionInbox(props.session, props.isFocused);
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
+  const parentThread = useThreadShell(current?.routing.parentRef ?? null);
+  const parentTitle = parentThread?.title ?? current?.routing.parentTitle;
   const connection = useSavedRemoteConnection(current?.ref.environmentId ?? null);
   const insets = useSafeAreaInsets();
   const userInput = current?.kind === "user_input" ? current.request : null;
@@ -72,7 +78,7 @@ function FocusedDecisionsContent(props: {
           keyboardDismissMode="on-drag"
         >
           <Text className="text-sm text-foreground-muted">
-            Pending questions and approvals from threads.
+            Pending questions, approvals and decisions from threads.
           </Text>
           <Button
             label="Decision inbox and history"
@@ -121,13 +127,38 @@ function FocusedDecisionsContent(props: {
                   : `${queue.length} decision${queue.length === 1 ? "" : "s"} waiting`}
               </Text>
               <Text className="font-goat-bold text-sm text-foreground">
-                {thread?.title ?? String(current.ref.threadId)}
+                {thread?.title ?? current.routing.threadTitle ?? String(current.ref.threadId)}
               </Text>
+              {parentTitle ? (
+                <Text className="text-xs text-foreground-muted">
+                  Asked by an agent in {parentTitle}
+                </Text>
+              ) : null}
               <Text className="text-xs text-foreground-muted">
                 {connection?.environmentLabel ?? String(current.ref.environmentId)}
                 {position > 0 ? ` · ${position} of ${queue.length}` : " · Checking decision"}
               </Text>
-              {current.kind === "approval" ? (
+              {current.routing.routedTo === "parent" ? (
+                <Text className="text-sm text-foreground-muted">
+                  {parentTitle ?? "Its parent agent"} is handling this first. You can still answer.
+                </Text>
+              ) : null}
+              {current.routing.escalation ? (
+                <Text className="text-sm text-foreground-muted">
+                  Handed to you by {current.routing.escalation.by}:{" "}
+                  {current.routing.escalation.reason}
+                </Text>
+              ) : null}
+              {current.kind === "decision" ? (
+                <DecisionDurableCard
+                  item={current}
+                  draft={decisionDraft}
+                  disabled={!canOperateThread || paused}
+                  responding={responding}
+                  onChange={onChangeDecisionDraft}
+                  onSubmit={(optionId, reason) => void onAnswerDecision(optionId, reason)}
+                />
+              ) : current.kind === "approval" ? (
                 <PendingApprovalCard
                   approval={current.request}
                   canOperateThread={canOperateThread}

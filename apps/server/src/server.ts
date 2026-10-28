@@ -35,7 +35,6 @@ import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
 import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
-import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
@@ -799,12 +798,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerPullRequestService),
     Layer.provide(ProjectionStoreV2.layer),
   ),
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const service = yield* DelegatedTaskQuestionReactor.DelegatedTaskQuestionReactor;
-      yield* service.start();
-    }),
-  ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   CloudFolderTrust.layer,
@@ -837,6 +830,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(LinkedHosts.layer),
   Layer.provideMerge(
     DecisionLayers.layer.pipe(
+      // The decision feed follows committed events through the shared sink.
+      Layer.provide(RuntimeLayer.layerEventSink),
       Layer.provide(
         OrchestratorMcpService.layer.pipe(
           Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),

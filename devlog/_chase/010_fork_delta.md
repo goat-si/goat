@@ -79,6 +79,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/cua/ComputerUseAttachment.ts`, `apps/server/src/cua/ComputerUseRequests.ts`, `apps/server/src/cua/ComputerUseLeases.ts`, `packages/client-runtime/src/computerUse/readinessSteps.ts`, `docs/user/computer-use.md`, `structure/decisions/ADR-0022-cua-driver-computer-use.md`
 - 정책: 사람이 키보드·마우스를 사용핮에 따라 승인된 에이전트를 자동으로 일시정지하지 않는다. 무인 작업은 기존 grant 또는 full-access 자동 승인과 private-mode 감지를 요구하고, 사람 입력과 무관하게 Stop·Stop all·Hand back·승인 만료로 끝낼 수 있다. 비밀번호·OTP·passkey 필드는 계속 자동 일시정지한다. upstream 동작을 받을 때 이 GOAT 정책 차이를 유지하고, 사람 입력 차단이나 승인 없는 실행으로 되돌리지 않는다.
 
+### `decision-routing` 자식 결정의 부모 우선 라우팅
+
+- 커밋: L7 PR (feat/mcp-subagent-decision-routing)
+- 경로: `apps/server/src/server.ts`, 삭제한 `apps/server/src/orchestration-v2/DelegatedTaskQuestionReactor{,.test}.ts`, `apps/server/src/orchestration-v2/QuestionEscalationService.ts`, `apps/server/src/goatclaw/Decision*.ts`
+- 정책: 자식 질문의 부모 wake는 GOAT `QuestionEscalationService` 하나가 맡는다. upstream `DelegatedTaskQuestionReactor`는 같은 질문에 두 번째 wake를 보내므로 지웠다. upstream이 이 reactor를 고치면 바뀐 동작이 `QuestionEscalationService`에 이미 있는지 보고, 없는 것만 그쪽으로 옮긴다. reactor와 등록은 다시 들이지 않는다.
+
 ### `delegated-tasks` 사이드바 위임 작업, 승격, launch 계보
 
 - 커밋: #33
