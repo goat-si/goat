@@ -541,7 +541,7 @@ export const threadEntries = {
       'Use this for independent work, a new thread, or a PR stack in its own worktree. Work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles belongs here even when the user calls it a subagent. Top-level threads appear in the sidebar so the user can open, steer and resume them. Use goat_task_create for bounded child subagents that report back and end.\n\nSet workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} to start a new worktree from local commits. Set startFromOrigin:true to fetch and start from the base branch\'s remote. Use {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to bind an existing checkout. Omitted workspaceStrategy selects the project root rather than the caller\'s worktree. Asking the agent to create a worktree through the shell does not update the thread binding.\n\nOmit projectId, modelSelection and modes to inherit from the calling thread. Outside a GOAT thread, pass projectId; the project\'s default model applies unless overridden. Set scratch:true instead of projectId to run without a project repository, in a fresh folder of its own. Attachments must be pending uploads. The new thread cannot use broader runtime or interaction modes than the calling thread, or than an outside agent\'s approved permission mode.\n\nRetry safely with clientRequestId: a repeat with the same key and arguments returns the first launch without starting another, and the same key with other arguments is refused. Retain threadId. Without a key, inspect goat_thread_list after an error or lost response before retrying. A calling GOAT thread receives a message when the launched run ends or waits on a question; do not poll goat_thread_wait. notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.\n\nLink a thread as [title](goat-thread://v1/<threadId>), using threadId exactly as returned without URL encoding. GOAT shows the thread\'s current title.\n\nCloud providers skip local worktree creation and setup. Most start from the published source branch and refuse unavailable or unpublished sources with a reason. Providers that upload the project folder, such as Claude Cloud, use its current branch and may include local changes. Choose a project repository; scratch is unavailable for cloud tasks. Follow-ups use the same cloud session when the provider\'s capabilities allow them.',
     parameters: {
       references:
-        "Up to 4 sets of files from a registered repository, pinned at a commit, for the new thread to read: {repositoryKey, files[], revision?, checkout?, host?}.",
+        "Up to 4 sets of committed files from a registered repository for the new thread to read: {mode:'snapshot', repositoryKey, files (1 to 8 paths), revision?, checkout?, host?}. Uncommitted changes are excluded.",
       projectId:
         "Project to start in. Default: the calling thread's project. Outside a thread pass it, or scratch.",
       title: "The new thread's title.",
@@ -571,6 +571,20 @@ export const threadEntries = {
           title: "Draft the migration plan",
           modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
           message: "Write a migration plan for the settings file.",
+        },
+      },
+      {
+        title: "Start a thread that reads two committed files from another repository",
+        args: {
+          title: "Port the retry helper",
+          references: [
+            {
+              mode: "snapshot",
+              repositoryKey: "github.com/goat-si/goat",
+              files: ["apps/server/src/mcp/ToolAdmission.ts", "docs/internals/agent-surface.md"],
+            },
+          ],
+          message: "Port ToolAdmission's retry rules into this project.",
         },
       },
     ],

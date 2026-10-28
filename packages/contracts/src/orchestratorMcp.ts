@@ -512,7 +512,10 @@ export type OrchestratorMcpPendingRequestRespondResult =
   typeof OrchestratorMcpPendingRequestRespondResult.Type;
 
 export const OrchestratorMcpThreadListInput = Schema.Struct({
-  projectId: OrchestratorMcpProjectTarget,
+  projectId: Schema.optional(ProjectId).annotate({
+    description:
+      "Project to list. Default: your thread's project. Outside a thread pass it, allProjects or a lineage filter. Not with allProjects.",
+  }),
   allProjects: Schema.optional(Schema.Boolean).annotate({
     description:
       "List every project instead of one; projectId must be omitted. A host other than this environment lists all its projects when projectId is omitted.",

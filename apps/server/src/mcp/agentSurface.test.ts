@@ -492,18 +492,24 @@ const argumentsFor = Effect.fn(function* (entry: Entry) {
   };
 });
 
-// The envelope's reason and message stand in for the direct result's text.
+// The envelope's reason and message stand in for the direct result's text. A goat_eval halt that
+// may have run keeps its own code, so it never passes for the target's answer.
 const asDirectResult = (result: McpSchema.CallToolResult) => {
   const envelope = result.structuredContent as AgentSurfaceResult;
   if (envelope.status !== "error")
     return new McpSchema.CallToolResult({ isError: false, content: [] });
+  const code =
+    envelope.error.code === "unknown_outcome" ? "unknown_outcome" : envelope.error.reason;
   // A plain-text failure stays the direct call's own text; a classified one names its code.
   const text =
     envelope.error.reason === "tool_error"
       ? envelope.error.message
-      : JSON.stringify({ code: envelope.error.reason, message: envelope.error.message });
+      : JSON.stringify({ code, message: envelope.error.message });
   return new McpSchema.CallToolResult({ isError: true, content: [{ type: "text", text }] });
 };
+
+// goat_eval's own refusals and journal failures, which say nothing about the target's access.
+const EVAL_OWN_FAILURE = /^(eval_[a-z_]+|grant_lost|storage_failed|unknown_outcome)$/;
 
 const via = {
   direct: (name: string, args: Record<string, unknown>) =>
@@ -596,18 +602,28 @@ describe("agent surface access", () => {
             const classified = classify(entry.path, result);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
+            const content = result.content[0];
+            const text = content?.type === "text" ? content.text : "";
             const outcome =
-              route !== "direct" &&
-              route !== "legacy" &&
-              classified === "unexpected" &&
-              directOutcome === "reached"
+              // goat_eval halts a write as unknown only after calling it, so a halt naming this
+              // path is the target's answer; it reached the handler when the direct call did.
+              route === "goat_eval" &&
+              directOutcome === "reached" &&
+              entry.effect !== "read" &&
+              refusalCode(text) === "unknown_outcome" &&
+              text.includes(`"message":"${entry.path} may have run`)
                 ? "reached"
-                : classified;
+                : route !== "direct" &&
+                    route !== "legacy" &&
+                    !(route === "goat_eval" && EVAL_OWN_FAILURE.test(refusalCode(text) ?? "")) &&
+                    classified === "unexpected" &&
+                    directOutcome === "reached"
+                  ? "reached"
+                  : classified;
             if (route === "direct") directOutcome = outcome;
             const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
-              const content = result.content[0];
-              const detail = content?.type === "text" ? content.text.slice(0, 160) : "";
+              const detail = text.slice(0, 160);
               mismatches.push(
                 `${entry.path} ${caller} ${route}: expected ${expected}, got ${outcome} (${detail})`,
               );
