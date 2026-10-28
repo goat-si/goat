@@ -1,4 +1,5 @@
 import * as DeviceService from "../device/DeviceService.ts";
+import { definitionName } from "./agentSurfaceSchemaRefs.testkit.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DeviceHostUnavailableError,
@@ -167,7 +168,6 @@ const refsIn = (node: unknown): ReadonlyArray<string> => [
   ...(isObject(node) && typeof node["$ref"] === "string" ? [node["$ref"]] : []),
   ...children(node).flatMap(refsIn),
 ];
-const definitionName = (ref: string) => /^#\/\$defs\/(.+)$/.exec(ref)?.[1];
 const unresolvedRefs = (root: unknown, definitions: JsonSchema) =>
   [...refsIn(root), ...refsIn(definitions)].filter((ref) => {
     const name = definitionName(ref);

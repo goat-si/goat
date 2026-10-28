@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { resolveGoatMcpToolDefinition } from "@goat/shared/goatMcpToolPresentation";
+import { definitionName } from "./agentSurfaceSchemaRefs.testkit.ts";
 
 it("exposes lifecycle writes and resource-specific reconciliation reads", () => {
   for (const path of [
@@ -37,6 +38,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -113,6 +115,18 @@ const served = McpHttpServer.toolkitRegistration(
   Layer.provideMerge(services),
   Layer.provide(NodeCrypto.layer),
 );
+it("receipt output references resolve when MCP schema definition names contain slashes", () => {
+  const document = Schema.toJsonSchemaDocument(
+    ThreadLifecycleToolkit.tools.goat_queue_receipt.successSchema,
+  );
+  const refs = Array.from(
+    JSON.stringify(document).matchAll(/"\$ref":"([^"]+)"/g),
+    (match) => match[1]!,
+  );
+  expect(refs.length).toBeGreaterThan(0);
+  for (const ref of refs)
+    expect(Object.hasOwn(document.definitions, definitionName(ref) ?? ""), ref).toBe(true);
+});
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
