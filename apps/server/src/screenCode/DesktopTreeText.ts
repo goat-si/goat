@@ -172,3 +172,78 @@ export const actionName = (action: string): string => {
 /** The same, inside the tree text's `actions=[…]` lists, where the driver escapes the newlines. */
 export const cleanActionText = (markdown: string): string =>
   markdown.replace(/name:([^,\]\\]*?)\\ntarget:[^,\]]*?\\nselector:[^,\]]*/g, "$1");
+
+/** Actions every container offers; an element with only these is not a control. */
+const PASSIVE_ACTIONS: ReadonlySet<string> = new Set([
+  "AXShowDefaultUI",
+  "AXShowAlternateUI",
+  "AXShowMenu",
+  "AXScrollToVisible",
+  "AXRaise",
+]);
+const FIELD_ROLES: ReadonlySet<string> = new Set([
+  "AXTextField",
+  "AXSearchField",
+  "AXTextArea",
+  "AXComboBox",
+  "AXSecureTextField",
+]);
+const CONTROL_ROLES: ReadonlySet<string> = new Set([
+  "AXButton",
+  "AXCheckBox",
+  "AXRadioButton",
+  "AXPopUpButton",
+  "AXMenuButton",
+  "AXSlider",
+  "AXLink",
+  "AXTab",
+  "AXDisclosureTriangle",
+  "AXIncrementor",
+  "AXColorWell",
+  ...FIELD_ROLES,
+]);
+
+/**
+ * What an interactive-only read keeps: controls with an action of their own, every text field,
+ * disabled controls (shown with `enabled:false`, so a flow's next step stays visible), and named
+ * rows and cells.
+ */
+export const isInteractive = (element: {
+  readonly role: string;
+  readonly name: string;
+  readonly actions?: ReadonlyArray<string>;
+}) =>
+  FIELD_ROLES.has(element.role) ||
+  CONTROL_ROLES.has(element.role) ||
+  (element.actions ?? []).some((action) => !PASSIVE_ACTIONS.has(action)) ||
+  (NAMED_BY_TEXT.has(element.role) && element.name !== "");
+
+/**
+ * The tree text narrowed to the numbered lines in `keep` and the lines above them, which stay as
+ * context without their numbers.
+ */
+export const keepTreeLines = (markdown: string, keep: ReadonlySet<number>): string => {
+  const raw = markdown.split("\n");
+  const included = new Set<number>();
+  const open: Array<{ readonly depth: number; readonly position: number }> = [];
+  raw.forEach((line, position) => {
+    const parsed = LINE.exec(line);
+    if (!parsed) return;
+    const depth = (parsed[1] ?? "").length;
+    while (open.length > 0 && (open.at(-1)?.depth ?? 0) >= depth) open.pop();
+    if (parsed[2] !== undefined && keep.has(Number(parsed[2]))) {
+      included.add(position);
+      for (const ancestor of open) included.add(ancestor.position);
+    }
+    open.push({ depth, position });
+  });
+  return raw
+    .filter((_, position) => included.has(position))
+    .map((line) => {
+      const index = LINE.exec(line)?.[2];
+      return index !== undefined && !keep.has(Number(index))
+        ? line.replace(`[${index}] `, "")
+        : line;
+    })
+    .join("\n");
+};

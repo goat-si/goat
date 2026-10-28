@@ -232,9 +232,9 @@ it.live("click({id}) in a cell acts on the element with that accessibility id", 
       source:
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
         "const byName = await (async () => app.click({name: 'General'}))().then(() => 'sent', (error) => error.code); " +
-        "const byId = await app.click({id: 'com.apple.settings.general'}); return [byName, byId.verdict];",
+        "const byId = await app.click({id: 'com.apple.settings.general'}); const narrow = await app.observe({interactiveOnly: true}); return [byName, byId.verdict, narrow.scope];",
     });
-    expect(result.value).toEqual(["target_ambiguous", "unverifiable"]);
+    expect(result.value).toEqual(["target_ambiguous", "unverifiable", "window interactive"]);
     expect(
       sent
         .filter((entry) => entry.tool === "click")
@@ -253,3 +253,55 @@ it.live("click({id}) in a cell acts on the element with that accessibility id", 
     ),
   );
 });
+
+it.effect(
+  "interactiveOnly keeps controls, fields and disabled controls, and drops static text",
+  () =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown: [
+            '- [0] AXWindow "Open" [actions=[raise]]',
+            "  - [1] AXGroup",
+            '    - [2] AXStaticText = "Recents"',
+            "    - [3] AXTextField (Search) [id=search]",
+            '    - [4] AXButton "Open" [id=OKButton]',
+            '    - [5] AXButton "Cancel" [id=CancelButton actions=[press]]',
+          ].join("\n"),
+          elements_complete: false,
+          elements: [
+            element({ index: 0, role: "AXWindow", label: "Open", actions: ["AXRaise"] }),
+            element({ index: 1, role: "AXGroup" }),
+            element({ index: 2, role: "AXStaticText", label: "Recents", value: "Recents" }),
+            element({ index: 3, role: "AXTextField", label: "Search" }),
+            { ...element({ index: 4, role: "AXButton", label: "Open" }), enabled: false },
+            element({ index: 5, role: "AXButton", label: "Cancel", actions: ["AXPress"] }),
+          ],
+        },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const observed = (yield* host.observe(
+        call("get_window_state", { interactiveOnly: true }, bound.value as ScreenTargetRef),
+        context,
+      )).value as ScreenObservation;
+      expect(observed.elements.map((each) => [each.index, each.name, each.enabled])).toEqual([
+        [3, "Search", undefined],
+        [4, "Open", false],
+        [5, "Cancel", undefined],
+      ]);
+      expect(observed.scope).toBe("window interactive");
+      // The containers above the kept controls stay as context, without numbers.
+      expect(observed.indexedText.split("\n")).toEqual([
+        '- AXWindow "Open" [actions=[raise]]',
+        "  - AXGroup",
+        "    - [3] AXTextField (Search) [id=search]",
+        '    - [4] AXButton "Open" [id=OKButton]',
+        '    - [5] AXButton "Cancel" [id=CancelButton actions=[press]]',
+      ]);
+    }),
+);

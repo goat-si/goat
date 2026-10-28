@@ -189,7 +189,7 @@ const __target = (binding, note, owner) => {
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
     const options = tab
       ? { ...base, ...(arg.screenshot ? { screenshot: true } : {}), ...(arg.interactiveOnly ? { interactiveOnly: true } : {}), ...(arg.fullPage ? { fullPage: true } : {}), ...(arg.scope ? { scope: arg.scope } : {}) }
-      : base;
+      : { ...base, ...(arg.interactiveOnly ? { interactiveOnly: true } : {}) };
     let observation;
     try { observation = remember((await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v); }
     catch (raw) { throw __error(raw); }

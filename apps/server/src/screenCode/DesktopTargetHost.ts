@@ -43,6 +43,8 @@ import {
   actionName,
   cleanActionText,
   idsFromTree,
+  isInteractive,
+  keepTreeLines,
   labelsFromTree,
   namesFromTree,
   pairTreeText,
@@ -515,6 +517,11 @@ export const createDesktopTargetHost = (deps: {
           },
         ];
       });
+      // An interactive-only read keeps controls, fields, disabled controls and named rows, and
+      // spends the reply budget on them alone.
+      const interactive = !capture && args.interactiveOnly === true;
+      const shown = interactive ? rows.filter(isInteractive) : rows;
+      const treeText = cleanActionText(pairTreeText(markdown));
       const resetReason = capture
         ? undefined
         : args.mode === "diff"
@@ -549,13 +556,19 @@ export const createDesktopTargetHost = (deps: {
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText: cleanActionText(pairTreeText(markdown)),
+              indexedText: interactive
+                ? keepTreeLines(
+                    treeText,
+                    new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
+                  )
+                : treeText,
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,
-              elements: rows,
+              elements: shown,
             }),
             mode: "full",
+            ...(interactive ? { scope: "window interactive" } : {}),
             ...(resetReason === undefined ? {} : { resetReason }),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
