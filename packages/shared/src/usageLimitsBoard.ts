@@ -252,6 +252,8 @@ function withoutReadings(presentations: LimitPresentations) {
       if (key !== null) known.add(key);
     }
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      // Only each Home's newest snapshot counts, as in collectLimitAccounts.
+      if (source.homeId !== undefined && newest.get(source.homeId) !== source) continue;
       for (const account of source.accounts) {
         const key = limitsNotice(account.usageLimits) === null ? resolveKey(account) : null;
         if (key !== null) known.add(key);

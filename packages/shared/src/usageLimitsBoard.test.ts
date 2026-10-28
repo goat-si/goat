@@ -211,6 +211,35 @@ describe("Usage limits board", () => {
     ]);
   });
 
+  it("keeps an account the Home's newest snapshot cannot read, even when an older one could", () => {
+    const seat = (windows: ServerProviderUsageWindow[]) =>
+      poolAccount("Seat", windows, { label: "p00seat", email: "seat@example.com" });
+    const older = { ...hub([seat([window("5h", 20, 100)])]), checkedAt: at(-30) };
+    const newer = hub([seat([])]);
+    const { sections } = limitBoard(
+      new Map([
+        [
+          EnvironmentId.make("a"),
+          {
+            entry: { target: { label: "A" } },
+            serverConfig: { providers: [], usageLimitSources: [older] },
+          },
+        ],
+        [
+          EnvironmentId.make("b"),
+          {
+            entry: { target: { label: "B" } },
+            serverConfig: { providers: [], usageLimitSources: [newer] },
+          },
+        ],
+      ]),
+      now,
+    );
+    expect(sections[0]?.groups.flatMap((group) => group.rows).map((row) => row.status)).toEqual([
+      "unknown",
+    ]);
+  });
+
   it("shows an unreadable hub pool in its own group and keeps unrelated notices", () => {
     const message =
       "OpenCodex pool unavailable (OpenCodex 2.40.0): this OpenCodex has no quota-pool API.";
