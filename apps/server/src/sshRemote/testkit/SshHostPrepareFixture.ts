@@ -1,4 +1,4 @@
-import { vi } from "@effect/vitest";
+import { expect, vi } from "vite-plus/test";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the expected path mirrors the host's native join.
 import * as NodePath from "node:path";
 import * as HostKey from "@goat/ssh/hostKey";
@@ -13,6 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ExitCode } from "effect/process/ChildProcessSpawner";
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
@@ -105,7 +107,12 @@ export const preparePolicy = (reason?: Reason) =>
     };
   });
 
-export const prepareFixture = (reason?: Reason) =>
+export const prepareFixture = (
+  reason?: Reason,
+  beforePhase: Effect.Effect<void> = Effect.void,
+  afterPhase: Effect.Effect<void> = Effect.void,
+  beforeOutcome: Effect.Effect<void> = Effect.void,
+) =>
   Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() =>
@@ -179,22 +186,27 @@ export const prepareFixture = (reason?: Reason) =>
                   return { operationId: "prepare", generation: 1, stage: "runtime" as const };
                 }),
               publishSetupOutcome: (_host, operation, outcome) =>
-                Effect.sync(() => {
-                  if (outcome.kind === "error")
-                    snapshot = {
-                      kind: "ok",
-                      status: {
-                        ...stopped,
-                        state: "failed",
-                        setup: { ...operation, stage: "complete" },
-                        detail: outcome.message,
-                        failure: { reason: outcome.reason, fix: outcome.fix },
-                      },
-                    };
-                  return true;
-                }),
+                beforeOutcome.pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (outcome.kind === "error")
+                        snapshot = {
+                          kind: "ok",
+                          status: {
+                            ...stopped,
+                            state: "failed",
+                            setup: { ...operation, stage: "complete" },
+                            detail: outcome.message,
+                            failure: { reason: outcome.reason, fix: outcome.fix },
+                          },
+                        };
+                      return true;
+                    }),
+                  ),
+                ),
               prepareRuntime: (host, options) =>
                 Effect.gen(function* () {
+                  yield* beforePhase;
                   preparations.push(host);
                   snapshot = {
                     kind: "ok",
@@ -205,6 +217,7 @@ export const prepareFixture = (reason?: Reason) =>
                     phase: "uploading",
                   });
                   yield* Deferred.await(upload);
+                  yield* afterPhase;
                   return snapshot;
                 }),
             }),
@@ -239,5 +252,54 @@ export const prepareFixture = (reason?: Reason) =>
       ),
       Setup.SshHostSetup,
     );
-    return { setup, caller: { kind: "mcp" as const, scope }, preparations };
+    return { setup, caller: { kind: "mcp" as const, scope }, preparations, upload };
   });
+
+export const prepareSettlementRegression = Effect.fn("prepareSettlementRegression")(function* (
+  mode: "before" | "after" | "publication" | "interrupted",
+) {
+  let fail = true;
+  const crashed = yield* Deferred.make<void>();
+  const completed = yield* Deferred.make<void>();
+  const crash = Effect.suspend(() =>
+    !fail
+      ? Effect.void
+      : (mode === "interrupted" ? Effect.interrupt : Effect.die("fixture runtime defect")).pipe(
+          Effect.ensuring(Deferred.succeed(crashed, undefined)),
+        ),
+  );
+  const f = yield* prepareFixture(
+    undefined,
+    mode === "after" ? Effect.void : crash,
+    mode === "after" ? crash : Effect.void,
+    mode === "publication" ? Effect.die("fixture publication defect") : Effect.void,
+  );
+  const caller = yield* f.setup.prepare({ host: "box" }, f.caller).pipe(
+    Effect.tap(() => Deferred.succeed(completed, undefined)),
+    Effect.forkChild,
+  );
+  try {
+    if (mode === "after") {
+      expect(yield* Fiber.join(caller)).toMatchObject({ status: { phase: "uploading" } });
+      yield* Deferred.succeed(f.upload, undefined);
+    }
+    yield* Deferred.await(crashed);
+    yield* TestClock.adjust("0 millis");
+    expect(yield* Deferred.isDone(completed)).toBe(true);
+    if (mode !== "after")
+      expect(yield* Fiber.join(caller)).toMatchObject({ kind: "error", code: "operation_failed" });
+    if (mode === "before" || mode === "after")
+      expect(yield* f.setup.status({ host: "box" })).toMatchObject({
+        status: { state: "failed", setup: { stage: "complete" } },
+      });
+    if (mode === "before") {
+      fail = false;
+      expect(yield* f.setup.prepare({ host: "box" }, f.caller)).toMatchObject({
+        kind: "ok",
+        status: { state: "preparing", phase: "uploading" },
+      });
+    }
+  } finally {
+    yield* Fiber.interrupt(caller);
+  }
+});
