@@ -12,7 +12,7 @@ const SERVER_SOURCE = NodeURL.fileURLToPath(new URL("../../../", import.meta.url
  * when it performs a transition beyond storing a value (docs/internals/agent-surface.md#settings).
  */
 const SETTINGS_WRITERS: Readonly<Record<string, string>> = {
-  "ws.ts": "The Settings page's update RPC.",
+  "auth/SettingsRpc.ts": "The Settings page's update RPC, authorized again at commit.",
   "mcp/toolkits/environment/handlers.ts": "The agent settings paths.",
   "channels/ChannelBotHome.ts": "Claims GOAT Bot's home; a newer claim wins.",
   "goatclaw/FleetSync.ts": "Exchanges the goatclaw policy between hosts.",

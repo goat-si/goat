@@ -1,0 +1,172 @@
+import * as Effect from "effect/Effect";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { makeWorkerRateLimits } from "./RelayRateLimits.ts";
+// @effect-diagnostics nodeBuiltinImport:off -- Isolated persistence tests own synchronous fixture files.
+import * as NodeSqlite from "node:sqlite";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
+import { it, expect } from "@effect/vitest";
+import { closeWindows, consumeWindow, type RateStorage } from "./AccountRateLimitStore.ts";
+import { HOURLY_OPERATIONS } from "./AccountLimits.ts";
+
+function storage(db: NodeSqlite.DatabaseSync): RateStorage {
+  return {
+    sql: {
+      exec: (query: string, ...values: ReadonlyArray<string | number>) =>
+        db.prepare(query).all(...values),
+    },
+    transactionSync: (body) => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const value = body();
+        db.exec("COMMIT");
+        return value;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
+  };
+}
+it("persists each hourly budget across restart and retains usage on clock rollback and policy change", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "relay-rate-"));
+  const file = NodePath.join(root, "state.sqlite");
+  try {
+    let db = new NodeSqlite.DatabaseSync(file);
+    for (const op of HOURLY_OPERATIONS) {
+      expect(consumeWindow(storage(db), op, 1, 100).allowed).toBe(true);
+      expect(consumeWindow(storage(db), op, 1, 101)).toEqual({
+        allowed: false,
+        retryAfterSeconds: 3600,
+      });
+    }
+    db.close();
+    db = new NodeSqlite.DatabaseSync(file);
+    for (const op of HOURLY_OPERATIONS) {
+      expect(consumeWindow(storage(db), op, 1, -100).allowed).toBe(false);
+      expect(consumeWindow(storage(db), op, 2, 200).allowed).toBe(true);
+      expect(consumeWindow(storage(db), op, 1, 300).allowed).toBe(false);
+      expect(consumeWindow(storage(db), op, 1, 3_600_000).allowed).toBe(true);
+    }
+    db.close();
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.effect(
+  "production Worker rate keys isolate stage, account and publishing environment while bindings deny closed on outages",
+  () =>
+    Effect.gen(function* () {
+      const calls: { binding: string; key: string }[] = [];
+      let mode: "allow" | "deny" | "outage" = "allow";
+      const limit = (binding: string, key: string) =>
+        Effect.suspend(() => {
+          calls.push({ binding, key });
+          return mode === "outage"
+            ? Effect.fail("fixture outage")
+            : Effect.succeed({ success: mode === "allow" });
+        });
+      const bindings = (stage: string) => ({
+        stage,
+        hourly: (key: string) =>
+          limit("hourly", key).pipe(
+            Effect.map((result) => ({ allowed: result.success, retryAfterSeconds: 42 })),
+          ),
+        mobile: (key: string) => limit("mobile", key),
+        publish: (key: string) => limit("publish", key),
+      });
+      const rates = yield* makeWorkerRateLimits(bindings("prod"));
+      yield* rates.charge({ userId: "owner", operation: "link" });
+      yield* rates.charge({ userId: "owner", operation: "connect" });
+      yield* rates.charge({ userId: "owner", operation: "mobile_registration" });
+      expect(calls[0]?.key).toBe(calls[1]?.key);
+      expect(calls[0]?.key).toBe(calls[2]?.key);
+      expect(calls[0]?.key).toMatch(/^[0-9a-f]{64}$/);
+      yield* rates.charge({ userId: "other", operation: "link" });
+      expect(calls[3]?.key).not.toBe(calls[0]?.key);
+      yield* rates.charge({
+        userId: "owner",
+        operation: "activity_publish",
+        environmentId: "a:b",
+        environmentPublicKey: "c",
+      });
+      yield* rates.charge({
+        userId: "owner",
+        operation: "activity_publish",
+        environmentId: "a",
+        environmentPublicKey: "b:c",
+      });
+      expect(calls[4]?.key).not.toBe(calls[5]?.key);
+      const preview = yield* makeWorkerRateLimits(bindings("preview"));
+      yield* preview.charge({ userId: "owner", operation: "link" });
+      expect(calls[6]?.key).not.toBe(calls[0]?.key);
+      for (const operation of ["link", "mobile_registration", "activity_publish"] as const) {
+        mode = "deny";
+        expect(yield* Effect.flip(rates.charge({ userId: "owner", operation }))).toMatchObject({
+          _tag: "RelayRateLimitExceededError",
+          operation,
+          retryAfterSeconds: operation === "link" ? 42 : 60,
+        });
+        mode = "outage";
+        expect((yield* Effect.flip(rates.charge({ userId: "owner", operation })))._tag).toBe(
+          "RelayAuthorizationUnavailableError",
+        );
+      }
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);
+it("erases usage windows and keeps terminal denial after reopening the database", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "relay-rate-close-"));
+  const file = NodePath.join(root, "state.sqlite");
+  try {
+    let db = new NodeSqlite.DatabaseSync(file);
+    expect(consumeWindow(storage(db), "connect", 20, 100).allowed).toBe(true);
+    closeWindows(storage(db));
+    db.close();
+    db = new NodeSqlite.DatabaseSync(file);
+    expect(consumeWindow(storage(db), "connect", 20, 4_000_000).allowed).toBe(false);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='account_rate_windows'").all(),
+    ).toEqual([]);
+    expect(db.prepare("SELECT id FROM account_rate_closed").all()).toHaveLength(1);
+    db.close();
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.effect(
+  "Worker deletion closes both the charged legacy key and digest counter and fails closed on binding failure",
+  () =>
+    Effect.gen(function* () {
+      const charged: string[] = [];
+      const closed: string[] = [];
+      let unavailable = false;
+      const rates = yield* makeWorkerRateLimits({
+        stage: "fixture-stage",
+        hourly: (key) =>
+          Effect.sync(() => {
+            charged.push(key);
+            return { allowed: true, retryAfterSeconds: 0 };
+          }),
+        mobile: () => Effect.die("No registration in deletion fixture"),
+        publish: () => Effect.die("No publication in deletion fixture"),
+        close: (key) =>
+          unavailable
+            ? Effect.fail("fixture DO unavailable")
+            : Effect.sync(() => {
+                closed.push(key);
+              }),
+      });
+      yield* rates.charge({ userId: "fixture-owner", operation: "link" });
+      const close = rates.close;
+      if (!close) throw new Error("Worker deletion binding must expose close");
+      yield* close("fixture-owner", "fixture-subject-digest");
+      expect(closed).toEqual([charged[0], "fixture-subject-digest"]);
+      unavailable = true;
+      expect((yield* Effect.flip(close("fixture-owner", "fixture-subject-digest")))._tag).toBe(
+        "RelayAuthorizationUnavailableError",
+      );
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);

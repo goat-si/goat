@@ -6,4 +6,5 @@ export const INDEXED_PATHS: ReadonlyArray<string> = [
   "/privacy-policy/",
   "/terms-of-service/",
   "/security-policy/",
+  "/account/delete/",
 ];

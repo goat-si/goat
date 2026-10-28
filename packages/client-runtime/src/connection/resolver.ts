@@ -1,10 +1,7 @@
-import {
-  AuthWebSocketTicketResult,
-  ExecutionEnvironmentDescriptor as DescriptorSchema,
-} from "@goat/contracts";
+import { openHubProxySocket } from "./hubProxySocket.ts";
+import { ExecutionEnvironmentDescriptor as DescriptorSchema } from "@goat/contracts";
 import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
-import { hubProxyHttpBaseUrl, requestHubProxyJson } from "./hubProxyHttp.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
+import { requestHubProxyJson } from "./hubProxyHttp.ts";
 import type {
   AuthClientPresentationMetadata,
   ExecutionEnvironmentDescriptor,
@@ -89,7 +86,6 @@ export class ConnectionResolver extends Context.Service<
 >()("@goat/client-runtime/connection/resolver/ConnectionResolver") {}
 
 const decodeHubDescriptor = Schema.decodeUnknownEffect(Schema.toCodecJson(DescriptorSchema));
-const decodeHubTicket = Schema.decodeUnknownEffect(Schema.toCodecJson(AuthWebSocketTicketResult));
 
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 const isSshProfile = Schema.is(SshConnectionProfile);
@@ -353,10 +349,10 @@ export const make = Effect.gen(function* () {
         detail: "Hub proxy authorization is unavailable on this client.",
       });
     const auth = yield* hubAuth.value.resolve(profile);
-    const httpBaseUrl = hubProxyHttpBaseUrl(auth.httpBaseUrl, profile.nodeId);
     const descriptor = yield* requestHubProxyJson(
       auth,
-      environmentEndpointUrl(httpBaseUrl, "/.well-known/goat/environment"),
+      profile.nodeId,
+      "/.well-known/goat/environment",
       decodeHubDescriptor,
     );
     if (descriptor.environmentId !== entry.target.environmentId)
@@ -364,25 +360,14 @@ export const make = Effect.gen(function* () {
         expected: entry.target.environmentId,
         actual: descriptor.environmentId,
       });
-    const ticket = yield* requestHubProxyJson(
-      auth,
-      environmentEndpointUrl(httpBaseUrl, "/api/auth/websocket-ticket"),
-      decodeHubTicket,
-      "POST",
-    );
-    const socket = new URL(environmentEndpointUrl(httpBaseUrl, "/ws"));
-    socket.protocol = socket.protocol === "https:" ? "wss:" : "ws:";
-    socket.searchParams.set("wsTicket", ticket.ticket);
-    appendClientConnectionParams(socket, presentation.metadata, "direct");
+    const socket = yield* openHubProxySocket(auth, profile.nodeId, presentation.metadata);
     return {
       descriptor,
       prepared: {
         environmentId: entry.target.environmentId,
         label: entry.target.label,
         target: entry.target,
-        httpBaseUrl,
-        socketUrl: socket.toString(),
-        httpAuthorization: auth.authorization,
+        ...socket,
       } satisfies PreparedConnection,
     };
   });

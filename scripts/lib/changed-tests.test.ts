@@ -100,9 +100,9 @@ describe("testsForChanges", () => {
         expect.arrayContaining(ingestSuite),
       );
     }
-    expect([...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])]).toEqual(
-      [],
-    );
+    const relayTests = [...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])];
+    expect(relayTests).toContain("infra/relay/src/accounts/AccountPolicyMigration.test.ts");
+    expect(relayTests.filter((file) => file.startsWith("infra/ingest/"))).toEqual([]);
   });
 
   // #1483 changed HubNodesSettings.tsx, passed its quick run, and left a compiler bailout that
@@ -158,4 +158,16 @@ describe("testsForChanges", () => {
       NodeFS.rmSync(outside, { recursive: true, force: true });
     }
   });
+});
+
+it("relay migration and fixture changes select real persistence suites", () => {
+  for (const change of [
+    "infra/relay/migrations/postgres/fixture/migration.sql",
+    "infra/relay/src/accounts/test/PostgresFixture.ts",
+  ]) {
+    const selected = testsForChanges(root, change.endsWith(".ts") ? [change] : [], [change]);
+    expect(selected).toContain("infra/relay/src/accounts/AccountPolicyMigration.test.ts");
+    expect(selected).toContain("infra/relay/src/accounts/AccountLifecycle.test.ts");
+    expect(selected).toContain("infra/relay/src/environments/RetiredEndpointCollector.test.ts");
+  }
 });

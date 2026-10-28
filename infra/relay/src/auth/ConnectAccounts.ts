@@ -4,15 +4,17 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as RelayDb from "../db.ts";
-import { relayConnectAccounts } from "../persistence/schema.ts";
-import { RelayAuthenticationStrengthError } from "@goat/contracts/connectAssurance";
+import { relayAccountAccess } from "../persistence/schema.ts";
 
+/**
+ * Connect session generations come from relay_account_access, the single account-status record.
+ * Sessions still authenticate suspended or uninvited users so owner-only cleanup stays reachable;
+ * AccountAccess denies everything else, and `check` only accepts the current allowed epoch.
+ */
 export class ConnectAccounts extends Context.Service<
   ConnectAccounts,
   {
-    readonly authorize: (
-      userId: string,
-    ) => Effect.Effect<number, RelayAuthenticationStrengthError | RelayInternalError>;
+    readonly authorize: (userId: string) => Effect.Effect<number, RelayInternalError>;
     readonly check: (
       userId: string,
       generation: number,
@@ -29,32 +31,18 @@ const make = Effect.gen(function* () {
     });
   const read = Effect.fn("ConnectAccounts.read")(function* (userId: string) {
     const rows = yield* db
-      .select()
-      .from(relayConnectAccounts)
-      .where(eq(relayConnectAccounts.userId, userId))
+      .select({ status: relayAccountAccess.status, accountEpoch: relayAccountAccess.accountEpoch })
+      .from(relayAccountAccess)
+      .where(eq(relayAccountAccess.userId, userId))
       .pipe(Effect.mapError(unavailable));
     return rows[0];
   });
   const authorize = Effect.fn("ConnectAccounts.authorize")(function* (userId: string) {
-    yield* db
-      .insert(relayConnectAccounts)
-      .values({ userId, generation: 1, status: "active" })
-      .onConflictDoNothing()
-      .pipe(Effect.mapError(unavailable));
-    const account = yield* read(userId);
-    if (!account || account.status !== "active")
-      return yield* new RelayAuthenticationStrengthError({
-        code: "authentication_strength_required",
-        reason: "session_not_active",
-        requiredLevel: "multi_factor",
-        maxAgeSeconds: 600,
-        traceId: "connect-account",
-      });
-    return account.generation;
+    return (yield* read(userId))?.accountEpoch ?? 0;
   });
   const check = Effect.fn("ConnectAccounts.check")(function* (userId: string, generation: number) {
     const account = yield* read(userId);
-    return account?.status === "active" && account.generation === generation;
+    return account?.status === "allowed" && account.accountEpoch === generation;
   });
   return ConnectAccounts.of({ authorize, check });
 });

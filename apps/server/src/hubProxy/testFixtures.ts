@@ -1,3 +1,4 @@
+import * as HubRpcSocket from "../auth/HubRpcSocket.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- scoped ephemeral HTTP test servers.
 import * as NodeHttp from "node:http";
 
@@ -36,6 +37,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as Settings from "../serverSettings.ts";
 import { SshRemoteDispatch } from "../sshRemote/SshRemoteDispatch.ts";
 import { HubProxyNodes, type HubProxyNode } from "./HubProxyNodes.ts";
 import * as HubProxySessions from "./HubProxySessions.ts";
@@ -48,7 +50,7 @@ export const NODE_TOKEN = "NODE_TOKEN-private-to-hub";
 export const NODE_SENTINEL = "NODE_AUTH_SECRET-never-proxy";
 export const readScopes = ["orchestration:read"] as const;
 export const phoneScopes = ["hub:proxy", ...readScopes] as const;
-export const sshNode: HubProxyNode = {
+export const sshNode = {
   nodeId: "node-1",
   environmentId: EnvironmentId.make("node-environment"),
   label: "Node",
@@ -58,7 +60,7 @@ export const sshNode: HubProxyNode = {
       target: { alias: "alias", hostname: "actual.host", username: "remote-user", port: 2201 },
     },
   ],
-};
+} satisfies HubProxyNode;
 const group = RpcGroup.make(
   Rpc.make("orchestration.subscribeThread", {
     success: Schema.String,
@@ -213,6 +215,7 @@ export const startNode = Effect.fnUntraced(function* (
   const sockets: Array<Socket.Socket> = [];
   const shellRequests = yield* Queue.unbounded<number>();
   const streamEnded = yield* Queue.unbounded<void>();
+  const socketEnded = yield* Queue.unbounded<void>();
   const uploadStarted = yield* Queue.unbounded<void>();
   const uploadReceived = yield* Queue.unbounded<number>();
   const uploadAborted = yield* Queue.unbounded<number>();
@@ -277,6 +280,7 @@ export const startNode = Effect.fnUntraced(function* (
             Object.defineProperty(wrapped, "upgrade", { value: Effect.succeed(observed) });
             return yield* httpEffect.pipe(
               Effect.provideService(HttpServerRequest.HttpServerRequest, wrapped),
+              Effect.ensuring(Queue.offer(socketEnded, undefined)),
             );
           }
           if (holdUploads && path?.startsWith("/api/attachments/upload/")) {
@@ -341,6 +345,7 @@ export const startNode = Effect.fnUntraced(function* (
     handshakes,
     shellRequests,
     streamEnded,
+    socketEnded,
     uploadStarted,
     uploadReceived,
     uploadAborted,
@@ -362,18 +367,19 @@ export const startNode = Effect.fnUntraced(function* (
   };
 });
 
-export const authLayer = EnvironmentAuth.layer.pipe(
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(ServerSecretStore.layer),
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-hub-proxy-test-" })),
-  Layer.provide(NodeServices.layer),
+export const authLayer = Layer.mergeAll(EnvironmentAuth.layer, Settings.layer).pipe(
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(ServerEnvironment.layerIdentity),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-hub-proxy-test-" })),
+  Layer.provideMerge(NodeServices.layer),
 );
 
-export const startHub = Effect.fnUntraced(function* (options?: {
+export const startHub = Effect.fnUntraced(function* <E = never, R = never>(options?: {
   readonly linked?: boolean;
   readonly holdUploads?: boolean;
   readonly shellBody?: Stream.Stream<Uint8Array>;
+  readonly extraRoutes?: Layer.Layer<never, E, R>;
 }) {
   const node = yield* startNode(options?.shellBody, options?.holdUploads);
   const nodes = yield* makeNodes(
@@ -408,8 +414,33 @@ export const startHub = Effect.fnUntraced(function* (options?: {
   });
   yield* nodes.subscribed;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  yield* auth.setCloudLinkTrust("test-account");
   const sessionStore = yield* SessionStore.SessionStore;
-  const baseUrl = yield* serve(HubProxyHttp.layer).pipe(
+  const hubStreamEnded = yield* Queue.unbounded<void>();
+  const rpc = HubRpcSocket.layer(() =>
+    Effect.gen(function* () {
+      const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
+      yield* RpcServer.make(group).pipe(
+        Effect.provideService(RpcServer.Protocol, protocol),
+        Effect.provide(
+          group.toLayer({
+            "orchestration.subscribeThread": () =>
+              Stream.concat(Stream.make("hub-stream-value"), Stream.never).pipe(
+                Stream.ensuring(Queue.offer(hubStreamEnded, undefined)),
+              ),
+            "orchestration.dispatchCommand": () => Effect.succeed("hub-write"),
+          }),
+        ),
+        Effect.forkScoped,
+      );
+      return yield* httpEffect;
+    }).pipe(Effect.provide(RpcSerialization.layerJson)),
+  );
+  const baseUrl = yield* serve(
+    Layer.mergeAll(HubProxyHttp.layer, rpc, options?.extraRoutes ?? Layer.empty).pipe(
+      Layer.provide(RpcSerialization.layerJson),
+    ),
+  ).pipe(
     Effect.provideService(HubProxyNodes, nodes.service),
     Effect.provideService(HubProxySessions.HubProxySessions, sessions),
     Effect.provide(FetchHttpClient.layer),
@@ -423,6 +454,7 @@ export const startHub = Effect.fnUntraced(function* (options?: {
     auth,
     baseUrl,
     sessionStore,
+    hubStreamEnded,
     secretReads: () => secretReads,
   };
 });

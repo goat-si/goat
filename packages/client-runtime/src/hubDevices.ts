@@ -332,3 +332,12 @@ export function cloudAutoJoinSaveError(requested: boolean, saved: boolean): stri
     ? null
     : "This hub runs an older GOAT that always joins its cloud machines. Update GOAT there to turn this off.";
 }
+
+export function connectHubProxySaveError(
+  requested: boolean,
+  saved: boolean | undefined,
+): string | null {
+  return requested === (saved ?? false)
+    ? null
+    : "Update GOAT on the hub to allow GOAT Connect devices to reach hub devices.";
+}

@@ -25,7 +25,11 @@ import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as Authentication from "../auth/ConnectAuthentication.ts";
 import * as Exchange from "../auth/ConnectTokenExchange.ts";
 import * as Approvals from "../auth/CliLinkApprovals.ts";
-import { postgresFixture } from "../auth/connectPostgres.testkit.ts";
+import {
+  allowAccount,
+  postgresFixture,
+  postgresPolicyFixture,
+} from "../auth/connectPostgres.testkit.ts";
 import * as Linker from "../environments/EnvironmentLinker.ts";
 import * as Reservations from "../environments/ConnectLinkReservations.ts";
 import * as Credentials from "../environments/EnvironmentCredentials.ts";
@@ -35,13 +39,12 @@ import * as Connector from "../environments/EnvironmentConnector.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import * as Publisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as Signatures from "../environments/EnvironmentPublishSignatures.ts";
-import * as Devices from "../agentActivity/Devices.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
 import {
-  config,
   environmentKeyPair,
   makeRequest,
+  postgresConfig as config,
   signTestJwt,
 } from "../environments/EnvironmentLinker.testkit.ts";
 
@@ -85,17 +88,9 @@ it.effect(
       const services = Layer.mergeAll(Linker.layer, Exchange.layer).pipe(
         Layer.provideMerge(Authentication.layer),
         Layer.provideMerge(Reservations.layer),
-        Layer.provideMerge(
-          Layer.mergeAll(
-            Links.layer,
-            Credentials.layer,
-            RelayTokens.layer,
-            ClientKeys.layer,
-            Approvals.layer,
-            Devices.layer,
-          ),
-        ),
+        Layer.provideMerge(Layer.mergeAll(RelayTokens.layer, ClientKeys.layer, Approvals.layer)),
         Layer.provideMerge(DpopProofs.layer),
+        Layer.provideMerge(postgresPolicyFixture),
         Layer.provideMerge(postgresFixture),
         Layer.provideMerge(
           Config.layer({
@@ -152,6 +147,7 @@ it.effect(
         (app) => Effect.promise(() => app.dispose()),
       );
       const db = Context.get(context, RelayDb.RelayDb);
+      yield* allowAccount("user_123").pipe(Effect.provide(context));
       const { payload } = yield* makeRequest.pipe(Effect.provide(context));
       const proof = { ...payload, environmentId: payload.environmentId };
       yield* Context.get(context, Links.EnvironmentLinks).upsert({
@@ -166,6 +162,8 @@ it.effect(
         endpoint: proof.endpoint,
       });
       const credential = yield* Context.get(context, Credentials.EnvironmentCredentials).create({
+        userId,
+        accountEpoch: 1,
         environmentId: proof.environmentId,
         environmentPublicKey: proof.environmentPublicKey,
       });

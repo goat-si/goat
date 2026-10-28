@@ -400,6 +400,29 @@ export const en = {
     noticesLink: "Open source licenses in GOAT",
     noticesHref: guide("open-source-licenses"),
   },
+  accountDeletion: {
+    title: "Delete GOAT Connect account",
+    description:
+      "Request permanent deletion of your GOAT Connect relay data and sign-in account from your browser. You do not need to install the app or connect a machine.",
+    action: "Continue to account deletion",
+    instructions:
+      "Sign in to the account you want to delete, verify MFA within the last 10 minutes, and confirm deletion. Relay cleanup runs first. Refresh its status to continue; if sign-in account deletion fails, return with the same account and finish deleting it.",
+    dataTitle: "What deletion removes",
+    data: [
+      "Deletion permanently removes your relay links, push registrations, live activities, delivery records and held webhooks, then deletes your sign-in account. It cannot be undone.",
+      "Local projects, thread history, provider credentials and independent LAN, Tailscale or SSH connections remain on your machines.",
+    ],
+    retentionTitle: "What remains for cleanup and denial",
+    retention: [
+      "A hashed account denial record and retired endpoint names remain for the beta to prevent access from returning and to find late tunnel resources. Minimal host revocation digests remain until each machine confirms cleanup, with no expiry during the beta. Closed inbox and rate-limit markers remain for the beta; replay guards expire on their own schedule.",
+      "Deletion operation status and timestamps remain for 90 days after completion. Provider tunnel cleanup may continue afterward. Queues, provider logs and backups follow their providers’ retention periods; this flow does not individually erase those copies. The deletion screen reports pending cleanup separately from sign-in account deletion.",
+    ],
+    machinesTitle: "Machines that are offline or need an update",
+    machines: [
+      "Supported machines remove their GOAT Connect access when they reconnect. Machines on older versions or that do not reconnect can keep existing local sessions until you update them or unlink them locally. Pending machine cleanup is shown during deletion; it does not mean every machine is signed out.",
+      "If a machine stays offline until the beta ends, unlink it locally. You can complete account deletion while machine or provider cleanup remains unconfirmed.",
+    ],
+  },
   footer: {
     tagline: "MIT licensed. GOAT began as a fork of T3 Code.",
     label: "Footer",

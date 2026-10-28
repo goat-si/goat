@@ -405,10 +405,12 @@ const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_resu
         input.liveResult.cause,
       );
       yield* Console.warn(
-        "GOAT Connect is disabled, but the running server could not stop its tunnel.\nRestart that server to stop the connector.",
+        "GOAT Connect local cleanup is pending. The running server has not confirmed credential withdrawal.\nReconnect or restart that server to finish cleanup.",
       );
-    } else {
-      yield* Console.log("GOAT Connect is disabled locally.");
+    } else if (input.liveResult.status === "succeeded") {
+      yield* Console.log(
+        "GOAT Connect is disabled locally; its local grants and sessions were revoked.",
+      );
     }
 
     if (Exit.isFailure(input.relayResult)) {
@@ -440,9 +442,17 @@ export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (opti
   const credential = yield* Effect.exit(tokens.getExisting.pipe(Effect.timeout("5 seconds")));
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const trustWithdrawal = yield* Effect.exit(auth.setCloudLinkTrust(null));
-  yield* CliState.clearPersistedCloudLink;
   if (options.clearAuthorization) yield* tokens.clear;
   const liveResult = yield* runLiveCloudUnlink();
+  // Keep the persisted link until the trusted server confirms local credential withdrawal.
+  if (liveResult.status === "succeeded") yield* CliState.clearPersistedCloudLink;
+  else {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    yield* secrets.set("cloud-connect-withdrawal-pending", stringToBytes("pending"));
+    yield* Console.warn(
+      "Local GOAT Connect sessions are unconfirmed. Start or reconnect the trusted server to finish credential withdrawal before relinking.",
+    );
+  }
   const relayResult: Exit.Exit<RelayUnlinkResult, unknown> = Exit.isFailure(credential)
     ? Exit.failCause(credential.cause)
     : yield* Effect.exit(

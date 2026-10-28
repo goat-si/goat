@@ -1,3 +1,26 @@
+import * as MintControlApi from "./http/MintControlApi.ts";
+import * as MintControl from "./auth/MintControl.ts";
+import * as AccountDeletionAuthentication from "./auth/AccountDeletionAuthentication.ts";
+import * as AccountErasure from "./accounts/AccountErasure.ts";
+import * as HostRevocations from "./accounts/HostRevocations.ts";
+import * as AccountDeletionApi from "./http/AccountDeletionApi.ts";
+import * as ClerkDeletionWebhook from "./http/ClerkDeletionWebhook.ts";
+import * as ApnsDeliveryQueueConsumer from "./agentActivity/ApnsDeliveryQueueConsumer.ts";
+import * as AccountAccess from "./accounts/AccountAccess.ts";
+import * as AccountTransactions from "./accounts/AccountTransactions.ts";
+import * as AccountDeviceAdmission from "./accounts/AccountDeviceAdmission.ts";
+import * as AccountLimits from "./accounts/AccountLimits.ts";
+import * as AccountRateLimitObject from "./accounts/AccountRateLimitObject.ts";
+import * as RelayRateLimits from "./accounts/RelayRateLimits.ts";
+import * as AccountLifecycle from "./accounts/AccountLifecycle.ts";
+import * as AccountAdminApi from "./http/AccountAdminApi.ts";
+import * as EnvironmentOwnership from "./environments/EnvironmentOwnership.ts";
+import * as EndpointIdentity from "./environments/EndpointIdentity.ts";
+import * as ManagedProvisioningIntents from "./environments/ManagedProvisioningIntents.ts";
+import * as RetiredEndpointCollector from "./environments/RetiredEndpointCollector.ts";
+import * as retiredInventoryBinding from "./environments/retiredInventoryBinding.ts";
+import * as DeliveryAuthorization from "./agentActivity/DeliveryAuthorization.ts";
+import * as HookDeliveryAuthorization from "./hooks/HookDeliveryAuthorization.ts";
 import * as ConnectPushQueue from "./agentActivity/ConnectPushQueue.ts";
 import * as ConnectTokenExchange from "./auth/ConnectTokenExchange.ts";
 import * as ConnectAuthentication from "./auth/ConnectAuthentication.ts";
@@ -16,6 +39,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/http/Etag";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
@@ -105,6 +129,8 @@ const layerHttpPlatformNotSupported = Layer.succeed(HttpPlatform.HttpPlatform, {
 });
 
 const layerRelayApi = Layer.mergeAll(
+  AccountDeletionApi.layerAccount,
+  AccountDeletionApi.layerHost,
   RelayHttpApi.layerHealthApi,
   RelayHttpApi.layerMetadataApi,
   RelayHttpApi.layerMobileApi,
@@ -181,6 +207,14 @@ export const layer = Api.make(
       .map((origin) => origin.trim())
       .filter(Boolean);
     const clerkCliOAuthClientId = yield* Config.String("CLERK_CLI_OAUTH_CLIENT_ID");
+    const mintDisabled = yield* MintControl.config;
+    const subjectDigestKey = yield* Config.Redacted("RELAY_SUBJECT_DIGEST_KEY");
+    const clerkWebhookSigningSecret = Option.getOrUndefined(
+      yield* Config.option(Config.Redacted("CLERK_WEBHOOK_SIGNING_SECRET")),
+    );
+    const clerkSessionIssuer = Option.getOrUndefined(
+      yield* Config.option(Config.String("CLERK_SESSION_ISSUER")),
+    );
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -216,7 +250,28 @@ export const layer = Api.make(
         period: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.periodSeconds,
       },
     });
-    const hookInboxes = yield* HookInboxObject.HookInboxObject;
+    const policy = yield* AccountLimits.config;
+    const operatorSecret = yield* Config.schema(
+      Schema.Redacted(Schema.String.pipe(Schema.check(Schema.isPattern(/^\S+$/)))),
+      "RELAY_OPERATOR_SECRET",
+    );
+    const accountCounters = yield* AccountRateLimitObject.AccountRateLimitObject;
+    const mobileRate = yield* Cloudflare.RateLimit("MOBILE_REGISTRATION_RATE_LIMIT", {
+      namespaceId: 1003,
+      simple: { limit: policy.mobile_registration, period: 60 },
+    });
+    const publishRate = yield* Cloudflare.RateLimit("ACTIVITY_PUBLISH_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: { limit: policy.activity_publish, period: 60 },
+    });
+    const hookInboxes = yield* HookInboxObject.HookInboxObject.pipe(
+      Effect.provide(HookInboxObject.layer(db)),
+    );
+    const retiredAuth = yield* (yield* Cloudflare.Tunnel.makeTunnelClient(
+      "RelayRetiredEndpoints",
+      ["Cloudflare Tunnel Read", "Cloudflare Tunnel Write"],
+      (auth) => auth,
+    ))();
 
     const alchemyRuntimeContext: Alchemy.BaseRuntimeContext = yield* Cloudflare.Worker;
 
@@ -231,6 +286,10 @@ export const layer = Api.make(
         clerkJwtAudience,
         clerkAuthorizedParties,
         clerkCliOAuthClientId,
+        mintDisabled,
+        subjectDigestKey,
+        ...(clerkWebhookSigningSecret === undefined ? {} : { clerkWebhookSigningSecret }),
+        ...(clerkSessionIssuer === undefined ? {} : { clerkSessionIssuer }),
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
@@ -269,13 +328,45 @@ export const layer = Api.make(
           .wake(baseUrl)
           .pipe(inboxCall("wake", endpointKey));
       }),
-      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey }) {
-        return hookInboxes.getByName(endpointKey).clear().pipe(inboxCall("clear", endpointKey));
+      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey, authorization, retire }) {
+        return hookInboxes
+          .getByName(endpointKey)
+          .clear(authorization, retire)
+          .pipe(inboxCall("clear", endpointKey));
       }),
     });
 
+    const layerRates = Layer.succeed(
+      RelayRateLimits.RelayRateLimits,
+      yield* RelayRateLimits.makeWorkerRateLimits({
+        stage,
+        close: (key) =>
+          accountCounters
+            .getByName(key)
+            .close()
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        hourly: (key, operation) =>
+          accountCounters
+            .getByName(key)
+            .consume(operation)
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        mobile: (key) =>
+          mobileRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        publish: (key) =>
+          publishRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+      }).pipe(Effect.provide(layerWebcrypto)),
+    );
     const layerRuntime = Layer.empty
       .pipe(
+        Layer.provideMerge(AccountLifecycle.layer),
+        Layer.provideMerge(AccountErasure.layer),
+        Layer.provideMerge(HostRevocations.layer),
+        Layer.provideMerge(AccountDeletionAuthentication.layer),
+        Layer.provideMerge(RetiredEndpointCollector.layer),
         Layer.provideMerge(MobileRegistrations.layer),
         Layer.provideMerge(AgentActivityPublisher.layer),
         Layer.provideMerge(EnvironmentConnector.layer),
@@ -328,15 +419,26 @@ export const layer = Api.make(
         Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
         Layer.provideMerge(EnvironmentCredentials.layer),
         Layer.provideMerge(
+          retiredInventoryBinding.layer(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            retiredAuth,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(ManagedEndpointAllocations.layer),
+        Layer.provideMerge(
           Layer.mergeAll(
             ConnectTokenExchange.layer.pipe(Layer.provide(ConnectAuthentication.layer)),
             CloudflareApiPause.layer,
             EnvironmentLinks.layer,
-            ManagedEndpointAllocations.layer,
             ManagedTunnelLimits.layer,
           ),
         ),
+      )
+      .pipe(
         Layer.provideMerge(LiveActivities.layer),
+        Layer.provideMerge(DeliveryAuthorization.layer),
         Layer.provideMerge(DeliveryAttempts.layer),
         Layer.provideMerge(
           Layer.mergeAll(
@@ -345,8 +447,18 @@ export const layer = Api.make(
             CliLinkApprovals.layer.pipe(Layer.provide(DpopProofs.layer)),
           ),
         ),
+        Layer.provideMerge(ManagedProvisioningIntents.layer),
+        Layer.provideMerge(EndpointIdentity.layer),
+        Layer.provideMerge(EnvironmentOwnership.layer),
+        Layer.provideMerge(AccountDeviceAdmission.layer),
+        Layer.provideMerge(HookDeliveryAuthorization.layer),
+        Layer.provideMerge(Layer.mergeAll(AccountAccess.layer, ConnectAccounts.layer)),
+        Layer.provideMerge(AccountTransactions.layer),
+        Layer.provideMerge(layerRates),
+        Layer.provideMerge(Layer.succeed(AccountLimits.AccountLimits, policy)),
+        Layer.provideMerge(Layer.succeed(AccountAdminApi.AccountOperatorSecret, operatorSecret)),
         Layer.provideMerge(
-          Layer.mergeAll(ConnectAccounts.layer, RelayDb.RelayTransactions.layer).pipe(
+          RelayDb.RelayTransactions.layer.pipe(
             Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
           ),
         ),
@@ -379,7 +491,7 @@ export const layer = Api.make(
     });
 
     const layerApp = Layer.merge(
-      layerRelayApi,
+      Layer.mergeAll(layerRelayApi, AccountAdminApi.layer, ClerkDeletionWebhook.layer),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),
@@ -401,12 +513,7 @@ export const layer = Api.make(
         deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
       },
       (stream) =>
-        ConnectPushQueue.consume(stream, (message) =>
-          ApnsDeliveries.ApnsDeliveries.pipe(
-            Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-            Effect.withSpan("relay.apn_delivery_queue.process_message"),
-          ),
-        ).pipe(
+        ConnectPushQueue.consume(stream, ApnsDeliveryQueueConsumer.processMessage).pipe(
           Effect.withSpan("relay.apn_delivery_queue.process_batch"),
           Effect.provide(layerRuntime),
         ),
@@ -431,6 +538,20 @@ export const layer = Api.make(
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
       Effect.all(
         [
+          AccountLifecycle.AccountLifecycle.pipe(
+            Effect.flatMap((service) => service.scanPending),
+            Effect.tapError((e) =>
+              Effect.logWarning("Account operations scan failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
+          RetiredEndpointCollector.RetiredEndpointCollector.pipe(
+            Effect.flatMap((service) => service.sweep),
+            Effect.tapError((e) =>
+              Effect.logWarning("Retired inventory failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
           DpopProofs.DpopProofReplay.pipe(
             Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
             Effect.andThen(
@@ -486,7 +607,12 @@ export const layer = Api.make(
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         RelayHttpApi.layerDocsRedirectRoute,
       ).pipe(
-        Layer.provide([Etag.layerWeak, layerHttpPlatformNotSupported, RelayHttpApi.layerCors]),
+        Layer.provide([
+          Etag.layerWeak,
+          layerHttpPlatformNotSupported,
+          RelayHttpApi.layerCors,
+          MintControlApi.layer.pipe(Layer.provide(layerRuntime)),
+        ]),
       ),
       RelayHttpApi.layerNotFoundRoute,
     ).pipe(
@@ -511,7 +637,7 @@ export const layer = Api.make(
         Layer.provideMerge(Cloudflare.Tunnel.ReadWriteTunnelBinding),
         Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
         Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
-        Layer.provideMerge(HookInboxObject.layer),
+        Layer.provideMerge(AccountRateLimitObject.layer),
         // Disable the duplicate runtime span; ours applies route/header/token redaction and rejects sender traceparent.
         Layer.provideMerge(
           Alchemy.Telemetry.layer(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true)),

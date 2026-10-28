@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as RelayDb from "../db.ts";
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
 import { relayClientKeys } from "../persistence/schema.ts";
 import { strengthRequired } from "./ConnectAuthentication.ts";
 
@@ -65,6 +66,7 @@ const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
   const crypto = yield* Crypto.Crypto;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
+  const transactions = yield* AccountTransactions;
   const check = Effect.fn("ClientKeys.check")(function* (
     input: Parameters<ClientKeys["Service"]["check"]>[0],
   ) {
@@ -88,12 +90,10 @@ const make = Effect.gen(function* () {
     input: Parameters<ClientKeys["Service"]["admit"]>[0],
   ) {
     const userId = input.assurance.userId;
-    return yield* db.$client
-      .withTransaction(
+    return yield* transactions
+      .run(
+        { userIds: [userId] },
         Effect.gen(function* () {
-          yield* db.$client`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`.pipe(
-            Effect.mapError(unavailable),
-          );
           if (!(yield* accounts.check(userId, input.assurance.authGeneration)))
             return yield* strengthRequired("session_not_active");
           const key = { userId, clientId: input.clientId, thumbprint: input.thumbprint };

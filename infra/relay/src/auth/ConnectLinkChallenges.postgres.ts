@@ -16,11 +16,21 @@ import * as Approvals from "./CliLinkApprovals.ts";
 import * as Replay from "./DpopProofs.ts";
 import * as Tokens from "./RelayTokens.ts";
 import { createLinkChallenge } from "./ConnectLinkChallenges.ts";
-import { awaitPostgresMilestone, postgresFixture } from "./connectPostgres.testkit.ts";
-import { config, intent, makeAssurance } from "../environments/EnvironmentLinker.testkit.ts";
+import {
+  allowAccount,
+  awaitPostgresMilestone,
+  postgresFixture,
+  postgresPolicyFixture,
+} from "./connectPostgres.testkit.ts";
+import {
+  postgresConfig as config,
+  intent,
+  makeAssurance,
+} from "../environments/EnvironmentLinker.testkit.ts";
 
 const layer = Layer.mergeAll(Approvals.layer, Tokens.layer).pipe(
   Layer.provideMerge(Replay.layer),
+  Layer.provideMerge(postgresPolicyFixture),
   Layer.provideMerge(postgresFixture),
   Layer.provideMerge(Config.layer(config)),
   Layer.provideMerge(NodeCrypto.layer),
@@ -49,7 +59,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(1800000000000);
-      yield* (yield* ConnectAccounts.ConnectAccounts).authorize("user_123");
+      yield* allowAccount("user_123");
       const crypto = yield* Crypto.Crypto;
       const verifier = "v".repeat(64);
       const approvalChallenge = Base64Url.encode(

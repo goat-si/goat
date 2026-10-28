@@ -77,6 +77,25 @@ requests must not follow redirects. These restrictions keep endpoint discovery
 from turning into arbitrary relay egress or exposing another service on the
 environment host.
 
+## Account trust and endpoint retirement
+
+Relay trust is scoped to one owning account and a captured account epoch. Suspension advances
+that epoch in the transaction that retires every endpoint identity and removes relay delivery
+eligibility. Allow advances it again after relay cleanup. Status checks alone cannot revive old
+DPoP tokens, environment credentials, registrations, signed delivery jobs, or held-hook alarms.
+The authoritative boundaries are the [account transaction service](../../infra/relay/src/accounts/AccountTransactions.ts)
+and [lifecycle service](../../infra/relay/src/accounts/AccountLifecycle.ts); transports do not
+provide an alternate status setter. Strict hourly counters use one persistent account Durable
+Object, independently of epochs and deploy versions.
+
+Endpoint generation outlives allocation incarnations. Generation zero preserves existing names;
+suspension retires the old name and hostname before a replacement can be activated. This isolates
+new traffic from retained connector tokens and late configuration or deletion effects on retired
+UUIDs. The [retired collector](../../infra/relay/src/environments/RetiredEndpointCollector.ts)
+keeps matching retired identities on every inventory cycle, even after an empty scan. Its durable
+lease and cursors separate brief database coordination from provider calls. An empty observation
+is not evidence that a late external effect can never appear.
+
 ## A link outlives a connector process
 
 CLI authorization, desired exposure, and a running connector have different
@@ -84,7 +103,8 @@ lifetimes. Linking can record intent while the server is stopped. Startup
 reconciles that intent. CLI logout removes the stored cloud credential and
 disables exposure without uninstalling the environment's background service.
 
-Managed allocations belong to a user/environment pair. Provisioning checkpoints
+Managed allocations have immutable incarnation IDs beneath a persistent account/environment
+endpoint identity. Provisioning checkpoints
 external tunnel and DNS resources so retries can reconcile partial work. A
 normal shutdown of a CLI-managed link releases its tunnel to free account
 capacity, retaining the hostname reservation for the next startup.
@@ -97,7 +117,7 @@ token. An update handoff immediately starts a replacement server, and replacing
 the tunnel would add routing propagation delay to every update. These exceptions
 belong to [shutdown handling](../../apps/server/src/cloud/CloudLink.ts).
 
-Release and unlink claim the allocation generation before deleting external
+Release and unlink claim the allocation incarnation and row generation before deleting external
 resources. A delayed cleanup must not delete a tunnel reused by a concurrent
 restart or relink. Unlink commits authorization revocation before external
 teardown, because a database failure must leave the active link usable. Failed

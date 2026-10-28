@@ -636,6 +636,7 @@ const layerAuth = EnvironmentAuth.layer.pipe(
 const layerCloudManagedEndpointRuntime = Layer.mergeAll(
   layerRelayClient,
   CloudManagedEndpointRuntime.layer.pipe(
+    Layer.provide(ServerEnvironment.layerIdentity),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(layerRelayClient),
   ),

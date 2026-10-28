@@ -1,3 +1,4 @@
+import * as HubConnectAccess from "../auth/HubConnectAccess.ts";
 /**
  * `/hub/nodes/<nodeId>/*`: a client paired to this hub reaches a node's own API here. The hub
  * authenticates the client with its own session, answers auth endpoints itself, and calls the
@@ -430,6 +431,9 @@ const proxySocket = Effect.fn("HubProxyHttp.proxySocket")(function* (
   const { upstream, socket } = yield* connect(false);
   if (!(yield* sessions.isCurrent(nodeId, upstream.generation)))
     return unavailableResponse("This node changed while the hub was connecting. Try again.");
+  const connectAccess = yield* HubConnectAccess.HubConnectAccess;
+  if (!HubConnectAccess.admits(session, yield* connectAccess.current))
+    return yield* failEnvironmentAuthInvalid("invalid_credential");
   const client = yield* request.upgrade;
   yield* sessions.trackRelay(nodeId);
   const clientReader = yield* client.reader;
@@ -448,6 +452,7 @@ const proxySocket = Effect.fn("HubProxyHttp.proxySocket")(function* (
     // The node session's own scopes: for a linked node that is also within its enrollment.
     scopes: upstream.scopes,
     stop: [
+      connectAccess.awaitDenial(session),
       sessionStore.awaitInvalidation(session.sessionId),
       sessions.revoked(nodeId, upstream.generation),
     ],
@@ -517,11 +522,20 @@ const handler = Effect.gen(function* () {
       : state;
     return HttpServerResponse.jsonUnsafe(yield* encodeSessionState(narrowed).pipe(Effect.orDie));
   }
-  if (path === "api/auth/websocket-ticket" && request.method === "POST") {
+  const ticketUse =
+    path === "api/auth/websocket-ticket/rpc"
+      ? "rpc"
+      : path === "api/auth/websocket-ticket/media"
+        ? "media"
+        : undefined;
+  if (
+    (path === "api/auth/websocket-ticket" || ticketUse !== undefined) &&
+    request.method === "POST"
+  ) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     // A ticket for this hub session: it opens P/ws here and is never accepted by a node.
     const ticket = yield* serverAuth
-      .issueWebSocketTicket(session)
+      .issueWebSocketTicket(session, ticketUse === undefined ? undefined : { use: ticketUse })
       .pipe(
         Effect.catch((error) => failEnvironmentInternal("websocket_ticket_issuance_failed", error)),
       );

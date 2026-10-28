@@ -145,3 +145,55 @@ it.effect("tells agents that a copied state's automation is held", () =>
     expect(yield* read).toMatchObject({ automationHold: null });
   }),
 );
+
+it.effect(
+  "MCP exposes hub standing consent to full-access callers and denies read-only or ownerless callers",
+  () =>
+    Effect.gen(function* () {
+      for (const mode of ["full-access", "read-only", undefined] as const) {
+        const dependencies = Layer.mergeAll(
+          ThreadCommandExecutor.layer,
+          Settings.layerTest(),
+          Layer.succeed(McpInvocationContext.McpInvocationContext, {
+            environmentId,
+            requestNamespace: "client:hub",
+            thread: undefined,
+            client:
+              mode === undefined
+                ? undefined
+                : { sessionId: "client:hub", label: "Test", access: mode },
+            capabilities: new Set(["orchestration" as const]),
+            issuedAt: 0,
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({}),
+          Layer.mock(Environment.ServerEnvironment)({
+            getDescriptor: Effect.succeed({
+              environmentId,
+              label: "Hub",
+              platform: { os: "linux", arch: "x64" },
+              serverVersion: "0.0.0",
+              capabilities: { repositoryIdentity: false },
+            }),
+          }),
+        );
+        const result = yield* Effect.gen(function* () {
+          const toolkit = yield* EnvironmentToolkit;
+          const results = yield* toolkit
+            .handle("goat_environment_preferences_update", {
+              hub: { enabled: true, connectDevicesHubProxy: true },
+            })
+            .pipe(Stream.unwrap, Stream.runCollect);
+          return results.at(-1)?.result;
+        }).pipe(
+          Effect.provide(
+            McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+              Layer.provideMerge(dependencies),
+            ),
+          ),
+        );
+        if (mode === "full-access")
+          expect(result).toMatchObject({ hub: { enabled: true, connectDevicesHubProxy: true } });
+        else expect(result).toHaveProperty("code");
+      }
+    }),
+);

@@ -805,3 +805,29 @@ describe("notes permissions", () => {
     }),
   );
 });
+
+it.effect("Connect hub consent requires settings write in the destination environment", () =>
+  Effect.gen(function* () {
+    const payload = { patch: { hub: { connectDevicesHubProxy: true } } };
+    for (const scopes of [[], [AuthOrchestrationReadScope], [AuthProvidersManageScope]]) {
+      expect(
+        yield* RpcAuthorization.authorizeRpcCall(
+          scopes,
+          WS_METHODS.serverUpdateSettings,
+          payload,
+        ).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          requiredPermission: AuthSettingsWriteScope,
+          requiredScope: AuthOrchestrationOperateScope,
+        },
+      });
+    }
+    yield* RpcAuthorization.authorizeRpcCall(
+      [AuthSettingsWriteScope],
+      WS_METHODS.serverUpdateSettings,
+      payload,
+    );
+  }),
+);

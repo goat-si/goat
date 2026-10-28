@@ -1,3 +1,15 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- real key-bound proxy ticket proofs.
+import * as NodeCrypto from "node:crypto";
+import * as DateTime from "effect/DateTime";
+import {
+  computeDpopAccessTokenHash,
+  computeDpopJwkThumbprint,
+  type DpopPublicJwk,
+} from "@goat/shared/dpop";
+import * as Schema from "effect/Schema";
+import { AuthWebSocketTicketResult } from "@goat/contracts";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as HubConnectAccess from "../auth/HubConnectAccess.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- sends an oversized declared body without allocating it.
 import * as NodeHttp from "node:http";
 
@@ -26,6 +38,8 @@ import {
   readScopes,
   startHub,
 } from "./testFixtures.ts";
+
+const decodeTicket = Schema.decodeUnknownEffect(Schema.toCodecJson(AuthWebSocketTicketResult));
 
 const fetchResponse = (url: string, token?: string, method: "GET" | "POST" = "GET") =>
   Effect.gen(function* () {
@@ -74,7 +88,7 @@ const rawSocket = Effect.fnUntraced(function* (url: string) {
 
 const ticketUrl = Effect.fnUntraced(function* (
   hub: Effect.Success<ReturnType<typeof startHub>>,
-  session: Awaited<Effect.Success<ReturnType<typeof hub.auth.issueSession>>>,
+  session: Parameters<typeof hub.auth.issueWebSocketTicket>[0],
 ) {
   const ticket = yield* hub.auth.issueWebSocketTicket(session);
   return `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?wsTicket=${encodeURIComponent(ticket.ticket)}&orchestrationProtocol=1001`;
@@ -721,4 +735,93 @@ it.effect("S4: four Deferred-held uploads fill one node's slots and the fifth re
     ]);
     expect((yield* postUpload(hub)).status).toBe(200);
   }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);
+
+it.effect.each([false, true])(
+  "direct coordinator withdrawal closes an idle Connect proxy socket (failed write: %s) and rejects its old ticket",
+  (failBump) =>
+    Effect.gen(function* () {
+      const hub = yield* startHub();
+      const access = yield* HubConnectAccess.HubConnectAccess;
+      yield* access.commitPolicy(true, Effect.void);
+      const session = yield* hub.sessionStore.issue({
+        subject: "cloud-connect",
+        scopes: phoneScopes,
+        connectAccessGeneration: (yield* access.current).generation,
+      });
+      const url = yield* ticketUrl(hub, session);
+      const connection = yield* rawSocket(url);
+      yield* connection.opened;
+      const sql = yield* SqlClient.SqlClient;
+      if (failBump)
+        yield* sql`CREATE TRIGGER fail_connect_bump BEFORE UPDATE ON hub_connect_access BEGIN SELECT RAISE(FAIL, 'injected write failure'); END`;
+      const withdrawal = yield* access.commitPolicy(false, Effect.void).pipe(Effect.result);
+      expect(withdrawal._tag).toBe(failBump ? "Failure" : "Success");
+      yield* connection.closed;
+      if (failBump) {
+        yield* sql`DROP TRIGGER fail_connect_bump`;
+        yield* access.commitPolicy(false, Effect.void);
+      }
+      yield* access.commitPolicy(true, Effect.void);
+      const refused = yield* rawSocket(url);
+      expect(yield* refused.failed).toBe(401);
+      const standard = yield* hub.auth.issueSession({ subject: "cloud-connect" });
+      expect(
+        (yield* fetchResponse(`${hub.baseUrl}hub/nodes/node-1/api/auth/session`, standard.token))
+          .status,
+      ).toBe(403);
+    }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);
+
+it.effect(
+  "the proxied RPC ticket is key-bound and its socket requires proof over that ticket",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* startHub();
+      const access = yield* HubConnectAccess.HubConnectAccess;
+      yield* access.commitPolicy(true, Effect.void);
+      const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+      });
+      const jwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
+      const thumbprint = computeDpopJwkThumbprint(jwk);
+      const session = yield* hub.sessionStore.issue({
+        subject: "cloud-connect",
+        scopes: phoneScopes,
+        method: "dpop-access-token",
+        proofKeyThumbprint: thumbprint,
+        connectAccessGeneration: (yield* access.current).generation,
+      });
+      const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
+      let sequence = 0;
+      const proof = (method: string, url: string, token: string) => {
+        const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+        const data = `${encode({ alg: "ES256", typ: "dpop+jwt", jwk })}.${encode({ htm: method, htu: url, ath: computeDpopAccessTokenHash(token), iat, jti: `request-${++sequence}` })}`;
+        return `${data}.${NodeCrypto.sign("sha256", Buffer.from(data), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64url")}`;
+      };
+      const url = `${hub.baseUrl}hub/nodes/node-1/api/auth/websocket-ticket/rpc`;
+      const issued = yield* Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        const response = yield* client.post(url, {
+          headers: {
+            authorization: `DPoP ${session.token}`,
+            dpop: proof("POST", url, session.token),
+          },
+        });
+        expect(response.status).toBe(200);
+        return yield* decodeTicket(yield* response.json);
+      }).pipe(Effect.provide(FetchHttpClient.layer));
+      expect(yield* hub.sessionStore.verifyWebSocketToken(issued.ticket)).toMatchObject({
+        audience: "rpc",
+        proofKeyThumbprint: thumbprint,
+      });
+      const path = `${hub.baseUrl}hub/nodes/node-1/ws`;
+      const socketUrl = `${path.replace(/^http/u, "ws")}?wsTicket=${encodeURIComponent(issued.ticket)}&orchestrationProtocol=1001`;
+      const denied = yield* rawSocket(socketUrl);
+      expect(yield* denied.failed).toBe(401);
+      const accepted = yield* rawSocket(
+        `${socketUrl}&dpop=${encodeURIComponent(proof("GET", path, issued.ticket))}`,
+      );
+      yield* accepted.opened;
+    }).pipe(Effect.scoped, Effect.provide(authLayer)),
 );

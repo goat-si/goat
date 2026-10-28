@@ -12,6 +12,7 @@ const secret = Redacted.make("queue-signing-secret");
 describe("apnsDeliveryJobs", () => {
   it("rejects tampered signed queue jobs", () => {
     const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
       kind: "live_activity_end",
       userId: "user-1",
       deviceId: "device-1",

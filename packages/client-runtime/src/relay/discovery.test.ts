@@ -96,6 +96,8 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
   }
 
   const client = ManagedRelay.ManagedRelayClient.of({
+    deleteAccount: () => Effect.die("Account deletion is outside this fixture"),
+    getAccountDeletion: () => Effect.die("Account deletion is outside this fixture"),
     relayUrl: "https://relay.example.test",
     listEnvironments: () =>
       Effect.gen(function* () {
@@ -269,6 +271,8 @@ describe("RelayEnvironmentDiscovery", () => {
     Effect.gen(function* () {
       const networkStatus = yield* SubscriptionRef.make<NetworkStatus>("online");
       const client = ManagedRelay.ManagedRelayClient.of({
+        deleteAccount: () => Effect.die("Account deletion is outside this fixture"),
+        getAccountDeletion: () => Effect.die("Account deletion is outside this fixture"),
         relayUrl: "https://relay.example.test",
         listEnvironments: () =>
           Effect.fail(

@@ -1,9 +1,8 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
-import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
-import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 import { relayProtectedErrorMessage } from "@goat/client-runtime/relay";
 import * as HttpServer from "effect/http/HttpServer";
 import {
@@ -19,6 +18,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
@@ -27,9 +27,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Etag from "effect/http/Etag";
 import * as HttpEffect from "effect/http/HttpEffect";
@@ -64,36 +62,26 @@ import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvide
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 
-const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
-  relayIssuer: "https://relay.example.test",
-  apns: {
-    teamId: "apns-team",
-    keyId: "apns-key",
-    privateKey: Redacted.make("apns-private-key"),
-    bundleId: "com.example.t3",
-    environment: "sandbox",
-  },
-  clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: `pk_test_${btoa("clerk.example.test$")}`,
-  clerkAuthorizedParties: ["https://app.example.test"],
-  clerkCliOAuthClientId: "cli-client",
-  clerkJwtAudience: "https://relay.example.test",
-  apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
-  cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
-  cloudMintPublicKey: "cloud-mint-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
-};
+vi.mock("@clerk/backend", () => ({
+  createClerkClient: vi.fn(),
+  verifyToken: vi.fn(),
+}));
 
-const encodeLinkRequest = Schema.encodeEffect(Schema.fromJsonString(RelayEnvironmentLinkRequest));
-const decodeLinkUnavailableError = Schema.decodeUnknownEffect(RelayEnvironmentLinkUnavailableError);
+import {
+  relaySettings,
+  encodeLinkRequest,
+  decodeLinkUnavailableError,
+  layerRelayUnlinkTest,
+} from "./Api.testkit.ts";
 
 describe("managed endpoint provisioning errors", () => {
   it.effect("returns the failed stage without exposing provider secrets through HTTP", () => {
     let traceId = "";
     const handlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
@@ -189,7 +177,6 @@ describe("managed endpoint provisioning errors", () => {
     }).pipe(Effect.scoped);
   });
 });
-
 describe("device listing compatibility", () => {
   it.effect("keeps v1 iOS-only while v2 returns every platform for the same account", () => {
     const iphone: RelayClientDeviceRecord = {
@@ -217,8 +204,10 @@ describe("device listing compatibility", () => {
       androidApiLevel: 36,
     };
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
@@ -314,8 +303,10 @@ describe("Cloudflare rate-limit retry hint", () => {
       | ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed,
   ) => {
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
+      Layer.provide(policyUnitLayer),
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          policyUnitLayer,
           Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
@@ -444,7 +435,7 @@ describe("relay DPoP failure mapping", () => {
 });
 
 describe("relay environment authentication", () => {
-  it.effect("preserves credential lookup persistence failures as internal errors", () => {
+  it.effect("reports credential lookup persistence failures as authorization unavailable", () => {
     const failure = new EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError({
       stage: "lookup-credential",
       cause: "database unavailable",
@@ -465,10 +456,12 @@ describe("relay environment authentication", () => {
         }),
       );
 
-      expect(Predicate.isTagged(error, "RelayInternalError")).toBe(true);
-      if (Predicate.isTagged(error, "RelayInternalError")) {
-        expect(error.reason).toBe("persistence_failed");
-      }
+      expect(error).toMatchObject({
+        _tag: "RelayAuthorizationUnavailableError",
+        code: "authorization_unavailable",
+      });
+      expect(error).not.toHaveProperty("cause");
+      expect(error).not.toHaveProperty("token");
     }).pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
@@ -481,6 +474,7 @@ describe("relay environment authentication", () => {
       }),
       Effect.provide(
         RelayHttpApi.layerEnvironmentAuth.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, credentials)),
         ),
       ),
@@ -488,65 +482,6 @@ describe("relay environment authentication", () => {
     );
   });
 });
-
-function layerRelayUnlinkTest(input?: {
-  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
-  readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
-  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
-  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
-  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
-  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
-  readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
-  readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
-  readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
-}) {
-  return Layer.mergeAll(
-    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
-      exclusive: (_userId, use) => use(Effect.void),
-      withdraw: (_input, revoke) => revoke,
-    }),
-    Layer.mock(HookInbox.HookInbox, {
-      clear: input?.clearInbox ?? (() => Effect.void),
-    }),
-    Layer.succeed(
-      RelayDb.RelayTransactions,
-      RelayDb.RelayTransactions.of({
-        withTransaction: input?.withTransaction ?? ((effect) => effect),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentLinks.EnvironmentLinks,
-      EnvironmentLinks.EnvironmentLinks.of({
-        upsert: () => Effect.die("unused upsert"),
-        listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
-        listForUser: () => Effect.die("unused listForUser"),
-        getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
-        findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
-        setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
-        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentCredentials.EnvironmentCredentials,
-      EnvironmentCredentials.EnvironmentCredentials.of({
-        create: () => Effect.die("unused create"),
-        authenticate: () => Effect.die("unused authenticate"),
-        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      ManagedEndpointProvider.ManagedEndpointProvider,
-      ManagedEndpointProvider.ManagedEndpointProvider.of({
-        provision: input?.provision ?? (() => Effect.die("unused provision")),
-        reconcileOrigin: input?.reconcileOrigin ?? (() => Effect.succeed("ready")),
-        prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
-        deprovision: input?.deprovision ?? (() => Effect.succeed(true)),
-        release: input?.release ?? (() => Effect.die("unused release")),
-      }),
-    ),
-  );
-}
 
 const linkedEnvironmentRecord = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -1002,6 +937,10 @@ describe("relay managed tunnel recovery", () => {
     const target = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "replacement-tunnel",
       tunnelName: "environment-1-tunnel",
@@ -1010,7 +949,6 @@ describe("relay managed tunnel recovery", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "replacement-generation",
       generation: 3,
-      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1059,9 +997,15 @@ describe("relay managed tunnel recovery", () => {
 });
 
 describe("relay environment unlink", () => {
-  it.effect("drops the unlinked endpoint's held webhooks, even if clearing fails", () => {
+  it.effect("clears held webhooks before releasing ownership and retries failed clearing", () => {
     const cleared: Array<string> = [];
     const endpointKey = "0123456789abcdef";
+    let releases = 0;
+    const failure = new HookInbox.HookInboxError({
+      operation: "clear",
+      endpointKey,
+      cause: new Error("unavailable"),
+    });
     const unlink = (clearFails: boolean) =>
       unlinkEnvironmentRecord({
         userId: "user-1",
@@ -1076,6 +1020,10 @@ describe("relay environment unlink", () => {
               Effect.succeed({
                 userId: "user-1",
                 environmentId: "environment-1",
+                incarnationId: "10000000-0000-4000-8000-000000000001",
+                accountEpoch: 1,
+                endpointGeneration: 0,
+                capacityReleasedAt: null,
                 hostname: "dev-0123456789abcdef.example.test",
                 tunnelId: "tunnel-1",
                 tunnelName: `goatrelay-managedendpoint-dev-${endpointKey}`,
@@ -1085,25 +1033,28 @@ describe("relay environment unlink", () => {
                 origin: null,
                 updatedAt: "2026-07-28T00:00:00.000Z",
                 generation: 1,
-                incarnationId: "allocation-test",
               }),
             clearInbox: (input) =>
               clearFails
-                ? Effect.fail(
-                    new HookInbox.HookInboxError({
-                      operation: "clear",
-                      endpointKey: input.endpointKey,
-                      cause: new Error("unavailable"),
-                    }),
-                  )
+                ? Effect.fail(failure)
                 : Effect.sync(() => void cleared.push(input.endpointKey)),
+            finishRelease: () =>
+              Effect.sync(() => {
+                releases++;
+                return true;
+              }),
           }),
         ),
       );
     return Effect.gen(function* () {
       expect(yield* unlink(false)).toBe(true);
       expect(cleared).toEqual([endpointKey]);
-      expect(yield* unlink(true)).toBe(true);
+      expect(releases).toBe(1);
+      expect(yield* Effect.flip(unlink(true))).toBe(failure);
+      expect(releases).toBe(1);
+      expect(yield* unlink(false)).toBe(true);
+      expect(releases).toBe(2);
+      expect(cleared).toEqual([endpointKey, endpointKey]);
     });
   });
 
@@ -1112,6 +1063,10 @@ describe("relay environment unlink", () => {
     const deprovisionTarget = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "tunnel-1",
       tunnelName: "environment-1-tunnel",
@@ -1120,7 +1075,6 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "generation-before-unlink",
       generation: 1,
-      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1260,6 +1214,10 @@ describe("relay environment unlink", () => {
     const target = {
       userId: "user-1",
       environmentId: "environment-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment-1.example.test",
       tunnelId: "tunnel-1",
       tunnelName: "environment-1-tunnel",
@@ -1268,17 +1226,14 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "original-generation",
       generation: 1,
-      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {
-      expect(
-        yield* unlinkEnvironmentRecord({
-          userId: "user-1",
-          environmentId: "environment-1",
-        }),
-      ).toBe(true);
+      const input = { userId: "user-1", environmentId: "environment-1" };
+      expect(yield* unlinkEnvironmentRecord(input)).toBe(false);
+      expect(targets).toEqual([target]);
+      expect(yield* unlinkEnvironmentRecord(input)).toBe(true);
       expect(targets).toEqual([target, target]);
     }).pipe(
       Effect.provide(
@@ -1386,6 +1341,8 @@ describe("relay routing fallback", () => {
         environmentBearer: (effect) =>
           effect.pipe(
             Effect.provideService(RelayEnvironmentPrincipal, {
+              userId: "user-1",
+              accountEpoch: 1,
               environmentId,
               environmentPublicKey,
             }),
@@ -1439,6 +1396,7 @@ describe("relay routing fallback", () => {
       }
       expect(published).toEqual(
         threadIds.map((threadId) => ({
+          userId: "user-1",
           environmentId,
           environmentPublicKey,
           threadId,
@@ -1474,7 +1432,7 @@ describe("relay CORS", () => {
         expect(response.status).toBe(500);
         expect(response.headers["access-control-allow-origin"]).toBe("*");
         expect(response.headers["access-control-expose-headers"]).toBe(
-          "traceparent,www-authenticate",
+          "traceparent,www-authenticate,retry-after",
         );
       }
     }).pipe(Effect.scoped),

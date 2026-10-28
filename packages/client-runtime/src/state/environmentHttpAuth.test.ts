@@ -25,6 +25,7 @@ import type { HttpClient } from "effect/http";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   ConnectionTransientError,
+  HubProxyConnectionTarget,
   RelayConnectionTarget,
   type PreparedConnection,
   type PreparedHttpAuthorization,
@@ -679,3 +680,45 @@ describe("authenticated environment HTTP requests", () => {
     }),
   );
 });
+
+it.effect("refreshes proxied HTTP with the hub identity and preserves the node prefix", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness((number) =>
+      number === 1 ? credentialRejectedResponse() : Response.json(SESSION),
+    );
+    const nodeId = EnvironmentId.make("node");
+    const prepared: PreparedConnection = {
+      ...PREPARED,
+      environmentId: nodeId,
+      target: new HubProxyConnectionTarget({
+        environmentId: nodeId,
+        connectionId: "via-hub",
+        label: "Node",
+      }),
+      httpBaseUrl: "https://previous.example.test/hub/nodes/node/",
+      httpAuthorization: {
+        _tag: "Dpop",
+        accessToken: "old",
+        expiresAtEpochMs: 0,
+        hubProxyOwner: {
+          environmentId: TARGET.environmentId,
+          nodeId: "node",
+          httpBaseUrl: PREPARED.httpBaseUrl,
+          endpointMode: "managed",
+        },
+      },
+    };
+    yield* fetchEnvironmentSessionState({ ...harness.input, prepared }).pipe(
+      Effect.provide(harness.httpLayer),
+    );
+    expect(harness.authorizations).toEqual([
+      { expectedEnvironmentId: TARGET.environmentId },
+      { expectedEnvironmentId: TARGET.environmentId, rejectedAccessToken: "current-token" },
+    ]);
+    expect(harness.calls.map((call) => call.url)).toEqual([
+      `${CURRENT_ORIGIN}/hub/nodes/node/api/auth/session`,
+      `${RENEWED_ORIGIN}/hub/nodes/node/api/auth/session`,
+    ]);
+    expect(harness.proofs.map((proof) => proof.url)).toEqual(harness.calls.map((call) => call.url));
+  }),
+);

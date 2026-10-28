@@ -249,6 +249,25 @@ jobs:
             exit 1
           fi
 
+      - name: PostgreSQL prerequisite for relay tests
+        if: matrix.task == 'test-relay' || (matrix.task == 'test-changed' && contains(needs.scope.outputs.changed_tests, 'infra/relay/'))
+        run: |
+          if ! command -v pg_config >/dev/null; then
+            if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+              echo "::error::Relay tests require pre-provisioned PostgreSQL binaries on $RUNNER_NAME (pg_config, initdb, postgres, pg_ctl, psql)"
+              exit 1
+            fi
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql
+          fi
+          node infra/relay/scripts/test-postgres.ts check
+
+      - name: Test relay
+        if: matrix.task == 'test-relay'
+        env:
+          ALCHEMY_TEST_DEV: "true"
+        run: vp run --filter goat-relay test
+
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
       - name: Test
@@ -266,6 +285,7 @@ jobs:
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
+          ALCHEMY_TEST_DEV: "true"
           CHANGED_TESTS: ${{ needs.scope.outputs.changed_tests }}
           CHANGED_NODE_TESTS: ${{ needs.scope.outputs.changed_node_tests }}
           VITEST_PW_DEBUG: "1"

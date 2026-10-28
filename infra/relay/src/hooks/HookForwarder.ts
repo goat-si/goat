@@ -1,3 +1,4 @@
+import * as HookDeliveryAuthorization from "./HookDeliveryAuthorization.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -214,6 +215,7 @@ const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
   });
 
 const make = Effect.gen(function* () {
+  const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
   const heldHooks = yield* HeldHooks.HeldHooks;
   const settings = yield* RelayConfiguration.RelayConfiguration;
   const httpClient = yield* HttpClient.HttpClient;
@@ -286,14 +288,9 @@ const make = Effect.gen(function* () {
       return errorResponse(413, "payload_too_large");
     }
 
-    const endpoint = yield* heldHooks.resolveEndpoint(parsed.endpointKey).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Failed to resolve hook endpoint", {
-          endpointKey: parsed.endpointKey,
-          errorTag: error._tag,
-        }).pipe(Effect.as(null)),
-      ),
-    );
+    const resolved = yield* heldHooks.resolveEndpoint(parsed.endpointKey).pipe(Effect.result);
+    if (Result.isFailure(resolved)) return errorResponse(503, "authorization_unavailable");
+    const endpoint = resolved.success;
     if (!endpoint) {
       yield* outcome("not_found");
       return hookNotFound();
@@ -328,6 +325,7 @@ const make = Effect.gen(function* () {
       jti: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
     });
     const hook = {
+      authorization: endpoint.authorization,
       id: deliveryId,
       receivedAt,
       method: request.method,
@@ -370,6 +368,9 @@ const make = Effect.gen(function* () {
       return HttpServerResponse.jsonUnsafe({ queued: true }, { status: 202 });
     });
 
+    const permitted = yield* authorization.allowed(endpoint.authorization).pipe(Effect.result);
+    if (Result.isFailure(permitted)) return errorResponse(503, "authorization_unavailable");
+    if (!permitted.success) return hookNotFound();
     const upstream = yield* sendUpstream(endpoint.httpBaseUrl, hook).pipe(
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.result,

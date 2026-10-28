@@ -63,7 +63,7 @@ export const environmentEntries = {
     description:
       "Update selected environment-wide preferences, including standing instructions and their project overrides.",
     guide:
-      "Use a live full-access/default calling thread or a full-access client. Omitted fields stay unchanged. Empty customInstructions or standingInstructions clears that text.\n\nIn projectStandingInstructions, project text replaces the environment policy for launches in that project. An empty string disables it there; null removes the override and restores inheritance.\n\nUpdates go through normal settings persistence and change notifications.",
+      "Use a live full-access/default calling thread or a full-access client. Omitted fields stay unchanged. hub.enabled selects this hub; hub.connectDevicesHubProxy is standing consent for all trusted devices on the linked Connect account. Enabling requires signing out of GOAT Connect and signing back in for new credentials. Disabling either policy ends privileged Connect sessions, including direct hub access. Empty customInstructions or standingInstructions clears that text.\n\nIn projectStandingInstructions, project text replaces the environment policy for launches in that project. An empty string disables it there; null removes the override and restores inheritance.\n\nUpdates go through normal settings persistence and change notifications.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,

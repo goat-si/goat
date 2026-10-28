@@ -1,3 +1,4 @@
+import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import {
   id,
   space,
@@ -4330,13 +4331,7 @@ it.effect.each(["pull", "ack"] as const)(
         let completed = 0;
         const controlledFs = FileSystem.FileSystem.of({
           ...fs,
-          watch: () =>
-            Stream.unwrap(
-              PubSub.subscribe(events).pipe(
-                Effect.tap(() => Deferred.succeed(watching, undefined)),
-                Effect.map(Stream.fromSubscription),
-              ),
-            ).pipe(Stream.tap(() => Deferred.succeed(eventSeen, undefined))),
+          watch: watchedEvents(events, watching, eventSeen),
         });
         const transformer: Statement.Transformer = (statement) =>
           Effect.gen(function* () {

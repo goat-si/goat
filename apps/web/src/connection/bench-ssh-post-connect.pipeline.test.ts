@@ -136,6 +136,8 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
     Layer.succeed(Relay.ManagedRelayDpopSigner, { thumbprint: unused(), createProof: unused }),
     Layer.succeed(Relay.ManagedRelayClient, {
       relayUrl: "https://unused.invalid",
+      deleteAccount: unused,
+      getAccountDeletion: unused,
       listEnvironments: unused,
       listDevices: unused,
       createEnvironmentLinkChallenge: unused,

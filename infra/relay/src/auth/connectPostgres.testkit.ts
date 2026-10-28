@@ -12,6 +12,7 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as TestClock from "effect/testing/TestClock";
 import * as ConnectAccounts from "./ConnectAccounts.ts";
+import { policyServicesLayer } from "../accounts/test/PolicyPostgresLayers.ts";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as RelayDb from "../db.ts";
 
@@ -40,11 +41,12 @@ const databaseFixture = Layer.effect(
       const sql = yield* Effect.promise(() =>
         NodeFSP.readFile(new URL(`${name}/migration.sql`, migrationsRoot), "utf8"),
       );
-      for (const statement of sql
-        .split(";")
-        .map((part) => part.trim())
-        .filter(Boolean))
-        yield* scoped.unsafe(statement);
+      // Dollar-quoted blocks contain semicolons, so they run as one statement.
+      for (const chunk of sql.split("--> statement-breakpoint"))
+        for (const statement of (chunk.includes("$$") ? [chunk] : chunk.split(";"))
+          .map((part) => part.trim())
+          .filter(Boolean))
+          yield* scoped.unsafe(statement);
     }
     return yield* PgDrizzle.makeWithDefaults().pipe(
       Effect.provideService(PgClient.PgClient, scoped),
@@ -72,6 +74,9 @@ export const postgresFixture = Layer.mergeAll(
   RelayDb.RelayTransactions.layer,
 ).pipe(Layer.provideMerge(databaseFixture));
 
+/** Real account policy over the fixture database; consumers supply RelayConfiguration and Crypto. */
+export const postgresPolicyFixture = policyServicesLayer();
+
 export const awaitPostgresMilestone = Effect.fn("test.awaitPostgresMilestone")(function* <A, E>(
   milestone: Deferred.Deferred<void>,
   worker: Fiber.Fiber<A, E>,
@@ -82,4 +87,10 @@ export const awaitPostgresMilestone = Effect.fn("test.awaitPostgresMilestone")(f
       Effect.andThen(Effect.die("PostgreSQL worker exited before reaching its milestone")),
     ),
   );
+});
+
+/** Connect sessions never invite accounts; fixtures grant access the way the operator API does. */
+export const allowAccount = Effect.fn("test.allowAccount")(function* (userId: string, epoch = 1) {
+  const db = yield* RelayDb.RelayDb;
+  yield* db.$client`INSERT INTO relay_account_access (user_id, status, account_epoch) VALUES (${userId}, 'allowed', ${epoch}) ON CONFLICT (user_id) DO UPDATE SET status = 'allowed', account_epoch = excluded.account_epoch`;
 });

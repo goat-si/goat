@@ -1,3 +1,4 @@
+import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -67,19 +68,6 @@ const decodeHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
-
-const layerServerSettings = () =>
-  ServerSettingsModule.layer.pipe(
-    Layer.provide(ServerSecretStore.layer),
-    Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
-    Layer.provideMerge(
-      Layer.fresh(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "goat-server-settings-test-",
-        }),
-      ),
-    ),
-  );
 
 const layerServerSettingsWithSecrets = () =>
   ServerSettingsModule.layer.pipe(
@@ -165,10 +153,11 @@ const withRegisteredSettingsWatchers = <A, E, R>(
       remove: (filePath, options) =>
         fs.remove(filePath, options).pipe(Effect.tap(() => notify(filePath))),
       symlink: (from, to) => fs.symlink(from, to).pipe(Effect.tap(() => notify(to))),
-      watch: (directory) =>
+      watch: (directory, options) =>
         Stream.unwrap(
           PubSub.subscribe(events).pipe(
             Effect.tap(() => {
+              options?.onReady?.();
               const count = (counts.get(directory) ?? 0) + 1;
               counts.set(directory, count);
               return Deferred.succeed(registration(directory, count), undefined);

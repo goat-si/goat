@@ -44,6 +44,26 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("Connect hub standing consent", () => {
+  it("defaults off and preserves an explicit Boolean policy", () => {
+    expect(decodeServerSettings({}).hub.connectDevicesHubProxy).toBe(false);
+    expect(decodeServerSettings({ hub: { enabled: true } }).hub.connectDevicesHubProxy).toBe(false);
+    for (const enabled of [false, true]) {
+      const patch = { hub: { connectDevicesHubProxy: enabled } };
+      expect(decodeServerSettingsPatch(patch)).toEqual(patch);
+      expect(decodeServerSettings(patch).hub.connectDevicesHubProxy).toBe(enabled);
+      expect(requiredScopesForServerSettingsPatch(decodeServerSettingsPatch(patch))).toEqual([
+        "settings:write",
+      ]);
+    }
+    for (const invalid of [null, "true"]) {
+      expect(() =>
+        decodeServerSettingsPatch({ hub: { connectDevicesHubProxy: invalid } }),
+      ).toThrow();
+    }
+  });
+});
+
 describe("agent tool listing", () => {
   it("lists the core tools to an environment that never chose, and keeps full for one that did", () => {
     expect(decodeServerSettings({}).agentToolListing).toBe("core");

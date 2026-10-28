@@ -32,6 +32,9 @@ Cloud runs start on the hub or wherever a sign-in exists.
 
 Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys**.
 
+GOAT Connect is coming soon. Its account-wide standing consent and sign-out/sign-in workflow
+are described in [Reach every machine through one hub](./remote-access.md#reach-every-machine-through-one-hub).
+
 ## Add, repair, or remove a device
 
 In **Settings → Hub → Hub devices**, **Add device to hub** joins a machine to the

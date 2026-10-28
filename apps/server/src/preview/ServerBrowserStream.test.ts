@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServer } from "effect/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as SessionLifetime from "../auth/SessionSocketLifetime.testkit.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { routeLayer } from "./ServerBrowserStream.ts";
@@ -33,7 +34,7 @@ const makeAuth = (
   error?: EnvironmentAuth.ServerAuthCredentialError,
 ) => {
   const requests: string[] = [];
-  const layer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
+  const authLayer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
     authenticateWebSocketUpgrade: (request) => {
       requests.push(request.originalUrl);
       return error
@@ -46,7 +47,7 @@ const makeAuth = (
           });
     },
   });
-  return { layer, requests };
+  return { layer: Layer.merge(authLayer, SessionLifetime.layerStable), requests };
 };
 
 const mutations = [

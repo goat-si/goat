@@ -125,6 +125,7 @@ export class ConnectionTransientError extends Schema.TaggedError<ConnectionTrans
   "ConnectionTransientError",
   {
     reason: ConnectionTransientReason,
+    retryAfterMillis: Schema.optionalKey(Schema.Number),
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
     sshPreparationTimedOut: Schema.optionalKey(Schema.Boolean),
@@ -203,6 +204,12 @@ export type PreparedHttpAuthorization =
       readonly _tag: "Dpop";
       readonly accessToken: string;
       readonly expiresAtEpochMs: number;
+      readonly hubProxyOwner?: {
+        readonly environmentId: EnvironmentId;
+        readonly nodeId: string;
+        readonly httpBaseUrl: string;
+        readonly endpointMode: "managed" | "direct";
+      };
     };
 
 export interface PreparedConnection {

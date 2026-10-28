@@ -147,7 +147,16 @@ it.effect("reads secrets afresh when the directory watcher is unavailable", () =
       }
     }).pipe(
       Effect.provide(layers),
-      Effect.provideService(FileSystem.FileSystem, { ...fs, watch: () => Stream.empty }),
+      Effect.provideService(FileSystem.FileSystem, {
+        ...fs,
+        watch: (_path, options) =>
+          Stream.unwrap(
+            Effect.sync(() => {
+              options?.onReady?.();
+              return Stream.empty;
+            }),
+          ),
+      }),
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );

@@ -7,8 +7,9 @@ import type * as FcmDeliveries from "./FcmDeliveries.ts";
 export class FcmDeliveryQueueSender extends Context.Service<
   FcmDeliveryQueueSender,
   {
-    readonly send: (
-      body: FcmDeliveries.FcmDeliveryJob,
-    ) => Effect.Effect<void, Cloudflare.Queues.SendError>;
+    readonly send: (body: {
+      readonly payload: FcmDeliveries.FcmDeliveryJob;
+      readonly signature: string;
+    }) => Effect.Effect<void, Cloudflare.Queues.SendError>;
   }
 >()("goat-relay/agentActivity/FcmDeliveryQueueSender") {}
