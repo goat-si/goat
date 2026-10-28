@@ -7,6 +7,8 @@ import { ClaudeSettings, ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/process";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -95,115 +97,27 @@ function withFakeClaudeEnv<A, E, R>(
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-text-" });
     const binDir = yield* makeFakeClaudeBinary(tempDir);
     const pathDelimiter = (yield* HostProcess.isWindows) ? ";" : ":";
-    const previousPath = process.env.PATH;
-    const previousOutput = process.env.GOAT_FAKE_CLAUDE_OUTPUT;
-    const previousExitCode = process.env.GOAT_FAKE_CLAUDE_EXIT_CODE;
-    const previousStderr = process.env.GOAT_FAKE_CLAUDE_STDERR;
-    const previousArgsMustContain = process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN;
-    const previousArgsMustNotContain = process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;
-    const previousStdinMustContain = process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
-    const previousConfigDirMustBe = process.env.GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE;
-    const previousCwdMustNotBe = process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE;
-
+    const updates = {
+      PATH: `${binDir}${pathDelimiter}${process.env.PATH ?? ""}`,
+      GOAT_FAKE_CLAUDE_OUTPUT: input.output,
+      GOAT_FAKE_CLAUDE_EXIT_CODE: input.exitCode === undefined ? undefined : String(input.exitCode),
+      GOAT_FAKE_CLAUDE_STDERR: input.stderr,
+      GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN: input.argsMustContain,
+      GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN: input.argsMustNotContain,
+      GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN: input.stdinMustContain,
+      GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,
+      GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE: input.configDirMustBe,
+    };
+    const previous = Object.fromEntries(Object.keys(updates).map((key) => [key, process.env[key]]));
+    const apply = (values: Readonly<Record<string, string | undefined>>) => {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
     yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        process.env.PATH = `${binDir}${pathDelimiter}${previousPath ?? ""}`;
-        process.env.GOAT_FAKE_CLAUDE_OUTPUT = input.output;
-
-        if (input.exitCode !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_EXIT_CODE = String(input.exitCode);
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_EXIT_CODE;
-        }
-
-        if (input.stderr !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_STDERR = input.stderr;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_STDERR;
-        }
-
-        if (input.argsMustContain !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN = input.argsMustContain;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN;
-        }
-
-        if (input.argsMustNotContain !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN = input.argsMustNotContain;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;
-        }
-
-        if (input.stdinMustContain !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN = input.stdinMustContain;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
-        }
-
-        if (input.cwdMustNotBe !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE = input.cwdMustNotBe;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE;
-        }
-
-        if (input.configDirMustBe !== undefined) {
-          process.env.GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE = input.configDirMustBe;
-        } else {
-          delete process.env.GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE;
-        }
-      }),
-      () =>
-        Effect.sync(() => {
-          process.env.PATH = previousPath;
-
-          if (previousOutput === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_OUTPUT;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_OUTPUT = previousOutput;
-          }
-
-          if (previousExitCode === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_EXIT_CODE;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_EXIT_CODE = previousExitCode;
-          }
-
-          if (previousStderr === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_STDERR;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_STDERR = previousStderr;
-          }
-
-          if (previousArgsMustContain === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN = previousArgsMustContain;
-          }
-
-          if (previousArgsMustNotContain === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN = previousArgsMustNotContain;
-          }
-
-          if (previousStdinMustContain === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN = previousStdinMustContain;
-          }
-
-          if (previousCwdMustNotBe === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE = previousCwdMustNotBe;
-          }
-
-          if (previousConfigDirMustBe === undefined) {
-            delete process.env.GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE;
-          } else {
-            process.env.GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE = previousConfigDirMustBe;
-          }
-        }),
+      Effect.sync(() => apply(updates)),
+      () => Effect.sync(() => apply(previous)),
     );
 
     const config = decodeClaudeSettings({
@@ -342,6 +256,54 @@ const memoryOutput = { text: "Synthetic result", assertionKind: "inference", evi
 const memoryOperations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
 
 it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
+  it.effect.each(["stdout", "stderr"] as const)(
+    "rejects oversized finite %s before accepting generation",
+    (outputStream) =>
+      Effect.gen(function* () {
+        const nativeSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        let drained = 0;
+        const chunk = new Uint8Array(1024 * 1024).fill(32);
+        const spawner = ChildProcessSpawner.make((command) =>
+          nativeSpawner.spawn(command).pipe(
+            Effect.map((child) => {
+              return {
+                ...child,
+                [outputStream]: child[outputStream].pipe(
+                  Stream.concat(
+                    Stream.fromIterable(Array.from({ length: 9 }, () => chunk)).pipe(
+                      Stream.tap(() =>
+                        Effect.sync(() => {
+                          drained++;
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
+              };
+            }),
+          ),
+        );
+        const result = yield* withFakeClaudeEnv(
+          { output: JSON.stringify({ structured_output: { title: "Synthetic title" } }) },
+          (generation) =>
+            generation
+              .generateThreadTitle({
+                cwd: process.cwd(),
+                message: "Synthetic request",
+                modelSelection: createModelSelection(
+                  ProviderInstanceId.make("claudeCode"),
+                  SYNTHETIC_CLAUDE_STANDARD_MODEL,
+                ),
+              })
+              .pipe(Effect.result),
+        ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+        expect(drained).toBe(9);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure.detail).toContain("Failed to collect process output");
+      }),
+  );
+
   it.effect.each(memoryOperations)(
     "records the resolved Claude alias and option suffix for %s",
     (operation) =>

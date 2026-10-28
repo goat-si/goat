@@ -1,4 +1,5 @@
-import { describe, expect, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { describe, expect } from "vite-plus/test";
 import type { ModelCapabilities } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelCapabilities } from "@goat/shared/model";
@@ -9,6 +10,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import {
+  collectStreamAsString,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -158,3 +160,20 @@ describe("ProviderCommandNotFoundError", () => {
     });
   });
 });
+
+it.effect("rejects truncated structured output instead of returning a parseable prefix", () =>
+  Effect.gen(function* () {
+    const bytes = new TextEncoder().encode('{"ok":true}');
+    expect(yield* collectStreamAsString(Stream.make(bytes), { maxBytes: bytes.length })).toBe(
+      '{"ok":true}',
+    );
+    const result = yield* collectStreamAsString(
+      Stream.make(new TextEncoder().encode('{"ok":true}garbage')),
+      { maxBytes: bytes.length },
+    ).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    expect(yield* collectStreamAsString(Stream.make(bytes), { maxBytes: bytes.length })).toBe(
+      '{"ok":true}',
+    );
+  }),
+);
