@@ -16,7 +16,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools that accept clientRequestId             | 53               |
 | Mutating tools whose clientRequestId GOAT deduplicates | 50               |
 | Input parameters with a description                    | 385 of 880 (44%) |
-| Tools with a worked example                            | 45 of 233        |
+| Tools with a worked example                            | 53 of 233        |
 | CLI commands, listed / unlisted                        | 62 / 19          |
 | CLI commands with usage examples                       | 0 of 81          |
 | Listed CLI leaf commands with --json                   | 11 of 47         |
@@ -176,7 +176,7 @@ One intent is spelled several ways (tool counts in parentheses):
 
 Only 44% of input parameters carry a description. 91 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `device_list`, `goat_attachment_discard`, and 81 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
-45 of 233 tools show a worked call, in their description or as examples `goat_describe` serves (37 tools). 123 tools have no `Tool.Title`. Description length is uneven; the longest are:
+53 of 233 tools show a worked call, in their description or as examples `goat_describe` serves (45 tools). 123 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
 | Tool                     | Characters | Declared at                                             |
 | ------------------------ | ---------- | ------------------------------------------------------- |
@@ -243,19 +243,19 @@ Every `goat ...` invocation in the docs names a real command and flags it accept
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat triage`.
 
-The server's `/llms.txt` lists every registry path with its summary. `goat_describe` serves input and output schemas from the registered tools, and examples for 37 of them.
+The server's `/llms.txt` lists every registry path with its summary. `goat_describe` serves input and output schemas from the registered tools, and examples for 45 of them.
 
 ## Fixes ranked by agent impact
 
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (210 `return`, 23 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Complete the on-demand tool reference.** 99 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 37 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
+3. **Complete the on-demand tool reference.** 99 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 45 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
 4. **Describe every parameter.** 495 of 880 parameters have no description, and 91 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 96 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 7. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 8. **`--json` on every listed leaf command.** Only 11 of 47 offer it; agents parse human tables otherwise.
-9. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 45 tools show a call. Registry examples are data that goat_describe serves and a test decodes against each tool's parameters; render them into CLI help too, and run them in a smoke test.
+9. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 53 tools show a call. Registry examples are data that goat_describe serves and a test decodes against each tool's parameters; render them into CLI help too, and run them in a smoke test.
 10. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
 11. **Move routing policy out of tool descriptions.** The longest description is 1688 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 12. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.

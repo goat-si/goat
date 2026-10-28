@@ -23,7 +23,7 @@ const read = {
 const retry =
   " Calls stay in this environment, including targets in another project. Thread callers need a live orchestration credential; outside clients need orchestration:operate and write access. Targets cannot exceed the caller's permission modes. clientRequestId is optional: only an identical retained key and arguments guarantee deduplication, for at least 24 hours. Without a key there is no retry guarantee. accepted means command acceptance, not provider execution or effect completion. Read the resource's receipt with the same key after an uncertain response; never infer non-execution from a missing receipt, which may have expired.";
 const receiptGuide =
-  'Read only this caller\'s retained request in this environment. Thread identity or outside-client session identity must match, and the caller must still hold the recorded grant, including live orchestration:operate authorization. Returns completed with the recorded MCP result/failure, in_progress, unknown, or missing. commandStatus can reconcile a committed command if outcome recording failed; accepted confirms intake only. Reading never redispatches. Example: goat_call {path: "thread.lifecycle_receipt", args: {clientRequestId: "delete-1"}}. Missing may mean expired and never proves non-execution.';
+  "Read only this caller's retained request in this environment. Thread identity or outside-client session identity must match, and the caller must still hold the recorded grant, including live orchestration:operate authorization. Returns completed with the recorded MCP result/failure, in_progress, unknown, or missing. commandStatus can reconcile a committed command if outcome recording failed; accepted confirms intake only. Reading never redispatches. Missing may mean expired and never proves non-execution.";
 
 export const lifecycleEntries = {
   "queue.resume": entry({
@@ -38,6 +38,12 @@ export const lifecycleEntries = {
       'Omit threadId for the calling thread. Existing ordering, usage-limit, provider-disabled and drain rules apply. Example: goat_call {path: "queue.resume", args: {threadId: "thread:target", clientRequestId: "resume-1"}}.' +
       retry,
     reconcile: "queue.receipt",
+    examples: [
+      {
+        title: "Resume a held queue",
+        args: { threadId: "<threadId>", clientRequestId: "resume-1" },
+      },
+    ],
   }),
   "queued_run.start": entry({
     ...write,
@@ -51,6 +57,12 @@ export const lifecycleEntries = {
       'Pass queuedRunId from queue.list. The run must still be queued and the thread stopped. Existing usage-limit, provider-disabled and drain rules apply. Example: goat_call {path: "queued_run.start", args: {threadId: "thread:target", queuedRunId: "run:queued", clientRequestId: "start-1"}}.' +
       retry,
     reconcile: "queued_run.receipt",
+    examples: [
+      {
+        title: "Start a selected queued user run",
+        args: { threadId: "<threadId>", queuedRunId: "<queuedRunId>", clientRequestId: "start-1" },
+      },
+    ],
   }),
   "thread.delete": entry({
     ...write,
@@ -64,6 +76,12 @@ export const lifecycleEntries = {
       'Deletion is irreversible; there is no restore tool. Use thread.organize for reversible archive instead. Refuses the caller\'s own thread, every nonterminal run (including queued/preparing), active background subagents and provider-native read-only children. Existing cleanup applies. Example: goat_call {path: "thread.delete", args: {threadId: "thread:target", clientRequestId: "delete-1"}}.' +
       retry,
     reconcile: "thread.lifecycle_receipt",
+    examples: [
+      {
+        title: "Permanently delete an inactive thread",
+        args: { threadId: "<threadId>", clientRequestId: "delete-1" },
+      },
+    ],
   }),
   "provider_session.detach": entry({
     ...write,
@@ -77,6 +95,16 @@ export const lifecycleEntries = {
       'Pass an explicit providerSessionId belonging to threadId. A live provider session will disconnect, which can affect threads sharing provider-session continuity. The caller cannot detach its own thread. A later send creates or resumes a session according to provider support; there is no reattach tool. Example: goat_call {path: "provider_session.detach", args: {threadId: "thread:target", providerSessionId: "session:target", clientRequestId: "detach-1"}}.' +
       retry,
     reconcile: "provider_session.receipt",
+    examples: [
+      {
+        title: "Disconnect another thread's provider session",
+        args: {
+          threadId: "<threadId>",
+          providerSessionId: "<providerSessionId>",
+          clientRequestId: "detach-1",
+        },
+      },
+    ],
   }),
   "queue.receipt": entry({
     ...read,
@@ -87,6 +115,7 @@ export const lifecycleEntries = {
     description:
       "Read a retained queue.resume outcome without running it again. Missing may mean expired, never proof of non-execution.",
     guide: receiptGuide,
+    examples: [{ title: "Reconcile queue resumption", args: { clientRequestId: "resume-1" } }],
   }),
   "queued_run.receipt": entry({
     ...read,
@@ -97,6 +126,9 @@ export const lifecycleEntries = {
     description:
       "Read a retained queued_run.start outcome without redispatch. Missing may mean expired, never proof of non-execution.",
     guide: receiptGuide,
+    examples: [
+      { title: "Reconcile a selected queued start", args: { clientRequestId: "start-1" } },
+    ],
   }),
   "thread.lifecycle_receipt": entry({
     ...read,
@@ -107,6 +139,12 @@ export const lifecycleEntries = {
     description:
       "Read a retained thread.delete result, including after deletion. Reading does not require the deleted target. Missing may mean expired.",
     guide: receiptGuide,
+    examples: [
+      {
+        title: "Reconcile deletion after the thread disappears",
+        args: { clientRequestId: "delete-1" },
+      },
+    ],
   }),
   "provider_session.receipt": entry({
     ...read,
@@ -117,5 +155,8 @@ export const lifecycleEntries = {
     description:
       "Read a retained provider_session.detach outcome without redispatch. Command acceptance does not confirm disconnect completion.",
     guide: receiptGuide,
+    examples: [
+      { title: "Reconcile provider session disconnection", args: { clientRequestId: "detach-1" } },
+    ],
   }),
 } as const;
