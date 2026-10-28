@@ -26,7 +26,7 @@ const fixture = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 const gone = { id: "thread-gone", deleted: "2026-01-01" };
-const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const now = 2 * 86_400_000;
 const attachment = Effect.fn("test.attachment")(function* (segment = gone.id) {
   const fs = yield* FileSystem.FileSystem;
