@@ -106,12 +106,14 @@ describe("DesktopCuaDriver", () => {
         assert.equal((yield* test.next).status, "stopped");
         yield* test.request("after-update");
         assert.equal((yield* test.next).status, "ready");
-        // GOAT's own check before the first agent start, then each agent's helper.
+        // GOAT's own check before each agent start (this fixture's driver never passes it), then
+        // each agent's helper, the new generation once the old one stopped.
         assert.deepEqual(
           test.helperLaunches.map(({ driverPath }) => driverPath),
           [
             HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
             HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
+            HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
             HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
           ],
         );

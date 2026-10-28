@@ -135,8 +135,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperGeneration = 0;
   /** The helper bundle a passing check proved; another one starting voids that proof. */
   let provenBundle: string | undefined;
-  /** The next macOS agent start runs the check first: once per dropped proof, never in a loop. */
-  let reproveWanted = true;
   let helperSeen = false;
   let lastReadiness: string | undefined;
   let watches = 0;
@@ -214,7 +212,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       if (!entry.helper || !entry.crashed) return Effect.void;
       // Consume it once, before a retiring host can be replaced or a new check proves it again.
       entry.crashed = false;
-      reproveWanted = true;
       return noteHelper((state) =>
         withoutProof(
           state,
@@ -385,7 +382,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       // Another installed generation starts: what the last check proved was about the old one.
       if (provenBundle !== undefined && provenBundle !== engine.bundle.bundlePath) {
         provenBundle = undefined;
-        reproveWanted = true;
         yield* noteHelper((state) =>
           withoutProof(state, proofLostDetail(PROOF_RESET_DETAIL.generation, environment.platform)),
         );
@@ -743,17 +739,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       Effect.suspend(() => (checkHost !== undefined && owned === checkHost ? stop : Effect.void)),
     ),
   );
-  const verify = Effect.suspend(() => {
-    reproveWanted = false;
-    return check;
-  }).pipe(mutex.withPermits(1), Effect.withSpan("desktop.cua.verify"));
+  const verify = check.pipe(mutex.withPermits(1), Effect.withSpan("desktop.cua.verify"));
   /**
    * Proves again, with a person's check, what a start, wake, unlock, update or helper exit dropped.
    * Bounded; the agent's start goes on whatever it finds (missing grants stopped it before this).
    */
   const reprove = (request: DesktopCuaDriverRequest, grants: Grants) =>
     Effect.suspend(() => {
-      reproveWanted = false;
       knownGrants = grants;
       return check;
     }).pipe(
@@ -816,12 +808,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             );
             return;
           }
-          // An update installed since the last proof is proven before it serves an agent.
-          const updated =
+          // Unproven, or proven for a generation an update has since replaced.
+          if (
             selected.kind === "helper" &&
-            provenBundle !== undefined &&
-            provenBundle !== selected.bundle.bundlePath;
-          if (selected.kind === "helper" && (reproveWanted || updated))
+            (!helperState.confirmed ||
+              (provenBundle !== undefined && provenBundle !== selected.bundle.bundlePath))
+          )
             yield* reprove(request, grants);
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
@@ -868,18 +860,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           // not the one an earlier check confirmed.
           Effect.andThen(
             selected.kind === "helper"
-              ? Effect.suspend(() => {
-                  reproveWanted = true;
-                  return noteHelper((state) =>
-                    withoutProof(
-                      state,
-                      proofLostDetail(
-                        `${COMPUTER_USE_HELPER_NAME} could not start, so capture and the tree are no longer proven.`,
-                        environment.platform,
-                      ),
+              ? noteHelper((state) =>
+                  withoutProof(
+                    state,
+                    proofLostDetail(
+                      `${COMPUTER_USE_HELPER_NAME} could not start, so capture and the tree are no longer proven.`,
+                      environment.platform,
                     ),
-                  );
-                })
+                  ),
+                )
               : Effect.void,
           ),
           Effect.andThen(
@@ -958,7 +947,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           mutex.withPermits(1)(
             Effect.suspend(() => {
               provenBundle = undefined;
-              reproveWanted = true;
               return noteHelper((state) =>
                 state.confirmed || state.capture !== "pending"
                   ? withoutProof(state, proofLostDetail(PROOF_RESET_DETAIL[event], "darwin"))

@@ -282,34 +282,41 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
-  it.effect("needs a fresh check after the helper's grants were taken away and given back", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const test = yield* fixture({
-          platform: "darwin",
-          helper: { granted: true },
-          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
-        });
-        assert.isTrue((yield* test.verify).verified);
-        yield* test.request("agent");
-        assert.equal((yield* test.next).status, "ready");
-        const proven = test.readiness.at(-1);
-        assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+  it.effect(
+    "proves the helper again by itself after its grants were taken away and given back",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const proven = test.readiness.at(-1);
+          assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
 
-        yield* test.restart;
-        assert.equal((yield* test.next).status, "stopped");
-        yield* test.answerAsHelper({ granted: false });
-        yield* test.request("revoked");
-        assert.equal((yield* test.next).status, "unavailable");
-        yield* test.answerAsHelper({ granted: true });
-        yield* test.request("given-back");
-        assert.equal((yield* test.next).status, "ready");
-        const running = test.readiness.at(-1);
-        assert.equal(running?.readiness.helper, "authenticated");
-        assert.equal(running?.readiness.capture, "pending");
-        assert.isFalse(running ? computerUseReady(running.readiness) : true);
-      }),
-    ),
+          yield* test.restart;
+          assert.equal((yield* test.next).status, "stopped");
+          yield* test.answerAsHelper({ granted: false });
+          yield* test.request("revoked");
+          assert.equal((yield* test.next).status, "unavailable");
+          yield* test.answerAsHelper({ granted: true });
+          yield* test.request("given-back");
+          assert.equal((yield* test.next).status, "ready");
+          const running = test.readiness.at(-1);
+          assert.equal(running?.readiness.helper, "authenticated");
+          // The old proof was dropped with the grants; GOAT's own check proved it again.
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            [true, false, true, false],
+          );
+          assert.equal(running?.readiness.capture, "ready");
+          assert.isTrue(running ? computerUseReady(running.readiness) : false);
+        }),
+      ),
   );
 
   it.effect.each([
