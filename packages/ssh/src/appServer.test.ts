@@ -294,7 +294,7 @@ describe("GOAT app server attachment", () => {
   );
 
   it.live(
-    "attaches to the one running app server in nightly, stable, or dev state, and does not start another",
+    "attaches to the one running app server in nightly or stable state, and does not start another",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -312,8 +312,6 @@ describe("GOAT app server attachment", () => {
           expect(yield* fs.exists(`${host.home}/.goat/runtime`)).toBe(false);
         };
         yield* attach(".goat/desktop-nightly/userdata");
-        yield* attach(".goat/dev");
-        yield* attach(".t3/dev");
 
         const exited = yield* ChildProcessSpawner.ChildProcessSpawner.pipe(
           Effect.flatMap((spawner) => spawner.spawn(ChildProcess.make("true", []))),
@@ -370,7 +368,27 @@ describe("GOAT app server attachment", () => {
         if (preferred.status !== "ready") return;
         expect(preferred.remoteServerKind).toBe("app");
         expect(preferred.remotePort).toBe(nightly.port);
+        // The stable app server it passed over is reported, not ignored silently.
+        expect(yield* probeAppServer(uploadTarget).pipe(Effect.provide(both.spawner))).toEqual({
+          kind: "attach",
+          port: nightly.port,
+          version: attachableDescriptor.serverVersion,
+          stateDir: ".goat/desktop-nightly/userdata",
+          otherLive: [".goat/desktop/userdata"],
+        });
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("a server running from development desktop state is never attached", () =>
+    Effect.gen(function* () {
+      for (const stateDir of [".goat/dev", ".t3/dev"]) {
+        const dev = yield* startAppServer(attachableDescriptor);
+        const host = yield* makeHost({ pid: process.pid, port: dev.port, stateDir });
+        expect(yield* probeAppServer(uploadTarget).pipe(Effect.provide(host.spawner))).toEqual({
+          kind: "none",
+        });
+      }
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.live(
@@ -457,11 +475,15 @@ describe("GOAT app server attachment", () => {
 
   it("declines an app server whose protocols this client cannot speak", () => {
     const answer = (descriptor: object) =>
-      parseAppServerProbe(`GOAT_APP_SERVER=live 1 3773\n${JSON.stringify(descriptor)}\n`);
+      parseAppServerProbe(
+        `GOAT_APP_SERVER=live 1 3773 .goat/desktop/userdata\n${JSON.stringify(descriptor)}\nGOAT_APP_SERVER_OTHERS=\n`,
+      );
     expect(answer(attachableDescriptor)).toEqual({
       kind: "attach",
       port: 3773,
       version: attachableDescriptor.serverVersion,
+      stateDir: ".goat/desktop/userdata",
+      otherLive: [],
     });
     expect(
       answer({

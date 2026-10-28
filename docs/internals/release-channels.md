@@ -46,7 +46,7 @@ To stop stable releases, label an issue `release-blocker` (and close it to resum
 
 ## Side-by-side desktop state
 
-A packaged nightly or preview build keeps its state in `~/.goat/desktop-nightly` and stable keeps
+A packaged nightly or preview build (dated or PR) keeps its state in `~/.goat/desktop-nightly` and stable keeps
 `~/.goat/desktop` (`resolveDesktopBaseDir` in `apps/desktop/src/app/DesktopStatePaths.ts`). The
 bundled server derives everything from that base directory, so the split covers its database and
 secrets too. On a nightly's first launch `apps/desktop/src/app/DesktopChannelStateMigration.ts`
