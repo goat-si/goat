@@ -161,6 +161,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
         source: "return 7;",
         resetValues: false,
         limits: DEFAULT_SCREEN_RUN_LIMITS,
+        deadlineMillis: Date.now() + DEFAULT_SCREEN_RUN_LIMITS.cellWallMs,
       },
     ]
       .map((frame) => JSON.stringify(frame))
