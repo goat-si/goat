@@ -119,6 +119,7 @@ export class ServerBrowserContexts {
   private readonly options: Options;
   private readonly contexts = new Map<string, Promise<BrowserContext>>();
   private readonly clearing = new Map<string, Promise<void>>();
+  private readonly profileTurns = new Map<string, Promise<void>>();
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
 
@@ -275,6 +276,24 @@ export class ServerBrowserContexts {
 
   async clearProfile(profileId: string) {
     if (profileId === INCOGNITO_BROWSER_PROFILE_ID) return;
+    await this.withProfile(profileId, () => this.clearUnlocked(profileId));
+  }
+
+  /**
+   * Runs one profile's open or clear alone, so an open cannot pin a store a clear just removed,
+   * and two opens of one profile pin the same store.
+   */
+  withProfile<A>(profileId: string, run: () => Promise<A>): Promise<A> {
+    const result = (this.profileTurns.get(profileId) ?? Promise.resolve()).then(run);
+    const settled = result.then(constVoid, constVoid);
+    this.profileTurns.set(profileId, settled);
+    void settled.then(() => {
+      if (this.profileTurns.get(profileId) === settled) this.profileTurns.delete(profileId);
+    });
+    return result;
+  }
+
+  private async clearUnlocked(profileId: string) {
     const key = JSON.stringify([profileId, null]);
     const clearing = (async () => {
       const pending = this.contexts.get(key);

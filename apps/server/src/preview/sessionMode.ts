@@ -179,6 +179,7 @@ export interface SessionOpenDeps<Snapshot, Tab extends { readonly session: Previ
       profileId: string,
       store: PreviewSessionStore,
     ) => Promise<PreviewSessionStore>;
+    readonly withProfile: <A>(profileId: string, run: () => Promise<A>) => Promise<A>;
   };
   readonly desktopAvailable: boolean;
   readonly open: (fields: {
@@ -190,8 +191,19 @@ export interface SessionOpenDeps<Snapshot, Tab extends { readonly session: Previ
   readonly discard: (snapshot: Snapshot, tab?: Tab) => Promise<void>;
 }
 
-/** Opens a new tab in exactly the requested session; a profile's first open pins its store. */
-export const openInSession = async <Snapshot, Tab extends { readonly session: PreviewTabSession }>(
+/**
+ * Opens a new tab in exactly the requested session. A profile open runs alone for that profile,
+ * reading its pin, opening, and pinning the store the tab used on its first success.
+ */
+export const openInSession = <Snapshot, Tab extends { readonly session: PreviewTabSession }>(
+  deps: SessionOpenDeps<Snapshot, Tab>,
+  session: RequestedSession,
+): Promise<Tab> =>
+  session.mode === "isolated"
+    ? openTab(deps, session)
+    : deps.contexts.withProfile(session.profileId, () => openTab(deps, session));
+
+const openTab = async <Snapshot, Tab extends { readonly session: PreviewTabSession }>(
   deps: SessionOpenDeps<Snapshot, Tab>,
   session: RequestedSession,
 ): Promise<Tab> => {
