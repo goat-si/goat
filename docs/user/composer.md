@@ -220,8 +220,8 @@ sent when you submit.
 Click the composer's microphone to record, then confirm to insert the text or send it.
 
 The desktop app transcribes on this computer, even when the thread runs on another
-machine: the recording goes to OpenAI's transcription service through this
-computer's Codex sign-in or OpenCodex, and never to the other machine. If you
+machine: the recording goes to the transcription service through this computer's
+Codex sign-in or OpenCodex, and never to the other machine. If you
 turned off **Local environment** in **Settings › Connections**, desktop voice input
 is unavailable until you turn it back on. In a browser, the environment you are
 connected to transcribes. The recorder shows which device transcribes.
