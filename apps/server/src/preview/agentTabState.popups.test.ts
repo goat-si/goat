@@ -14,7 +14,7 @@ it("gives each real popup to the agent that opened it when their responses arriv
       agentOperating: true,
       popups: new PopupAttribution(),
     };
-    await watchOpenings(await context.newCDPSession(page), tab);
+    await watchOpenings(await context.newCDPSession(page), tab, () => 0);
     const slow = Promise.withResolvers<void>();
     await context.route("https://popup.test/slow", async (route) => {
       await slow.promise;

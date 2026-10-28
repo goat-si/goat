@@ -74,10 +74,11 @@ export class PopupAttribution {
 export const watchOpenings = async (
   cdp: Pick<CDPSession, "send" | "on">,
   tab: Opener & { readonly popups: PopupAttribution },
+  now: () => number,
 ) => {
   const self = (await cdp.send("Target.getTargetInfo")).targetInfo.targetId;
   cdp.on("Target.targetCreated", ({ targetInfo }) => {
-    if (targetInfo.openerId === self) tab.popups.opened(targetInfo.targetId, tab, Date.now());
+    if (targetInfo.openerId === self) tab.popups.opened(targetInfo.targetId, tab, now());
   });
   await cdp.send("Target.setDiscoverTargets", { discover: true });
 };
