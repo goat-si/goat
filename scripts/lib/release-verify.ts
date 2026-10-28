@@ -16,6 +16,7 @@ import type { PlatformError } from "effect/PlatformError";
 import { runtimeManifestAssetName } from "@goat/shared/runtimeManifest";
 import { checkReleaseRuntimeManifest } from "./runtime-manifest.ts";
 import { parseUpdateManifest, type UpdateManifest } from "./update-manifest.ts";
+import { SOURCE_REPOSITORY_REFERENCE } from "./source-repository.ts";
 
 export class ReleaseVerificationError extends Schema.TaggedError<ReleaseVerificationError>()(
   "ReleaseVerificationError",
@@ -192,7 +193,7 @@ const sharedHostedHomes = new Set(["/home/runner", "/Users/runner", "C:\\Users\\
 
 /** D-10: shipped code links to published pages and releases, never the GOAT source repository. */
 export function sourceRepositoryUrlProblems(name: string, content: string): string[] {
-  return /(?:github\.com[/:]|repos\/)goat-si\/goat(?!(?:-releases|_))/i.test(content)
+  return new RegExp(SOURCE_REPOSITORY_REFERENCE, "i").test(content)
     ? [`${name}: source repository URL`]
     : [];
 }
