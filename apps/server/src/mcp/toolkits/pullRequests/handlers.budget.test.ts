@@ -10,6 +10,7 @@ describe("pull request reads within the budget", () => {
     () =>
       Effect.gen(function* () {
         const big = "x".repeat(200 * 1024);
+        const longUrl = `https://github.com/sample-tools/goat/pull/4?${"a".repeat(1500)}`;
         const comment = (id: string) => ({
           id,
           kind: "issue-comment" as const,
@@ -72,7 +73,7 @@ describe("pull request reads within the budget", () => {
                 entries:
                   input.query === "huge"
                     ? [
-                        { ...entry(4), title: big },
+                        { ...entry(4), title: "\u0001".repeat(4096), url: longUrl },
                         { ...entry(5), title: big },
                       ]
                     : input.query === "many"
@@ -125,6 +126,9 @@ describe("pull request reads within the budget", () => {
         });
         expect(huge.entries.map((row) => row.number)).toEqual([4, 5]);
         expect(huge.rowsClipped).toBe(true);
+        // Identifiers stay whole for follow-up reads; text is cut by its escaped JSON size.
+        expect(huge.entries[0]?.url).toBe(longUrl);
+        expect(Buffer.byteLength(JSON.stringify(huge.entries[0]?.title))).toBeLessThanOrEqual(1026);
         within(huge);
         const many = yield* harness
           .call("goat_pull_request_search", { state: "open", query: "many" })

@@ -21,13 +21,14 @@ const hidden = ThreadId.make("thread:hidden");
 const shown = ThreadId.make("thread:shown");
 
 it.effect(
-  "checks the caller may read the thread before any diff, and cuts a long diff at the budget",
+  "checks the caller may read the thread before any diff, and cuts a long diff so its JSON fits the budget",
   () =>
     Effect.gen(function* () {
       const queried = yield* Ref.make(0);
       const diff = (threadId: ThreadId, toTurnCount: number) =>
         Ref.update(queried, (count) => count + 1).pipe(
-          Effect.as({ threadId, fromTurnCount: 0, toTurnCount, diff: "+".repeat(300 * 1024) }),
+          // Tabs double when JSON-escaped, so raw bytes alone would overrun the budget.
+          Effect.as({ threadId, fromTurnCount: 0, toTurnCount, diff: "\t".repeat(300 * 1024) }),
         );
       const service = yield* ThreadDiffMcpService.ThreadDiffMcpService.pipe(
         Effect.provide(
@@ -67,6 +68,7 @@ it.effect(
 
       const read = yield* service.fullDiff(scope, { threadId: shown, toTurnCount: 4 });
       expect(read.truncated).toBe(true);
-      expect(Buffer.byteLength(read.diff, "utf8")).toBe(256 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(256 * 1024);
+      expect(read.diff.length).toBeGreaterThan(100 * 1024);
     }),
 );
