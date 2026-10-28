@@ -7,8 +7,12 @@ import {
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   canSendToGoatBot,
+  goatBotActivity,
+  goatBotActivityTask,
   goatBotReplyingSince,
   initialGoatBotEnsure,
+  observeResidentAtom,
+  residentAtomValue,
   retryGoatBotEnsure,
   settleGoatBotEnsure,
   startGoatBotEnsure,
@@ -20,7 +24,7 @@ import {
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotRef, EnvironmentId } from "@goat/contracts";
+import type { ChannelBotRef, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,
@@ -36,9 +40,11 @@ import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { environmentThreadDetails } from "../../state/threads";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
+import { useReplying } from "./useReplying";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import {
@@ -126,6 +132,21 @@ function newSession(environmentId: EnvironmentId): Session {
 }
 
 /** A stable snapshot and a single ensure/send queue per destination environment. */
+/** A worker thread's detail only while another screen keeps it loaded; never loads it. */
+function useResidentThreadProjection(ref: ScopedThreadRef | null) {
+  const atom = ref === null ? null : environmentThreadDetails.threadAtom(ref);
+  const resident = atom !== null && residentAtomValue(appAtomRegistry, atom) !== null;
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      atom === null || !resident ? () => {} : observeResidentAtom(appAtomRegistry, atom, onChange),
+    [atom, resident],
+  );
+  const thread = useSyncExternalStore(subscribe, () =>
+    atom === null ? null : residentAtomValue(appAtomRegistry, atom),
+  );
+  return thread?.projection ?? null;
+}
+
 export function useMobileGoatBotSession(visible: boolean) {
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
@@ -371,6 +392,32 @@ export function useMobileGoatBotSession(visible: boolean) {
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     [visibleTurnItems],
   );
+  const reading = useReplying(replyingSince, visible);
+  const activityTask = useMemo(
+    () => goatBotActivityTask({ visibleTurnItems, readers: goatBotItemReaders }),
+    [visibleTurnItems],
+  );
+  const worker = activityTask?.chip.worker;
+  // Thread keys carry no host, so remote work is never looked up locally.
+  const workerRef = useMemo(
+    () =>
+      !visible || worker === undefined || worker.host !== undefined
+        ? null
+        : scopeThreadRef(worker.environmentId, worker.threadId),
+    [visible, worker],
+  );
+  const workerShell = useThreadShell(workerRef);
+  const workerProjection = useResidentThreadProjection(workerRef);
+  const activity = visible
+    ? goatBotActivity({
+        reading,
+        task: activityTask,
+        worker:
+          workerRef === null
+            ? null
+            : { shell: workerShell?.source ?? null, projection: workerProjection },
+      })
+    : null;
   const resolved: GoatBotAvailability =
     !selection.supported && environment === null && home.botRef !== null
       ? { kind: "offline", environmentId: home.botRef.environmentId }
@@ -415,6 +462,7 @@ export function useMobileGoatBotSession(visible: boolean) {
   return {
     rows,
     replyingSince,
+    activity,
     canSend,
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,

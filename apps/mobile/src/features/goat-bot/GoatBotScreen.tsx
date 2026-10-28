@@ -6,14 +6,13 @@ import { memo, useCallback, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
-import { useReplying } from "./useReplying";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
-import { GoatBotBubble, GoatBotTypingIndicator } from "./GoatBotBubble";
+import { GoatBotBubble } from "./GoatBotBubble";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
@@ -266,6 +265,20 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   );
 });
 
+/** What GOAT Bot is doing, in place of typing dots. Static, so the list repaints nothing. */
+function GoatBotActivityBubble({ text }: { readonly text: string }) {
+  const bodyText = useScaledTextRole("body");
+  return (
+    <View accessibilityRole="text" accessibilityLiveRegion="polite" className="self-start">
+      <GoatBotBubble side="in" tail>
+        {(textColor) => (
+          <Text style={{ color: textColor, opacity: 0.72, ...bodyText }}>{text}</Text>
+        )}
+      </GoatBotBubble>
+    </View>
+  );
+}
+
 export function GoatBotScreen(props: {
   readonly visible: boolean;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
@@ -293,7 +306,6 @@ export function GoatBotScreen(props: {
   const hasBanner = session.availability !== "ready";
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(44);
-  const replying = useReplying(session.replyingSince, props.visible);
   const renderItem = useCallback(
     ({ item }: { item: GoatBotRow }) => (
       <GoatBotTimelineRow
@@ -374,7 +386,9 @@ export function GoatBotScreen(props: {
             Ask GOAT Bot for anything. It answers here and starts work in its own threads.
           </Text>
         }
-        ListFooterComponent={replying ? <GoatBotTypingIndicator /> : null}
+        ListFooterComponent={
+          session.activity ? <GoatBotActivityBubble text={session.activity.text} /> : null
+        }
       />
       <View
         className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
