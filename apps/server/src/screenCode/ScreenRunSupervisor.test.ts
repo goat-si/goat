@@ -151,17 +151,92 @@ it.live(
             "/* first */ 'use strict'; return (function () { return this === undefined; })();",
           ),
         ).toBe(true);
+        // The body stays a function body: its function declarations mean what they would unwrapped.
+        expect(yield* cell("redeclare", "function f() {} var f; return typeof f;")).toBe(
+          "function",
+        );
+        expect(
+          yield* cell(
+            "annex-b",
+            "function g() { return 1; } { function g() { return 2; } } return g();",
+          ),
+        ).toBe(2);
+        // Names the saver uses cannot collide with the cell's own.
+        expect(
+          yield* cell(
+            "helper-names",
+            "let __screenExport = 1; let __screenKeep = () => { throw 1; }; const kept = 3; return __screenExport + kept;",
+          ),
+        ).toBe(4);
+        expect(yield* cell("kept-after-shadow", "return kept;")).toBe(3);
+        // QuickJS reads the directives: an escaped CRLF in an earlier one still leaves the cell strict.
+        expect(
+          yield* cell(
+            "crlf",
+            '"a\\\r\n"; "use strict"; return (function () { return this === undefined; })();',
+          ),
+        ).toBe(true);
         expect(yield* cell("sloppy", "'use strict' + ''; loose = 1; return loose;")).toBe(1);
+        // A write to a kept name reaches the binding its closures read, whatever the name is.
+        yield* cell("define-v", "let v = 1; function readV() { return v; } return v;");
+        expect(yield* cell("write-v", "v = 9; return [v, readV()];")).toEqual([9, 9]);
+        // A let the scanner might take for a const stays writable; QuickJS judges constness.
+        yield* cell(
+          "misread",
+          "let m = 1; let y = 2; y++ / (function () {\n  const m = 2; return m;\n})(); return m;",
+        );
+        expect(yield* cell("write-m", "m = 9; return m;")).toBe(9);
+        // Saving runs nothing the cell replaced, such as a hooked Object.defineProperty.
+        const hooked = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("hooked", limits) },
+          "const original = Object.defineProperty; Object.defineProperty = (...args) => { console.log('define'); return original(...args); }; const afterHook = 1; return afterHook;",
+          false,
+        );
+        expect(hooked.console).toEqual([]);
+        expect(yield* cell("after-hook", "return afterHook;")).toBe(1);
+        // A getter on the returned value or error runs before the cell's bindings are published.
+        expect(
+          yield* cell(
+            "getter-result",
+            "const result = 7; return { get value() { return globalThis.result ?? 'absent'; } };",
+          ),
+        ).toEqual({ value: "absent" });
+        const thrown = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("getter-error", limits) },
+          "const reason = 'kept'; const error = new Error(); Object.defineProperty(error, 'message', { get() { return globalThis.reason ?? 'absent'; } }); throw error;",
+          false,
+        );
+        expect(thrown.error).toMatchObject({ message: "absent" });
+        expect(yield* cell("after-getters", "return [result, reason];")).toEqual([7, "kept"]);
+        // Saving restores a global a nested var named, without reading Object.prototype.
+        const inherited = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("inherited-get", limits) },
+          "globalThis.victim = 1; Reflect.defineProperty(Object.prototype, 'get', { get() { console.log('inherited'); return undefined; }, configurable: true }); function g() { var victim = 2; } return 0;",
+          false,
+        );
+        expect(inherited.console).toEqual([]);
+        expect(yield* cell("victim", "delete Object.prototype.get; return victim;")).toBe(1);
+        // Saving uses the real global object, never one a cell put in globalThis.
+        const proxied = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("proxied", limits) },
+          "const real = globalThis; const log = (k) => console.log('trap ' + String(k)); globalThis = new Proxy(real, { get(t, k) { log(k); return Reflect.get(t, k); }, has(t, k) { log(k); return Reflect.has(t, k); }, defineProperty(t, k, d) { log(k); return Reflect.defineProperty(t, k, d); }, getOwnPropertyDescriptor(t, k) { log(k); return Reflect.getOwnPropertyDescriptor(t, k); }, deleteProperty(t, k) { log(k); return Reflect.deleteProperty(t, k); } }); const x = 1; return x;",
+          false,
+        );
+        expect(proxied.console).toEqual([]);
         // A var inside a nested function is not the cell's binding, even when it names an inherited one.
         yield* cell("nested", "function f() { var toString = 1; } return 0;");
         expect(yield* cell("inherited", "return typeof toString;")).toBe("function");
-        // A directive ends at a line break before a block, so the block runs strict.
+        // QuickJS decides which strings are directives, and the cell runs as it would unwrapped:
+        // it counts one ended by a semicolon, and not one followed by a block on the next line.
         const strictBlock = yield* supervisor.runCell(
           { runId: "r", turnId: "t", context: context("strict-block", limits) },
-          '"use strict"\n{ undeclared = 9; }\nreturn 1;',
+          '"use strict";\n{ undeclared = 9; }\nreturn 1;',
           false,
         );
         expect(strictBlock.status).toBe("failed");
+        expect(
+          yield* cell("quickjs-sloppy", '"use strict"\n{ undeclaredToo = 9; }\nreturn 1;'),
+        ).toBe(1);
         // A line opening with != still compares with the directive, so the cell stays sloppy.
         expect(yield* cell("compare", '"use strict"\n!= ""; looser = 1; return looser;')).toBe(1);
         yield* cell("constant", "const fixed = 1; return fixed;");
@@ -173,6 +248,33 @@ it.live(
         ).toBe(true);
       }),
     ),
+);
+
+it.live("a cell cut off by its deadline keeps nothing, and a reset after it still runs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 300 });
+      const supervisor = fixtureSupervisor({
+        asset,
+        limits,
+        hostBridge: new ScreenHostBridge(),
+        scheduleDeadline: childDeadlineOnly,
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+      const run = (cellId: string, source: string, reset = false) =>
+        supervisor.runCell(
+          { runId: "r", turnId: "t", context: context(cellId, limits) },
+          source,
+          reset,
+        );
+      expect((yield* run("hang", "let saved = 7; await new Promise(() => {});")).status).toBe(
+        "deadline",
+      );
+      expect((yield* run("after", "return typeof saved;")).value).toBe("undefined");
+      expect((yield* run("reset", "return 42;", true)).value).toBe(42);
+    }),
+  ),
 );
 
 it.live("a disposed supervisor boots no further spare", () =>

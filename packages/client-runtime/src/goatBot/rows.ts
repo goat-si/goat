@@ -69,6 +69,8 @@ export interface GoatBotMessagePresentation {
   readonly requestKey: string | null;
   readonly replyToKey?: string | null;
   readonly clientKey?: string | null;
+  /** The work a bot message is about, such as the task its acknowledgement started. */
+  readonly taskId?: string | null;
   /** Answers a bot question offers. */
   readonly options?: ReadonlyArray<string>;
   readonly memory?: MemoryReportReference;
@@ -184,6 +186,11 @@ export function goatBotConversationPreview(input: {
 
 /** Messages further apart than this start a new group. */
 const GOAT_BOT_GROUP_GAP_MS = 5 * 60 * 1000;
+/**
+ * Reception gives up after 45 seconds and then sends a failure note, so a reply that has not come
+ * by this point is not coming and the reading indicator stops.
+ */
+export const GOAT_BOT_READING_LIMIT_MS = 90_000;
 const GOAT_BOT_STAMP_GAP_MS = 60 * 60 * 1000;
 const NO_OPTIONS: ReadonlyArray<string> = [];
 

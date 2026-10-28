@@ -20,6 +20,7 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { toastManager } from "../ui/toast";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
@@ -106,7 +107,7 @@ function GoatBotThreadSession({
   }, [confirmedHere, removal, retryAvailability, threadId]);
   const unarchive = useOrchestrationCommand(threadEnvironment.unarchive, { reportFailure: false });
   return (
-    <>
+    <GoatBotActivityContext value={removal === null ? session.activity : null}>
       {shell !== null ? <ThreadVisitWatermark threadRef={threadRef} /> : null}
       {shell === null && bootstrapped && confirmedHere && removal !== "deleted" ? (
         <GoatBotRemovalProbe
@@ -153,7 +154,7 @@ function GoatBotThreadSession({
         }
         legacyAgentRoute={legacyAgentRoute}
       />
-    </>
+    </GoatBotActivityContext>
   );
 }
 
