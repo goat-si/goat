@@ -276,14 +276,17 @@ export const makeSurface = <Tab extends ScreenTab>(
     drawPointer(tab, { phase, x, y, ...withCursor });
     notePointer(tab, x, y);
   };
+  const replayed = new WeakSet<object>();
   /**
-   * A viewer that opens mid-run sees where the agent's owned pointer last was on this page. Call
-   * after its first viewport: a viewer places a pointer only once it knows the viewport.
+   * After a viewer's first frame, it sees where the agent's owned pointer last was on this page.
+   * A viewer places a pointer by its viewport and frame, so an earlier replay would be misplaced.
    */
-  const replayPointer = (
+  const framed = (
     tab: Tab,
     viewer: ScreenTab["viewers"] extends ReadonlySet<infer V> ? V : never,
   ) => {
+    if (replayed.has(viewer)) return;
+    replayed.add(viewer);
     const last = pointerByTab.get(tab);
     if (last === undefined || last.document !== tab.documentGeneration) return;
     const { sequence, withCursor } = pointerOwner(tab);
@@ -342,7 +345,7 @@ export const makeSurface = <Tab extends ScreenTab>(
     notify,
     showPointer,
     notePointer,
-    replayPointer,
+    framed,
     service: {
       onAuthorityChange,
       cursorState,

@@ -1577,10 +1577,9 @@ const make = Effect.gen(function* () {
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop) {
-        tab.control.assertAgentMayDispatch();
-        return screen.notePointer(tab, x, y);
-      }
+      // Before drawing too: a Stop during a long target lookup must not move the cursor later.
+      tab.control.assertAgentMayDispatch();
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return screen.notePointer(tab, x, y);
       screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
       // A Stop during the move refuses the input before it goes out, without marking dispatch.
@@ -2343,6 +2342,7 @@ const make = Effect.gen(function* () {
         ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
       ).catch(() => null);
       if (data) viewer.push({ _tag: "frame", data: Buffer.from(data, "base64"), ack: Effect.void });
+      screen.framed(tab, viewer);
     };
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     yield* Effect.addFinalizer(() =>
@@ -2394,9 +2394,9 @@ const make = Effect.gen(function* () {
           }),
         ),
       });
+      screen.framed(tab, viewer);
     });
     broadcastViewport(tab);
-    screen.replayPointer(tab, viewer);
     yield* Effect.promise(() => startScreencast(1));
     // An idle page does not repaint for a new screencast, so the viewer
     // starts from a still unless a live frame beat it.
