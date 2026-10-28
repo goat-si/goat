@@ -2,10 +2,12 @@ import {
   COMPUTER_USE_METHODS,
   COMPUTER_USE_PROTOCOL_VERSION,
   computerUseReady,
+  type ComputerUseActionRequest,
 } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import { linuxActionResult } from "./linuxActions.ts";
 import {
   connect,
   decodeHello,
@@ -31,6 +33,50 @@ import { CROPPED_CAPTURE } from "./windowCapture.ts";
 import { STILL_DRAWING, UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
+  it("an empty scoped diff proves neither a targetless key nor a targeted click did nothing", async () => {
+    const helper = await connect();
+    const first = await helper.observe({ query: "Name", maxElements: 2 });
+    const after = await helper.observe({
+      since: first.observation.observationId,
+      query: "Name",
+      maxElements: 2,
+    });
+    expect(after.observation).toMatchObject({ kind: "diff", added: [], changed: [], removed: [] });
+    const actions: ComputerUseActionRequest[] = [
+      {
+        action: "pressKey",
+        key: "enter",
+        delivery: "background",
+        target: first.observation.target,
+        observationId: first.observation.observationId,
+      },
+      {
+        action: "click",
+        at: { element: helper.ref(first.observation, "Name") },
+        delivery: "background",
+        target: first.observation.target,
+        observationId: first.observation.observationId,
+      },
+    ];
+    for (const action of actions)
+      expect(
+        linuxActionResult(
+          action,
+          {
+            isError: false,
+            text: "Input sent.",
+            structured: { effect: "unverifiable" },
+            images: [],
+          },
+          after.observation,
+        ),
+      ).toMatchObject({
+        outcome: "unverifiable",
+        dispatch: "dispatched_unknown",
+      });
+    await helper.close();
+  });
+
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
     let versionReads = 0;
     const gnomeShellVersion = () => {
@@ -166,7 +212,7 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
-  it("a change to the element the action named confirms it, and no change at all is suspected_noop", async () => {
+  it("a target change confirms it, while no visible change stays unverifiable", async () => {
     const helper = await connect();
     helper.driver.state.setValueEffect = "unverifiable";
     const first = await helper.observe();
@@ -180,7 +226,7 @@ describe("Linux computer use helper conformance", () => {
       { action: "click", at: { element: helper.ref(first.observation, "Name") } },
       set.observation,
     );
-    expect(noop).toMatchObject({ outcome: "suspected_noop", dispatch: "verified" });
+    expect(noop).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
     await helper.close();
   });
 

@@ -356,7 +356,7 @@ export function linuxActionResult(
     };
   if (effect === "confirmed") return { ...extra, outcome: "confirmed", dispatch: "verified" };
   if (effect === "suspected_noop" || effect === "not_applied" || effect === "no_drop")
-    return { ...extra, outcome: "suspected_noop", dispatch: "verified" };
+    return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
   // The driver could not tell; the helper's own diff after settling decides. A full read is not
   // comparable with what the agent saw, so it decides nothing. Only a change to the element the
   // action named is evidence of its effect: other changes may come from the app itself.
@@ -368,9 +368,7 @@ export function linuxActionResult(
     (after.changed.some((element) => element.ref === target) || after.removed.includes(target))
   )
     return { ...extra, outcome: "confirmed", dispatch: "verified" };
-  return after.added.length + after.changed.length + after.removed.length === 0
-    ? { ...extra, outcome: "suspected_noop", dispatch: "verified" }
-    : { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
+  return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
 }
 
 /** The element ref an action names, when it names one. */
