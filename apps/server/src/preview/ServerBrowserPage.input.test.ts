@@ -2,6 +2,7 @@ import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { pointAtTarget } from "./ServerBrowserPointer.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);
@@ -103,3 +104,16 @@ it.each([
     expect(await page.locator("button").textContent()).toBe("u0041");
   }),
 );
+
+it("points the agent's cursor at the field it types into, and nowhere for focused typing", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      '<input id="f" style="position:fixed;left:100px;top:40px;width:80px;height:20px;border:0;padding:0">',
+    );
+    const points: Array<[number, number, string]> = [];
+    const pointer: ServerBrowserPage.PointerReporter = async ({ x, y }, phase) =>
+      void points.push([x, y, phase]);
+    await pointAtTarget(page, { locator: "#f" }, pointer);
+    await pointAtTarget(page, {}, pointer);
+    expect(points).toEqual([[140, 50, "move"]]);
+  }));

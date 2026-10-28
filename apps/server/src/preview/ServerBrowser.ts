@@ -97,6 +97,7 @@ import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import { pointAtTarget } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -403,6 +404,17 @@ const make = Effect.gen(function* () {
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
+    (tab, pointer) => {
+      if (tab.desktop)
+        runFork(desktopChannel.pointer({ threadId: tab.threadId, tabId: tab.tabId }, pointer));
+      void tab.recording?.encoder
+        ?.evaluate(
+          ([px, py, click]) =>
+            (globalThis as unknown as EncoderWindow).__goatRecorder?.cursor(px, py, click),
+          [pointer.x, pointer.y, pointer.phase === "click"] as const,
+        )
+        .catch(constVoid);
+    },
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -1552,7 +1564,6 @@ const make = Effect.gen(function* () {
       };
     });
 
-  let pointerSequence = 0;
   /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
   const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
 
@@ -1563,30 +1574,10 @@ const make = Effect.gen(function* () {
 
       if (tab.viewers.size === 0 && !encoder && !tab.desktop)
         return tab.control.assertAgentMayDispatch();
-      const show = (next: "move" | "click") => {
-        const { sequence, withCursor } = screen.nextPointer(tab, pointerSequence);
-        pointerSequence = sequence;
-        for (const viewer of tab.viewers)
-          viewer.push({ _tag: "pointer", phase: next, x, y, sequence, ...withCursor });
-        if (tab.desktop)
-          runFork(
-            desktopChannel.pointer(
-              { threadId: tab.threadId, tabId: tab.tabId },
-              { phase: next, x, y, ...withCursor },
-            ),
-          );
-        void encoder
-          ?.evaluate(
-            ([px, py, click]) =>
-              (globalThis as unknown as EncoderWindow).__goatRecorder?.cursor(px, py, click),
-            [x, y, next === "click"] as const,
-          )
-          .catch(constVoid);
-      };
-      show("move");
+      screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
       if (phase === "click") {
-        show("click");
+        screen.showPointer(tab, x, y, "click");
         await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
       }
     };
@@ -1982,9 +1973,11 @@ const make = Effect.gen(function* () {
           ),
         );
       case "select":
-        return recordAction(tab, "select", () =>
-          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, actionGate()),
-        );
+        return recordAction(tab, "select", async () => {
+          const gate = actionGate();
+          await pointAtTarget(tab.page, input as PreviewAutomationSelectInput, pointerFor(tab));
+          return ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gate);
+        });
       case "drag":
         return recordAction(tab, "drag", () =>
           ServerBrowserPage.drag(
@@ -1999,9 +1992,11 @@ const make = Effect.gen(function* () {
           uploadFiles(tab, input as PreviewAutomationUploadInput),
         );
       case "type":
-        return recordAction(tab, "type", () =>
-          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, actionGate()),
-        );
+        return recordAction(tab, "type", async () => {
+          const gate = actionGate();
+          await pointAtTarget(tab.page, input as PreviewAutomationTypeInput, pointerFor(tab));
+          return ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gate);
+        });
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
