@@ -118,7 +118,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
     if (request.action === "release" || request.action === "close") {
       const current = controls.get(threadId);
       if (request.action === "close") appLeases.release(threadId, request.controlId);
-      else appLeases.settle(request.reservationId, request.notSent === true);
+      else appLeases.settle(threadId, request, request.reservationId, request.notSent === true);
       return reservations.release(
         threadId,
         request,
@@ -182,7 +182,9 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
               call.controlId,
               need,
               now,
-              decision.reservationId ?? undefined,
+              decision.reservationId === null
+                ? undefined
+                : { reservationId: decision.reservationId, connectionId: call.connectionId },
             );
         }
         return withCallPermissions(decision, state);
