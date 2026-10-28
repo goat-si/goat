@@ -23,7 +23,7 @@ import type {
   OrchestrationV2ProjectedTurnItem,
   ScopedThreadRef,
 } from "@goat/contracts";
-import { useCallback, useContext, useEffect, useSyncExternalStore } from "react";
+import { useContext, useEffect, useSyncExternalStore } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
@@ -207,11 +207,8 @@ function pendingInputsAt(queue: GoatBotSendQueue | undefined, _revision: number)
 function useResidentThreadProjection(ref: ScopedThreadRef | null) {
   const atom = ref === null ? null : environmentThreadDetails.threadAtom(ref);
   const resident = atom !== null && residentAtomValue(appAtomRegistry, atom) !== null;
-  const subscribe = useCallback(
-    (onChange: () => void) =>
-      atom === null || !resident ? () => {} : observeResidentAtom(appAtomRegistry, atom, onChange),
-    [atom, resident],
-  );
+  const subscribe = (onChange: () => void) =>
+    atom === null || !resident ? () => {} : observeResidentAtom(appAtomRegistry, atom, onChange);
   const thread = useSyncExternalStore(subscribe, () =>
     atom === null ? null : residentAtomValue(appAtomRegistry, atom),
   );

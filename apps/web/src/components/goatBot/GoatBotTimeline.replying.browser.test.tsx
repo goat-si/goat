@@ -105,13 +105,14 @@ function withMotion(): Disposable {
 }
 
 it("draws both activity states without any running animation", async () => {
+  using _timers = clock();
   using _motion = withMotion();
   // Router off: nothing here links anywhere.
   await using screen = await render(
     <>
       <span data-testid="control" className="animate-spin" />
       <GoatBotActivityContext value={{ state: "working", text: "Working" }}>
-        <GoatBotTimeline rows={[]} replyingSince={new Date().toISOString()} onRetry={() => {}} />
+        <GoatBotTimeline rows={[]} replyingSince={ago(0)} onRetry={() => {}} />
       </GoatBotActivityContext>
     </>,
     { router: false },

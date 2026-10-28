@@ -53,7 +53,7 @@ export interface GoatBotWorkerObservation {
   } | null;
 }
 
-export const GOAT_BOT_READING_TEXT = "Reading your message";
+const GOAT_BOT_READING_TEXT = "Reading your message";
 const ACTIVITY_TEXT_LIMIT = 120;
 const OUTSTANDING: ReadonlySet<ChannelTaskChip["status"]> = new Set([
   "received",
@@ -297,6 +297,7 @@ export function observeResidentAtom<A>(
     if (!check()) onChange();
   });
   peekListeners.set(node, (peekListeners.get(node) ?? 0) + 1);
+  // @effect-diagnostics-next-line globalTimers:off - React subscriptions run outside an Effect runtime.
   timer = setInterval(check, RELEASE_CHECK_MS);
   return release;
 }

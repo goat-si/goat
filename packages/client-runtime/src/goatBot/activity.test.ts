@@ -5,6 +5,7 @@ import {
   NodeId,
   OrchestrationV2TurnItemJson,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   type ChannelTaskChip,
   type OrchestrationV2ProjectedTurnItem,
@@ -299,19 +300,21 @@ describe("goatBotActivity", () => {
 
   it("reads a dedicated worker's blocking request but not a background question", () => {
     const task = chip("task-1");
-    const request = (kind: "command" | "user_input", blocking?: boolean) =>
-      ({
-        shell: {
-          activityRunStatus: "running" as const,
-          pendingRuntimeRequest: {
-            id: "request-1",
-            kind,
-            createdAt: DateTime.makeUnsafe(at(4)),
-            ...(blocking === undefined ? {} : { blocking }),
-          },
+    const request = (
+      kind: "command" | "user_input",
+      blocking?: boolean,
+    ): GoatBotWorkerObservation => ({
+      shell: {
+        activityRunStatus: "running",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("request-1"),
+          kind,
+          createdAt: DateTime.makeUnsafe(at(4)),
+          ...(blocking === undefined ? {} : { blocking }),
         },
-        projection: null,
-      }) as GoatBotWorkerObservation;
+      },
+      projection: null,
+    });
     expect(working(acknowledged(task), request("command"))?.text).toBe("Waiting for your approval");
     expect(working(acknowledged(task), request("user_input", false))?.text).toBe("Working");
   });
@@ -326,11 +329,11 @@ describe("goatBotActivity", () => {
       shell: {
         activityRunStatus: "running",
         pendingRuntimeRequest: {
-          id: "request-b",
+          id: RuntimeRequestId.make("request-b"),
           kind: "command",
           createdAt: DateTime.makeUnsafe(at(8)),
         },
-      } as GoatBotWorkerObservation["shell"],
+      },
       projection: {
         runs: [
           { id: runA, status: "waiting" },
@@ -368,11 +371,11 @@ describe("goatBotActivity", () => {
   });
 
   it("uses only task observations for a session worker it cannot tie to a run", () => {
-    const shell = {
+    const shell: GoatBotWorkerObservation = {
       shell: {
         activityRunStatus: "waiting",
         pendingRuntimeRequest: {
-          id: "request-b",
+          id: RuntimeRequestId.make("request-b"),
           kind: "command",
           createdAt: DateTime.makeUnsafe(at(8)),
         },
@@ -383,7 +386,7 @@ describe("goatBotActivity", () => {
         runtimeRequests: [],
         turnItems: [tool("Edit files", runB, 8)],
       },
-    } as GoatBotWorkerObservation;
+    };
     const noRunId = chip("task-a", {
       status: "dispatching",
       worker: { environmentId: env, threadId: session },
