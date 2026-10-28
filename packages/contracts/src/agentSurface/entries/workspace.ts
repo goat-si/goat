@@ -11,6 +11,19 @@ const common = {
   annotations: { idempotentHint: false, openWorldHint: false },
 } as const;
 export const workspaceEntries = {
+  "workspace.write": entry({
+    ...common,
+    effect: "destructive",
+    capability: "workspace.write",
+    verb: "write",
+    name: "goat_workspace_write",
+    summary: "Conditionally save a live workspace file.",
+    description:
+      "Save UTF-8 workspace text with filesystem:write and an edit-permitting mode. expectedVersion must match a complete read, or be null for create-only. Maximum encoded size is 32768 bytes. Conflicts preserve existing bytes. clientRequestId is required; reuse it only for the same request. No force overwrite, delete or host forwarding.",
+    idempotency: "key",
+    keyRequired: true,
+    reconcile: "workspace.read",
+  }),
   "workspace.list": entry({
     ...common,
     verb: "list",

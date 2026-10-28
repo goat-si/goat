@@ -480,7 +480,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
       const record = yield* stored(journal.readStep(evalRunId, at), at);
       let envelope: Envelope | undefined;
       let restored = false;
-      if (record !== undefined) {
+      if (record !== undefined && !["workspace", "terminal"].includes(entry.resource)) {
         if (record.path !== entry.path || record.args_digest !== digest)
           return yield* halt(
             failure(

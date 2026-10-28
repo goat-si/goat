@@ -58,3 +58,16 @@ export const AgentWorkspaceSearchResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type AgentWorkspaceSearchResult = typeof AgentWorkspaceSearchResult.Type;
+export const AgentWorkspaceWriteInput = Schema.Struct({
+  ...AgentWorkspaceTarget,
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+  contents: Schema.String.check(Schema.isMaxLength(AGENT_TEXT_MAX_BYTES)),
+  expectedVersion: Schema.NullOr(Schema.String.check(Schema.isPattern(/^sha256:[a-f0-9]{64}$/))),
+  textFormat: Schema.optionalKey(ProjectTextFormat),
+});
+export type AgentWorkspaceWriteInput = typeof AgentWorkspaceWriteInput.Type;
+export const AgentWorkspaceWriteResult = Schema.Struct({
+  path: Schema.String,
+  version: Schema.String,
+});
+export type AgentWorkspaceWriteResult = typeof AgentWorkspaceWriteResult.Type;

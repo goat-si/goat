@@ -36,6 +36,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { mcpClientScopes } from "../auth/mcpClientScopes.ts";
+import { OrchestratorMcpFailure } from "@goat/contracts";
 const decodeProject = Schema.decodeEffect(Project);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 
@@ -64,6 +65,7 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
     deletedAt: null,
   });
   const events: Array<{ action: string; target: string; outcome: string }> = [];
+  const auditOnline = yield* Ref.make(true);
   const scope: McpInvocationScope = {
     environmentId,
     issuedAt: 0,
@@ -101,9 +103,20 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
   });
   const audit = Layer.succeed(Audit.AgentWorkspaceTerminalAudit, {
     append: (_scope, action, target, outcome) =>
-      Effect.sync(() => {
-        events.push({ action, target, outcome });
-      }),
+      Ref.get(auditOnline).pipe(
+        Effect.flatMap((online) =>
+          online
+            ? Effect.sync(() => {
+                events.push({ action, target, outcome });
+              })
+            : Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  message: "Audit unavailable.",
+                }),
+              ),
+        ),
+      ),
   });
   const base = Layer.mergeAll(
     entries,
@@ -135,6 +148,7 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
     grants,
     settings,
     events,
+    auditOnline,
     service: Context.get(built, Workspace.AgentWorkspaceMcpService),
   };
 });
@@ -287,4 +301,123 @@ it.effect(
       ).toBe(true);
       expect((yield* settings.getSettings).agentWorkspaceAccess).toBe("off");
     }).pipe(Effect.provide(Settings.layerTest())),
+);
+
+it.effect("#2059 conditionally saves text and creates without clobbering", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    yield* f.fs.writeFileString(`${f.root}/draft.txt`, "\ufeffold\r\ntext\r\n");
+    const loaded = yield* f.service.read(f.scope, {
+      projectId: f.projectId,
+      path: "draft.txt",
+      maxBytes: 32768,
+    });
+    const saved = yield* f.service.write(f.scope, {
+      projectId: f.projectId,
+      path: "draft.txt",
+      contents: "new\ntext\n",
+      expectedVersion: loaded.version!,
+    });
+    expect(Buffer.from(yield* f.fs.readFile(`${f.root}/draft.txt`)).toString("utf8")).toBe(
+      "\ufeffnew\r\ntext\r\n",
+    );
+    yield* f.fs.writeFileString(`${f.root}/draft.txt`, "external edit");
+    const stale = yield* f.service
+      .write(f.scope, {
+        projectId: f.projectId,
+        path: "draft.txt",
+        contents: "lost",
+        expectedVersion: saved.version,
+      })
+      .pipe(Effect.flip);
+    expect(stale.code).toBe("conflict");
+    expect(yield* f.fs.readFileString(`${f.root}/draft.txt`)).toBe("external edit");
+    const created = yield* f.service.write(f.scope, {
+      projectId: f.projectId,
+      path: "new.txt",
+      contents: "first",
+      expectedVersion: null,
+    });
+    expect(created.version).toMatch(/^sha256:/);
+    expect(
+      (yield* f.service
+        .write(f.scope, {
+          projectId: f.projectId,
+          path: "new.txt",
+          contents: "second",
+          expectedVersion: null,
+        })
+        .pipe(Effect.flip)).code,
+    ).toBe("conflict");
+    expect(yield* f.fs.readFileString(`${f.root}/new.txt`)).toBe("first");
+    expect(
+      yield* f.service
+        .write(f.scope, {
+          projectId: f.projectId,
+          path: "large.txt",
+          contents: "한".repeat(12000),
+          expectedVersion: null,
+        })
+        .pipe(Effect.isFailure),
+    ).toBe(true);
+    expect(yield* f.fs.exists(`${f.root}/large.txt`)).toBe(false);
+    expect(JSON.stringify(f.events)).not.toContain("external edit");
+    yield* Ref.set(f.auditOnline, false);
+    expect(
+      yield* f.service
+        .write(f.scope, {
+          projectId: f.projectId,
+          path: "no-audit.txt",
+          contents: "not published",
+          expectedVersion: null,
+        })
+        .pipe(Effect.isFailure),
+    ).toBe(true);
+    expect(yield* f.fs.exists(`${f.root}/no-audit.txt`)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("#2059 rejects omitted and null mutation keys through direct tools and goat_call", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    for (const key of [undefined, null]) {
+      const args = {
+        projectId: "fixture-project",
+        path: "draft.txt",
+        contents: "changed",
+        expectedVersion: null,
+        ...(key === undefined ? {} : { clientRequestId: key }),
+      };
+      for (const route of ["goat_workspace_write", "goat_call"]) {
+        const result = yield* server.callTool({
+          name: route,
+          arguments: route === "goat_call" ? { path: "workspace.write", args } : args,
+        });
+        const content = result.content[0];
+        expect(content?.type).toBe("text");
+        if (content?.type === "text") {
+          const body = JSON.parse(content.text);
+          expect(route === "goat_call" ? body.error.code : body.code).toBe("invalid_request");
+        }
+      }
+    }
+  }).pipe(
+    Effect.provideService(McpSchema.McpServerClient, client),
+    Effect.provideService(McpInvocationContext, {
+      environmentId: EnvironmentId.make("fixture-environment"),
+      capabilities: new Set(["orchestration"] as const),
+      issuedAt: 0,
+      requestNamespace: "fixture-client",
+      grantedScopes: [],
+      reauthorize: () => Effect.void,
+      thread: undefined,
+      client: { sessionId: "fixture-client", label: "Fixture", access: "full-access" },
+    }),
+    Effect.provide(
+      catalog.pipe(
+        Layer.provide(Layer.merge(dependencies, feature)),
+        Layer.provideMerge(McpServer.McpServer.layer),
+      ),
+    ),
+  ),
 );

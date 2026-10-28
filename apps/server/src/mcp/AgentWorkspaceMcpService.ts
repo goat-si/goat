@@ -7,6 +7,9 @@ import {
   type AgentWorkspaceReadResult,
   type AgentWorkspaceSearchInput,
   type AgentWorkspaceSearchResult,
+  type AgentWorkspaceWriteInput,
+  type AgentWorkspaceWriteResult,
+  AGENT_TEXT_MAX_BYTES,
   type ProjectEntry,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -19,6 +22,7 @@ import * as WorkspaceFileSystem from "../workspace/WorkspaceFileSystem.ts";
 import { agentWorkspacePath, validAgentRelativePath } from "../workspace/agentWorkspacePath.ts";
 import * as Access from "./AgentWorkspaceTerminalAccess.ts";
 import * as Audit from "./AgentWorkspaceTerminalAudit.ts";
+import * as ToolAccess from "./McpToolAccess.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
 const Cursor = Schema.Struct({ root: Schema.String, path: Schema.String, after: Schema.String });
@@ -49,6 +53,10 @@ export class AgentWorkspaceMcpService extends Context.Service<
       scope: McpInvocationScope,
       input: AgentWorkspaceReadInput,
     ) => Effect.Effect<AgentWorkspaceReadResult, OrchestratorMcpFailure>;
+    readonly write: (
+      scope: McpInvocationScope,
+      input: AgentWorkspaceWriteInput,
+    ) => Effect.Effect<AgentWorkspaceWriteResult, OrchestratorMcpFailure>;
   }
 >()("goat/mcp/AgentWorkspaceMcpService") {}
 
@@ -162,6 +170,80 @@ const make = Effect.gen(function* () {
     yield* finish(scope, input, permit, "workspace.search", "paths");
     return { entries: page, truncated: result.truncated || omitted };
   });
-  return AgentWorkspaceMcpService.of({ list, search, read });
+  const write = Effect.fn("AgentWorkspace.write")(function* (
+    scope: McpInvocationScope,
+    input: AgentWorkspaceWriteInput,
+  ) {
+    const permit = yield* access.authorize(scope, input, "filesystem:write");
+    if (!validAgentRelativePath(input.path)) return yield* failed();
+    const target = yield* checkPath(permit.root, input.path, true);
+    const authorizeAtPublish = access
+      .authorize(scope, input, "filesystem:write")
+      .pipe(
+        Effect.flatMap((current) =>
+          samePermit(current, permit)
+            ? Effect.void
+            : Effect.fail(Access.denied("The workspace changed before saving.")),
+        ),
+      );
+    yield* ToolAccess.admit({
+      ...input,
+      destination: { ...permit, canonicalRoot: target.root, canonicalPath: target.path },
+    });
+    yield* audit.append(scope, "workspace.write", `${permit.projectId}/${input.path}`, "requested");
+    const loaded =
+      input.expectedVersion === null
+        ? undefined
+        : yield* files
+            .readFilePage({ cwd: permit.root, path: input.path, maxBytes: AGENT_TEXT_MAX_BYTES })
+            .pipe(Effect.mapError(failed));
+    if (loaded && (!loaded.exists || loaded.version !== input.expectedVersion))
+      return yield* new OrchestratorMcpFailure({
+        code: "conflict",
+        message: "The file changed or was deleted. Read it again before saving.",
+      });
+    if (
+      loaded?.textFormat?.encoding === "unsupported" ||
+      loaded?.textFormat?.lineEnding === "mixed"
+    )
+      return yield* Access.invalid("This text format cannot be saved safely.");
+    const textFormat = input.textFormat ?? loaded?.textFormat;
+    const result = yield* files
+      .writeFile({
+        cwd: permit.root,
+        relativePath: input.path,
+        contents: input.contents,
+        ...(input.expectedVersion === null
+          ? { createOnly: true }
+          : { expectedVersion: input.expectedVersion }),
+        ...(textFormat === undefined ? {} : { textFormat }),
+        maxBytes: AGENT_TEXT_MAX_BYTES,
+        authorizeAtPublish,
+      })
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "OrchestratorMcpFailure"
+            ? error
+            : error._tag === "WorkspaceFileChangedOnDiskError" ||
+                error._tag === "WorkspaceFileDeletedOnDiskError"
+              ? new OrchestratorMcpFailure({
+                  code: "conflict",
+                  message: "The file changed or was deleted; no bytes were replaced.",
+                })
+              : Access.invalid(
+                  "The file could not be saved safely. Check its path, encoding and encoded size.",
+                ),
+        ),
+      );
+    yield* audit.append(scope, "workspace.write", `${permit.projectId}/${input.path}`, "completed");
+    if (!result.version)
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "outcome_unknown",
+        message: "The saved file has no version. Read it before another write.",
+      });
+    return { path: result.relativePath, version: result.version };
+  });
+  return AgentWorkspaceMcpService.of({ list, search, read, write });
 });
 export const layer = Layer.effect(AgentWorkspaceMcpService, make);

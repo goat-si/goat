@@ -5,6 +5,18 @@ import * as Access from "../../McpToolAccess.ts";
 import { WorkspaceToolkit } from "./tools.ts";
 
 export const layer = Access.toLayer(WorkspaceToolkit, {
+  goat_workspace_write: Access.destructive(
+    Access.writesWithCapability(
+      (input) =>
+        Effect.gen(function* () {
+          return yield* (yield* Service.AgentWorkspaceMcpService).write(
+            yield* McpInvocationContext,
+            input,
+          );
+        }),
+      { admission: "handler" },
+    ),
+  ),
   goat_workspace_list: Access.reads((input) =>
     Effect.gen(function* () {
       return yield* (yield* Service.AgentWorkspaceMcpService).list(

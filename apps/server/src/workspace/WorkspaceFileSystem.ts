@@ -40,6 +40,7 @@ import type {
   ProjectWriteFileResult,
 } from "@goat/contracts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isNetworkPath } from "@goat/shared/path";
 import * as Context from "effect/Context";
@@ -55,7 +56,7 @@ import * as WorkspacePaths from "./WorkspacePaths.ts";
 import { readFilePage as readPage } from "./readFilePage.ts";
 import { fileHeaderMimeType } from "./fileHeaderMimeType.ts";
 import {
-  atomicWorkspaceWrite,
+  prepareAtomicWorkspaceWrite,
   workspaceFileVersion,
   WorkspaceFileChangedOnDiskError,
   WorkspaceFileDeletedOnDiskError,
@@ -153,6 +154,11 @@ export const WorkspaceFileSystemError = Schema.Union([
   WorkspaceUnsupportedTextFormatError,
 ]);
 export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
+type GuardedWrite<E, R> = ProjectWriteFileInput & {
+  readonly createOnly?: boolean;
+  readonly maxBytes?: number;
+  readonly authorizeAtPublish?: Effect.Effect<void, E, R>;
+};
 
 export class WorkspaceFileSystem extends Context.Service<
   WorkspaceFileSystem,
@@ -174,13 +180,15 @@ export class WorkspaceFileSystem extends Context.Service<
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
     /** Writes inside a known workspace only. */
-    readonly writeFile: (
-      input: ProjectWriteFileInput,
+    readonly writeFile: <E = never, R = never>(
+      input: GuardedWrite<E, R>,
     ) => Effect.Effect<
       ProjectWriteFileResult,
       | WorkspaceFileSystemError
       | WorkspacePaths.WorkspacePathOutsideRootError
       | KnownWorkspaces.UnknownWorkspaceError
+      | E,
+      R
     >;
   }
 >()("goat/workspace/WorkspaceFileSystem") {}
@@ -192,6 +200,7 @@ export const make = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const knownWorkspaces = yield* KnownWorkspaces.KnownWorkspaces;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+  const writeLocks = yield* KeyedLock.make<string>();
 
   const metadataForPath = Effect.fnUntraced(function* (requestedPath: string) {
     const expandedPath = expandHomePath(requestedPath, yield* HostProcess.HomeDirectory);
@@ -605,62 +614,87 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath, absolutePath: target.absolutePath, realTargetPath };
   });
 
-  const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
-    "WorkspaceFileSystem.writeFile",
-  )(function* (input) {
+  const writeFile = Effect.fn("WorkspaceFileSystem.writeFile")(function* <E = never, R = never>(
+    input: GuardedWrite<E, R>,
+  ) {
     yield* knownWorkspaces.assertContains(input.cwd);
     const target = yield* resolveWriteTarget(input);
-
-    const format = input.textFormat;
-    if (format && (format.encoding !== "utf-8" || format.lineEnding === "mixed")) {
-      return yield* new WorkspaceUnsupportedTextFormatError({});
-    }
-    const normalized = format ? input.contents.replace(/\r\n|\r/g, "\n") : input.contents;
-    const contents = format
-      ? (format.bom ? "\ufeff" : "") +
-        (format.lineEnding === "lf"
-          ? normalized
-          : normalized.replaceAll("\n", format.lineEnding === "crlf" ? "\r\n" : "\r"))
-      : normalized;
-    const bytes = new TextEncoder().encode(contents);
-    const platform = yield* HostProcess.Platform;
-    yield* Effect.tryPromise({
-      try: () =>
-        atomicWorkspaceWrite({
-          // Resolve `..` in cwd by name, as resolveWriteTarget did, before following links.
-          workspaceRoot: path.resolve(input.cwd),
-          absolutePath: target.absolutePath,
-          contents: bytes,
-          ...(input.expectedVersion !== undefined
-            ? { expectedVersion: input.expectedVersion }
-            : {}),
-          platform,
-        }),
-      catch: (cause) => {
-        if (isWorkspaceFileChangedOnDiskError(cause) || isWorkspaceFileDeletedOnDiskError(cause))
-          return cause;
-        if (isAtomicWritePathEscapeError(cause)) {
-          return new WorkspaceFilePathEscapeError({
+    return yield* writeLocks.withLock(
+      target.realTargetPath,
+      Effect.gen(function* () {
+        const currentTarget = yield* resolveWriteTarget(input);
+        if (currentTarget.realTargetPath !== target.realTargetPath)
+          return yield* new WorkspaceFileChangedOnDiskError({});
+        const format = input.textFormat;
+        if (format && (format.encoding !== "utf-8" || format.lineEnding === "mixed")) {
+          return yield* new WorkspaceUnsupportedTextFormatError({});
+        }
+        const normalized = format ? input.contents.replace(/\r\n|\r/g, "\n") : input.contents;
+        const contents = format
+          ? (format.bom ? "\ufeff" : "") +
+            (format.lineEnding === "lf"
+              ? normalized
+              : normalized.replaceAll("\n", format.lineEnding === "crlf" ? "\r\n" : "\r"))
+          : normalized;
+        const bytes = new TextEncoder().encode(contents);
+        if (input.maxBytes !== undefined && bytes.length > input.maxBytes)
+          return yield* new WorkspaceUnsupportedTextFormatError({});
+        const platform = yield* HostProcess.Platform;
+        const writeFailure = (cause: unknown) => {
+          const nested = isAtomicWriteOperationError(cause) ? cause.cause : cause;
+          if (
+            isWorkspaceFileChangedOnDiskError(nested) ||
+            isWorkspaceFileDeletedOnDiskError(nested)
+          )
+            return nested;
+          if (isWorkspaceFileChangedOnDiskError(cause) || isWorkspaceFileDeletedOnDiskError(cause))
+            return cause;
+          if (isAtomicWritePathEscapeError(cause)) {
+            return new WorkspaceFilePathEscapeError({
+              workspaceRoot: input.cwd,
+              relativePath: input.relativePath,
+              resolvedWorkspaceRoot: cause.resolvedWorkspaceRoot,
+              resolvedPath: cause.resolvedPath,
+            });
+          }
+          return new WorkspaceFileSystemOperationError({
             workspaceRoot: input.cwd,
             relativePath: input.relativePath,
-            resolvedWorkspaceRoot: cause.resolvedWorkspaceRoot,
-            resolvedPath: cause.resolvedPath,
+            resolvedPath: target.absolutePath,
+            operationPath: isAtomicWriteOperationError(cause)
+              ? cause.operationPath
+              : target.absolutePath,
+            operation: isAtomicWriteOperationError(cause) ? cause.operation : "write-file",
+            cause,
           });
-        }
-        return new WorkspaceFileSystemOperationError({
-          workspaceRoot: input.cwd,
-          relativePath: input.relativePath,
-          resolvedPath: target.absolutePath,
-          operationPath: isAtomicWriteOperationError(cause)
-            ? cause.operationPath
-            : target.absolutePath,
-          operation: isAtomicWriteOperationError(cause) ? cause.operation : "write-file",
-          cause,
-        });
-      },
-    });
-    yield* workspaceEntries.refresh(input.cwd);
-    return { relativePath: target.relativePath, version: workspaceFileVersion(bytes) };
+        };
+        yield* input.authorizeAtPublish ?? Effect.void;
+        yield* Effect.acquireUseRelease(
+          Effect.tryPromise({
+            try: () =>
+              prepareAtomicWorkspaceWrite({
+                workspaceRoot: path.resolve(input.cwd),
+                absolutePath: target.absolutePath,
+                contents: bytes,
+                ...(input.expectedVersion === undefined
+                  ? {}
+                  : { expectedVersion: input.expectedVersion }),
+                ...(input.createOnly === undefined ? {} : { createOnly: input.createOnly }),
+                platform,
+              }),
+            catch: writeFailure,
+          }),
+          (prepared) =>
+            Effect.andThen(
+              input.authorizeAtPublish ?? Effect.void,
+              Effect.tryPromise({ try: prepared.publish, catch: writeFailure }),
+            ),
+          (prepared) => Effect.promise(prepared.cleanup),
+        );
+        yield* workspaceEntries.refresh(input.cwd);
+        return { relativePath: target.relativePath, version: workspaceFileVersion(bytes) };
+      }),
+    );
   });
 
   const readFilePage: WorkspaceFileSystem["Service"]["readFilePage"] = Effect.fn(
