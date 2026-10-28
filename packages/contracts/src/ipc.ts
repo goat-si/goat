@@ -1156,8 +1156,19 @@ export const SystemSettingsPaneSchema = Schema.Literals([
   "full-disk-access",
   "accessibility",
   "screen-recording",
+  "microphone",
 ]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
+
+/** `unsupported`: the OS has no app-level microphone grant to ask for; the browser decides. */
+export const DesktopMicrophoneAccessSchema = Schema.Literals([
+  "granted",
+  "denied",
+  "restricted",
+  "unavailable",
+  "unsupported",
+]);
+export type DesktopMicrophoneAccess = typeof DesktopMicrophoneAccessSchema.Type;
 
 /**
  * The machine is suspending, woke from sleep, or the user unlocked the screen.
@@ -1281,6 +1292,8 @@ export interface DesktopBridge extends DesktopBridgeParts {
   openExternal: (url: string) => Promise<boolean>;
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
+  /** Asks macOS for the microphone when it has not asked yet. Older builds lack this. */
+  requestMicrophoneAccess?: () => Promise<DesktopMicrophoneAccess>;
   restartCuaDriver?: () => Promise<void>;
   /** Restarts the local driver and proves its macOS grants from inside the driver. */
   verifyCuaDriver?: () => Promise<DesktopCuaVerification>;

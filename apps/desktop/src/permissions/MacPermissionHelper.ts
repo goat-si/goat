@@ -15,6 +15,8 @@ export const macPermissionGranted = (permission: MacPermission) => {
     return Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
   if (permission === "accessibility")
     return Electron.systemPreferences.isTrustedAccessibilityClient(false);
+  if (permission === "microphone")
+    return Electron.systemPreferences.getMediaAccessStatus("microphone") === "granted";
   return false;
 };
 
