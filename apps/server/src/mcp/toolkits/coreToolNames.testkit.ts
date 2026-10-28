@@ -20,6 +20,7 @@ import { ConnectionToolkit } from "./connection/tools.ts";
 import { RemoteReportToolkit } from "./remoteReport/tools.ts";
 import { ChannelToolkit } from "./channel/tools.ts";
 import { ThreadDiffToolkit } from "./threadDiff/tools.ts";
+import { DocsToolkit } from "./docs/tools.ts";
 
 export const CORE_GOAT_TOOL_NAMES = [
   "goat_attachment_discard",
@@ -38,6 +39,8 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_connection_add_ssh",
   "goat_connection_list",
   "goat_connection_remove",
+  "goat_docs_read",
+  "goat_docs_search",
   "goat_environment_preferences_update",
   "goat_environment_read",
   "goat_environment_settings_read",
@@ -203,4 +206,5 @@ export const PUBLISHED_TOOLKITS = [
   RemoteReportToolkit,
   ChannelToolkit,
   ThreadDiffToolkit,
+  DocsToolkit,
 ];

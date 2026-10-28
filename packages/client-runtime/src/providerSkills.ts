@@ -3,6 +3,7 @@ import {
   BUILTIN_SKILL_SCOPE,
   BUILTIN_SKILLS,
   COMPUTER_USE_PROVIDER_DRIVERS,
+  environmentDeliversBuiltInSkill,
   type EnvironmentId,
   type ProjectId,
   resolveProjectBuiltInSkillEnabled,
@@ -146,17 +147,16 @@ type BuiltInSkillSettings = Pick<ServerSettings, "enableCua" | "disabledBuiltInS
 
 /** Where the skills are offered: the destination server's support and the thread's project. */
 export interface BuiltInSkillTarget {
-  /** The destination environment advertises `devDisciplineSkill`. */
+  /** Message-named skills delivered by the destination environment. */
+  readonly builtInSkills?: ReadonlyArray<string> | undefined;
+  /** Older servers advertise goat-discipline through this capability. */
   readonly devDisciplineSkill?: boolean | undefined;
   readonly projectId?: ProjectId | null | undefined;
 }
 
 /**
- * Adds GOAT's built-in skills that this provider's turns can carry. They come last, so a skill
- * of the same name the person wrote wins when the menu dedupes by name. A skill switched off in
- * Settings, for the environment or the thread's project, is listed as disabled, which keeps it
- * out of the menu. Computer Use needs computer use on; goat-discipline needs a server that
- * delivers it.
+ * Appends GOAT's built-ins after provider skills, so a person's same-named skill wins.
+ * Disabled skills stay listed but leave the menu. Message-named skills require server delivery.
  */
 export function withBuiltInProviderSkills(
   skills: ReadonlyArray<ServerProviderSkill>,
@@ -170,8 +170,8 @@ export function withBuiltInProviderSkills(
       ? COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
       : skill.anyOf?.includes("computer-use")
         ? settings.enableCua && COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
-        : target?.devDisciplineSkill === true &&
-          BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver),
+        : BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver) &&
+          environmentDeliversBuiltInSkill(target, skill.name),
   );
   if (offered.length === 0) return skills;
   const resolved = { projectSettingsOverrides: {}, ...settings };
@@ -195,7 +195,10 @@ export function resolveThreadProviderSkills(
         readonly providers: ReadonlyArray<ServerProvider>;
         readonly settings?: BuiltInSkillSettings;
         readonly environment?: {
-          readonly capabilities: { readonly devDisciplineSkill?: boolean | undefined };
+          readonly capabilities: {
+            readonly builtInSkills?: ReadonlyArray<string> | undefined;
+            readonly devDisciplineSkill?: boolean | undefined;
+          };
         };
       }
     | null
@@ -211,6 +214,7 @@ export function resolveThreadProviderSkills(
         provider,
         config?.settings,
         {
+          builtInSkills: config?.environment?.capabilities.builtInSkills,
           devDisciplineSkill: config?.environment?.capabilities.devDisciplineSkill,
           projectId,
         },

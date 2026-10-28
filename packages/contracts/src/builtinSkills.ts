@@ -7,7 +7,12 @@ import { TurnCapability } from "./composerContext.ts";
 /** `ServerProviderSkill.scope` of skills GOAT ships itself rather than a provider discovers. */
 export const BUILTIN_SKILL_SCOPE = "builtin";
 
-export const BuiltInSkillName = Schema.Literals(["computer-use", "screen-code", "goat-discipline"]);
+export const BuiltInSkillName = Schema.Literals([
+  "computer-use",
+  "screen-code",
+  "goat-discipline",
+  "goat-docs",
+]);
 export type BuiltInSkillName = typeof BuiltInSkillName.Type;
 
 export interface BuiltInSkillListing {
@@ -40,7 +45,36 @@ export const BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillListing> = [
     description:
       "GOAT's guidance for code changes: size the work, prove each claim, stay safe, brief subagents. Loads on the turn whose message names it.",
   },
+  {
+    name: "goat-docs",
+    displayName: "GOAT Docs",
+    description:
+      "Answer questions about GOAT itself from its user guides: search, read the page, cite it. Loads on the turn whose message names it.",
+  },
 ];
+
+/** Built-in skills a message loads by naming them; a server lists the ones it delivers. */
+export const MESSAGE_NAMED_BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillName> = BUILTIN_SKILLS.filter(
+  (skill) => skill.anyOf === undefined,
+).map((skill) => skill.name);
+
+/**
+ * Whether a server delivers a message-named built-in skill: it lists the skill, or, for a server
+ * from before that list, it advertises goat-discipline the older way.
+ */
+export function environmentDeliversBuiltInSkill(
+  capabilities:
+    | {
+        readonly builtInSkills?: ReadonlyArray<string> | undefined;
+        readonly devDisciplineSkill?: boolean | undefined;
+      }
+    | null
+    | undefined,
+  name: BuiltInSkillName,
+): boolean {
+  if (capabilities?.builtInSkills !== undefined) return capabilities.builtInSkills.includes(name);
+  return name === "goat-discipline" && capabilities?.devDisciplineSkill === true;
+}
 
 /**
  * Drivers whose turns carry GOAT's instructions, so a message-named built-in skill reaches them.

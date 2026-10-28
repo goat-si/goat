@@ -144,6 +144,9 @@ import * as HostStatusHandlers from "./toolkits/hostStatus/handlers.ts";
 import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
 import * as ThreadDiffHandlers from "./toolkits/threadDiff/handlers.ts";
 import { ThreadDiffToolkit } from "./toolkits/threadDiff/tools.ts";
+import * as DocsHandlers from "./toolkits/docs/handlers.ts";
+import { DocsToolkit } from "./toolkits/docs/tools.ts";
+import * as UserDocs from "../userDocs/UserDocs.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
@@ -994,6 +997,7 @@ export const catalogRegistrations = {
   environment: toolkitRegistration(EnvironmentToolkit, EnvironmentHandlers.layer),
   hostStatus: toolkitRegistration(HostStatusToolkit, HostStatusHandlers.layer),
   threadDiff: toolkitRegistration(ThreadDiffToolkit, ThreadDiffHandlers.layer),
+  docs: toolkitRegistration(DocsToolkit, DocsHandlers.layer).pipe(Layer.provide(UserDocs.layer)),
   fleetHealth: toolkitRegistration(FleetHealthToolkit, FleetHealthHandlers.layer),
   fleet: toolkitRegistration(FleetToolkit, FleetHandlers.layer),
   fleetResources: toolkitRegistration(FleetResourcesToolkit, FleetResourcesHandlers.layer),
@@ -1203,6 +1207,7 @@ export const layer = Layer.mergeAll(
   layerEnvironmentToolkit,
   layerHostStatusToolkit,
   layerThreadDiffToolkit,
+  catalogRegistrations.docs,
   catalogRegistrations.fleetHealth,
   layerFleetResourcesToolkit,
   layerPreviewControlsRegistration,

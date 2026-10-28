@@ -259,6 +259,46 @@ describe("mobile built-in skill switch across environments", () => {
     expect(planMobileBuiltInSkillToggle(targets, "goat-discipline", false)).toEqual([]);
   });
 
+  it("allows only docs on a docs-only server and only discipline on an older server", () => {
+    const docs = environment(firstId, DEFAULT_SERVER_SETTINGS);
+    const older = environment(secondId, DEFAULT_SERVER_SETTINGS);
+    const withCapabilities = (target: SettingsTarget, capabilities: object) => ({
+      ...target,
+      serverConfig: {
+        ...target.serverConfig,
+        environment: {
+          ...target.serverConfig.environment,
+          capabilities: { ...target.serverConfig.environment.capabilities, ...capabilities },
+        },
+      },
+    });
+    const docsTargets = resolveMobileSettingsTargets(
+      [withCapabilities(docs, { builtInSkills: ["goat-docs"] })],
+      [{ environmentId: firstId, id: firstProject }],
+    );
+    const olderTargets = resolveMobileSettingsTargets(
+      [withCapabilities(older, { devDisciplineSkill: true })],
+      [{ environmentId: secondId, id: secondProject }],
+    );
+    expect(planMobileBuiltInSkillProjectPatch(docsTargets, "goat-docs", true)).toEqual([
+      {
+        environmentId: firstId,
+        patch: {
+          projectSettingsOverrides: {
+            [firstProject]: { builtInSkills: { "goat-docs": { enabled: true } } },
+          },
+        },
+      },
+    ]);
+    expect(planMobileBuiltInSkillProjectPatch(docsTargets, "goat-discipline", true)).toEqual([]);
+    expect(planMobileBuiltInSkillToggle(docsTargets, "goat-docs", false)).toHaveLength(1);
+    expect(planMobileBuiltInSkillProjectPatch(olderTargets, "goat-discipline", true)).toHaveLength(
+      1,
+    );
+    expect(planMobileBuiltInSkillProjectPatch(olderTargets, "goat-docs", true)).toEqual([]);
+    expect(planMobileBuiltInSkillToggle(olderTargets, "goat-docs", false)).toEqual([]);
+  });
+
   it("changes only the toggled skill in each environment's own switched-off list", () => {
     const targets = resolveMobileSettingsTargets(
       [

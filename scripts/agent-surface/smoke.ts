@@ -222,6 +222,21 @@ const main = async (): Promise<ReadonlyArray<Check>> => {
   }
   check("safe reads answer with a result or a coded error", readFailures);
 
+  // The guides ship inside the server bundle; a packaged server that cannot read them fails here.
+  const guideSearch = await callTool("goat_docs_search", { query: "tailscale https" });
+  const guideRead = await callTool("goat_docs_read", {
+    page: "remote-access",
+    section: "tailscale-https",
+  });
+  check("user guides answer from this build", [
+    ...(guideSearch.isError === true || !resultText(guideSearch).includes("#tailscale-https")
+      ? [`docs.search answered ${outcome(guideSearch)}`]
+      : []),
+    ...(guideRead.isError === true || !resultText(guideRead).includes("Tailscale HTTPS")
+      ? [`docs.read answered ${outcome(guideRead)}`]
+      : []),
+  ]);
+
   if (!listedNames.has("goat_call"))
     check("goat_call matches direct calls", [], "goat_call is not offered (rollout step 5)");
   else {

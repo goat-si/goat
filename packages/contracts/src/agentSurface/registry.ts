@@ -7,6 +7,7 @@ import { computerUseEntries } from "./entries/computer_use.ts";
 import { connectionEntries } from "./entries/connection.ts";
 import { decisionEntries } from "./entries/decision.ts";
 import { deviceEntries } from "./entries/device.ts";
+import { docsEntries } from "./entries/docs.ts";
 import { environmentEntries } from "./entries/environment.ts";
 import { fallbackChainEntries } from "./entries/fallback_chain.ts";
 import { goalEntries } from "./entries/goal.ts";
@@ -59,6 +60,7 @@ export const agentSurfaceRegistry = {
   ...computerUseEntries,
   ...connectionEntries,
   ...deviceEntries,
+  ...docsEntries,
   ...environmentEntries,
   ...goalEntries,
   ...hubEntries,

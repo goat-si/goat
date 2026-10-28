@@ -7,6 +7,7 @@ import baseConfig from "../../vite.config.ts";
 import { resolveBuildCommit, resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import { resolveSeaBuildTarget } from "../../scripts/lib/sea-build-target.ts";
+import { readUserGuides } from "../../scripts/lib/user-guides.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
@@ -121,6 +122,7 @@ export default mergeConfig(
         __GOAT_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
         __GOAT_BUILD_COMMIT__: JSON.stringify(resolveBuildCommit(import.meta.dirname) ?? ""),
+        __GOAT_USER_DOCS__: JSON.stringify(readUserGuides(`${import.meta.dirname}/../..`)),
         __GOAT_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
         __GOAT_BUILD_HOSTED_APP_URL__: JSON.stringify(repoEnv.GOAT_HOSTED_APP_URL?.trim() ?? ""),
         __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
