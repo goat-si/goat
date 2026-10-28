@@ -115,6 +115,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const read = tree([element(1, "AXButton", { frame: { x: 280, y: 130, w: 40, h: 20 } })]);
+      let shownAt = 100;
       const { host, sent } = fixture({
         // The window was at x 0 when bound; it is at x 100 by the screenshot. The host cannot tell
         // whether it moved before or after the tree read, so it sends no point rather than a wrong one.
@@ -137,7 +138,7 @@ it.effect(
                 tree_markdown: "",
                 screenshot_width: 400,
                 screenshot_height: 200,
-                window_bounds: { x: 100, y: 50, width: 400, height: 200 },
+                window_bounds: { x: shownAt, y: 50, width: 400, height: 200 },
                 image: { mimeType: "image/png", bytes: "cG5n", width: 400, height: 200 },
               }
             : read,
@@ -152,11 +153,14 @@ it.effect(
       const first = yield* host.observe(call("get_accessibility_tree", {}, ref), context);
       // The screenshot keeps the tree's snapshot, so its refs stay valid.
       yield* host.observe(call("screenshot", {}, ref), context);
+      // Back where it was bound: the basis matches again, but a screenshot already showed it wrong.
+      shownAt = 0;
+      yield* host.observe(call("screenshot", {}, ref), context);
       yield* host.invoke(call("click", { elementRef: buttonOf(first.value) }, ref), context);
       const again = yield* host.observe(call("get_accessibility_tree", {}, ref), context);
       yield* host.invoke(call("click", { elementRef: buttonOf(again.value) }, ref), context);
       expect(
         sent.filter((entry) => entry.tool === "click").map((entry) => entry.cursor?.point),
-      ).toEqual([undefined, { fx: 0.5, fy: 0.45 }]);
+      ).toEqual([undefined, { fx: 0.75, fy: 0.45 }]);
     }),
 );

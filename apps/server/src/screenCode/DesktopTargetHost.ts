@@ -101,25 +101,17 @@ const elementFrames = (entries: readonly Record<string, unknown>[]) => {
   }
   return placed;
 };
+const sameRect = (a: Rect, b: Rect) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 /**
  * An element's center as a fraction of its window; a center outside the window gives none. A
- * tree that left its window out is measured against the bounds held when it was read, and only
- * while they still hold: once a screenshot shows the window moved, the host cannot tell whether
- * that happened before or after the read, so it sends no point until the tree is read again.
+ * tree that left its window out is measured against the bounds held when it was read, while no
+ * screenshot has shown them wrong: the host cannot tell a move before the read from one after.
  */
 const aimOf = (
   placed: Placed | undefined,
   basis: Rect | undefined,
-  bounds: Rect | undefined,
 ): ComputerUseOverlayPoint | undefined => {
-  const held =
-    basis !== undefined &&
-    bounds !== undefined &&
-    basis.x === bounds.x &&
-    basis.y === bounds.y &&
-    basis.w === bounds.w &&
-    basis.h === bounds.h;
-  const window = placed?.window ?? (held ? basis : undefined);
+  const window = placed?.window ?? basis;
   if (!placed || !window || window.w <= 0 || window.h <= 0) return undefined;
   const fx = (placed.frame.x + placed.frame.w / 2 - window.x) / window.w;
   const fy = (placed.frame.y + placed.frame.h / 2 - window.y) / window.h;
@@ -182,7 +174,7 @@ interface BoundWindow {
   pointsStale?: boolean;
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
-  /** The window bounds held when those frames were read. */
+  /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
   framesBasis?: Rect;
   /**
    * The window's screen bounds from its binding or latest screenshot. They place a tree that
@@ -557,6 +549,9 @@ export const createDesktopTargetHost = (deps: {
       const bounds = object(state.window_bounds);
       const shotBounds = boundsOf(bounds);
       if (shotBounds !== undefined) bound.windowBounds = shotBounds;
+      // Once shown wrong, the basis stays dropped until the next tree read, even if it matches again.
+      if (shotBounds && bound.framesBasis && !sameRect(bound.framesBasis, shotBounds))
+        delete bound.framesBasis;
       if (
         !imagePart ||
         !width ||
@@ -763,7 +758,7 @@ export const createDesktopTargetHost = (deps: {
         point:
           elementToken === undefined
             ? undefined
-            : aimOf(bound.frames?.get(elementToken), bound.framesBasis, bound.windowBounds),
+            : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
       });
       return driverResult(tool, reply);
     },
@@ -845,7 +840,10 @@ export const createDesktopTargetHost = (deps: {
       { ...first, deadlineMillis: Math.min(...calls.map((call) => call.deadlineMillis)) },
       context,
       bound.connectionGeneration,
-      { bound, point: bound.aims?.get(String(steps[0]?.args.element_token)) },
+      {
+        bound,
+        point: aimOf(bound.frames?.get(String(steps[0]?.args.element_token)), bound.framesBasis),
+      },
     ).pipe(Effect.result);
     if (sent._tag === "Failure") {
       const error = sent.failure;
