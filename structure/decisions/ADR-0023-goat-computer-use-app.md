@@ -21,13 +21,11 @@
   thread launched from another environment, and turns it launches or sends here, use every app like a
   person's threads instead of holding the screen alone. They stay unattended for steering and
   outside full access. The Safety bullet and D16 below state the amended decision.
-- Amended 2026-10-28 again, D16 (owner decision, Jun, 2026-10-28: remote work must get computer
-  use): every directed full access run takes the foreground without asking: one a person's
-  client started, one an agent started from a directed run, a launch or an answer from another
-  environment, and an approval's wake. Other server wakes and unattended work still ask. A
-  message, an agent's or the server's promotion of a queued message, or an agent's answer to a
-  question that reaches less of the screen than the running turn waits as the next turn; a
-  person's own promotion is their decision. D16 below states the amended decision.
+- Amended 2026-10-28, D16 (owner decision, Jun, 2026-10-28): every full-access run takes the
+  foreground without asking, whoever or whatever started it, and unattended work still holds the
+  screen one thread at a time, since two such threads would mix their input. Tracking which run
+  sent a message and gating steering by that reach move to roadmap 400. The Readiness and
+  approvals bullet below states the decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
@@ -162,10 +160,10 @@
     thread already gives that trust (D16). The "Full access without approval" switch is gone from
     Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
     the settings contract so older clients and settings files still decode, and the server ignores
-    it. What differs by origin stays: unattended work (GOAT Bot, channels, schedules, webhooks)
-    asks for the foreground and holds the screen one thread at a time, while every other full
-    access run works beside other threads, and a directed one, including one an agent or another
-    environment started, takes the foreground without asking (amended 2026-10-28). The
+    it. Every full-access run also takes the foreground without asking (amended 2026-10-28).
+    What differs by origin stays: unattended work holds the screen one thread at a time, except a
+    full access turn launched from another environment, which works beside other threads
+    (amended 2026-10-28). The
     password-manager exclusions, pause, Stop and stop all, each
     call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
     the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the

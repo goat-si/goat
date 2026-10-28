@@ -78,9 +78,7 @@ before it tries another action.
 
 Every thread in full access mode uses every app without asking, whatever
 started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
-channel. Threads in full access mode also get foreground input without asking,
-including ones an agent or another computer's GOAT started; work that runs on
-its own still asks for it. In other modes, the agent asks before it uses an app. The
+channel. They also get foreground input without asking. In other modes, the agent asks before it uses an app. The
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
 approved, it can list apps and windows but cannot look inside or type into them.
@@ -113,12 +111,11 @@ action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
 automatically only on its next turn.
 
-Full access skips only the app approval. Everything else on this page still
+Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
 secret field in a browser tab still pauses agents, each action stays within
-what its call may reach, and work that runs on its own still asks for
-foreground control and still shares the screen one thread at a time.
-**Stop**, **Stop all** and turning computer use off
+what its call may reach, and work that runs on its own still shares the screen
+one thread at a time. **Stop**, **Stop all** and turning computer use off
 end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
@@ -170,16 +167,15 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 ## Work that runs on its own
 
 GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
-threads any of them start use every app without asking when they run in full
-access mode, and need approval otherwise. They still need approval for
-foreground control. When such a thread needs approval, GOAT asks in that
+threads any of them start use every app and foreground input without asking
+when they run in full access mode, and need approval otherwise. When such a
+thread needs approval, GOAT asks in that
 thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
 In full access mode, a thread started from another computer's GOAT uses every
-app and the foreground here beside the threads you run, rather than waiting for
-the screen.
+app here beside the threads you run, rather than waiting for the screen.
 Detecting secret fields in desktop apps is switched off while it is being
 fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts

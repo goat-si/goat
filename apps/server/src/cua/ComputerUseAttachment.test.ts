@@ -365,12 +365,13 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  // Every origin a run can have: one a person or their agents direct, and each unattended reason (automation, schedule, webhook, Slack, channels).
+  // Every origin a run can have: interactive, and each unattended reason (automation, schedule,
+  // webhook, Slack, channels, remote launches).
   const everyOrigin: ReadonlyArray<{
     readonly label: string;
     readonly origin: ComputerUse.ComputerUseAttachmentInput["origin"];
   }> = [
-    { label: "a person or an agent", origin: interactive },
+    { label: "a person", origin: interactive },
     ...(
       [
         "goat_bot",
@@ -530,7 +531,6 @@ describe("computerUseAttachment", () => {
                 id: runId,
                 userMessageId: MessageId.make("message:launch"),
                 requestedAt: at,
-                startedAt: at,
                 completedAt: null,
               },
             ]),

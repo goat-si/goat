@@ -26,6 +26,7 @@ import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 
 const threadId = ThreadId.make("thread:attached-foreground");
+const scheduled = { _tag: "unattended", reason: "scheduled_task" } as const;
 const layer = ComputerUseLeases.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
@@ -59,12 +60,10 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
   fullAccess: boolean,
   liveUpdates = true,
   agentInputGate?: Deferred.Deferred<void>,
-  /** A run a person started, attached in place of GOAT Bot's unattended turn. */
+  /** The run attached for, in place of no run at all. */
   person?: RunId,
-  /** Who started that run, when not a person typing in a GOAT client. */
+  /** Who started that run; a person typing in a GOAT client when absent. */
   origin?: ComputerUseOrigin,
-  /** A person or the agents they direct caused that run (ComputerUseOrigin.directedRun). */
-  directed = true,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
@@ -97,7 +96,7 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
       person === undefined
         ? { _tag: "unattended", reason: "goat_bot" }
         : (origin ?? { _tag: "interactive" }),
-    ...(person === undefined ? {} : { runId: person, directed }),
+    ...(person === undefined ? {} : { runId: person }),
     leases: Option.some({
       ...leases,
       proxy: { command: "/fixture/node", entrypoint: "/fixture/proxy" },
@@ -543,28 +542,11 @@ describe("foreground through real computer-use attachment", () => {
   );
 
   it.effect.each([
-    {
-      label: "launched from another environment",
-      origin: { _tag: "unattended", reason: "launched_remotely" },
-    },
-    { label: "an agent started", origin: { _tag: "interactive" } },
-  ] as const)("a full access run $label takes the foreground without approval", ({ origin }) =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const { leases } = yield* attach(
-        true,
-        true,
-        undefined,
-        RunId.make("run:attached-foreground"),
-        origin,
-      );
-      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
-    }).pipe(Effect.provide(layer)),
-  );
-
-  it.effect(
-    "a full access run no one directed, such as a server wake, still asks for the foreground",
-    () =>
+    { label: "a schedule", origin: scheduled },
+    { label: "another environment", origin: { _tag: "unattended", reason: "launched_remotely" } },
+  ] as const)(
+    "a full access run started by $label takes the foreground without approval",
+    ({ origin }) =>
       Effect.gen(function* () {
         yield* runMigrations();
         const { leases } = yield* attach(
@@ -572,20 +554,42 @@ describe("foreground through real computer-use attachment", () => {
           true,
           undefined,
           RunId.make("run:attached-foreground"),
-          { _tag: "interactive" },
-          false,
+          origin,
         );
-        assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build"));
+        assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
       }).pipe(Effect.provide(layer)),
   );
 
-  it.effect.each(["pause", "private", "stop"] as const)(
-    "a %s leaves the same run without full access foreground; the next run has it",
-    (interruption) =>
+  it.effect("unattended work with the foreground still holds the screen alone", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const { leases } = yield* attach(
+        true,
+        true,
+        undefined,
+        RunId.make("run:attached-foreground"),
+        scheduled,
+      );
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build"));
+      // A second unattended thread gets no control while the first holds the screen.
+      const other = yield* leases.everyAppControl(ThreadId.make("thread:other-schedule"), true, {
+        runId: RunId.make("run:other-schedule"),
+      });
+      assert.isTrue(Option.isNone(other));
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect.each(
+    (["pause", "private", "stop"] as const).flatMap((interruption) =>
+      [undefined, scheduled].map((origin) => ({ interruption, origin })),
+    ),
+  )(
+    "a $interruption leaves the same run without full access foreground; the next run has it ($origin)",
+    ({ interruption, origin }) =>
       Effect.gen(function* () {
         yield* runMigrations();
         const first = RunId.make("run:first");
-        const { attachment, leases } = yield* attach(true, true, undefined, first);
+        const { attachment, leases } = yield* attach(true, true, undefined, first, origin);
         const focus = (controlId: string) =>
           leases
             .controlState(threadId, controlId)
@@ -599,10 +603,10 @@ describe("foreground through real computer-use attachment", () => {
           yield* leases.resume;
         } else yield* leases.stop(threadId);
         // The same run attaching again, as a reattach or rotation does, does not get it back.
-        const again = yield* attach(true, true, undefined, first);
+        const again = yield* attach(true, true, undefined, first, origin);
         assert.deepEqual(yield* focus(again.attachment.control.controlId), []);
         assert.isFalse(yield* leases.foregroundAvailable(threadId, "anything"));
-        const next = yield* attach(true, true, undefined, RunId.make("run:second"));
+        const next = yield* attach(true, true, undefined, RunId.make("run:second"), origin);
         assert.lengthOf(yield* focus(next.attachment.control.controlId), 1);
         assert.isTrue(yield* leases.foregroundAvailable(threadId, "anything"));
       }).pipe(Effect.provide(layer)),
@@ -654,7 +658,6 @@ describe("foreground through real computer-use attachment", () => {
           // Q starts on the same control and gets its own implied foreground.
           const reused = Option.getOrThrow(
             yield* leases.everyAppControl(threadId, false, {
-              person: true,
               runId: RunId.make("run:Q"),
             }),
           );

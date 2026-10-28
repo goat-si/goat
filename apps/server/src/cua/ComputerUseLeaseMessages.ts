@@ -22,7 +22,7 @@ export type LeaseEnd =
 
 const REQUEST = goatCallText("computer_use.request");
 
-export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps; the request waits for the person's answer in this turn. A full-access thread a person directs needs no request except after a pause or Stop in this turn; automatic foreground authority returns only next turn. Respect the pause or Stop.`;
+export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps; the request waits for the person's answer in this turn. A full-access thread needs no request except after a pause or Stop in this turn; automatic foreground authority returns only next turn. Respect the pause or Stop.`;
 
 export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";

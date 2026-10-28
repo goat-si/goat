@@ -19,6 +19,6 @@ export const RuntimeRequestRespondCommand = Schema.Struct({
   answers: Schema.optional(ProviderUserInputAnswers),
   attachmentsByQuestionId: Schema.optional(UserInputAttachments),
   respondedBy: Schema.optional(UserInputRespondedBy),
-  /** The only running turn an agent's message answer may join; otherwise it is the next turn. */
+  /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   answerSteersRunId: Schema.optional(RunId),
 });

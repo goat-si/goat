@@ -286,9 +286,8 @@ describe("computer use skill against what agents receive today", () => {
   it("teaches full-access foreground authority and same-turn approval without self-restoring", () => {
     const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
     expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
-    expect(line).toContain("Full-access turns already have foreground authority without asking");
     expect(line).toContain(
-      "work that runs on its own (GOAT Bot, channels, schedules, webhooks) still needs foreground approval",
+      "Full-access turns already have foreground authority without asking, whatever started them.",
     );
     expect(line).toContain("it waits for the answer in this turn");
     expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
