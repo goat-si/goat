@@ -296,3 +296,47 @@ it("sees a change inside a shadow root under a clicked point", () =>
       evidence: expect.arrayContaining(["dom"]),
     });
   }));
+
+it("does not credit a click with a clock ticking inside its target or an ancestor's attribute timer", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<div id="box" style="position:absolute;left:10px;top:10px;width:200px;height:40px">time <span id="clock"></span></div><script>
+        setInterval(() => { clock.textContent = String(Date.now()); document.body.dataset.tick = String(Date.now()); }, 1);
+      </script>`,
+    );
+    for (let attempt = 0; attempt < 10; attempt++)
+      await expect(ServerBrowserPage.click(page, { x: 30, y: 20 })).resolves.toMatchObject({
+        effect: "suspected_noop",
+      });
+  }));
+
+it("does not credit a click with a navigation earlier work started", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still" style="position:absolute;left:10px;top:10px;margin:0">static</p><script>
+        window.later = () => setTimeout(() => { location.hash = "done"; }, 20);
+      </script>`,
+    );
+    await page.evaluate("later()");
+    await expect(ServerBrowserPage.click(page, { x: 20, y: 18 })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    expect(page.url()).toContain("#done");
+  }));
+
+it("credits a click's synchronous change to a sibling's attribute or text", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<span id="show" onclick="panel.hidden = false">show</span><div id="panel" hidden>panel</div>
+       <button id="count" onclick="label.firstChild.data = 'one'">count</button><span id="label">none</span>`,
+    );
+    await page.focus("#count");
+    await expect(ServerBrowserPage.click(page, { selector: "#show" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+    await expect(ServerBrowserPage.click(page, { selector: "#count" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));

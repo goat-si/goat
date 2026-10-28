@@ -25,15 +25,14 @@ interface Watch {
 }
 
 /**
- * Runs in the clicked frame, as source: the server has no DOM types. After `arm` it counts any
- * change at or around the target, elements added or removed while the click's own events are
- * handled, input, focus and URL. What happens elsewhere between events (a feed, a clock) is ambient.
+ * Runs in the clicked frame, as source: the server has no DOM types. A change counts only when
+ * the click caused it: made while one of its own events is dispatched, a navigation it started,
+ * or input and focus landing on its target. Nothing is credited for being near or in time.
  */
 const INSTALL = `(() => {
   const seen = new Set();
   let armed = false;
   let target = null;
-  let href = location.href;
   let resolve = () => undefined;
   const changed = new Promise((done) => (resolve = done));
   const note = (kind) => {
@@ -46,17 +45,9 @@ const INSTALL = `(() => {
     for (let at = node; at; at = at.parentNode || at.host) if (at === ancestor) return true;
     return false;
   };
-  // A change counts as the target's when it happens inside it, changes an ancestor's own
-  // attributes, or adds or removes the target itself; children added to an ancestor do not.
-  const near = (record) => target !== null && (within(record.target, target) ||
-    (record.type === "attributes" && within(target, record.target)) ||
-    (record.type === "childList" && [...record.addedNodes, ...record.removedNodes]
-      .some((node) => within(target, node))));
-  const elementIn = (nodes) => Array.from(nodes).some((node) => node.nodeType === 1);
-  // Changes made while one of the click's own trusted events is dispatched, their handlers'
-  // microtasks included, are its own wherever they land. window.event names that event during
-  // its listeners and their microtasks, even ones registered before this watch; inside shadow
-  // trees it is hidden, so dispatches seen from the window's capture phase count too.
+  // window.event names the click's event during its listeners and their microtasks, even ones the
+  // page registered first; inside shadow trees it is hidden, so dispatches the window's capture
+  // phase saw count while their eventPhase is not NONE.
   const types = new Set(["pointerdown", "mousedown", "pointerup", "mouseup", "click",
     "contextmenu", "dblclick"]);
   const dispatching = new Set();
@@ -66,13 +57,7 @@ const INSTALL = `(() => {
     for (const event of dispatching) if (event.eventPhase === 0) dispatching.delete(event);
     return dispatching.size > 0;
   };
-  const consider = (records, caused) => {
-    for (const record of records)
-      if (near(record) || (caused && record.type === "childList" &&
-          (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
-        return note("dom");
-  };
-  const observer = new MutationObserver((records) => consider(records, handled()));
+  const observer = new MutationObserver((records) => records.length && handled() && note("dom"));
   const options = { subtree: true, childList: true, attributes: true, characterData: true };
   const observed = new Set();
   const watch = (root) => {
@@ -84,10 +69,12 @@ const INSTALL = `(() => {
   watch(document);
   const begin = (event) => {
     if (!event.isTrusted) return;
+    // Changes pending from before this event are ambient.
+    observer.takeRecords();
     dispatching.add(event);
     for (const node of event.composedPath()) if (node instanceof ShadowRoot) watch(node);
   };
-  // Input and focus count when the click caused them or they land on its target.
+  // Input and focus count when the click caused them or they land on or around its target.
   const related = (event) => {
     if (handled()) return true;
     const at = event.composedPath()[0];
@@ -96,11 +83,14 @@ const INSTALL = `(() => {
   };
   const onInput = (event) => related(event) && note("input");
   const onFocus = (event) => related(event) && note("focus");
-  const onUrl = () => location.href !== href && note("url");
+  // A link or form the click activated starts a user-initiated navigation; a handler's own
+  // location change happens during dispatch. Navigations other work started are not the click's.
+  const onNavigate = (event) => (event.userInitiated || handled()) && note("navigation");
+  const navigation = window.navigation;
   const listeners = [[document, "input", onInput], [document, "change", onInput],
-    [document, "focusin", onFocus], [window, "popstate", onUrl], [window, "hashchange", onUrl],
-    ...[...types].map((type) => [window, type, begin])];
+    [document, "focusin", onFocus], ...[...types].map((type) => [window, type, begin])];
   for (const [on, type, listener] of listeners) on.addEventListener(type, listener, true);
+  navigation?.addEventListener("navigate", onNavigate);
   const deepest = (x, y) => {
     let found = document.elementFromPoint(x, y);
     while (found && found.shadowRoot) {
@@ -112,20 +102,17 @@ const INSTALL = `(() => {
   };
   const arm = (at) => {
     seen.clear();
-    href = location.href;
     target = at && typeof at.x === "number" ? deepest(at.x, at.y) : at;
-    // A click on the page's background has no target: everything would be "inside" it.
-    if (target === document.body || target === document.documentElement) target = null;
     if (target) watch(target.getRootNode());
     armed = true;
   };
   const stop = () => {
-    onUrl();
     armed = false;
     resolve();
     dispatching.clear();
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
+    navigation?.removeEventListener("navigate", onNavigate);
   };
   return { seen, changed, arm, stop };
 })()`;
@@ -213,43 +200,45 @@ const findAim = async (page: Page, locator: Locator | null, point: Point): Promi
  * target; `settle` waits briefly after it and returns the verdict.
  */
 export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) => {
-  let url = page.url();
   const seen = new Set<ClickEvidence>();
   let armed = false;
   let wake = constVoid;
   const woke = new Promise<void>((resolve) => (wake = resolve));
-  const note = (kind: ClickEvidence) => {
+  // A popup needs the user activation the click gave; one opened without it is blocked.
+  const onPopup = () => {
     if (!armed) return;
-    seen.add(kind);
+    seen.add("popup");
     wake();
   };
-  const watched = (target: Frame) => target === page.mainFrame() || target === frame;
+  // A navigation that replaces the document cannot be read from the page while it is pending, so a
+  // request for a new document in the clicked frame after arming counts. Same-document changes
+  // are judged in the page, where a change other work made is not the click's.
   const onRequest = (request: Request) => {
-    if (request.isNavigationRequest() && watched(request.frame())) note("navigation");
+    if (!armed || !request.isNavigationRequest()) return;
+    const navigated = request.frame();
+    if (navigated !== page.mainFrame() && navigated !== frame) return;
+    seen.add("navigation");
+    wake();
   };
-  const onNavigated = (navigated: Frame) => {
-    if (watched(navigated)) note("navigation");
-  };
-  const onPopup = () => note("popup");
-  page.on("request", onRequest);
-  page.on("framenavigated", onNavigated);
   page.on("popup", onPopup);
-  // A page that cannot run script, or that a dialog holds, still reports through page events.
+  page.on("request", onRequest);
+  // A page that cannot run script, or that a dialog holds, still reports popups and dialogs.
   const installing = Promise.resolve()
     .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
     .catch(() => undefined);
   const watch = await bounded(installing, INSTALL_MS);
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {
-    page.off("request", onRequest);
-    page.off("framenavigated", onNavigated);
     page.off("popup", onPopup);
+    page.off("request", onRequest);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);
   };
+  const record = (kinds: ReadonlyArray<string> | void | undefined) => {
+    for (const kind of kinds ?? []) seen.add(kind as ClickEvidence);
+  };
   const arm = async (aim: ClickAim) => {
     armed = true;
-    url = page.url();
     const target: unknown = "element" in aim ? aim.element : aim.point;
     await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
   };
@@ -257,21 +246,27 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
     try {
       if (dialog) seen.add("dialog");
       else {
+        // The first signal's kinds arrive with it, before a navigation can replace the document.
         await bounded(
-          Promise.race([woke, watch?.evaluate((state) => state.changed).catch(constVoid)]),
+          Promise.race([
+            woke,
+            watch
+              ?.evaluate((state) => state.changed.then(() => [...state.seen]))
+              .then(record, constVoid),
+          ]),
         );
-        // A failed read proves nothing; navigation is counted from the page's own events.
-        const inPage = await bounded(
-          watch
-            ?.evaluate((state) => {
-              state.stop();
-              return [...state.seen];
-            })
-            .catch(() => undefined),
+        // A failed read proves nothing.
+        record(
+          await bounded(
+            watch
+              ?.evaluate((state) => {
+                state.stop();
+                return [...state.seen];
+              })
+              .catch(() => undefined),
+          ),
         );
-        for (const kind of inPage ?? []) seen.add(kind as ClickEvidence);
       }
-      if (page.url() !== url) seen.add("url");
       return { effect: seen.size > 0 ? "confirmed" : "suspected_noop", evidence: [...seen] };
     } finally {
       release();
