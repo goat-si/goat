@@ -13,7 +13,8 @@
  * current control, so Stop, Stop all, expiry, replacement, an idle turn, leaving full access,
  * deleting the thread and a narrowed grant that drops the app all end it, and so does
  * APP_LEASE_IDLE_MS without a mutating call on it; the proxy closing its driver or losing its lease
- * stream releases it at once. A call of another control still out in the app holds it too (H2, H3
+ * stream releases it at once, and a call refused before anything reached the app gives back what
+ * its own hold took. A call of another control still out in the app holds it too (H2, H3
  * in ComputerUseCallReservations.appTicket). The PR that added D17 (#1679) states the invariants
  * and their bounds.
  *
@@ -75,6 +76,8 @@ export const makeAppLeases = <E>(options: {
   ) => Effect.Effect<boolean, E>;
 }) => {
   let leases: ReadonlyArray<Lease> = [];
+  /** What each call's hold replaced, so a call that never ran can give the app back. */
+  const holds = new Map<string, { readonly before: ReadonlyArray<Lease>; readonly after: Lease }>();
   const drop = (lease: Lease) => {
     leases = leases.filter((other) => other !== lease);
   };
@@ -103,19 +106,42 @@ export const makeAppLeases = <E>(options: {
     return undefined;
   });
   /** An admitted mutating call on one app leases it, or renews its lease, for its control. */
-  const hold = (threadId: ThreadId, controlId: string, need: AppNeed, now: number) => {
+  const hold = (
+    threadId: ThreadId,
+    controlId: string,
+    need: AppNeed,
+    now: number,
+    reservationId?: string,
+  ) => {
     if (need._tag !== "app") return;
     const own = leases.filter((lease) => lease.threadId === threadId && meets(lease, need));
     const app = need.app ?? own.find((lease) => lease.app !== undefined)?.app;
     const pids = [...new Set([...own.flatMap((lease) => lease.pids), need.pid])];
-    leases = [
-      ...leases.filter((lease) => !own.includes(lease)),
-      { pids, app, threadId, controlId, usedAt: now },
-    ];
+    const lease: Lease = { pids, app, threadId, controlId, usedAt: now };
+    // A confirmation renews the hold of its own reservation; what the first hold replaced stays.
+    const earlier = reservationId === undefined ? undefined : holds.get(reservationId);
+    leases = [...leases.filter((other) => !own.includes(other)), lease];
+    for (const [id, held] of holds) if (!leases.includes(held.after)) holds.delete(id);
+    if (reservationId !== undefined)
+      holds.set(reservationId, {
+        before: earlier !== undefined && own.includes(earlier.after) ? earlier.before : own,
+        after: lease,
+      });
+  };
+  /**
+   * A call's ticket was released. A call nothing of which was sent gives back the lease its hold
+   * took, unless a later call of the thread has renewed it since.
+   */
+  const settle = (reservationId: string, notSent: boolean) => {
+    const held = holds.get(reservationId);
+    holds.delete(reservationId);
+    if (!notSent || held === undefined || !leases.includes(held.after)) return;
+    leases = [...leases.filter((lease) => lease !== held.after), ...held.before];
   };
   /** The control's proxy closed its driver (it exited, crashed or lost its connection). */
   const release = (threadId: ThreadId, controlId: string) => {
     leases = leases.filter((lease) => lease.threadId !== threadId || lease.controlId !== controlId);
+    for (const [id, held] of holds) if (!leases.includes(held.after)) holds.delete(id);
   };
-  return { busy, hold, release, held: () => leases.length };
+  return { busy, hold, settle, release, held: () => leases.length };
 };

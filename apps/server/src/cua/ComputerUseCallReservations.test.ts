@@ -51,12 +51,18 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
       args,
       ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
-  const release = (owner: typeof a, reservationId: string, connectionId = "driver:1") =>
+  const release = (
+    owner: typeof a,
+    reservationId: string,
+    connectionId = "driver:1",
+    outcome: { readonly completed?: true; readonly notSent?: true } = {},
+  ) =>
     leases.callReservation(owner, {
       action: "release",
       controlId: owner === a ? first.controlId : second.controlId,
       connectionId,
       reservationId,
+      ...outcome,
     });
   const close = (owner = a, connectionId = "driver:1") =>
     leases.callReservation(owner, {
@@ -886,5 +892,33 @@ describe("server computer-use call reservations", () => {
           detail: "expired",
         });
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+});
+
+describe("server computer-use app leases of calls that never ran", () => {
+  it.effect("a refused call leaves no app lease, so another thread can use the app at once", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const refused = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("expected ticket");
+      yield* f.release(f.a, refused.reservationId, "driver:1", { completed: true, notSent: true });
+      assert.equal((yield* f.reserve(f.b)).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect("a refused call keeps the app lease an earlier call of its thread took", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const acted = yield* f.reserve();
+      if (acted.status !== "admitted" || acted.reservationId === null)
+        return assert.fail("expected first ticket");
+      yield* f.release(f.a, acted.reservationId, "driver:1", { completed: true });
+      const refused = yield* f.reserve();
+      if (refused.status !== "admitted" || refused.reservationId === null)
+        return assert.fail("expected second ticket");
+      yield* f.release(f.a, refused.reservationId, "driver:1", { completed: true, notSent: true });
+      assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 });

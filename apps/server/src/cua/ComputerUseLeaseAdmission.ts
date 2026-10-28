@@ -118,6 +118,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
     if (request.action === "release" || request.action === "close") {
       const current = controls.get(threadId);
       if (request.action === "close") appLeases.release(threadId, request.controlId);
+      else appLeases.settle(request.reservationId, request.notSent === true);
       return reservations.release(
         threadId,
         request,
@@ -175,7 +176,14 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
             (yield* ComputerUseCallApps).admitted(request.args, request.appLabel);
           // Admitted after its proxy went away: it can only be stopping, from now.
           if (gone.has(call.controlId)) reservations.markStopped(threadId, call.controlId, now);
-          else appLeases.hold(threadId, call.controlId, need, now);
+          else
+            appLeases.hold(
+              threadId,
+              call.controlId,
+              need,
+              now,
+              decision.reservationId ?? undefined,
+            );
         }
         return withCallPermissions(decision, state);
       }),
