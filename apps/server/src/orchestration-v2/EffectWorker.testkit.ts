@@ -236,7 +236,8 @@ export const cancellationFence = (interruptOwner = false, checkWarning = false) 
     const operations: string[] = [];
     const warnings: unknown[] = [];
     const logger = Logger.make(({ message }) => {
-      if (message[0] === "orchestration-v2.effect-cleanup-unresolved") warnings.push(message);
+      if (Array.isArray(message) && message[0] === "orchestration-v2.effect-cleanup-unresolved")
+        warnings.push(message);
     });
     const target = ThreadId.make("thread:late-native-cleanup");
     yield* Effect.gen(function* () {
@@ -314,8 +315,12 @@ export const cancellationFence = (interruptOwner = false, checkWarning = false) 
         Effect.provide(workerLayer),
       );
     }).pipe(
-      Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
-      Effect.provide(Logger.layer([logger])),
+      Effect.provide(
+        Layer.mergeAll(
+          EffectOutbox.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+          Logger.layer([logger]),
+        ),
+      ),
     );
   }).pipe(Effect.scoped);
 
@@ -469,7 +474,8 @@ export const cancellationRollbackPreservesClaim = Effect.gen(function* () {
 });
 
 export const mockExecution = () => ({
-  begin: () => Effect.succeedSome("synthetic"),
+  admissions: Effect.succeed([]),
+  begin: (claim: EffectOutbox.OrchestrationEffectV2) => Effect.succeedSome(claim),
   warnSlowCleanup: () => Effect.void,
   retireJoined: () => Effect.void,
   retireAdmission: () => Effect.void,

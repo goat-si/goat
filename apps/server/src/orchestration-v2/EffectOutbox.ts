@@ -416,6 +416,15 @@ export const layer = Layer.effect(
         Effect.mapError((cause) => new EffectOutboxError({ operation, cause })),
       );
 
+    const retireAdmissions = Effect.fn("EffectOutbox.retireAdmissions")(
+      (admissions: ReadonlyArray<OrchestrationEffectV2>, effectIds: ReadonlyArray<string>) =>
+        Effect.forEach(
+          admissions.filter((claim) => effectIds.includes(claim.id)),
+          (claim) => fences.retireAdmission(claim),
+          { discard: true },
+        ),
+    );
+
     const service: EffectOutboxV2Shape = {
       getExecution: () => Effect.succeed(fences),
       captureHeldBacklog: Effect.gen(function* () {
@@ -526,12 +535,13 @@ export const layer = Layer.effect(
               AND effect_type IN ${sql.in(effectTypes)}
             RETURNING effect_id
           `;
-          for (const row of rows) yield* fences.retireAdmission(row.effect_id);
           return rows.map(({ effect_id }) => effect_id);
         },
         Effect.mapError((cause) => new EffectOutboxError({ operation: "cancel-unsettled", cause })),
       ),
       signalCancellations: Effect.fn("EffectOutbox.signalCancellations")(function* (effectIds) {
+        // EventSink calls this only after its cancellation transaction commits.
+        yield* retireAdmissions(yield* fences.admissions, effectIds);
         yield* Effect.forEach(
           effectIds,
           (effectId) => {
@@ -559,6 +569,7 @@ export const layer = Layer.effect(
         yield* signalSettled([effectId]);
       }),
       reconcileAfterProcessLoss: Effect.gen(function* () {
+        const admissions = yield* fences.admissions;
         const now = DateTime.formatIso(yield* DateTime.now);
         const cancelledRows = yield* sql<{ readonly effect_id: string }>`
           UPDATE orchestration_v2_effect_outbox
@@ -586,8 +597,10 @@ export const layer = Layer.effect(
             AND effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)}
           RETURNING effect_id
         `;
-        for (const row of [...cancelledRows, ...requeuedRows])
-          yield* fences.retireAdmission(row.effect_id);
+        yield* retireAdmissions(
+          admissions,
+          [...cancelledRows, ...requeuedRows].map((row) => row.effect_id),
+        );
         if (requeuedRows.length > 0) yield* notifyAvailable(requeuedRows.length);
         return { requeued: requeuedRows.length, cancelled: cancelledRows.length };
       }).pipe(
@@ -671,6 +684,7 @@ export const layer = Layer.effect(
       nextClaimableAt: Effect.suspend(() => service.nextClaimableAtFor()),
       succeed: Effect.fn("EffectOutbox.succeed")(
         function* ({ effectId, workerId }) {
+          const admissions = yield* fences.admissions;
           const now = DateTime.formatIso(yield* DateTime.now);
           const rows = yield* sql<{ readonly effect_id: string }>`
             UPDATE orchestration_v2_effect_outbox
@@ -687,7 +701,7 @@ export const layer = Layer.effect(
             RETURNING effect_id
           `;
           if (rows.length === 1) {
-            yield* fences.retireAdmission(effectId);
+            yield* retireAdmissions(admissions, [effectId]);
             cancellationSignals.delete(effectId);
             yield* signalSettled([effectId]);
             yield* notifyAvailable();
@@ -703,6 +717,7 @@ export const layer = Layer.effect(
       ),
       retry: Effect.fn("EffectOutbox.retry")(
         function* ({ effectId, workerId, error, delayMs, undoAttempt = false }) {
+          const admissions = yield* fences.admissions;
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const availableAt = DateTime.formatIso(
@@ -724,7 +739,7 @@ export const layer = Layer.effect(
             RETURNING effect_id
           `;
           if (rows.length === 1) {
-            yield* fences.retireAdmission(effectId);
+            yield* retireAdmissions(admissions, [effectId]);
             cancellationSignals.delete(effectId);
             yield* notifyAvailable();
           }
@@ -739,6 +754,7 @@ export const layer = Layer.effect(
       ),
       fail: Effect.fn("EffectOutbox.fail")(
         function* ({ effectId, workerId, error }) {
+          const admissions = yield* fences.admissions;
           const now = DateTime.formatIso(yield* DateTime.now);
           const rows = yield* sql<{ readonly effect_id: string }>`
             UPDATE orchestration_v2_effect_outbox
@@ -755,7 +771,7 @@ export const layer = Layer.effect(
             RETURNING effect_id
           `;
           if (rows.length === 1) {
-            yield* fences.retireAdmission(effectId);
+            yield* retireAdmissions(admissions, [effectId]);
             cancellationSignals.delete(effectId);
             yield* signalSettled([effectId]);
             yield* notifyAvailable();

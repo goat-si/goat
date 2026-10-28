@@ -790,7 +790,7 @@ export const layerWithOptions = (
                     // Recheck durable cancellation after registering the Deferred; cancellation may have committed after claim.
                     if (yield* wasCancelled(effect.id)) {
                       yield* outbox.clearCancellation(effect.id);
-                      yield* fences.retireAdmission(effect.id);
+                      yield* fences.retireAdmission(effect);
                       yield* outbox.notifyAvailable();
                       return true;
                     }
@@ -805,7 +805,7 @@ export const layerWithOptions = (
                     .pipe(boundExecution(effect));
                   const exit = yield* Effect.exit(
                     OwnedEffectDeadline.runClaim({
-                      effectId: effect.id,
+                      claim: effect,
                       fences,
                       execute: execution,
                       cancellation,
@@ -900,7 +900,7 @@ export const layerWithOptions = (
                 }),
               ).pipe(
                 Effect.ensuring(
-                  fences.retireAdmission(effect.id).pipe(Effect.andThen(outbox.notifyAvailable())),
+                  fences.retireAdmission(effect).pipe(Effect.andThen(outbox.notifyAvailable())),
                 ),
               );
             }),
