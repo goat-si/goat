@@ -41,26 +41,36 @@ const INSTALL = `(() => {
     seen.add(kind);
     resolve();
   };
+  // Shadow-inclusive: a node inside a shadow root is within its host.
+  const within = (node, ancestor) => {
+    for (let at = node; at; at = at.parentNode || at.host) if (at === ancestor) return true;
+    return false;
+  };
   // A change counts as the target's when it happens inside it, changes an ancestor's own
   // attributes, or adds or removes the target itself; children added to an ancestor do not.
-  const near = (record) => target !== null && (target.contains(record.target) ||
-    (record.type === "attributes" && record.target.contains(target)) ||
+  const near = (record) => target !== null && (within(record.target, target) ||
+    (record.type === "attributes" && within(target, record.target)) ||
     (record.type === "childList" && [...record.addedNodes, ...record.removedNodes]
-      .some((node) => node.contains(target))));
+      .some((node) => within(target, node))));
   const elementIn = (nodes) => Array.from(nodes).some((node) => node.nodeType === 1);
-  const consider = (records, handled) => {
-    for (const record of records)
-      if (near(record) || (handled && record.type === "childList" &&
-          (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
-        return note("dom");
-  };
-  // A change made while one of the click's own events is still being dispatched, handlers'
-  // microtasks included, is its own wherever it lands. Dispatch ends with eventPhase NONE, however
-  // propagation stopped, so timers after it are ambient. Nested dispatches each count.
+  // Changes made while one of the click's own trusted events is dispatched, their handlers'
+  // microtasks included, are its own wherever they land. window.event names that event during
+  // its listeners and their microtasks, even ones registered before this watch; inside shadow
+  // trees it is hidden, so dispatches seen from the window's capture phase count too.
+  const types = new Set(["pointerdown", "mousedown", "pointerup", "mouseup", "click",
+    "contextmenu", "dblclick"]);
   const dispatching = new Set();
   const handled = () => {
+    const current = window.event;
+    if (current && current.isTrusted && types.has(current.type)) return true;
     for (const event of dispatching) if (event.eventPhase === 0) dispatching.delete(event);
     return dispatching.size > 0;
+  };
+  const consider = (records, caused) => {
+    for (const record of records)
+      if (near(record) || (caused && record.type === "childList" &&
+          (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
+        return note("dom");
   };
   const observer = new MutationObserver((records) => consider(records, handled()));
   const options = { subtree: true, childList: true, attributes: true, characterData: true };
@@ -73,23 +83,37 @@ const INSTALL = `(() => {
   };
   watch(document);
   const begin = (event) => {
-    consider(observer.takeRecords(), handled());
+    if (!event.isTrusted) return;
     dispatching.add(event);
     for (const node of event.composedPath()) if (node instanceof ShadowRoot) watch(node);
   };
-  const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].map((type) => [
-    window, type, begin, true]);
-  const onInput = () => note("input");
-  const onFocus = () => note("focus");
+  // Input and focus count when the click caused them or they land on its target.
+  const related = (event) => {
+    if (handled()) return true;
+    const at = event.composedPath()[0];
+    return target !== null && at !== document.body && at !== document.documentElement &&
+      (within(at, target) || within(target, at));
+  };
+  const onInput = (event) => related(event) && note("input");
+  const onFocus = (event) => related(event) && note("focus");
   const onUrl = () => location.href !== href && note("url");
   const listeners = [[document, "input", onInput], [document, "change", onInput],
-    [document, "focusin", onFocus], [window, "popstate", onUrl], [window, "hashchange", onUrl]];
+    [document, "focusin", onFocus], [window, "popstate", onUrl], [window, "hashchange", onUrl],
+    ...[...types].map((type) => [window, type, begin])];
   for (const [on, type, listener] of listeners) on.addEventListener(type, listener, true);
-  for (const [on, type, listener, capture] of phases) on.addEventListener(type, listener, capture);
+  const deepest = (x, y) => {
+    let found = document.elementFromPoint(x, y);
+    while (found && found.shadowRoot) {
+      const inner = found.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === found) break;
+      found = inner;
+    }
+    return found;
+  };
   const arm = (at) => {
     seen.clear();
     href = location.href;
-    target = at && typeof at.x === "number" ? document.elementFromPoint(at.x, at.y) : at;
+    target = at && typeof at.x === "number" ? deepest(at.x, at.y) : at;
     // A click on the page's background has no target: everything would be "inside" it.
     if (target === document.body || target === document.documentElement) target = null;
     if (target) watch(target.getRootNode());
@@ -102,7 +126,6 @@ const INSTALL = `(() => {
     dispatching.clear();
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
-    for (const [on, type, listener, capture] of phases) on.removeEventListener(type, listener, capture);
   };
   return { seen, changed, arm, stop };
 })()`;

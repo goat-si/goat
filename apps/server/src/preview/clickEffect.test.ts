@@ -239,3 +239,60 @@ it("sees a change inside an open shadow root", () =>
       },
     );
   }));
+
+it("does not credit a click with input another field receives meanwhile", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still" style="position:absolute;left:10px;top:10px;margin:0">static</p><input id="other" style="position:absolute;top:100px"><script>
+        setInterval(() => { other.value += "x"; other.dispatchEvent(new Event("input", { bubbles: true })); }, 1);
+      </script>`,
+    );
+    for (let attempt = 0; attempt < 10; attempt++)
+      await expect(ServerBrowserPage.click(page, { x: 20, y: 18 })).resolves.toMatchObject({
+        effect: "suspected_noop",
+      });
+  }));
+
+it("credits what a window capture handler the page set earlier does for the click", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<span id="trigger">open</span><div id="overlays"></div><script>
+        window.addEventListener("click", (event) => {
+          if (event.target.id === "trigger") overlays.append(document.createElement("menu"));
+        }, true);
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#trigger" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));
+
+it("credits a menu opened by a right click or a double click", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<span id="right" oncontextmenu="event.preventDefault(); overlays.append(document.createElement('menu'))">right</span>
+       <span id="double" ondblclick="overlays.append(document.createElement('menu'))">double</span><div id="overlays"></div>`,
+    );
+    await expect(
+      ServerBrowserPage.click(page, { selector: "#right", button: "right" }),
+    ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
+    await expect(
+      ServerBrowserPage.click(page, { selector: "#double", clickCount: 2 }),
+    ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
+  }));
+
+it("sees a change inside a shadow root under a clicked point", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<div id="host" style="position:absolute;left:10px;top:10px"></div><script>
+        const root = host.attachShadow({ mode: "open" });
+        root.innerHTML = "<span id=s style='display:inline-block;width:60px;height:20px'>save</span>";
+        root.getElementById("s").addEventListener("click", (event) => { event.target.firstChild.data = "saved"; });
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { x: 30, y: 20 })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));
