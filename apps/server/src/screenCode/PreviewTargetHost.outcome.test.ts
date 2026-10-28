@@ -55,7 +55,11 @@ it.effect(
       yield* fixture.dispatch("claim_tab");
       const ref = (yield* fixture.observe()).elements[0]!.ref;
       fixture.state.lostReply = new PreviewAutomationTimeoutError(actionErrorContext);
-      const inCell = (method: ScreenHostCall["method"], callId: number, args: object) =>
+      const inCell = (
+        method: ScreenHostCall["method"],
+        callId: number,
+        args: ScreenHostCall["args"],
+      ) =>
         fixture.bridge.handle(
           { ...call(method, callId, args, fixture.ref), cellId: "lost" },
           { ...context, cellId: "lost" },
