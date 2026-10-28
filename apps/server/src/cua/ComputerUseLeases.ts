@@ -61,7 +61,11 @@ import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseF
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
 import { IMPLIED_RECHECK_MS, makeRunEnd } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { ComputerUseLeaseError, makeLeaseQueries } from "./ComputerUseLeaseQueries.ts";
+import {
+  ComputerUseLeaseError,
+  makeLeaseQueries,
+  PER_SIGNAL_READ,
+} from "./ComputerUseLeaseQueries.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
@@ -460,7 +464,10 @@ const make = Effect.gen(function* () {
     interruptions = { count: interruptions.count + 1, last };
   };
 
-  const controlState = Effect.fn("ComputerUseLeases.controlState")(function* (
+  const controlState = Effect.fn(
+    "ComputerUseLeases.controlState",
+    PER_SIGNAL_READ,
+  )(function* (
     threadId: ThreadId,
     controlId: string,
   ): Effect.fn.Return<ComputerUseControlState, ComputerUseLeaseError> {
@@ -680,9 +687,10 @@ const make = Effect.gen(function* () {
       });
     }),
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
-    currentControl: Effect.fn("ComputerUseLeases.currentControl")((threadId) =>
-      Effect.sync(() => Option.fromNullishOr(controls.get(threadId))),
-    ),
+    currentControl: Effect.fn(
+      "ComputerUseLeases.currentControl",
+      PER_SIGNAL_READ,
+    )((threadId) => Effect.sync(() => Option.fromNullishOr(controls.get(threadId)))),
     controlState,
     ...makeForegroundAuthority({
       foreground,
@@ -825,9 +833,6 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.andThen(changed)),
     hold: (id, on) => Effect.sync(() => holdFor(id, on)).pipe(Effect.andThen(changed)),
     // Suspended: the controls are read each time it runs, never once when the service is built.
-    // Untraced: frame viewers and session lists read it again on every lease signal, and a moving
-    // pointer signals many times a second. DesktopFrames.reconcile and PreviewSessions.snapshot
-    // are its spans.
     sessions: Effect.suspend(() =>
       Effect.forEach([...controls.values()], (record) =>
         controlState(record.threadId, record.controlId).pipe(
@@ -843,7 +848,7 @@ const make = Effect.gen(function* () {
           }),
         ),
       ).pipe(Effect.map(stoppedCards.merge)),
-    ).pipe(Effect.withTracerEnabled(false)),
+    ),
     subscribe: PubSub.subscribe(signals),
     changed,
     onAuthorityChange: (listener) => {

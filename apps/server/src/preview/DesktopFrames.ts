@@ -35,6 +35,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { PER_SIGNAL_READ } from "../cua/ComputerUseLeaseQueries.ts";
 import * as LinuxFrameSource from "../cua/linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
@@ -247,8 +248,11 @@ const make = Effect.gen(function* () {
   // Any lease signal since a frame's check began may have closed its gate.
   const fence = Option.isSome(leases) ? yield* leases.value.subscribe : undefined;
 
-  // Untraced: it runs for every lease signal and frame; DesktopFrames.reconcile is the span.
-  const gateOf = Effect.fnUntraced(function* (key: string) {
+  // Read on every lease signal and every frame that arrives.
+  const gateOf = Effect.fn(
+    "DesktopFrames.gateOf",
+    PER_SIGNAL_READ,
+  )(function* (key: string) {
     if (Option.isNone(leases)) return closed("unsupported");
     const detection = yield* leases.value.detection;
     const entry = (yield* leases.value.sessions).find(
