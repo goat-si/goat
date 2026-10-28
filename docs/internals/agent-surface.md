@@ -174,7 +174,9 @@ so `goat_call` treats a transient failure of a call that carried the key as
 safe to repeat. Thread send, interrupt, retry and update, thread create-many,
 task create and review findings turn the key into a stable orchestration
 command id: its receipt commits in the same transaction as the command, which
-the separate reservation statement cannot, and lives longer than 24 hours. Goal
+the separate reservation statement cannot, and lives longer than 24 hours.
+Thread configure uses the same durable command id locally and within one
+destination dispatch session. Goal
 apply stores the key with the goal it creates, channel ingest uses it as the
 message key in the channel ledger, and a secret request's key is how a later
 call collects the answer. An origin report stores the key as a receipt with

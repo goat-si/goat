@@ -15,6 +15,7 @@ import { hostEntries } from "./entries/host.ts";
 import { hostLinkEntries } from "./entries/host_link.ts";
 import { htmlEntries } from "./entries/html.ts";
 import { hubEntries } from "./entries/hub.ts";
+import { lifecycleEntries } from "./entries/lifecycle.ts";
 import { memoryEntries } from "./entries/memory.ts";
 import { noteEntries } from "./entries/note.ts";
 import { operationEntries } from "./entries/operation.ts";
@@ -53,6 +54,7 @@ export const agentSurfaceRegistry = {
   ...permissionProfileEntries,
   ...attachmentEntries,
   ...threadEntries,
+  ...lifecycleEntries,
   ...channelEntries,
   ...computerUseEntries,
   ...connectionEntries,

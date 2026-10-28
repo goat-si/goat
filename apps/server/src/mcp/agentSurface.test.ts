@@ -1,4 +1,5 @@
 import * as DeviceService from "../device/DeviceService.ts";
+import { definitionName } from "./agentSurfaceSchemaRefs.testkit.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DeviceHostUnavailableError,
@@ -73,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(227);
+  expect(entries).toHaveLength(235);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -167,7 +168,6 @@ const refsIn = (node: unknown): ReadonlyArray<string> => [
   ...(isObject(node) && typeof node["$ref"] === "string" ? [node["$ref"]] : []),
   ...children(node).flatMap(refsIn),
 ];
-const definitionName = (ref: string) => /^#\/\$defs\/(.+)$/.exec(ref)?.[1];
 const unresolvedRefs = (root: unknown, definitions: JsonSchema) =>
   [...refsIn(root), ...refsIn(definitions)].filter((ref) => {
     const name = definitionName(ref);

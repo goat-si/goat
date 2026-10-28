@@ -105,6 +105,7 @@ import { validateRepositoryReferenceArguments } from "./repositoryReferenceArgum
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import * as HostThreadConfigurationMcpService from "./HostThreadConfigurationMcpService.ts";
 import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
@@ -166,6 +167,9 @@ import * as RemoteReportHandlers from "./toolkits/remoteReport/handlers.ts";
 import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import * as SshHandlers from "./toolkits/ssh/handlers.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
+import * as ThreadLifecycleMcpService from "./ThreadLifecycleMcpService.ts";
+import * as ThreadLifecycleHandlers from "./toolkits/threadLifecycle/handlers.ts";
+import { ThreadLifecycleToolkit } from "./toolkits/threadLifecycle/tools.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
@@ -981,6 +985,7 @@ export const catalogRegistrations = {
   previewSnapshot: imageToolRegistration(registerPreviewSnapshot(), PreviewHandlers.layerSnapshot),
   orchestrator: toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
   thread: toolkitRegistration(ThreadToolkit, ThreadHandlers.layer),
+  threadLifecycle: toolkitRegistration(ThreadLifecycleToolkit, ThreadLifecycleHandlers.layer),
   worktree: toolkitRegistration(WorktreeToolkit, WorktreeHandlers.layer),
   previewControls: toolkitRegistration(PreviewControlsToolkit, PreviewControlsHandlers.layer),
   environment: toolkitRegistration(EnvironmentToolkit, EnvironmentHandlers.layer),
@@ -1034,6 +1039,7 @@ export const layerOrchestratorToolkit = catalogRegistrations.orchestrator.pipe(
 export const layerThreadToolkit = catalogRegistrations.thread.pipe(
   Layer.provide(ThreadSearchMcpService.layer),
   Layer.provide(PendingQuestionsMcpService.layer),
+  Layer.provide(HostThreadConfigurationMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
 );
@@ -1179,6 +1185,7 @@ export const layer = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
+  catalogRegistrations.threadLifecycle.pipe(Layer.provide(ThreadLifecycleMcpService.layer)),
   layerAttachmentToolkit,
   layerChannelToolkit,
   catalogRegistrations.note,

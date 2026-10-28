@@ -81,6 +81,10 @@ function withoutComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\x60\\])\/\/.*$/gm, "$1");
 }
 
+/** import type and export type statements, which never run, so they name nothing a run executes. */
+const TYPE_ONLY_MODULE =
+  /\b(?:import\s+type\s+(?:\{[^}]*\}|\*\s*as\s+[\w$]+|[\w$]+)|export\s+type\s*(?:\{[^}]*\}|\*(?:\s*as\s+[\w$]+)?))\s*from\s*["'][^"'\n]+["']/g;
+
 /**
  * Files a source names in strings: a path ending in a file name (a fixture it reads, a script it
  * spawns), resolved against the source's directory, else by its trailing path segments, else by a
@@ -90,7 +94,7 @@ function withoutComments(source) {
  */
 function namedFilesOf(source, from, { byBase, byStem, fileSet, packageDirFor }) {
   const found = new Set();
-  const code = withoutComments(source);
+  const code = withoutComments(source).replace(TYPE_ONLY_MODULE, "");
   const addAll = (matches) => {
     if (matches.length > 0 && matches.length <= MAX_NAME_MATCHES)
       for (const file of matches) found.add(file);
@@ -255,26 +259,79 @@ function resolveExport(manifest, subpath) {
 }
 
 /**
- * Tests and test configs, and files that only they import, directly or through other such files.
- * Only these name files that a run executes: elsewhere a file name is mostly prose, a type-only
- * import, or a self-spawn of the server entry, which would make every server change reach whatever
- * imports the naming module.
+ * Tests and test configs, and files that only they import or name, directly or through other such
+ * files. Only these name files that a run executes: elsewhere a file name is mostly prose, a
+ * type-only import, or a self-spawn of the server entry, which would make every server change reach
+ * whatever imports the naming module.
  */
-function testCodeOf(files, importers) {
+function testCodeOf(files, importers, rawNamers) {
   const testCode = new Set(files.filter((file) => TEST_FILE.test(file) || CONFIG_FILE.test(file)));
+  // Files that import each other join together, so an import cycle is judged as one unit.
+  const groups = importCyclesOf(files, importers);
   let grew = true;
   while (grew) {
     grew = false;
-    for (const file of files) {
-      const users = importers.get(file);
-      if (testCode.has(file) || !users || users.size === 0) continue;
-      if ([...users].every((user) => testCode.has(user))) {
-        testCode.add(file);
-        grew = true;
-      }
+    for (const group of groups) {
+      if (group.every((file) => testCode.has(file))) continue;
+      const members = new Set(group);
+      const users = group
+        .flatMap((file) => [...(importers.get(file) ?? []), ...(rawNamers.get(file) ?? [])])
+        .filter((user) => !members.has(user));
+      const usedByTests = users.length > 0 || group.some((file) => testCode.has(file));
+      if (!usedByTests || !users.every((user) => testCode.has(user))) continue;
+      for (const file of group) testCode.add(file);
+      grew = true;
     }
   }
   return testCode;
+}
+
+/** Strongly connected components of the import graph (Tarjan's algorithm, without recursion). */
+function importCyclesOf(files, importers) {
+  const index = new Map();
+  const low = new Map();
+  const onStack = new Set();
+  const stack = [];
+  const groups = [];
+  let next = 0;
+  for (const root of files) {
+    if (index.has(root)) continue;
+    const work = [[root, [...(importers.get(root) ?? [])], 0]];
+    index.set(root, next);
+    low.set(root, next++);
+    stack.push(root);
+    onStack.add(root);
+    while (work.length > 0) {
+      const frame = work[work.length - 1];
+      const [node, edges] = frame;
+      if (frame[2] < edges.length) {
+        const child = edges[frame[2]++];
+        if (!index.has(child)) {
+          index.set(child, next);
+          low.set(child, next++);
+          stack.push(child);
+          onStack.add(child);
+          work.push([child, [...(importers.get(child) ?? [])], 0]);
+        } else if (onStack.has(child)) low.set(node, Math.min(low.get(node), index.get(child)));
+        continue;
+      }
+      work.pop();
+      if (work.length > 0) {
+        const parent = work[work.length - 1][0];
+        low.set(parent, Math.min(low.get(parent), low.get(node)));
+      }
+      if (low.get(node) !== index.get(node)) continue;
+      const group = [];
+      let member;
+      do {
+        member = stack.pop();
+        onStack.delete(member);
+        group.push(member);
+      } while (member !== node);
+      groups.push(group);
+    }
+  }
+  return groups;
 }
 
 /**
@@ -360,7 +417,9 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
     for (const named of namedFilesOf(source, file, { byBase, byStem, fileSet, packageDirFor }))
       namings.push([file, named]);
   }
-  const testCode = testCodeOf(files, importers);
+  const rawNamers = new Map();
+  for (const [file, named] of namings) link(rawNamers, file, named);
+  const testCode = testCodeOf(files, importers, rawNamers);
   for (const [file, named] of namings) {
     if (testCode.has(file) && !importers.get(named)?.has(file)) link(namers, file, named);
   }

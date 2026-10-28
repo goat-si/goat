@@ -9,6 +9,7 @@ import {
   CommandId,
   MessageId,
   ThreadId,
+  type ModelSelection,
   type RuntimeMode,
   type ProviderInteractionMode,
 } from "@goat/contracts";
@@ -60,6 +61,7 @@ import {
   unavailable,
 } from "./threadAccess.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { checkModelSelection as checkCatalogModelSelection } from "./ModelSelectionValidation.ts";
 
 type Modes = {
   readonly runtimeMode: RuntimeMode;
@@ -170,41 +172,12 @@ const make = Effect.gen(function* () {
   const documentText = yield* DocumentText.DocumentText;
   const attachmentLeases = yield* AttachmentFileLeases.AttachmentFileLeases;
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-  /**
-   * Refuses a provider instance this environment does not have, or a requested
-   * model its provider does not list, before any thread exists. An SSH launch
-   * forwards the caller's model as requested, so the remote checks it here. The
-   * cached model list goes stale when the provider's own catalog changes (for
-   * example `ocx sync` on a remote host), so a miss refreshes the instance once.
-   */
   const checkModelSelection = Effect.fn("ThreadLaunchMcpService.checkModelSelection")(function* (
-    selection: { readonly instanceId: string; readonly model: string },
+    selection: ModelSelection,
     requested: boolean,
   ) {
     if (Option.isNone(providerRegistry)) return;
-    const registry = providerRegistry.value;
-    const providers = yield* registry.getProviders;
-    let provider = providers.find((entry) => entry.instanceId === selection.instanceId);
-    if (provider === undefined)
-      return yield* new OrchestratorMcpFailure({
-        code: "invalid_request",
-        message: `This GOAT has no provider instance ${selection.instanceId}; it has ${
-          providers.map((entry) => entry.instanceId).join(", ") || "none"
-        }. ${goatCallText("provider.list")} lists providers and models.`,
-      });
-    const misses = (candidate: typeof provider) =>
-      requested &&
-      candidate !== undefined &&
-      candidate.models.length > 0 &&
-      !candidate.models.some((model) => model.slug === selection.model);
-    if (!misses(provider)) return;
-    const refreshed = yield* registry.refreshInstance(provider.instanceId);
-    provider = refreshed.find((entry) => entry.instanceId === selection.instanceId) ?? provider;
-    if (misses(provider))
-      return yield* new OrchestratorMcpFailure({
-        code: "invalid_request",
-        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one ${goatCallText("provider.list")} lists for it, or fix the provider's catalog and check it with ${goatCallText("provider.diagnose", `{instanceId:"${selection.instanceId}"}`)}.`,
-      });
+    yield* checkCatalogModelSelection(providerRegistry.value, selection, requested);
   });
   return ThreadLaunchMcpService.of({
     launch: (scope, rawInput, { runtimeMode: requestedRuntimeMode, interactionMode }, cloudRun) =>

@@ -70,6 +70,7 @@ export * from "./guestShare.ts";
 export * from "./guestStream.ts";
 export * from "./applicationEvent.ts";
 export * from "./orchestratorMcp.ts";
+export * from "./orchestratorMcpThreadConfiguration.ts";
 export * from "./orchestratorMcpCloudTask.ts";
 export * from "./orchestratorMcpFailure.ts";
 export * from "./threadReplica.ts";
