@@ -1,4 +1,5 @@
 // @effect-diagnostics globalTimers:off - The lock orders Playwright promises outside the Effect runtime.
+import type { PreviewAutomationRequest, PreviewAutomationWaitForInput } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
@@ -20,6 +21,23 @@ const tabBusy = () =>
     "PreviewAutomationTimeoutError",
     "This tab did not finish the call in time; an earlier call may still be running. Try again in a moment.",
   );
+
+/** A wait that never started cannot say its condition is unmet, so it fails instead of timing out. */
+const waitNotStarted = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationExecutionError",
+    "The wait did not start before its deadline; an earlier call held this tab. Check again.",
+  );
+
+/** A wait's input once it starts: the time it spent queued behind the tab's other work is gone. */
+export const waitInput = (
+  request: Pick<PreviewAutomationRequest, "input" | "timeoutMs">,
+  deadlineMs: number,
+): PreviewAutomationWaitForInput => {
+  const timeoutMs = Math.min(request.timeoutMs, deadlineMs - performance.now());
+  if (timeoutMs <= 0) throw waitNotStarted();
+  return { ...(request.input as PreviewAutomationWaitForInput), timeoutMs };
+};
 
 /**
  * Answers the caller by its deadline while the work itself goes on; onExpire runs when the
@@ -82,7 +100,11 @@ export const withCaptureLock = <A>(
  * answered here, before the broker gives up on the whole host; half a second lets the call's own
  * timeout answer first.
  */
-export const answerCall = <A>(timeoutMs: number, call: (deadlineMs: number) => Promise<A>) => {
-  const deadlineMs = performance.now() + timeoutMs;
-  return answerBy(call(deadlineMs), deadlineMs + 500, constVoid, tabBusy);
+export const answerCall = <A>(
+  request: { readonly timeoutMs: number; readonly operation: string },
+  call: (deadlineMs: number) => Promise<A>,
+) => {
+  const deadlineMs = performance.now() + request.timeoutMs;
+  const late = request.operation === "waitFor" ? waitNotStarted : tabBusy;
+  return answerBy(call(deadlineMs), deadlineMs + 500, constVoid, late);
 };

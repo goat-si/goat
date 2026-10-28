@@ -215,9 +215,10 @@ dispatched call whose result is lost or times out has an unknown outcome; anothe
 observe again before deciding what to do. The cell never replays that input. The first call that
 fails after its write may have landed (an unknown outcome or a partial write) stops the cell's later
 input: calls already dispatched keep their outcome, and each later write gets its own `not_run`
-error and receipt without dispatching, while reads still run. A call refused before anything was
-sent, a write the driver reports as a no-op, or a failed read leaves the cell free, because the
-page is as the cell last saw it and the guest has caught or will see that error. An
+error and receipt without dispatching, while reads still run. The macOS driver's suspected no-op
+counts as an unknown outcome, because it does not prove nothing landed. A call refused before
+anything was sent, a write refused before it could land, or a failed read leaves the cell free,
+because the page is as the cell last saw it and the guest has caught or will see that error. An
 unverifiable write is a success whose receipt says it may have committed, because the macOS
 driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with

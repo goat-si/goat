@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
+import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import type {
   EnvironmentId,
   ThreadId,
@@ -342,15 +343,26 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
       const bridge = new ScreenHostBridge();
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      // The macOS driver's suspected no-op does not prove nothing landed, so it reads as unknown.
+      const driverSafety =
+        category === "suspected_noop"
+          ? {
+              safety: classifyActionOutcome({
+                effect: "write",
+                status: "indeterminate",
+                dispatched: true,
+              }),
+            }
+          : {};
       let sent = 0;
       bridge.setDispatcher({
         availability: () => Effect.succeed([]),
-        dispatch: () =>
+        dispatch: (request) =>
           Effect.gen(function* () {
             sent++;
             yield* Deferred.succeed(started, undefined);
             yield* Deferred.await(release);
-            return { category };
+            return { category, ...(request.method === "click" ? driverSafety : {}) };
           }),
       });
       const active = yield* bridge
@@ -369,7 +381,7 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
       yield* Deferred.succeed(release, undefined);
       const first = yield* Fiber.join(active);
       const second = yield* Fiber.join(queued);
-      const landed = category === "partial";
+      const landed = category !== "refused";
       expect(first?.outcome).toBe("error");
       expect(first?.error?.safety?.possibleCommit).toBe(landed);
       // The guest caught the failure and went on: it may observe, and sends more input only when

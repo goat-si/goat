@@ -9,6 +9,7 @@ import {
   ThreadId,
   TurnItemId,
   type ScreenTargetRef,
+  type ScreenHostCall,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -204,6 +205,32 @@ it.effect(
         expect(late.timeoutMs).toBeGreaterThan(0);
         expect(late.timeoutMs).toBeLessThan(1_000);
       }
+    }),
+);
+
+it.effect(
+  "a wait the browser could not start fails as a read, and the cell's input still runs",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const inCell = (
+        method: ScreenHostCall["method"],
+        callId: number,
+        args: ScreenHostCall["args"],
+      ) =>
+        fixture.bridge.handle(
+          { ...call(method, callId, args, fixture.ref), cellId: "busy" },
+          { ...context, cellId: "busy" },
+        );
+      fixture.state.failure = new PreviewAutomationExecutionError({
+        ...actionErrorContext,
+        operation: "waitFor",
+      });
+      const waited = yield* inCell("wait_for", 90, { text: "Ready" });
+      expect(waited?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
+      fixture.state.failure = undefined;
+      expect((yield* inCell("press_key", 91, { key: "Enter" }))?.outcome).toBe("ok");
     }),
 );
 

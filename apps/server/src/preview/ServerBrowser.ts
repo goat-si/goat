@@ -42,7 +42,6 @@ import {
   type PreviewAutomationStatus,
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
-  type PreviewAutomationWaitForInput,
   type PreviewEvent,
   type PreviewNavStatus,
   type PreviewReportProfilesInput,
@@ -94,7 +93,7 @@ import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as AgentTabState from "./agentTabState.ts";
-import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
+import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
@@ -1865,7 +1864,8 @@ const make = Effect.gen(function* () {
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
         }
       },
-      deadlineMs,
+      // A wait dequeued after its deadline says it never started, never that its condition failed.
+      request.operation === "waitFor" ? undefined : deadlineMs,
     );
   };
 
@@ -2017,11 +2017,9 @@ const make = Effect.gen(function* () {
           request.timeoutMs,
         );
       case "waitFor":
-        return ServerBrowserPage.waitFor(
-          tab.page,
-          { ...(input as PreviewAutomationWaitForInput), timeoutMs: request.timeoutMs },
-          signal,
-        ).then(ServerBrowserScreen.recheck(tab, request));
+        return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
+          ServerBrowserScreen.recheck(tab, request),
+        );
       case "recordingStart": {
         const recording = await startRecording(tab, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
@@ -2033,7 +2031,7 @@ const make = Effect.gen(function* () {
     Effect.tryPromise({
       try: () => {
         ServerBrowserScreen.assertScreenConnection(request, connectionId);
-        return answerCall(request.timeoutMs, (deadlineMs) =>
+        return answerCall(request, (deadlineMs) =>
           runOperation(request, deadlineMs)
             // After every observation around the operation let the result through.
             .then((result) =>
