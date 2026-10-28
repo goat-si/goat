@@ -655,16 +655,16 @@ export const make = Effect.gen(function* () {
     targeted: (threadId: ThreadId) => runSweep(null, threadId),
     full: (refresh) => runSweep(null, undefined, refresh),
   });
+  // The event consumer reads metadata only; restoring archived history would hold it behind the archive lock.
+  const readThreadMetadata = (threadId: ThreadId) =>
+    projections.getThread(threadId).pipe(Effect.provideService(SkipThreadArchiveRestore, true));
   const enqueueThread = Effect.fn("ThreadSettlementServiceV2.enqueueThread")(function* (
     threadId: ThreadId,
     refresh = false,
   ) {
     // A full pass can exclude active threads, so only their fresh lookup consumes the hint.
     if (refresh) {
-      // Metadata only: restoring archived history here would hold the event consumer behind it.
-      const thread = yield* projections
-        .getThread(threadId)
-        .pipe(Effect.provideService(SkipThreadArchiveRestore, true));
+      const thread = yield* readThreadMetadata(threadId);
       if (
         thread.deletedAt === null &&
         thread.archivedAt === null &&
@@ -681,13 +681,13 @@ export const make = Effect.gen(function* () {
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
     function* (threadId: ThreadId) {
-      const settled = yield* projections.getThread(threadId);
+      const settled = yield* readThreadMetadata(threadId);
       if (settled.settledOverride !== "settled") return;
       yield* terminals.closeIdle({ threadId });
       const worktreePath = settled.worktreePath;
       if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
       // Recheck after closing and worktree I/O; re-engaged threads must not be cleaned up.
-      const thread = yield* projections.getThread(threadId);
+      const thread = yield* readThreadMetadata(threadId);
       if (thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
