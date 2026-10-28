@@ -68,6 +68,8 @@ it.effect.each(["--version", "__ssh-helper"] as const)(
 );
 
 it.effect.each([
+  { label: "version", args: ["--version"] },
+  { label: "probe", args: ["__ssh-helper", "protocol", "--shell"] },
   { label: "unknown flag", args: ["__ssh-helper", "protocol", "--invalid-helper-flag"] },
   { label: "missing flag value", args: ["__ssh-helper", "protocol", "--runtime-file"] },
   { label: "completions", args: ["__ssh-helper", "protocol", "--completions", "bash"] },
@@ -87,6 +89,7 @@ it.effect.each([
     const exitCode = process.exitCode;
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     process.argv = [argv[0] ?? "node", "/fixture/bin.ts", ...args];
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -98,6 +101,7 @@ it.effect.each([
         vi.resetModules();
         log.mockRestore();
         error.mockRestore();
+        write.mockRestore();
       }),
     );
     const { runCliWithArgs } = yield* Effect.promise(() => import("./binCli.ts"));
@@ -109,8 +113,11 @@ it.effect.each([
     );
     const expectedLogs = [...log.mock.calls];
     const expectedErrors = [...error.mock.calls];
+    const expectedWrites = [...write.mock.calls];
+    expect(expectedLogs.length + expectedErrors.length + expectedWrites.length).toBeGreaterThan(0);
     log.mockClear();
     error.mockClear();
+    write.mockClear();
 
     yield* Effect.promise(() => import("./bin.ts"));
     assert.isDefined(running);
@@ -121,5 +128,6 @@ it.effect.each([
     }
     expect(log.mock.calls).toEqual(expectedLogs);
     expect(error.mock.calls).toEqual(expectedErrors);
+    expect(write.mock.calls).toEqual(expectedWrites);
   }),
 );
