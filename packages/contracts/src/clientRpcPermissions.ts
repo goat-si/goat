@@ -13,10 +13,8 @@ import {
   AuthEnvironmentMaintainScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
-  requiredScopesForServerSettingsPatch,
 } from "./auth.ts";
-import { requiredScopesForServerSettingsPatch, ServerSettingsPatch } from "./settings.ts";
-import { ProviderInstanceMutation } from "./providerInstance.ts";
+import { requiredScopesForServerSettingsPatch } from "./settings.ts";
 import { CHANNEL_GATEWAY_WS_METHODS } from "./channelGateway.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 import { WS_METHODS, ServerSettingsUpdateInput } from "./rpc.ts";
@@ -174,13 +172,6 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
-
-const decodeSettingsUpdate = Schema.decodeUnknownSync(
-  Schema.Struct({
-    patch: ServerSettingsPatch,
-    providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
-  }),
-);
 
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);

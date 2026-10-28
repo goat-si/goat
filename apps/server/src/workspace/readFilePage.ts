@@ -45,7 +45,9 @@ export async function readFilePage(input: {
     if (bytes.length > 0 && end === 0)
       throw new RangeError("Budget is smaller than the next UTF-8 code point.");
     const page = bytes.subarray(0, end);
-    const contents = new TextDecoder("utf-8", { fatal: true }).decode(page);
+    const contents = new TextDecoder("utf-8", { fatal: true, ignoreBOM: offset !== 0 }).decode(
+      page,
+    );
     const after = await handle.stat({ bigint: true });
     if (
       before.size !== after.size ||

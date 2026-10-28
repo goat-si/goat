@@ -121,28 +121,32 @@ const make = Effect.gen(function* () {
         Effect.provideService(ThreadManagement.ThreadManagementService, threads),
       );
       yield* assertLiveCaller(context);
-      if (
-        writes &&
-        (scope.readOnly ||
-          context.limits.interactionMode !== "default" ||
-          (terminal
-            ? context.limits.runtimeMode !== "full-access"
-            : !["auto-accept-edits", "auto", "full-access"].includes(context.limits.runtimeMode)))
-      )
-        return yield* denied(
-          terminal
-            ? "Terminal operations require full access mode."
-            : "File writes require a mode that permits edits.",
-        );
+      let runtimeMode = context.limits.runtimeMode;
       if (writes && scope.thread) {
-        const profile = yield* profiles.resolve(scope).pipe(Effect.mapError(unavailable));
+        const profile = yield* profiles
+          .resolve(scope, context.limits.runtimeMode)
+          .pipe(Effect.mapError(unavailable));
         const result = Profiles.checkProfile(
           profile,
           terminal ? "terminal.operate" : "workspace.write",
           {},
         );
         if (!result.ok) return yield* denied(result.reason);
+        if (profile.enabled) runtimeMode = profile.runtimeMode;
       }
+      if (
+        writes &&
+        (scope.readOnly ||
+          context.limits.interactionMode !== "default" ||
+          (terminal
+            ? runtimeMode !== "full-access"
+            : !["auto-accept-edits", "auto", "full-access"].includes(runtimeMode)))
+      )
+        return yield* denied(
+          terminal
+            ? "Terminal operations require full access mode."
+            : "File writes require a mode that permits edits.",
+        );
       yield* scope.reauthorize([permission]).pipe(Effect.mapError(reauthorizationFailure));
       return {
         projectId,

@@ -22,15 +22,24 @@ export const make = Effect.fn("SettingsRpc.make")(function* (session: Authentica
     if (input.providerInstanceMutation !== undefined && input.agentTerminalBinding !== undefined)
       return yield* new ServerSettingsError({ settingsPath: "settings", operation: "normalize" });
     const updatePolicy = settings.updateAgentWorkspaceTerminalPolicy;
+    const usesAgentPolicy =
+      input.agentTerminalBinding !== undefined ||
+      input.patch.agentWorkspaceAccess !== undefined ||
+      input.patch.agentTerminalAccess !== undefined ||
+      input.patch.projectSettingsOverrides !== undefined;
     return yield* input.providerInstanceMutation === undefined
-      ? updatePolicy === undefined
-        ? Effect.fail(new ServerSettingsError({ settingsPath: "settings", operation: "normalize" }))
-        : updatePolicy(
-            input.patch,
-            session.sessionId,
-            input.agentTerminalBinding,
-            authorize(input.patch, undefined, input.agentTerminalBinding),
-          )
+      ? !usesAgentPolicy
+        ? settings.updateSettings(input.patch, authorize(input.patch))
+        : updatePolicy === undefined
+          ? Effect.fail(
+              new ServerSettingsError({ settingsPath: "settings", operation: "normalize" }),
+            )
+          : updatePolicy(
+              input.patch,
+              session.sessionId,
+              input.agentTerminalBinding,
+              authorize(input.patch, undefined, input.agentTerminalBinding),
+            )
       : routes.mutateProviderInstance(
           { mutation: input.providerInstanceMutation, patch: input.patch },
           { kind: "client", sessionId: session.sessionId },
