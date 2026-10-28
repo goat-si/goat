@@ -25,8 +25,11 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as EffectExecutionFences from "./EffectExecutionFences.ts";
+import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as AutomationHold from "../automationHold.ts";
 
@@ -203,8 +206,13 @@ export class EffectOutboxError extends Schema.TaggedError<EffectOutboxError>()(
 const isEffectOutboxError = Schema.is(EffectOutboxError);
 
 export interface EffectOutboxV2Shape {
+  readonly getExecution: () => Effect.Effect<
+    EffectExecutionFences.EffectExecutionFences["Service"]
+  >;
   readonly captureHeldBacklog: Effect.Effect<void, EffectOutboxError>;
   readonly awaitAvailable: Effect.Effect<void>;
+  readonly awaitControlAvailable: Effect.Effect<void>;
+  readonly awaitCleanupAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
   /** Persist rows only. Notify workers after the surrounding transaction commits. */
   readonly enqueue: (
@@ -234,7 +242,11 @@ export interface EffectOutboxV2Shape {
     readonly workerId: string;
     readonly leaseDurationMs: number;
     readonly excludeRestartContinuations?: boolean;
+    readonly effectTypes?: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
   }) => Effect.Effect<Option.Option<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly nextClaimableAtFor: (
+    effectTypes?: ReadonlyArray<OrchestrationEffectRequestV2["type"]>,
+  ) => Effect.Effect<Option.Option<DateTime.Utc>, EffectOutboxError>;
   readonly nextClaimableAt: Effect.Effect<Option.Option<DateTime.Utc>, EffectOutboxError>;
   readonly succeed: (input: {
     readonly effectId: string;
@@ -302,10 +314,12 @@ const rowToEffect = (row: EffectRow) =>
     })),
   );
 
-export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = Layer.effect(
+export const layer = Layer.effect(
   EffectOutboxV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const fences = yield* EffectExecutionFences.EffectExecutionFences;
+    const claimLock = yield* Semaphore.make(1);
     const hold = yield* AutomationHold.AutomationHold;
     let backlog: { readonly effects: string; readonly threads: string } | undefined;
     const heldBacklog = Effect.gen(function* () {
@@ -317,6 +331,8 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         : sql`AND candidate.effect_id NOT IN (SELECT value FROM json_each(${held.effects}))
               AND candidate.thread_id NOT IN (SELECT value FROM json_each(${held.threads}))`;
     const available = yield* Queue.dropping<void>(64);
+    const controlAvailable = yield* Queue.dropping<void>(1);
+    const cleanupAvailable = yield* Queue.dropping<void>(1);
     const cancellationSignals = new Map<string, Deferred.Deferred<void>>();
     const settledSignals = new Map<string, Deferred.Deferred<void>>();
     const signalSettled = (effectIds: ReadonlyArray<string>) =>
@@ -334,11 +350,17 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       Queue.offerAll(
         available,
         Array.from({ length: Math.min(64, Math.max(0, Math.floor(count))) }, () => undefined),
-      ).pipe(Effect.asVoid);
+      ).pipe(
+        Effect.andThen(Queue.offer(controlAvailable, undefined)),
+        Effect.andThen(Queue.offer(cleanupAvailable, undefined)),
+        Effect.asVoid,
+      );
     // Retry backoff must block later effects so turns cannot race a pending rollback.
     const claimableCandidatePredicate = (
+      occupancy: Effect.Success<EffectExecutionFences.EffectExecutionFences["Service"]["snapshot"]>,
       availableBefore?: string,
       excludeRestartContinuations = false,
+      effectTypes?: ReadonlyArray<OrchestrationEffectRequestV2["type"]>,
     ) =>
       sql`
         ${
@@ -347,6 +369,10 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             : sql`candidate.available_at <= ${availableBefore}`
         }
         AND candidate.status = 'pending'
+        AND ${effectTypes === undefined ? sql`1 = 1` : effectTypes.length === 0 ? sql`0 = 1` : sql`candidate.effect_type IN ${sql.in(effectTypes)}`}
+        AND ${occupancy.titleThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type != 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.titleThreads)})`}
+        AND ${occupancy.mainThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type = 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.mainThreads)})`}
+        AND ${occupancy.fullLanes.length === 0 ? sql`1 = 1` : sql`candidate.effect_type NOT IN ${sql.in(occupancy.fullLanes.flatMap(effectTypesForLane))}`}
         AND NOT EXISTS (
           SELECT 1
           FROM orchestration_v2_effect_outbox AS active
@@ -391,6 +417,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       );
 
     const service: EffectOutboxV2Shape = {
+      getExecution: () => Effect.succeed(fences),
       captureHeldBacklog: Effect.gen(function* () {
         if (backlog !== undefined) return;
         // Re-snapshot on each process start while held: new work from a previous held
@@ -463,6 +490,8 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           Effect.mapError((cause) => new EffectOutboxError({ operation: "get", effectId, cause })),
         ),
       awaitAvailable: Queue.take(available),
+      awaitControlAvailable: Queue.take(controlAvailable),
+      awaitCleanupAvailable: Queue.take(cleanupAvailable),
       notifyAvailable,
       listByCommandId: (commandId) =>
         sql<EffectRow>`
@@ -497,6 +526,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               AND effect_type IN ${sql.in(effectTypes)}
             RETURNING effect_id
           `;
+          for (const row of rows) yield* fences.retireAdmission(row.effect_id);
           return rows.map(({ effect_id }) => effect_id);
         },
         Effect.mapError((cause) => new EffectOutboxError({ operation: "cancel-unsettled", cause })),
@@ -556,6 +586,8 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             AND effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)}
           RETURNING effect_id
         `;
+        for (const row of [...cancelledRows, ...requeuedRows])
+          yield* fences.retireAdmission(row.effect_id);
         if (requeuedRows.length > 0) yield* notifyAvailable(requeuedRows.length);
         return { requeued: requeuedRows.length, cancelled: cancelledRows.length };
       }).pipe(
@@ -565,8 +597,14 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       ),
       // The worker polls for the next effect even when there is no work to claim.
       claimNext: Effect.fnUntraced(
-        function* ({ workerId, leaseDurationMs, excludeRestartContinuations = false }) {
+        function* ({
+          workerId,
+          leaseDurationMs,
+          excludeRestartContinuations = false,
+          effectTypes,
+        }) {
           const held = yield* heldBacklog;
+          const occupancy = yield* fences.snapshot;
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const leaseExpiresAt = DateTime.formatIso(
@@ -585,7 +623,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = (
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
-              WHERE ${claimableCandidatePredicate(nowIso, excludeRestartContinuations)}${backlogFilter(held)}
+              WHERE ${claimableCandidatePredicate(occupancy, nowIso, excludeRestartContinuations, effectTypes)}${backlogFilter(held)}
                 AND ${excludeRestartContinuations ? sql`candidate.effect_type != 'provider-runtime.continue'` : sql`1 = 1`}
               ORDER BY candidate.available_at ASC, candidate.created_at ASC, candidate.effect_id ASC
               LIMIT 1
@@ -595,35 +633,42 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           const rows = yield* claimStatement.pipe(Effect.withTracerEnabled(false));
           const row = rows[0];
           if (row === undefined) return Option.none();
-          cancellationSignals.set(row.effect_id, Deferred.makeUnsafe<void>());
-          return Option.some(yield* rowToEffect(row));
+          const effect = yield* rowToEffect(row);
+          yield* fences.admitClaim(effect);
+          cancellationSignal(effect.id);
+          return Option.some(effect);
         },
+        claimLock.withPermit,
+        Effect.uninterruptible,
         Effect.mapError((cause) => new EffectOutboxError({ operation: "claim", cause })),
       ),
-      nextClaimableAt: Effect.gen(function* () {
-        const held = yield* heldBacklog;
-        const rows = yield* sql<{ readonly available_at: string | null }>`
+      nextClaimableAtFor: Effect.fn("EffectOutbox.nextClaimableAtFor")(
+        function* (effectTypes) {
+          const held = yield* heldBacklog;
+          const occupancy = yield* fences.snapshot;
+          const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate
-          WHERE ${claimableCandidatePredicate()}${backlogFilter(held)}
+          WHERE ${claimableCandidatePredicate(occupancy, undefined, false, effectTypes)}${backlogFilter(held)}
         `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
-        const availableAt = rows[0]?.available_at;
-        if (availableAt === undefined || availableAt === null) return Option.none();
-        const parsed = DateTime.make(availableAt);
-        if (Option.isNone(parsed)) {
-          return yield* new EffectOutboxError({
-            operation: "next-claimable",
-            cause: `Invalid available_at timestamp: ${availableAt}`,
-          });
-        }
-        return parsed;
-      }).pipe(
+          const availableAt = rows[0]?.available_at;
+          if (availableAt === undefined || availableAt === null) return Option.none();
+          const parsed = DateTime.make(availableAt);
+          if (Option.isNone(parsed)) {
+            return yield* new EffectOutboxError({
+              operation: "next-claimable",
+              cause: `Invalid available_at timestamp: ${availableAt}`,
+            });
+          }
+          return parsed;
+        },
         Effect.mapError((cause) =>
           isEffectOutboxError(cause)
             ? cause
             : new EffectOutboxError({ operation: "next-claimable", cause }),
         ),
       ),
+      nextClaimableAt: Effect.suspend(() => service.nextClaimableAtFor()),
       succeed: Effect.fn("EffectOutbox.succeed")(
         function* ({ effectId, workerId }) {
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -642,6 +687,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             RETURNING effect_id
           `;
           if (rows.length === 1) {
+            yield* fences.retireAdmission(effectId);
             cancellationSignals.delete(effectId);
             yield* signalSettled([effectId]);
             yield* notifyAvailable();
@@ -678,6 +724,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             RETURNING effect_id
           `;
           if (rows.length === 1) {
+            yield* fences.retireAdmission(effectId);
             cancellationSignals.delete(effectId);
             yield* notifyAvailable();
           }
@@ -708,6 +755,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             RETURNING effect_id
           `;
           if (rows.length === 1) {
+            yield* fences.retireAdmission(effectId);
             cancellationSignals.delete(effectId);
             yield* signalSettled([effectId]);
             yield* notifyAvailable();
@@ -751,7 +799,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
 
     return service;
   }),
-);
+).pipe(Layer.provide(EffectExecutionFences.layer));
 
 export const layerPruneWorker = Layer.effectDiscard(
   Effect.gen(function* () {

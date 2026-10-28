@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
+import * as OwnedEffectDeadline from "./OwnedEffectDeadline.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
@@ -175,6 +176,8 @@ const make = Effect.gen(function* () {
         times: input.kind.type === "initial" ? 2 : 0,
         schedule: Schedule.exponential("2 seconds"),
       }),
+      OwnedEffectDeadline.generateTitle,
+      Effect.map(Option.getOrElse(() => ({ type: "complete" as const }))),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.interrupt
