@@ -93,12 +93,25 @@ const elementFrames = (entries: readonly Record<string, unknown>[]) => {
   }
   return placed;
 };
-/** An element's center as a fraction of its window; a center outside the window gives none. */
+/**
+ * An element's center as a fraction of its window; a center outside the window gives none. A
+ * tree that left its window out is measured against the bounds held when it was read, and only
+ * while they still hold: once a screenshot shows the window moved, the host cannot tell whether
+ * that happened before or after the read, so it sends no point until the tree is read again.
+ */
 const aimOf = (
   placed: Placed | undefined,
+  basis: Rect | undefined,
   bounds: Rect | undefined,
 ): ComputerUseOverlayPoint | undefined => {
-  const window = placed?.window ?? bounds;
+  const held =
+    basis !== undefined &&
+    bounds !== undefined &&
+    basis.x === bounds.x &&
+    basis.y === bounds.y &&
+    basis.w === bounds.w &&
+    basis.h === bounds.h;
+  const window = placed?.window ?? (held ? basis : undefined);
   if (!placed || !window || window.w <= 0 || window.h <= 0) return undefined;
   const fx = (placed.frame.x + placed.frame.w / 2 - window.x) / window.w;
   const fy = (placed.frame.y + placed.frame.h / 2 - window.y) / window.h;
@@ -242,6 +255,8 @@ interface BoundWindow {
   pointsStale?: boolean;
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
+  /** The window bounds held when those frames were read. */
+  framesBasis?: Rect;
   /**
    * The window's screen bounds from its binding or latest screenshot. They place a tree that
    * leaves the window out (macOS indexes only actionable elements); a tree read returns none.
@@ -559,6 +574,8 @@ export const createDesktopTargetHost = (deps: {
         delete bound.snapshotId;
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
+        if (bound.windowBounds === undefined) delete bound.framesBasis;
+        else bound.framesBasis = bound.windowBounds;
       }
       const render = Effect.try({
         try: () =>
@@ -809,7 +826,7 @@ export const createDesktopTargetHost = (deps: {
         point:
           elementToken === undefined
             ? undefined
-            : aimOf(bound.frames?.get(elementToken), bound.windowBounds),
+            : aimOf(bound.frames?.get(elementToken), bound.framesBasis, bound.windowBounds),
       });
       return driverResult(tool, reply);
     },
