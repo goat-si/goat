@@ -92,6 +92,33 @@ describe("X11 window capture", () => {
     expect([...shrinkRgb(rgb, 2, 2, 1, 1)]).toEqual([128, 128, 128]);
     expect(shrinkRgb(rgb, 2, 2, 2, 2)).toBe(rgb);
   });
+
+  it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
+    const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
+      const drawn = coverage(100, 80);
+      for (const rect of rects) drawn.add(rect);
+      return drawn.whole();
+    };
+    const tiles = [
+      { x: 50, y: 0, w: 50, h: 40 },
+      { x: 0, y: 0, w: 60, h: 80 },
+      { x: 50, y: 40, w: 50, h: 40 },
+    ];
+    expect(covered(tiles)).toBe(true);
+    expect(covered(tiles.slice(0, 2))).toBe(false);
+    expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
+    // Drawing that spills past the window counts only where it is inside.
+    expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
+  });
+
+  it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
+    const drawn = coverage(3840, 2160);
+    let accepted = true;
+    for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
+      accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
+    expect(accepted).toBe(false);
+    expect(drawn.whole()).toBe(false);
+  });
 });
 
 interface FakeWindow {
@@ -518,24 +545,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }
     });
 
-    it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
-      const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
-        const drawn = coverage(100, 80);
-        for (const rect of rects) drawn.add(rect);
-        return drawn.whole();
-      };
-      const tiles = [
-        { x: 50, y: 0, w: 50, h: 40 },
-        { x: 0, y: 0, w: 60, h: 80 },
-        { x: 50, y: 40, w: 50, h: 40 },
-      ];
-      expect(covered(tiles)).toBe(true);
-      expect(covered(tiles.slice(0, 2))).toBe(false);
-      expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
-      // Drawing that spills past the window counts only where it is inside.
-      expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
-    });
-
     it("refuses when the window tree read through changes between the redraw and the read", async () => {
       // Each leaves pixels in the pixmap that the app's redraw never covered (#1390 review).
       const MAP = 19;
@@ -598,15 +607,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       if (!("png" in capture)) throw new Error(JSON.stringify(capture));
       // The app's own gray, never the red behind the frame.
       expect(firstPixel(capture.png)).toEqual([0x80, 0x80, 0x80]);
-    });
-
-    it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
-      const drawn = coverage(3840, 2160);
-      let accepted = true;
-      for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
-        accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
-      expect(accepted).toBe(false);
-      expect(drawn.whole()).toBe(false);
     });
 
     it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
