@@ -95,6 +95,10 @@ export function focusPanelTerminalAfterClose(
   threadRef: ScopedThreadRef,
   previousActiveSurfaceId: string | null,
 ): void {
+  if (typeof document !== "undefined" && document.activeElement?.closest('[role="tablist"]')) {
+    cancelTerminalFocus(threadRef);
+    return;
+  }
   const { activeSurfaceId } = selectThreadRightPanelState(
     useRightPanelStore.getState().byThreadKey,
     threadRef,
