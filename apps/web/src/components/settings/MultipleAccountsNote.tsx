@@ -6,10 +6,10 @@ import { serverEnvironment } from "../../state/server";
 import { Alert, AlertDescription } from "../ui/alert";
 
 const ACCOUNT_GUIDANCE = new Map([
-  ["codex", { name: "Codex", guide: "providers-codex.md#use-multiple-accounts" }],
+  ["codex", { name: "Codex", guide: "providers-codex#use-multiple-accounts" }],
   [
     "claudeAgent",
-    { name: "Claude", guide: "providers-claude.md#separate-accounts-or-configurations" },
+    { name: "Claude", guide: "providers-claude#separate-accounts-or-configurations" },
   ],
 ]);
 
@@ -38,7 +38,7 @@ export function MultipleAccountsNote({
           account is already signed in and keep each account's sign-in separate. Adding an account
           does not increase another account's usage limits.{" "}
           <a
-            href={`https://github.com/goat-si/goat/blob/dev/docs/user/${guidance.guide}`}
+            href={`https://trygoat.ai/docs/user/${guidance.guide}`}
             target="_blank"
             rel="noreferrer"
           >
