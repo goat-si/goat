@@ -165,7 +165,9 @@ function hideReason(state: OverlayState): ComputerUseOverlayHideReason | undefin
   if (state.ended) return "ended";
   if (state.pause) return state.pause;
   if (state.capturing.size > 0 || state.recording) return "capture";
-  if (state.scoped?.op === "hide") return state.scoped.reason;
+  // The macOS helper ends its MCP session on a pause or end reason; only the lease's own pause and
+  // end may send one. A target's cursor ending, turning private or being taken over only hides.
+  if (state.scoped?.op === "hide") return "idle";
   if (!state.target) return "idle";
   return undefined;
 }
