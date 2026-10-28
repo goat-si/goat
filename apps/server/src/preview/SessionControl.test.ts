@@ -423,8 +423,8 @@ describe("SessionControl", () => {
 
   it("holds a tab an agent handed to a person until their hand back is recorded, not when their viewer drops", async () => {
     const control = new SessionControl("agent");
-    const ends: string[] = [];
-    control.onHandoffEnd((end) => ends.push(end));
+    const changes: string[] = [];
+    control.onHandoffChange((change) => changes.push(change));
     const before = control.generation;
     expect(control.requestHandoff("Sign in with the code on your phone.")).toBe(true);
     // Refs the agent took before asking expire, as at a takeover.
@@ -437,26 +437,29 @@ describe("SessionControl", () => {
     });
     await control.take("viewer");
     await control.disconnect("viewer");
-    expect([control.handoffReason, ends]).toEqual(["Sign in with the code on your phone.", []]);
+    expect([control.handoffReason, changes]).toEqual([
+      "Sign in with the code on your phone.",
+      ["taken"],
+    ]);
     await control.take("viewer");
     await control.release("viewer");
     // Held until the hand back is recorded, which then ends it without reporting it again.
-    expect([control.handoffReason, ends]).toEqual([
+    expect([control.handoffReason, changes]).toEqual([
       "Sign in with the code on your phone.",
-      ["handedBack"],
+      ["taken", "taken", "handedBack"],
     ]);
     expect(control.agentCanActNow("agent")).toBe(false);
     control.endHandoff(null);
     await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
     control.requestHandoff("Solve the CAPTCHA.");
     control.stopAgents();
-    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "stopped"]]);
+    expect([control.handoffReason, changes.at(-1)]).toEqual([null, "stopped"]);
   });
 
   it("lets the request's own end free the tab without reporting a person's hand back", async () => {
     const control = new SessionControl("agent");
     const ends: string[] = [];
-    control.onHandoffEnd((end) => ends.push(end));
+    control.onHandoffChange((end) => ends.push(end));
     control.requestHandoff("Approve the sign-in.");
     control.endHandoff(null);
     expect(ends).toEqual([]);

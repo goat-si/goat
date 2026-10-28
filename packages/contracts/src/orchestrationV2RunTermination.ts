@@ -20,3 +20,7 @@ export const OrchestrationV2RunTerminationCause = Schema.Struct({
   ]),
 });
 export type OrchestrationV2RunTerminationCause = typeof OrchestrationV2RunTerminationCause.Type;
+
+/** A run a person ended: Stop, or putting its thread away. Nothing should start that agent again. */
+export const isPersonRunEnd = (kind: OrchestrationV2RunTerminationCause["kind"] | undefined) =>
+  kind === "person_stop" || kind === "thread_archive" || kind === "thread_delete";

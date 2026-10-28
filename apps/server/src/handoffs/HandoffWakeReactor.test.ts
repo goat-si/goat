@@ -6,6 +6,7 @@ import {
   STORAGE_CLEAN_HANDOFF_PATH,
   StorageMcpCleanInput,
   CommandId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -549,6 +550,39 @@ it.effect(
         );
         expect(textOf(stopped.handoffId, "cancelled")).toBeUndefined();
         expect(sent).toHaveLength(3);
+      }),
+    ),
+);
+
+it.effect(
+  "wakes nobody when a screen request ends after a person stopped the turn that asked",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 1 });
+        const asked = yield* ask(world, PREVIEW_HANDOFF_PATH, expiresAt);
+        const run = (yield* world.orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        yield* world.orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make("stop-asking-run"),
+          threadId,
+          runId: run.id,
+          holdQueue: true,
+        });
+        yield* world.worker.drain();
+        // The Stop's own record was lost; the request runs out its clock and GOAT expires it.
+        yield* TestClock.adjust("2 minutes");
+        yield* world.orchestrator.dispatch({
+          type: "handoff.transition",
+          commandId: CommandId.make("expire-screen-request"),
+          threadId,
+          handoffId: TurnItemId.make(asked.handoffId),
+          state: "expired",
+          actor: { type: "server" },
+        });
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
       }),
     ),
 );

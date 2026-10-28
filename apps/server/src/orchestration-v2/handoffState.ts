@@ -1,6 +1,7 @@
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   HandoffError,
+  PREVIEW_HANDOFF_PATH,
   endsWithItsRun,
   isHandoffPending,
   type Handoff,
@@ -45,10 +46,14 @@ export function transitionHandoff(
           new HandoffError({ reason: record.state === "expired" ? "expired" : "conflict" }),
         );
   }
+  // A person stopped the screen a request was for: that end stands even when it is written late.
+  const screenStop =
+    record.target.path === PREVIEW_HANDOFF_PATH && state === "cancelled" && actor.type === "agent";
   const expired =
-    (record.expiresAt !== null &&
+    !screenStop &&
+    ((record.expiresAt !== null &&
       DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
-    (endsWithItsRun(record) && runEnded);
+      (endsWithItsRun(record) && runEnded));
   const next = expired ? "expired" : state;
   if (next === "pending" || (next === "expired" && !expired))
     return Effect.fail(new HandoffError({ reason: "conflict" }));

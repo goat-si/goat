@@ -34,8 +34,10 @@ const HUMAN_MESSAGE = "A human controls this tab.";
 const HANDOFF_MESSAGE =
   "This tab waits for the person you asked to finish a step; act again once they hand it back.";
 
-/** How a person ended an agent's request on the tab: handed back, stopped, or closed. */
-export type HandoffEnd = "handedBack" | "stopped" | "ended";
+/** What a person did with an agent's request on the tab: took it, handed it back, stopped it, or closed the tab. */
+export type HandoffChange = "taken" | "handedBack" | "stopped" | "ended";
+/** Why a person's hand back did not complete the request: not recorded yet, too late, or answered. */
+export type HandBackNotice = "unsaved" | "expired" | "answered";
 
 /** What a secret fill may do from inside its queued turn. */
 export interface SecretFence {
@@ -69,7 +71,8 @@ export class SessionControl {
   private requested: string | null = null;
   /** Which request the hold belongs to, so a late end never settles a newer one. */
   private requestId = "";
-  private readonly handoffListeners = new Set<(end: HandoffEnd, requestId: string) => void>();
+  private notice: HandBackNotice | null = null;
+  private readonly handoffListeners = new Set<(end: HandoffChange, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
@@ -112,6 +115,18 @@ export class SessionControl {
     return this.requested;
   }
 
+  /** Why the person's last hand back here did not complete the request, until they act again. */
+  get handBackNotice() {
+    return this.notice;
+  }
+
+  /** Tells viewers how a hand back ended; an unrecorded one only while the request still holds. */
+  noteHandBack(notice: HandBackNotice) {
+    if ((notice === "unsaved" && this.requested === null) || this.notice === notice) return;
+    this.notice = notice;
+    this.changed();
+  }
+
   /** Calls back after any change of owner, privacy or stop, for status readers. */
   onChange(listener: () => void) {
     this.listeners.add(listener);
@@ -122,8 +137,8 @@ export class SessionControl {
     for (const listener of this.listeners) listener();
   }
 
-  /** Calls back once when a person ends the agent's request: Hand back, Stop or closing. */
-  onHandoffEnd(listener: (end: HandoffEnd, requestId: string) => void) {
+  /** Calls back when a person takes the tab, hands it back, stops it or closes it. */
+  onHandoffChange(listener: (end: HandoffChange, requestId: string) => void) {
     this.handoffListeners.add(listener);
     return () => void this.handoffListeners.delete(listener);
   }
@@ -135,6 +150,7 @@ export class SessionControl {
       this.authority++;
       this.epoch++;
       this.requested = reason;
+      this.notice = null;
       this.requestId = requestId;
       this.onGenerationChange();
       this.cut(new BrowserControlInterrupted(HANDOFF_MESSAGE, "humanControl"));
@@ -147,7 +163,7 @@ export class SessionControl {
    * Ends the request. A person's end tells the listeners; the request's own record ending
    * (answered in the thread, or expired) does not. Refs taken during it expire either way.
    */
-  endHandoff(end: HandoffEnd | null) {
+  endHandoff(end: Exclude<HandoffChange, "taken"> | null) {
     if (!this.clearRequest(end)) return;
     this.epoch++;
     this.onGenerationChange();
@@ -155,9 +171,10 @@ export class SessionControl {
   }
 
   /** Clears the request without moving the generation, for callers that move it themselves. */
-  private clearRequest(end: HandoffEnd | null) {
+  private clearRequest(end: Exclude<HandoffChange, "taken"> | null) {
     if (this.requested === null) return false;
     this.requested = null;
+    this.notice = null;
     if (end !== null) for (const listener of this.handoffListeners) listener(end, this.requestId);
     return true;
   }
@@ -480,7 +497,12 @@ export class SessionControl {
     if (this.owner !== null && this.owner !== viewerId) {
       throw new BrowserControlInterrupted("Another viewer controls this browser tab.");
     }
-    if (this.owner !== viewerId) this.changeOwner(viewerId);
+    if (this.owner !== viewerId) {
+      this.notice = null;
+      this.changeOwner(viewerId);
+      if (this.requested !== null)
+        for (const listener of this.handoffListeners) listener("taken", this.requestId);
+    }
     return this.human(viewerId, async () => {});
   }
 
@@ -501,8 +523,10 @@ export class SessionControl {
       );
     }
     // The request stays held until its record takes the hand back, which then ends it here.
-    if (handedBack && this.requested !== null)
+    if (handedBack && this.requested !== null) {
+      this.notice = null;
       for (const listener of this.handoffListeners) listener("handedBack", this.requestId);
+    }
     this.changeOwner(null);
     await this.enqueue(async () => {
       await Promise.all(this.handoff);

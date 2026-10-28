@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   createPreviewFramePainter,
   createPreviewStreamClient,
+  previewStreamControlLabel,
   type PreviewStreamControl,
 } from "./serverBrowserStream.ts";
 
@@ -82,6 +83,23 @@ describe("preview stream control", () => {
     client.stop();
   });
 
+  it("says a tab waits for you while the agent's request for a person is open", () => {
+    const { client, socket, onControl } = connect();
+    socket.control({ ...agent, waitingForPerson: true });
+    const waiting = onControl.mock.lastCall?.[0] as PreviewStreamControl;
+    expect(previewStreamControlLabel(waiting)).toBe("Waiting for you");
+    // Once the person takes it, the label is theirs; another viewer's control still wins.
+    expect(previewStreamControlLabel({ ...waiting, controller: "you" })).toBe("You have control");
+    expect(previewStreamControlLabel({ ...waiting, controller: "another-viewer" })).toBe(
+      "Another viewer has control",
+    );
+    socket.control({ ...agent, generation: 2 });
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0] ?? null)).toBe(
+      "Agent has control",
+    );
+    client.stop();
+  });
+
   it("keeps read-only frames flowing while refusing takeover and every mutation", () => {
     const { client, socket, onFrame } = connect();
     socket.control({ ...agent, canOperate: false });
@@ -109,6 +127,27 @@ describe("preview stream control", () => {
     socket.control({ ...agent, generation: 2 });
     expect(client.send({ type: "text", text: "late input" })).toBe(false);
     expect(client.send({ type: "dialog", accept: false })).toBe(false);
+    client.stop();
+  });
+
+  it("tells the viewer how a hand back that did not complete ended, until they act again", () => {
+    const { client, socket, onControl } = connect();
+    socket.message(JSON.stringify({ type: "control", ...agent, handBackNotice: "expired" }));
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe(
+      "The agent's request had already expired. The agent was told.",
+    );
+    socket.message(JSON.stringify({ type: "control", ...agent, handBackNotice: "answered" }));
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe(
+      "The agent's request was already answered. The tab is the agent's again.",
+    );
+    socket.control({ ...agent, handBackNotice: "unsaved" });
+    const unsaved = onControl.mock.lastCall?.[0];
+    expect(previewStreamControlLabel(unsaved)).toBe(
+      "Hand back not saved. Take control and release it again.",
+    );
+    expect(previewStreamControlLabel({ ...unsaved, controller: "you" })).toBe("You have control");
+    socket.control(agent);
+    expect(previewStreamControlLabel(onControl.mock.lastCall?.[0])).toBe("Agent has control");
     client.stop();
   });
 });

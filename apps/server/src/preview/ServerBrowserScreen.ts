@@ -9,7 +9,8 @@ import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
 import {
   BrowserControlInterrupted,
-  type HandoffEnd,
+  type HandBackNotice,
+  type HandoffChange,
   type SessionControl,
 } from "./SessionControl.ts";
 
@@ -32,11 +33,28 @@ export interface AuthorityChange {
 }
 export type AuthorityListener = (change: AuthorityChange) => void;
 
-/** A person ended an agent's request on a tab. */
-export interface HandoffEnded {
+/** Who controls a tab, as one viewer hears it. */
+export const viewerControl = (control: SessionControl, viewerId: string) => ({
+  controller:
+    control.controller === viewerId
+      ? ("you" as const)
+      : control.controller !== null
+        ? ("another-viewer" as const)
+        : control.agentId !== null
+          ? ("agent" as const)
+          : ("unclaimed" as const),
+  generation: control.generation,
+  private: control.isPrivate,
+  // An agent asked a person for a step here and waits for them to hand the tab back.
+  waitingForPerson: control.handoffReason !== null,
+  ...(control.handBackNotice === null ? {} : { handBackNotice: control.handBackNotice }),
+});
+
+/** A person took, handed back or ended an agent's request on a tab. */
+export interface HandoffChanged {
   readonly threadId: string;
   readonly tabId: string;
-  readonly end: HandoffEnd;
+  readonly change: HandoffChange;
   /** The request the person ended; a newer one on the same tab is not settled by it. */
   readonly requestId: string;
 }
@@ -52,12 +70,18 @@ export interface SurfaceService {
     readonly reason: string;
     readonly requestId: string;
   }) => Effect.Effect<boolean>;
-  /** Ends a tab's request because its record ended; no HandoffEnded is reported. */
+  /** Ends a tab's request because its record ended; no HandoffChanged is reported. */
   readonly endHandoff?: (input: {
     readonly threadId: string;
     readonly tabId: string;
   }) => Effect.Effect<void>;
-  readonly onHandoffEnd?: (listener: (ended: HandoffEnded) => void) => () => void;
+  readonly onHandoffChange?: (listener: (changed: HandoffChanged) => void) => () => void;
+  /** Tells a tab's viewers why a person's hand back did not complete the request. */
+  readonly noteHandBack?: (input: {
+    readonly threadId: string;
+    readonly tabId: string;
+    readonly notice: HandBackNotice;
+  }) => Effect.Effect<void>;
 }
 
 /** The trusted screen host supplies the exact tab after claim admission. */
@@ -200,7 +224,7 @@ export const makeSurface = <Tab extends ScreenTab>(
   ) => void,
 ) => {
   const listeners = new Set<AuthorityListener>();
-  const handoffListeners = new Set<(ended: HandoffEnded) => void>();
+  const handoffListeners = new Set<(changed: HandoffChanged) => void>();
   const watched = new WeakSet<Tab>();
   const cursorByTab = new WeakMap<Tab, AgentCursorSnapshot>();
   const notify: AuthorityListener = (change) => {
@@ -235,23 +259,32 @@ export const makeSurface = <Tab extends ScreenTab>(
       if (!tab || tab.control.agentId === null) return false;
       if (!watched.has(tab)) {
         watched.add(tab);
-        tab.control.onHandoffEnd((end, requestId) => {
+        tab.control.onHandoffChange((change, requestId) => {
           for (const listener of handoffListeners)
-            listener({ threadId: tab.threadId, tabId: tab.tabId, end, requestId });
+            listener({ threadId: tab.threadId, tabId: tab.tabId, change, requestId });
         });
       }
       return tab.control.requestHandoff(input.reason, input.requestId);
     });
   const endHandoff: NonNullable<SurfaceService["endHandoff"]> = (input) =>
     Effect.sync(() => findTab(input.threadId, input.tabId)?.control.endHandoff(null));
-  const onHandoffEnd = (listener: (ended: HandoffEnded) => void) => {
+  const noteHandBack: NonNullable<SurfaceService["noteHandBack"]> = (input) =>
+    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.noteHandBack(input.notice));
+  const onHandoffChange = (listener: (changed: HandoffChanged) => void) => {
     handoffListeners.add(listener);
     return () => void handoffListeners.delete(listener);
   };
   return {
     notify,
     nextPointer,
-    service: { onAuthorityChange, cursorState, requestHandoff, endHandoff, onHandoffEnd },
+    service: {
+      onAuthorityChange,
+      cursorState,
+      requestHandoff,
+      endHandoff,
+      onHandoffChange,
+      noteHandBack,
+    },
   };
 };
 

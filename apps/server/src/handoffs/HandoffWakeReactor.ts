@@ -16,8 +16,10 @@ import {
   PREVIEW_HANDOFF_PATH,
   STORAGE_CLEAN_HANDOFF_PATH,
   endsWithItsRun,
+  isPersonRunEnd,
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
+  RunId,
   type ThreadId,
 } from "@goat/contracts";
 import * as AutomationHold from "../automationHold.ts";
@@ -219,6 +221,27 @@ const make = Effect.gen(function* () {
         if (!offered.has(messageId) && retry.failedAt < before) retries.delete(messageId);
     }).pipe(permit.withPermits(1));
 
+  /** Handoffs whose asking turn a person stopped; a stop is final, so each is read once. */
+  const stoppedAskers = new Set<string>();
+  /** Whether a person stopped the turn that asked for this handoff, or put its thread away. */
+  const askerStopped = Effect.fn("HandoffWakeReactor.askerStopped")(function* (
+    threadId: ThreadId,
+    handoffId: string,
+  ) {
+    if (stoppedAskers.has(handoffId)) return true;
+    const rows = yield* sql<{ readonly run_id: string | null }>`
+      SELECT run_id FROM orchestration_v2_projection_turn_items
+      WHERE thread_id = ${threadId} AND turn_item_id = ${handoffId}`;
+    const runId = rows[0]?.run_id;
+    if (runId === undefined || runId === null) return false;
+    const { runs } = yield* threads.getThreadRecords(threadId, ["runs"], {
+      runIds: [RunId.make(runId)],
+    });
+    const stopped = isPersonRunEnd(runs.find((run) => run.id === runId)?.terminationCause?.kind);
+    if (stopped) stoppedAskers.add(handoffId);
+    return stopped;
+  });
+
   const deliver = Effect.fn("HandoffWakeReactor.deliver")(
     function* (handoff: Handoff, since: string) {
       const wake = handoffWake(handoff);
@@ -233,6 +256,14 @@ const make = Effect.gen(function* () {
         shell.deletedAt !== null ||
         shell.archivedAt !== null ||
         (yield* delivered(wake.messageId))
+      ) {
+        retries.delete(wake.messageId);
+        return;
+      }
+      // Stop really stops: however a screen request ends after it, the stopped turn stays so.
+      if (
+        handoff.target.path === PREVIEW_HANDOFF_PATH &&
+        (yield* askerStopped(threadId, handoff.handoffId))
       ) {
         retries.delete(wake.messageId);
         return;
@@ -303,16 +334,21 @@ const make = Effect.gen(function* () {
       WHERE item.type = 'human_handoff' AND item.status <> 'waiting'
         AND item.updated_at >= ${from} AND message.message_id IS NULL`;
     const offered = new Set<string>();
+    const seen = new Set<string>();
     for (const row of rows) {
       if (row.handoff_json === null) continue;
       const handoff = decodeHandoff(row.handoff_json);
       if (Option.isNone(handoff)) continue;
+      seen.add(handoff.value.handoffId);
       const wake = handoffWake(handoff.value);
       if (wake !== undefined) offered.add(wake.messageId);
       yield* deliver(handoff.value, since.value);
     }
     // A wake the tail started after this read began keeps its retry state.
     yield* forgetRetries(offered, DateTime.toEpochMillis(startedAt));
+    // Out of the reconcile window, a stopped turn's handoff is never read again.
+    for (const handoffId of stoppedAskers)
+      if (!seen.has(handoffId)) stoppedAskers.delete(handoffId);
   }).pipe(
     Effect.catchCause((cause) => Effect.logWarning("handoff wake reconcile failed", { cause })),
   );
