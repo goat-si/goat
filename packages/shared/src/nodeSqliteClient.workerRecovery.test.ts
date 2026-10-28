@@ -776,6 +776,7 @@ it.effect(
 it.effect("reports native reader durations on successful and failed statements", () =>
   Effect.gen(function* () {
     const replies: Array<{ nativeMs?: number; prepareMs?: number }> = [];
+    using _now = vi.spyOn(Date, "now").mockReturnValue(30_000);
     nativeTiming.enabled = true;
     workerStarts.onStart = (worker) =>
       worker.on("message", (reply) => {
@@ -783,11 +784,25 @@ it.effect("reports native reader durations on successful and failed statements",
       });
     yield* withReaderClient((sql) =>
       Effect.gen(function* () {
-        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.withSpan("test.nativeReader"));
         yield* sql`SELECT * FROM missing_native_table`.pipe(SqliteClient.readOnly, Effect.exit);
         assert.equal(replies[0]?.nativeMs, 75, "success carries worker-native duration");
         assert.equal(replies[0]?.prepareMs, 75);
         assert.equal(replies[1]?.prepareMs, 75, "prepare failure retains native duration");
+        const records = SqliteClient.recentSlowSql(30_000).filter(
+          (record) => record.owner === "test.nativeReader",
+        );
+        assert.deepEqual(
+          records.map(({ connection, operation, nativeMs }) => ({
+            connection,
+            operation,
+            nativeMs,
+          })),
+          [
+            { connection: "reader", operation: "prepare", nativeMs: 75 },
+            { connection: "reader", operation: "execute", nativeMs: 75 },
+          ],
+        );
       }),
     ).pipe(
       Effect.ensuring(
