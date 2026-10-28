@@ -28,12 +28,19 @@ export interface SignInPage {
 
 /** What GOAT recorded on this tab. */
 export interface SignInRecord {
-  /** A request from the tab carried a password GOAT filled, while this document was showing. */
+  /** The identifier beside the field when GOAT filled the password. */
+  readonly identifierAtFill?: PreviewSignInField;
+  /**
+   * A form or same-site script request from the tab carried a password GOAT filled, while this
+   * document was showing.
+   */
   readonly submitted?: {
     readonly documentGeneration: number;
     readonly at: number;
     /** The HTTP status the submission got back, once it did. */
     readonly status?: number;
+    /** The identifier beside the field when it was sent, read then or else kept from the fill. */
+    readonly identifier?: PreviewSignInField;
   };
   /** When, in the same order as submitted.at, a person last handed the tab back after GOAT asked them to finish a step. */
   readonly handedBackAt?: number;
@@ -198,9 +205,18 @@ export const signInStage = (
       stage: "unknown",
       evidence: [...evidence, "a frame GOAT could not read may hold the form"],
     };
-  if (record.handedBackAt !== undefined && submitted && record.handedBackAt > submitted.at)
-    return { stage: "signed_in", evidence: [...evidence, "a person handed the tab back after it"] };
-  return { stage: "site_accepted", evidence: [...evidence, "no sign-in form or error shows now"] };
+  if (submitted?.identifier === "empty")
+    return {
+      stage: "partial",
+      evidence: [...evidence, "the identifier was empty when the password was sent"],
+    };
+  // A later page alone is no answer: the site must have taken the submission itself.
+  if (submitted?.status === undefined)
+    return { stage: "unknown", evidence: [...evidence, "the site has not answered it"] };
+  const answered = [...evidence, "the site answered " + submitted.status];
+  if (record.handedBackAt !== undefined && record.handedBackAt > submitted.at)
+    return { stage: "signed_in", evidence: [...answered, "a person handed the tab back after it"] };
+  return { stage: "site_accepted", evidence: [...answered, "no sign-in form or error shows now"] };
 };
 
 export const signInState = (

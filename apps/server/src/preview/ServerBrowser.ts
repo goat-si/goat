@@ -1407,6 +1407,7 @@ const make = Effect.gen(function* () {
   const startRecording = (tab: ServerTab, deadlineMs?: number): Promise<Recording> => {
     const { run, answer } = queueCaptureBy(deadlineMs)(tab, async () => {
       if (tab.recording) return tab.recording;
+      secretFill.assertPixels(tab, tab.threadId);
       const encoder = await contexts.scratchPage();
       let session: CDPSession | null = null;
       try {
