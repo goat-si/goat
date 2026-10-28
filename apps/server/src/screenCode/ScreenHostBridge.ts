@@ -333,10 +333,12 @@ export class ScreenHostBridge {
       if (admittedIndex === undefined) return;
       const entry = state.journal[admittedIndex];
       if (!entry) return;
+      // The admission's unknown axes stand only until the call settles on its own.
+      const { outcome: _pending, ...settled } = entry.receipt;
       state.journal[admittedIndex] = {
         ...entry,
         receipt: {
-          ...entry.receipt,
+          ...settled,
           ...(safety ? { safety } : {}),
           category,
           journalState,

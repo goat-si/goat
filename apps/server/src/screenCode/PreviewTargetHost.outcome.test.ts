@@ -16,9 +16,12 @@ it.effect("a click the browser saw change something is a confirmed receipt", () 
     expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
     fixture.state.clickResult = { effect: "suspected_noop", evidence: [] };
     expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
-    const receipts = fixture.bridge
-      .takeCellImagesNow("run", "turn", "cell")
-      .journal.filter((entry) => entry.receipt.method === "click")
+    const { journal } = fixture.bridge.takeCellImagesNow("run", "turn", "cell");
+    // Claiming is not input on the page: once settled, it carries no unknown axes.
+    const claim = journal.find((entry) => entry.receipt.method === "claim_tab")?.receipt;
+    expect(claim && "outcome" in claim).toBe(false);
+    const receipts = journal
+      .filter((entry) => entry.receipt.method === "click")
       .map((entry) => [entry.receipt.category, entry.receipt.evidence, entry.receipt.outcome]);
     // The input went out both times; only the first was seen to change the page.
     expect(receipts).toEqual([
