@@ -54,14 +54,20 @@ export function governingRuns(runs: ReadonlyArray<Run>, pr: number): ReadonlyArr
   return [real, full].flatMap((kind) => runs.filter(kind).toSorted(byCreation).slice(0, 1));
 }
 
-/** Each governing run must have finished, at its latest attempt, with its own goat-ci-result. */
+/**
+ * A real pull request run is required: a manual run skips the screenshot gate, and a head may
+ * carry no pull request run at all. Each governing run must have finished, at its latest
+ * attempt, with its own goat-ci-result.
+ */
 export function mergeVerdict(
   governing: ReadonlyArray<Run>,
   jobsOf: (run: Run) => ReadonlyArray<Run>,
   head: string,
   knownFailure?: string,
 ): MergeVerdict {
-  if (governing.length === 0) return { merge: false, reason: `no goat-ci run on ${head} yet` };
+  if (!governing.some((run) => run.event === "pull_request")) {
+    return { merge: false, reason: `no goat-ci pull request run on ${head} yet` };
+  }
   const results: Array<Run> = [];
   for (const run of governing) {
     if (run.status !== "completed") {

@@ -43,6 +43,10 @@ const verdict = (
 describe("mergeVerdict", () => {
   it("refuses a head whose goat-ci run is missing or still running, known failure or not (#2017)", () => {
     expect(verdict([], {}).merge).toBe(false);
+    // A manual run alone skips the screenshot gate and may stand in for a skipped PR run.
+    expect(verdict([run(1, "completed", "success", "all")], { 1: [result("success")] }).merge).toBe(
+      false,
+    );
     expect(verdict([run(1, "in_progress", null)], {}, "fails on dev too").merge).toBe(false);
   });
 
