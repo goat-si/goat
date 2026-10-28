@@ -110,7 +110,7 @@ export const make = Effect.gen(function* () {
     const pool = yield* opencodex.read();
     const previous = yield* Ref.getAndSet(poolRef, pool);
     yield* publish(
-      pool === undefined ? snapshots : [...snapshots, quotaPoolSource(pool.pool)],
+      pool?.pool === undefined ? snapshots : [...snapshots, quotaPoolSource(pool.pool)],
       !Equal.equals(previous, pool),
     );
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
@@ -169,6 +169,7 @@ export const make = Effect.gen(function* () {
     quotaPool: Ref.get(poolRef).pipe(Effect.map((snapshot) => snapshot?.pool)),
     projectProviders: Effect.fn("UsageLimitSources.projectProviders")(function* (providers) {
       const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
+      // Implicit default instances are absent here; the projection treats them as the registry does.
       return yield* opencodex.project(
         providers,
         settings?.providerInstances ?? {},

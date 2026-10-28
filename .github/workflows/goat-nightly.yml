@@ -283,7 +283,7 @@ jobs:
         run: node scripts/update-release-package-versions.ts "$VERSION"
 
       # No relay, Clerk or tracing configuration: the GOAT nightly bundle bakes in
-      # no upstream service endpoints (PR-preview style, D-10).
+      # no upstream service endpoints (PR-preview style).
       - name: Build JS bundle
         run: vp run build:desktop
 

@@ -1,4 +1,5 @@
 import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
+import { missedTurnInputRuns } from "./goat/MissedTurnInput.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -1386,14 +1387,9 @@ export const layer: Layer.Layer<
       };
       // The resume fallback summary already covers every earlier run in order. A
       // retry copy after it would rank older missed requests as the newest history.
-      const missedRuns = projection.runs.filter(
-        (source) =>
-          !resumeFellBack &&
-          source.ordinal < run.ordinal &&
-          source.providerThreadId === providerThread.id &&
-          (source.status === "failed" || source.status === "interrupted") &&
-          !deliveredAttemptIds.has(source.activeAttemptId),
-      );
+      const missedRuns = resumeFellBack
+        ? []
+        : missedTurnInputRuns(projection, run, deliveredAttemptIds);
       const missedRunIds = new Set(missedRuns.map((source) => source.id));
       const missedItems =
         missedRunIds.size === 0

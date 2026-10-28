@@ -1,4 +1,5 @@
-import { assert, describe, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert, describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -547,3 +548,58 @@ process.stderr.write('reader waiting');`,
     },
   );
 });
+
+it.effect("rejects oversized SSH stdout after draining the finite stream", () =>
+  Effect.gen(function* () {
+    let drained = 0;
+    const chunk = new Uint8Array(1024 * 1024).fill(97);
+    const spawner = lazyChildProcessSpawner(() =>
+      Effect.succeed({
+        ...makeFailedProcess({ stdout: "", exitCode: 0 }),
+        stdout: Stream.fromIterable(Array.from({ length: 9 }, () => chunk)).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              drained++;
+            }),
+          ),
+        ),
+      }),
+    );
+    const result = yield* runSshCommand({
+      alias: "fixture",
+      hostname: "fixture",
+      username: null,
+      port: null,
+    }).pipe(Effect.result, Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    assert.equal(drained, 9);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure")
+      assert.match(result.failure.message, /stdout exceeded its byte budget/u);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("retains only the SSH diagnostic byte tail while observing authentication", () =>
+  Effect.gen(function* () {
+    const stderr =
+      'Authenticated to fixture using "publickey".\n' + "雪".repeat(30_000) + "\nlast diagnostic\n";
+    let answered = 0;
+    const spawner = lazyChildProcessSpawner(() =>
+      Effect.succeed(makeFailedProcess({ stdout: "ok", stderr, exitCode: 0 })),
+    );
+    const result = yield* runSshCommand({
+      alias: "fixture",
+      hostname: "fixture",
+      username: null,
+      port: null,
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(SshHostAnswered, () => {
+        answered++;
+      }),
+    );
+    assert.equal(answered, 1);
+    assert.isAtMost(Buffer.byteLength(result.stderr), 64 * 1024);
+    assert.isTrue(result.stderr.endsWith("\nlast diagnostic\n"));
+    assert.equal(result.stdout, "ok");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

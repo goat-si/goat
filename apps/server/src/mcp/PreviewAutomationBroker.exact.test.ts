@@ -118,3 +118,37 @@ it.effect("a host's refusal before any input left reaches the agent as not dispa
     }),
   ),
 );
+
+it.effect("a deadline the host hit before any input left reaches the agent as not dispatched", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      let answered = 0;
+      yield* Stream.runForEach(yield* broker.connect(makeHost()), (event) =>
+        event.type === "connected"
+          ? Effect.void
+          : broker.respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationTimeoutError",
+                message: "The target was not ready before the deadline, so no input was sent.",
+                // The first expired before input; the second timed out after input may have left.
+                ...(answered++ === 0 ? { detail: { beforeInput: true } } : {}),
+              },
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const invoke = broker
+        .invoke<void>({ scope, operation: "type", input: { text: "x" }, timeoutMs: 2_000 })
+        .pipe(Effect.flip);
+      expect(yield* invoke).toMatchObject({
+        _tag: "PreviewAutomationTimeoutError",
+        dispatched: false,
+      });
+      expect(yield* invoke).not.toHaveProperty("dispatched");
+    }),
+  ),
+);

@@ -1,5 +1,6 @@
 import type { OrchestrationV2TurnItem, ToolActivityIcon } from "@goat/contracts";
 import {
+  COMPUTER_USE_TOOL_SOURCE,
   computerUseTypedTextLength,
   cuaDriverToolName,
   replaceComputerUseTypedText,
@@ -22,8 +23,6 @@ export interface ComputerUseRun {
   readonly summary: string;
   /** The app or window the call names in its input; an observation names it better in its output. */
   readonly target: string | null;
-  /** The call's result is a screenshot by design, so the card shows it without a click. */
-  readonly observes: boolean;
   /** How the call names its app, for the app's icon: a bundle id, an app name, or a pid. */
   readonly app: ComputerUseAppRef | null;
 }
@@ -117,14 +116,6 @@ function inputApp(input: Record<string, unknown>): ComputerUseAppRef | null {
   };
 }
 
-const OBSERVATION_TOOLS: ReadonlySet<string> = new Set([
-  "get_window_state",
-  "wait_for_window_settle",
-  "get_desktop_state",
-  "zoom",
-  "verify_state",
-]);
-
 const SUMMARIES: Readonly<Record<string, string>> = {
   click: "Click",
   double_click: "Double-click",
@@ -182,7 +173,7 @@ export function computerUseDisplayInput(
   return replaceComputerUseTypedText(toolName, input, characters);
 }
 
-function summary(tool: string, input: Record<string, unknown>): string {
+function summary(tool: string, input: Record<string, unknown>, appName?: string): string {
   switch (tool) {
     case "click":
     case "double_click":
@@ -214,14 +205,14 @@ function summary(tool: string, input: Record<string, unknown>): string {
       return direction === undefined ? "Scroll" : `Scroll ${direction}`;
     }
     case "launch_app":
-      return `Open ${label(input.name) ?? label(input.bundle_id) ?? "an app"}`;
+      return `Open ${label(input.name) ?? appName ?? label(input.bundle_id) ?? "an app"}`;
     default:
       return SUMMARIES[tool] ?? tool.replaceAll("_", " ");
   }
 }
 
-function inputTarget(input: Record<string, unknown>): string | null {
-  const app = label(input.name) ?? label(input.bundle_id);
+function inputTarget(input: Record<string, unknown>, appName: string | undefined): string | null {
+  const app = label(input.name) ?? appName ?? label(input.bundle_id);
   if (app !== undefined) return app;
   const pid = label(input.pid, 12);
   if (pid === undefined) return null;
@@ -238,16 +229,20 @@ export function computerUseRun(
   const raw = record(item.input);
   // ACP children keep the call in its {server, tool, arguments} envelope.
   const input = (raw?.server === "cua-driver" ? record(raw.arguments) : raw) ?? {};
+  // The server names a pid-only call's app on the item, as a launch by bundle id learns it too.
+  const appName =
+    item.toolSource?.kind === "computer" && item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
+      ? item.toolSource.name
+      : undefined;
   return {
     tool,
-    summary: summary(tool, input),
-    target: inputTarget(input),
-    observes: OBSERVATION_TOOLS.has(tool),
+    summary: summary(tool, input, appName),
+    target: inputTarget(input, appName),
     app: inputApp(input),
   };
 }
 
-/** The app and window title an observation's result names. */
+/** The app and window title an observation's result names; a title that is the app's name once. */
 export function computerUseObservedTarget(output: unknown): string | null {
   const structured = record(record(output)?.structuredContent) ?? record(output);
   const fields =
@@ -256,7 +251,9 @@ export function computerUseObservedTarget(output: unknown): string | null {
       : jsonTextFields(output);
   const app = label(fields?.app_name);
   const title = label(fields?.window_title);
-  return app !== undefined && title !== undefined ? `${title} in ${app}` : (app ?? title ?? null);
+  return app !== undefined && title !== undefined && title.toLowerCase() !== app.toLowerCase()
+    ? `${title} in ${app}`
+    : (app ?? title ?? null);
 }
 
 /**

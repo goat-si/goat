@@ -1,7 +1,8 @@
 import * as Cause from "effect/Cause";
 import * as Fiber from "effect/Fiber";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as Stream from "effect/Stream";
 import * as M from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -301,6 +302,58 @@ const memoryOutput = { text: "Synthetic result", assertionKind: "inference", evi
 const memoryOperations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect.each(["stdout", "stderr", "mcp-list"] as const)(
+    "rejects oversized finite %s before accepting generation",
+    (outputStream) =>
+      Effect.gen(function* () {
+        const nativeSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        let drained = 0;
+        const chunk = new Uint8Array(1024 * 1024).fill(32);
+        const spawner = ChildProcessSpawner.make((command) =>
+          nativeSpawner.spawn(command).pipe(
+            Effect.map((child) => {
+              if (
+                !ChildProcess.isStandardCommand(command) ||
+                !command.args.includes(outputStream === "mcp-list" ? "mcp" : "exec")
+              )
+                return child;
+              return {
+                ...child,
+                [outputStream === "mcp-list" ? "stdout" : outputStream]: child[
+                  outputStream === "mcp-list" ? "stdout" : outputStream
+                ].pipe(
+                  Stream.concat(
+                    Stream.fromIterable(Array.from({ length: 9 }, () => chunk)).pipe(
+                      Stream.tap(() =>
+                        Effect.sync(() => {
+                          drained++;
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
+              };
+            }),
+          ),
+        );
+        const result = yield* withFakeCodexEnv(
+          { output: JSON.stringify({ title: "Synthetic title" }) },
+          (generation) =>
+            generation
+              .generateThreadTitle({
+                cwd: process.cwd(),
+                message: "Synthetic request",
+                modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+              })
+              .pipe(Effect.result),
+        ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+        expect(drained).toBe(9);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure.detail).toContain("Failed to collect process output");
+      }),
+  );
+
   it.effect.each(memoryOperations)("runs %s without tools or checkout configuration", (operation) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

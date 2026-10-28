@@ -27,7 +27,7 @@ export const collectUint8StreamText = <E>(input: {
   readonly maxBytes?: number | undefined;
   readonly truncatedMarker?: string | null | undefined;
 }): Effect.Effect<CollectedUint8StreamText, E> => {
-  const maxBytes = input.maxBytes ?? Number.POSITIVE_INFINITY;
+  const maxBytes = input.maxBytes ?? 8 * 1024 * 1024;
   const truncatedMarker = input.truncatedMarker ?? "";
 
   return input.stream.pipe(
@@ -44,6 +44,7 @@ export const collectUint8StreamText = <E>(input: {
         }
 
         const remainingBytes = maxBytes - state.bytes;
+        if (chunk.byteLength === 0) return state;
         if (remainingBytes <= 0) {
           return {
             ...state,
@@ -51,8 +52,7 @@ export const collectUint8StreamText = <E>(input: {
           };
         }
 
-        const nextChunk =
-          chunk.byteLength > remainingBytes ? chunk.slice(0, remainingBytes) : chunk;
+        const nextChunk = Uint8Array.from(chunk.subarray(0, remainingBytes));
         state.chunks.push(nextChunk);
         const bytes = state.bytes + nextChunk.byteLength;
         const truncated = chunk.byteLength > remainingBytes;

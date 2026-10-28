@@ -137,12 +137,13 @@ const tab = (
   refreshToken: number,
   revealRequest: { readonly path: string; readonly nonce: number } | null = null,
   selectedCommitOid: string | null = null,
+  tabDetail: PullRequestDetailView = detail,
 ) => (
   <PullRequestCodeTab
     scrollerRef={() => {}}
     environmentId={EnvironmentId.make("environment")}
     reference={detail}
-    detail={detail}
+    detail={tabDetail}
     selectedCommitOid={selectedCommitOid}
     onSelectedCommitChange={() => {}}
     onRefresh={() => {}}
@@ -219,7 +220,16 @@ it("reveals a pending file across pages while a stale selected commit falls back
   setup(true);
   const container = document.createElement("div");
   container.className = "flex h-[500px] w-[900px]";
-  await using screen = await render(tab(0, { path: "late.ts", nonce: 1 }, "gone"), { container });
+  // The diff scope menu only renders for a pull request that still has commits.
+  const keptCommit = {
+    oid: "kept",
+    messageHeadline: "Kept commit",
+    committedDate: "2026-09-01T00:00:00Z",
+  };
+  await using screen = await render(
+    tab(0, { path: "late.ts", nonce: 1 }, "gone", { ...detail, commits: [keptCommit] }),
+    { container },
+  );
 
   await expectFileHeaderShown(screen, container, "late.ts");
   await expect

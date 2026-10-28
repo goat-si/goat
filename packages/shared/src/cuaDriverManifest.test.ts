@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,12 +21,14 @@ import {
   missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
   cuaDriverSessionListingEnvironment,
+  listCuaDriverApplications,
   listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
 
 vi.mock("node:fs/promises", { spy: true });
+vi.mock("node:child_process", { spy: true });
 
 describe("cuaDriverManifest", () => {
   it("retains every attested identity when a best-effort listing loses the bundle id", () => {
@@ -735,4 +738,44 @@ describe("request-time listing on standalone servers, review round 1 (#1574)", (
       }
     },
   );
+});
+
+it("rejects an oversized driver frame before newline or child EOF", async () => {
+  const child = NodeChildProcess.spawn(
+    process.execPath,
+    [
+      "-e",
+      `
+    process.stdin.once('data', () => process.stdout.write(Buffer.alloc(8 * 1024 * 1024 + 1, 32)));
+  `,
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockReturnValueOnce(child);
+  let bytes = 0;
+  const written = new Promise<void>((resolve) =>
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 8 * 1024 * 1024) queueMicrotask(resolve);
+    }),
+  );
+  const controller = new AbortController();
+  const result = listCuaDriverApplications({
+    binaryPath: "synthetic-driver",
+    platform: "linux",
+    environment: {},
+    signal: controller.signal,
+  }).catch((error: unknown) => error);
+  try {
+    await written;
+    const rejectedBeforeEof = child.stdin.writableEnded;
+    controller.abort();
+    expect(await result).toMatchObject({
+      message: "Cua Driver listing exceeded its frame budget.",
+    });
+    expect(rejectedBeforeEof).toBe(true);
+  } finally {
+    controller.abort();
+    child.kill();
+  }
 });

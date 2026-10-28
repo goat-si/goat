@@ -10,13 +10,10 @@ import {
 import {
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
-  turnItemOutputImages,
 } from "@goat/client-runtime/work-log/item-detail";
 
 import { useTurnItemDetail } from "../../state/queries";
 import { Badge } from "../ui/badge";
-import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
-import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 const STATUS_VARIANT = {
   running: "info",
@@ -27,25 +24,20 @@ const STATUS_VARIANT = {
   stopped: "secondary",
 } as const satisfies Record<ComputerUseRunStatus, string>;
 
-const LAZY_IMAGE = { loading: "lazy" } as const;
-
 /**
- * A computer-use call's status, target, and the screenshots its result gave the model. The
- * screenshots load only when asked for, and the timeline mounts only the rows on screen.
+ * An expanded computer-use call's status and target. The row's inspector shows the screenshots
+ * its result gave the model, so a collapsed row stays one line, like Codex's.
  */
 export function ComputerUseRunCard(props: {
   readonly run: ComputerUseRun;
   readonly status: ComputerUseRunStatus | null;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly environmentId: EnvironmentId;
-  readonly showScreenshots: boolean;
-  readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }) {
   const wireItem = props.projectedItem.item;
   const wireOutput = wireItem.type === "dynamic_tool" ? wireItem.output : undefined;
   const detail = useTurnItemDetail(
-    (props.showScreenshots || computerUseNeedsResultDetail(props.run, wireOutput)) &&
-      turnItemNeedsDetailFetch(wireItem)
+    computerUseNeedsResultDetail(props.run, wireOutput) && turnItemNeedsDetailFetch(wireItem)
       ? {
           environmentId: props.environmentId,
           threadId: props.projectedItem.sourceThreadId,
@@ -56,7 +48,6 @@ export function ComputerUseRunCard(props: {
   );
   const fetched = detail.data?.item;
   const item = fetched?.type === wireItem.type ? fetched : wireItem;
-  const images = props.showScreenshots ? turnItemOutputImages(item) : [];
   const target =
     (item.type === "dynamic_tool" ? computerUseObservedTarget(item.output) : null) ??
     props.run.target;
@@ -66,7 +57,7 @@ export function ComputerUseRunCard(props: {
     wireOutput,
     fetched?.type === "dynamic_tool" ? fetched.output : undefined,
   );
-  if (status === null && target === null && images.length === 0) return null;
+  if (status === null && target === null) return null;
   return (
     <div
       className="ms-7 mt-1 mb-1.5 flex min-w-0 flex-col gap-1.5"
@@ -80,21 +71,6 @@ export function ComputerUseRunCard(props: {
         {target === null ? null : <span className="min-w-0 truncate">{target}</span>}
       </div>
       {note === null ? null : <p className="text-xs text-muted-foreground">{note}</p>}
-      {images.length === 0 ? null : (
-        <div className="flex flex-wrap gap-2">
-          {images.map((resource) => (
-            <ChatMarkdownAssetImage
-              key={resource.index}
-              environmentId={props.environmentId}
-              resource={resource}
-              alt="Screenshot the agent saw"
-              maxHeightRem={10}
-              imageProps={LAZY_IMAGE}
-              onImageExpand={props.onImageExpand}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

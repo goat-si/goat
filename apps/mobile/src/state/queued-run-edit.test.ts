@@ -171,6 +171,8 @@ describe("beginQueuedRunEdit", () => {
     appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
 
     expect(getQueuedRunEdit(threadKey)).toBeNull();
+    // The recovery merge publishes after awaiting hydration; this await on the same load resumes after it.
+    await waitForComposerDraftsLoaded();
     expect(getComposerDraftSnapshot(threadKey).attachments).toEqual([attachment]);
     expect(getComposerDraftSnapshot(queuedEditDraftKey(threadKey, runId)).attachments).toEqual([]);
     expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(

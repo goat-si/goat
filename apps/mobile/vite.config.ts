@@ -63,6 +63,11 @@ const reactTests = [
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
+// Their tests vary Platform.OS or __DEV__, which production inlining would erase.
+const devCompiledSources = [
+  "/lib/useNotificationPermissionStatus.ts",
+  "/features/connection/ConnectionsNewRouteScreen.tsx",
+];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {
   transformAsync: (
@@ -123,8 +128,7 @@ export default defineConfig({
                   name: "metro",
                   bundler: "metro",
                   platform: "ios",
-                  // Permission tests vary Platform.OS; production inlining would erase that branch.
-                  isDev: normalizePath(id).endsWith("/lib/useNotificationPermissionStatus.ts"),
+                  isDev: devCompiledSources.some((source) => normalizePath(id).endsWith(source)),
                   isServer: false,
                   isNodeModule: false,
                   supportsStaticESM: true,

@@ -311,6 +311,7 @@ const classifyResponseError = (
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
+        ...notSent,
         ...(interceptedBy ? { interceptedBy } : {}),
         ...(remoteTimeoutMs === undefined
           ? {}

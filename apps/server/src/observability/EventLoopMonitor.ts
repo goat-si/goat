@@ -3,7 +3,9 @@ import * as NodeOS from "node:os";
 import * as NodePerfHooks from "node:perf_hooks";
 
 import type { ServerEventLoopStall } from "@goat/contracts";
-import { RotatingFileSink } from "@goat/shared/logging";
+import { makeAsyncRotatingFileSink, type RotatingFileSinkError } from "@goat/shared/logging";
+import { recentSlowSql } from "@goat/shared/nodeSqliteClient";
+import * as Queue from "effect/Queue";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -143,9 +145,10 @@ export interface StallLogOptions {
   readonly maxBytes: number;
 }
 
-const layerWith = (
+export const layerWith = (
   makeSampler: Effect.Effect<Effect.Effect<EventLoopReadings>, never, Scope.Scope>,
   stallLog: StallLogOptions,
+  writeOverride?: (line: string) => Effect.Effect<void, RotatingFileSinkError>,
 ) =>
   Layer.effect(
     EventLoopMonitor,
@@ -160,31 +163,42 @@ const layerWith = (
       const latestStall = yield* Ref.make<
         { readonly delayMs: number; readonly atMs: number } | undefined
       >(undefined);
-      const stallSink = yield* Effect.try(
-        () =>
-          new RotatingFileSink({
-            filePath: stallLog.filePath,
-            maxBytes: stallLog.maxBytes,
-            maxFiles: 1,
-            throwOnError: true,
-          }),
-      ).pipe(
-        Effect.catch(() =>
-          Effect.logWarning("event loop stall log unavailable", {
-            filePath: stallLog.filePath,
-          }).pipe(Effect.as(undefined)),
-        ),
-      );
-      const tick = Effect.gen(function* () {
+      const stallSink =
+        writeOverride === undefined
+          ? yield* makeAsyncRotatingFileSink({ ...stallLog, maxFiles: 1 }).pipe(
+              Effect.catch(() =>
+                Effect.logWarning("event loop stall log unavailable", {
+                  filePath: stallLog.filePath,
+                }).pipe(Effect.as(undefined)),
+              ),
+            )
+          : { write: writeOverride };
+      const pending = yield* Queue.dropping<string>(16);
+      let droppedStallRecords = 0;
+      if (stallSink !== undefined)
+        yield* Queue.take(pending).pipe(
+          Effect.flatMap((line) => stallSink.write(line)),
+          Effect.catch(() =>
+            Effect.logWarning("event loop stall log write failed", {
+              filePath: stallLog.filePath,
+            }),
+          ),
+          Effect.forever,
+          Effect.forkScoped,
+        );
+      const tick = Effect.fn("EventLoopMonitor.sample")(function* (startup: boolean) {
         const readings = yield* sample;
         yield* recordGauges(readings);
-        const delayMaxMs = stallMs(readings);
-        if (delayMaxMs === undefined) return;
+        const observedStall = stallMs(readings);
+        if (observedStall === undefined && !startup) return;
+        const delayMaxMs =
+          observedStall ?? Math.max(0, Math.round(readings.delayMaxNs / 1e6) - RESOLUTION_MS);
         const { utilization, usage, rssBytes, loadAverage, cpuCount } = readings;
         const now = yield* DateTime.now;
         const detectedAt = DateTime.formatIso(now);
-        yield* Ref.set(latestStall, { delayMs: delayMaxMs, atMs: DateTime.toEpochMillis(now) });
-        if (delayMaxMs >= NOTICEABLE_STALL_MS) {
+        if (!startup)
+          yield* Ref.set(latestStall, { delayMs: delayMaxMs, atMs: DateTime.toEpochMillis(now) });
+        if (!startup && delayMaxMs >= NOTICEABLE_STALL_MS) {
           yield* Ref.set(latestNoticeableStall, {
             detectedAtMs: DateTime.toEpochMillis(now),
             stall: {
@@ -199,6 +213,9 @@ const layerWith = (
         }
         const attributes = {
           delayMaxMs,
+          phase: startup ? "startup" : "runtime",
+          recentSql: recentSlowSql(DateTime.toEpochMillis(now)),
+          droppedStallRecords,
           utilization: Math.round(utilization * 100) / 100,
           cpuUserMs: Math.round(usage.userCPUTime / 1000),
           cpuSystemMs: Math.round(usage.systemCPUTime / 1000),
@@ -207,12 +224,26 @@ const layerWith = (
           involuntaryContextSwitches: usage.involuntaryContextSwitches,
           rssMb: Math.round(rssBytes / 1024 / 1024),
         };
-        yield* Effect.logWarning(`event loop stalled for ${delayMaxMs} ms`).pipe(
-          Effect.withSpan("server.eventLoop.stall", { root: true, level: "Warn", attributes }),
+        const warning = observedStall !== undefined;
+        yield* (
+          warning
+            ? Effect.logWarning(`event loop stalled for ${delayMaxMs} ms`)
+            : Effect.logDebug("event loop startup sample")
+        ).pipe(
+          Effect.withSpan(warning ? "server.eventLoop.stall" : "server.eventLoop.startup", {
+            root: true,
+            level: warning ? "Warn" : "Debug",
+            attributes,
+          }),
         );
         if (stallSink !== undefined) {
           yield* encodeStallLine({ time: detectedAt, ...attributes }).pipe(
-            Effect.flatMap((line) => Effect.try(() => stallSink.write(`${line}\n`))),
+            Effect.flatMap((line) => Queue.offer(pending, `${line}\n`)),
+            Effect.tap((accepted) =>
+              Effect.sync(() => {
+                if (!accepted) droppedStallRecords++;
+              }),
+            ),
             Effect.catch(() =>
               Effect.logWarning("event loop stall log write failed", {
                 filePath: stallLog.filePath,
@@ -220,19 +251,18 @@ const layerWith = (
             ),
           );
         }
-      }).pipe(sampling.withPermits(1));
+      }, sampling.withPermits(1));
       const wait = Effect.sleep(SAMPLE_INTERVAL);
-      // The first sample includes migrations and bootstrap; skip expected startup stalls.
       yield* wait.pipe(
-        Effect.andThen(sampling.withPermits(1)(sample)),
+        Effect.andThen(tick(true)),
         Effect.andThen(Ref.set(warmedUp, true)),
-        Effect.andThen(wait.pipe(Effect.andThen(tick), Effect.forever)),
+        Effect.andThen(wait.pipe(Effect.andThen(tick(false)), Effect.forever)),
         Effect.forkScoped,
       );
 
       return EventLoopMonitor.of({
         latestNoticeableStall: Effect.gen(function* () {
-          if (yield* Ref.get(warmedUp)) yield* tick;
+          if (yield* Ref.get(warmedUp)) yield* tick(false);
           const latest = yield* Ref.get(latestNoticeableStall);
           if (latest === undefined) return undefined;
           const ageMs = DateTime.toEpochMillis(yield* DateTime.now) - latest.detectedAtMs;

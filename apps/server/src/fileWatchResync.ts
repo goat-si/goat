@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 
 export const fileWatchResync = (directory: string, options: FileSystem.WatchOptions = {}) =>
@@ -22,3 +23,13 @@ export const fileWatchResync = (directory: string, options: FileSystem.WatchOpti
       );
     }),
   );
+
+/** A watch stream that ends cleanly has stopped observing; supervisors restart on this failure. */
+export const watchEndedError = (pathOrDescriptor: string, description: string) =>
+  PlatformError.systemError({
+    _tag: "Unknown",
+    module: "FileSystem",
+    method: "watch",
+    pathOrDescriptor,
+    description,
+  });

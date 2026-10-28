@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Real child fixtures stage a local asset under a temporary directory.
-import { it, expect } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { expect, vi } from "vite-plus/test";
+import * as NodeChildProcess from "node:child_process";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -13,6 +15,8 @@ import { screenRunLimits } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { createScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
+
+vi.mock("node:child_process", { spy: true });
 
 const fixtureSupervisor = (input: {
   asset: { path: string; sha256: string };
@@ -678,4 +682,74 @@ it.live("a cell's wall limit includes the time its fresh child takes to start", 
       expect(result.console).toEqual([]);
     }),
   ),
+);
+
+it.live.each([false, true])(
+  "rejects an oversized screen frame before newline or child EOF (effect dispatched: %s)",
+  (effectDispatched) =>
+    Effect.gen(function* () {
+      const child = NodeChildProcess.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+      require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+        const frame = JSON.parse(line);
+        if (frame.t === 'cell' && ${effectDispatched}) process.stdout.write(JSON.stringify({
+          t: 'call', runId: 'r', turnId: 't', cellId: frame.cellId, callId: 1, method: 'list_apps', args: {}, deadlineMillis: frame.deadlineMillis
+        }) + '\\n');
+        else if (frame.t === 'cell' || frame.t === 'reply') process.stdout.write(Buffer.alloc(256 * 1024 + 1, 32));
+      });
+    `,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockReturnValueOnce(child);
+      let bytes = 0;
+      const written = new Promise<void>((resolve) =>
+        child.stdout.on("data", (chunk: Buffer) => {
+          const newline = chunk.lastIndexOf(10);
+          bytes = newline < 0 ? bytes + chunk.byteLength : chunk.byteLength - newline - 1;
+          if (bytes > 256 * 1024) queueMicrotask(resolve);
+        }),
+      );
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const bridge = new ScreenHostBridge();
+      let dispatched = 0;
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.sync(() => {
+            dispatched++;
+            return { value: true, category: "confirmed" as const };
+          }),
+      });
+      const supervisor = fixtureSupervisor({
+        asset: { path: "unused", sha256: "unused" },
+        limits,
+        hostBridge: bridge,
+        scheduleDeadline: childDeadlineOnly,
+      });
+      yield* Effect.gen(function* () {
+        const running = yield* supervisor
+          .runCell(
+            { runId: "r", turnId: "t", context: context("oversized", limits) },
+            "return true;",
+            false,
+          )
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Effect.promise(() => written);
+        const closedBeforeEof = supervisor.activeCount() === 0;
+        if (!closedBeforeEof) yield* supervisor.cutCell("r", "t", "oversized", "test cleanup");
+        const result = yield* Fiber.join(running);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure.code).toBe(effectDispatched ? "unknown_outcome" : "output_limit");
+          expect(result.failure.effectStarted).toBe(effectDispatched);
+          expect(result.failure.receipts).toHaveLength(effectDispatched ? 1 : 0);
+        }
+        expect(closedBeforeEof).toBe(true);
+        expect(dispatched).toBe(effectDispatched ? 1 : 0);
+      }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test cleanup")));
+    }),
 );

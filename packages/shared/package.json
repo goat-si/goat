@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./boundedProcessOutput": {
+      "types": "./src/boundedProcessOutput.ts",
+      "import": "./src/boundedProcessOutput.ts"
+    },
+    "./boundedLines": {
+      "types": "./src/boundedLines.ts",
+      "import": "./src/boundedLines.ts"
+    },
     "./opencodexRelease": {
       "types": "./src/opencodexRelease.ts",
       "import": "./src/opencodexRelease.ts"

@@ -41,7 +41,6 @@ describe("computerUseRun", () => {
         tool: "get_window_state",
         summary: "Look at a window",
         target: "Process 501, window 7",
-        observes: true,
         app: { pid: 501 },
       },
     );
@@ -52,7 +51,6 @@ describe("computerUseRun", () => {
       tool: "wait_for_window_settle",
       summary: "Wait for a window to settle",
       target: "Process 501, window 7",
-      observes: true,
       app: { pid: 501 },
     });
     expect(computerUseRun(call("cua-driver.click", { pid: 501, x: 10, y: 20 }))?.summary).toBe(
@@ -71,9 +69,24 @@ describe("computerUseRun", () => {
     expect(computerUseRun(call("cua-driver.launch_app", { name: "Finder" }))).toMatchObject({
       summary: "Open Finder",
       target: "Finder",
-      observes: false,
       app: { name: "Finder" },
     });
+    // A launch by bundle id, or a call naming only a pid, reads as the app the server named.
+    const named = (toolName: string, input: unknown) =>
+      ({
+        ...call(toolName, input),
+        toolSource: {
+          key: "native-app:com.apple.calculator",
+          name: "Calculator",
+          kind: "computer",
+        },
+      }) as OrchestrationV2TurnItem;
+    expect(
+      computerUseRun(named("cua-driver.launch_app", { bundle_id: "com.apple.calculator" })),
+    ).toMatchObject({ summary: "Open Calculator", target: "Calculator" });
+    expect(
+      computerUseRun(named("cua-driver.get_window_state", { pid: 501, window_id: 7 }))?.target,
+    ).toBe("Calculator");
   });
 
   it("never repeats typed text, which can be a password", () => {
@@ -104,6 +117,15 @@ describe("computerUseObservedTarget", () => {
     expect(
       computerUseObservedTarget({ content: [{ type: "text", text: "{not json" }] }),
     ).toBeNull();
+  });
+
+  it("names a window once when its title is only the app's name", () => {
+    expect(computerUseObservedTarget({ app_name: "KakaoTalk", window_title: "KakaoTalk" })).toBe(
+      "KakaoTalk",
+    );
+    expect(
+      computerUseObservedTarget({ app_name: "Calculator", window_title: " calculator " }),
+    ).toBe("Calculator");
   });
 });
 

@@ -518,3 +518,57 @@ describe("omitUnencodableMetrics", () => {
     encodeHostStatus({ hosts: [clean] });
   });
 });
+
+it("tells agents when quota is an OpenCodex pool, with account counts and each window's source", () => {
+  const base = {
+    driver: ProviderDriverKind.make("codex"),
+    displayName: "Codex",
+  };
+  const pooled: ServerProviderUsageLimits = {
+    checkedAt: "2026-10-28T02:00:00.000Z",
+    windows: [
+      { id: "5h", kind: "session", label: "5 hours", usedPercent: 61, source: "header" },
+      { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 52.5, source: "estimated" },
+    ],
+    quotaPool: { provider: "openai", homeId: "home-a", accounts: { available: 2, total: 3 } },
+    quotaPoolRoute: { provider: "openai" },
+  };
+  const empty: ServerProviderUsageLimits = {
+    checkedAt: "2026-10-28T02:00:00.000Z",
+    windows: [],
+    quotaPool: { provider: "anthropic", homeId: "home-a", accounts: { available: 0, total: 0 } },
+    quotaPoolRoute: { provider: "anthropic" },
+  };
+  const unreadable: ServerProviderUsageLimits = {
+    checkedAt: "2026-10-28T02:00:00.000Z",
+    windows: [],
+    unavailable: {
+      reason: "probeFailed",
+      message: "OpenCodex pool unavailable (OpenCodex 2.86.0).",
+    },
+    quotaPoolRoute: { provider: "openai" },
+  };
+  const [pool, missing, failed, direct] = hostStatusQuotas(
+    [
+      { ...base, instanceId: ProviderInstanceId.make("codex"), usageLimits: pooled },
+      { ...base, instanceId: ProviderInstanceId.make("claude"), usageLimits: empty },
+      { ...base, instanceId: ProviderInstanceId.make("child"), usageLimits: unreadable },
+      {
+        ...base,
+        instanceId: ProviderInstanceId.make("direct"),
+        usageLimits: limits("2026-10-28T02:00:00.000Z"),
+      },
+    ],
+    new Set(),
+  );
+  expect(pool?.note).toBe(
+    "OpenCodex pool for openai on Home home-a: 2 of 3 accounts available. 5 hours 61% (header), Weekly 53% (estimated). These are the pool's limits, not this instance's own account.",
+  );
+  expect(missing?.note).toBe(
+    "OpenCodex pool for anthropic on Home home-a: 0 of 0 accounts available. The pool reports no readings. These are the pool's limits, not this instance's own account.",
+  );
+  expect(failed?.note).toBe(
+    "Routes through OpenCodex for openai, but GOAT could not read the pool: OpenCodex pool unavailable (OpenCodex 2.86.0). Its own account limit is not shown.",
+  );
+  expect(direct?.note).toBeUndefined();
+});

@@ -34,7 +34,7 @@ import {
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
 import { supervise } from "./backgroundSupervision.ts";
-import { fileWatchResync } from "./fileWatchResync.ts";
+import { fileWatchResync, watchEndedError } from "./fileWatchResync.ts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -2001,13 +2001,14 @@ const make = Effect.gen(function* () {
           event.path === filePath ||
           pathService.resolve(directory, event.path) === resolvedFilePath,
       ),
+      Stream.concat(
+        Stream.fail(watchEndedError(filePath, "Settings filesystem watcher ended unexpectedly")),
+      ),
     );
   };
 
   const startWatcher = Effect.gen(function* () {
-    const settingsDir = pathService.dirname(settingsPath);
-
-    yield* fs.makeDirectory(settingsDir, { recursive: true }).pipe(
+    yield* fs.makeDirectory(pathService.dirname(settingsPath), { recursive: true }).pipe(
       Effect.mapError(
         (cause) =>
           new ServerSettingsError({

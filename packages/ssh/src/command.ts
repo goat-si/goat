@@ -1,3 +1,5 @@
+import * as NodeBuffer from "node:buffer";
+import { makeByteTail } from "@goat/shared/boundedProcessOutput";
 import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -213,14 +215,37 @@ export function getLastNonEmptyOutputLine(stdout: string): string | null {
   );
 }
 
-const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
-  stream.pipe(
-    Stream.decodeText(),
-    Stream.runFold(
-      () => "",
-      (acc, chunk) => acc + chunk,
+const SSH_STDOUT_MAX_BYTES = 8 * 1024 * 1024;
+const SSH_STDERR_MAX_BYTES = 64 * 1024;
+
+const collectProcessOutput = Effect.fn("ssh/command.collectProcessOutput")(function* <E>(
+  stream: Stream.Stream<Uint8Array, E>,
+) {
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let truncated = false;
+  yield* stream.pipe(
+    Stream.runForEach((chunk) =>
+      Effect.sync(() => {
+        const room = SSH_STDOUT_MAX_BYTES - bytes;
+        if (chunk.byteLength > room) truncated = true;
+        if (room > 0 && chunk.byteLength > 0) {
+          const retained = Uint8Array.from(chunk.subarray(0, room));
+          chunks.push(retained);
+          bytes += retained.byteLength;
+        }
+      }),
     ),
   );
+  if (truncated)
+    return yield* new SshCommandError({
+      command: [],
+      exitCode: null,
+      stderr: "",
+      message: "SSH stdout exceeded its byte budget.",
+    });
+  return NodeBuffer.Buffer.concat(chunks, bytes).toString("utf8");
+});
 
 // DEBUG1 is needed for auth milestones and proxy status banners; lower levels
 // omit them. Unlike -v, LogLevel does not enable verbose logging in ProxyJump's
@@ -484,6 +509,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
 
   const onHostAnswered = yield* SshHostAnswered;
   let reportedAnswer = false;
+  const diagnosticTail = makeByteTail(SSH_STDERR_MAX_BYTES);
   const cost = yield* SshReconnectCost;
   if (cost?.active) {
     cost.spawns++;
@@ -534,7 +560,8 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       }).pipe(
         Stream.runForEach((line) =>
           Effect.sync(() => {
-            progress.stderr += line;
+            diagnosticTail.append(NodeBuffer.Buffer.from(line, "utf8"));
+            progress.stderr = diagnosticTail.result().text;
           }),
         ),
         Effect.map(() => progress.stderr),

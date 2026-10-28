@@ -346,4 +346,23 @@ describe("Fleet OpenCodex quota", () => {
     expect(result.viaHub.size).toBe(0);
     expect(result.quotas).toEqual(quotaRows(rows).map((q) => ({ ...q, hidden: 0 })));
   });
+  it("keeps a direct sign-in when an unverified routed instance carries only a route marker", () => {
+    const unverified: HostStatusQuota = {
+      instanceId: ProviderInstanceId.make("routed"),
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "routed",
+      fromCache: false,
+      limits: {
+        checkedAt: AT,
+        windows: [],
+        unavailable: { reason: "probeFailed", message: "The OpenCodex route is not verified yet." },
+        quotaPoolRoute: { provider: "openai" },
+      },
+    };
+    const result = fleetQuota([row("child", [unverified, quota("own-codex", 76)], pool())]);
+    expect(result.quotas.map((q) => [q.label, q.peak])).toEqual([
+      ["OpenCodex pool", 43],
+      ["own-codex", 76],
+    ]);
+  });
 });
