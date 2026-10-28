@@ -1,4 +1,4 @@
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/http";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -30,3 +30,18 @@ export function makeHandle(input: {
 }
 
 export const unusedHttpClient = HttpClient.make(() => Effect.die("unused"));
+
+export function jsonResponse(
+  request: HttpClientRequest.HttpClientRequest,
+  body: unknown,
+  status = 200,
+) {
+  // Keep body decoding on TestClock instead of an untracked Web Response promise.
+  return Object.defineProperty(
+    HttpClientResponse.fromWeb(request, Response.json(body, { status })),
+    "json",
+    {
+      value: Effect.succeed(body),
+    },
+  );
+}

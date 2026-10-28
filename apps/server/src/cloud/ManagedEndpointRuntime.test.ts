@@ -1,4 +1,4 @@
-import { makeHandle, unusedHttpClient } from "./ManagedEndpointRuntime.testkit.ts";
+import { jsonResponse, makeHandle, unusedHttpClient } from "./ManagedEndpointRuntime.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -14,7 +14,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient } from "effect/http";
 import type { RelayManagedEndpointRuntimeConfig } from "@goat/contracts/relay";
 import * as RelayClient from "@goat/shared/relayClient";
 
@@ -914,23 +914,19 @@ it.effect(
           probes++;
           if (mode === "timeout") return Effect.never;
           return Effect.succeed(
-            HttpClientResponse.fromWeb(
+            jsonResponse(
               request,
-              Response.json(
-                { environmentId: mode === "retargeted" ? "other-environment" : "env-fixture" },
-                { status: mode === "deleted" ? 404 : 200 },
-              ),
+              { environmentId: mode === "retargeted" ? "other-environment" : "env-fixture" },
+              mode === "deleted" ? 404 : 200,
             ),
           );
         }
         return Effect.succeed(
-          HttpClientResponse.fromWeb(
+          jsonResponse(
             request,
-            Response.json(
-              request.url.endsWith("/config")
-                ? { config: { ingress: [{ hostname: "managed.example.test" }] } }
-                : { readyConnections: 1 },
-            ),
+            request.url.endsWith("/config")
+              ? { config: { ingress: [{ hostname: "managed.example.test" }] } }
+              : { readyConnections: 1 },
           ),
         );
       });

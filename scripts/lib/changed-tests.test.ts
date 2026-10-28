@@ -100,9 +100,9 @@ describe("testsForChanges", () => {
         expect.arrayContaining(ingestSuite),
       );
     }
-    expect([...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])]).toEqual(
-      [],
-    );
+    const relayTests = [...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])];
+    expect(relayTests).toContain("infra/relay/src/accounts/AccountPolicyMigration.test.ts");
+    expect(relayTests.filter((file) => file.startsWith("infra/ingest/"))).toEqual([]);
   });
 
   // #1483 changed HubNodesSettings.tsx, passed its quick run, and left a compiler bailout that
