@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 
-import { DESCRIPTION_BUDGET, DESCRIPTIONS_OVER_BUDGET } from "./descriptionBudget.ts";
+import {
+  DESCRIPTION_BUDGET,
+  DESCRIPTIONS_OVER_BUDGET,
+  SIGNATURES_BUDGET,
+} from "./descriptionBudget.ts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
+import { listedDescription } from "./signature.ts";
 
 const entries: ReadonlyArray<AgentSurfaceEntry & { readonly path: string }> =
   Object.values(agentSurfaceRegistry);
@@ -33,4 +38,13 @@ it("fits the budget once an entry has a guide to hold the rest", () => {
     .filter((entry) => entry.guide !== undefined && entry.path in DESCRIPTIONS_OVER_BUDGET)
     .map((entry) => entry.path);
   expect(unmoved).toEqual([]);
+});
+
+it("keeps the signatures a listing appends to a description within their budget", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  const off = entries.flatMap((entry) => {
+    const added = bytes(listedDescription(entry)) - bytes(entry.description);
+    return added > SIGNATURES_BUDGET ? [`${entry.path}: ${added} > ${SIGNATURES_BUDGET}`] : [];
+  });
+  expect(off).toEqual([]);
 });

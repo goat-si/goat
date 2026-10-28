@@ -8,6 +8,7 @@ import {
 } from "@goat/contracts/agentSurface/envelope";
 import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
 import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { toSignature } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -48,6 +49,32 @@ const reclassified = (
 };
 
 const pathOf = (toolName: string) => resolveAgentSurfaceEntry(toolName)?.path;
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Arguments the target refused before it ran, for a key it does not declare or a value that does
+ * not decode, come back with its one-line signature so the next call can be right.
+ */
+const withExpectedSignature = (
+  result: AgentSurfaceResult,
+  dispatch: ToolDispatch["Service"],
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+): AgentSurfaceResult => {
+  if (result.status !== "error" || result.error.code !== "invalid_request") return result;
+  const schema = dispatch.served(name)?.inputSchema;
+  const { details } = result.error;
+  if (!isRecord(schema) || (details !== undefined && !isRecord(details))) return result;
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const undeclared =
+    !isRecord(schema.additionalProperties) &&
+    Object.keys(args).some((key) => !Object.hasOwn(properties, key));
+  if (result.error.reason !== "invalid_params" && !undeclared) return result;
+  const expectedSignature = toSignature(pathOf(name) ?? name, schema);
+  return { ...result, error: { ...result.error, details: { ...details, expectedSignature } } };
+};
 
 /** Where a routed call ran, so the agent can tell remote results from local ones. */
 const withHost = (result: AgentSurfaceResult, host: string | undefined): AgentSurfaceResult =>
@@ -124,5 +151,6 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
       InternalError: (error) =>
         Effect.succeed(envelopeError("internal", "internal_error", error.message)),
     }),
+    Effect.map((result) => withExpectedSignature(result, dispatch, name, args)),
   );
 });

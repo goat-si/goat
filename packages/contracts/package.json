@@ -51,6 +51,10 @@
       "types": "./src/agentSurface/resolve.ts",
       "import": "./src/agentSurface/resolve.ts"
     },
+    "./agentSurface/signature": {
+      "types": "./src/agentSurface/signature.ts",
+      "import": "./src/agentSurface/signature.ts"
+    },
     "./agentSurface/callText": {
       "types": "./src/agentSurface/callText.ts",
       "import": "./src/agentSurface/callText.ts"

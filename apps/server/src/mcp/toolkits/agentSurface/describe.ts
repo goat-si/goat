@@ -9,6 +9,7 @@ import {
   listedToolName,
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
+import { toSignature } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -47,6 +48,9 @@ const surfaceVersion = surfaceVersionOf(entries);
 
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;
+/** Lists name nested fields by {} only; one path spells them out a level deep. */
+const LIST_SIGNATURE_DEPTH = 0;
+const PATH_SIGNATURE_DEPTH = 1;
 
 /** Who asks: availability follows their scope and, for a thread, their goatclaw profile. */
 interface Caller {
@@ -81,6 +85,13 @@ export const makeDescribe = (
   const served = (entry: AgentSurfaceRegistryEntry) =>
     dispatch.served(listedToolName(entry)) !== undefined;
 
+  const signatureOf = (entry: AgentSurfaceRegistryEntry, depth: number) => {
+    const tool = dispatch.served(listedToolName(entry));
+    return tool === undefined
+      ? {}
+      : { signature: toSignature(entry.path, tool.inputSchema, { depth }) };
+  };
+
   const availableTo = (entry: AgentSurfaceRegistryEntry, caller: Caller, isServed: boolean) =>
     availability(entry, caller.scope, isServed, caller.profile, caller.host);
 
@@ -95,7 +106,33 @@ export const makeDescribe = (
           requires: entry.requires,
           available: availableTo(entry, caller, served(entry)),
           description: entry.description,
+          ...signatureOf(entry, LIST_SIGNATURE_DEPTH),
         };
+
+  const full = (entry: AgentSurfaceRegistryEntry, caller: Caller) => {
+    const tool = dispatch.served(listedToolName(entry));
+    return {
+      path: entry.path,
+      name: listedToolName(entry),
+      summary: entry.summary,
+      effect: entry.effect,
+      available: availableTo(entry, caller, tool !== undefined),
+      canonicalName: canonicalToolName(entry),
+      legacyNames: entry.legacyNames,
+      description: entry.description,
+      ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
+      hostRoutable: entry.hostRoutable,
+      requires: entry.requires,
+      dryRun: entry.dryRun,
+      humanSteps: entry.humanSteps,
+      ...signatureOf(entry, PATH_SIGNATURE_DEPTH),
+      inputSchema: tool?.inputSchema ?? null,
+      outputSchema: tool?.outputSchema ?? null,
+    };
+  };
+
+  const described = (entry: AgentSurfaceRegistryEntry, caller: Caller, detail: Detail) =>
+    detail === "full" ? full(entry, caller) : listed(entry, caller, detail);
 
   const matched = (
     { entry, match, matchedWords, unmatchedWords }: Match<AgentSurfaceRegistryEntry>,
@@ -195,6 +232,7 @@ export const makeDescribe = (
 
   return Effect.fn("AgentSurface.describe")(function* (input: {
     readonly path?: string | undefined;
+    readonly paths?: ReadonlyArray<string> | undefined;
     readonly query?: string | undefined;
     readonly detail?: Detail | undefined;
     readonly limit?: number | undefined;
@@ -206,14 +244,35 @@ export const makeDescribe = (
     const caller: Caller = {
       scope,
       profile:
-        input.path === undefined && input.query === undefined
+        input.path === undefined && input.query === undefined && input.paths === undefined
           ? undefined
           : yield* callerProfile(permissions, scope),
       host: yield* hostConditions,
     };
+    if (input.paths !== undefined) {
+      if (input.path !== undefined || input.query !== undefined || input.cursor !== undefined)
+        return yield* refuse(
+          "paths answers on its own: pass it without path, query or cursor, or call goat_describe again for those.",
+        );
+      const found = new Map<string, AgentSurfaceRegistryEntry>();
+      const missing: Array<{ path: string; nearest: Array<string> }> = [];
+      for (const name of input.paths) {
+        const entry = resolveAgentSurfaceEntry(name);
+        if (entry === undefined)
+          missing.push({ path: name, nearest: [...nearestPaths(entries, name)] });
+        else found.set(entry.path, entry);
+      }
+      return {
+        depth: "paths" as const,
+        entries: [...found.values()].map((entry) =>
+          described(entry, caller, input.detail ?? "full"),
+        ),
+        missing,
+      } satisfies DescribeResult;
+    }
     if (input.detail === "full" && (input.query !== undefined || input.path === undefined))
       return yield* refuse(
-        'detail "full" describes one path: pass its path, such as "thread.send", without query.',
+        'detail "full" describes paths: pass one as path, such as "thread.send", or up to 10 as paths, without query.',
       );
     const limit = input.limit ?? DEFAULT_LIMIT;
     if (input.query !== undefined)
@@ -251,34 +310,11 @@ export const makeDescribe = (
         next: 'Pass query to search, a resource ("thread") for its paths, or a path ("thread.send") for its schema and availability. Call any path with goat_call.',
       } satisfies DescribeResult;
     }
-    if (entry !== undefined && input.detail !== undefined && input.detail !== "full")
+    if (entry !== undefined)
       return {
         depth: "path" as const,
-        entry: listed(entry, caller, input.detail),
+        entry: described(entry, caller, input.detail ?? "full"),
       } satisfies DescribeResult;
-    if (entry !== undefined) {
-      const tool = dispatch.served(listedToolName(entry));
-      return {
-        depth: "path" as const,
-        entry: {
-          path: entry.path,
-          name: listedToolName(entry),
-          summary: entry.summary,
-          effect: entry.effect,
-          available: availableTo(entry, caller, tool !== undefined),
-          canonicalName: canonicalToolName(entry),
-          legacyNames: entry.legacyNames,
-          description: entry.description,
-          ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
-          hostRoutable: entry.hostRoutable,
-          requires: entry.requires,
-          dryRun: entry.dryRun,
-          humanSteps: entry.humanSteps,
-          inputSchema: tool?.inputSchema ?? null,
-          outputSchema: tool?.outputSchema ?? null,
-        },
-      } satisfies DescribeResult;
-    }
     const inResource = entries.filter((candidate) => candidate.resource === input.path);
     return {
       depth: "resource" as const,
