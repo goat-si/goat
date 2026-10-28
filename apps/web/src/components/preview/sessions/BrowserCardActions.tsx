@@ -8,17 +8,19 @@ import {
   useServerPictureInPictureKey,
 } from "~/browser/serverPictureInPicture";
 import { PanelRightIcon, PictureInPictureIcon, XIcon } from "~/components/solar";
-import { Button } from "~/components/ui/button";
+import { Button, type ButtonVariant } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 
 import { previewBridge } from "../previewBridge";
 
-function HeaderButton(props: {
+/** An icon button in an agent card's header, named by a tooltip on hover or focus. */
+export function CardHeaderButton(props: {
   readonly label: string;
   readonly tooltip?: string;
   readonly pressed?: boolean;
+  readonly variant?: ButtonVariant;
   readonly disabled?: boolean;
   readonly onClick: () => void;
   readonly children: React.ReactNode;
@@ -28,7 +30,7 @@ function HeaderButton(props: {
       <TooltipTrigger
         render={
           <Button
-            variant={props.pressed ? "secondary" : "ghost"}
+            variant={props.variant ?? (props.pressed ? "secondary" : "ghost")}
             size="icon-xs"
             aria-label={props.label}
             aria-pressed={props.pressed}
@@ -111,23 +113,27 @@ export function BrowserCardActions(props: {
   return (
     <span className="flex items-center gap-0.5">
       {props.onOpenInPanel ? (
-        <HeaderButton label="Open in the right panel" onClick={props.onOpenInPanel}>
+        <CardHeaderButton label="Open in the right panel" onClick={props.onOpenInPanel}>
           <PanelRightIcon />
-        </HeaderButton>
+        </CardHeaderButton>
       ) : null}
       {canPopOut ? (
-        <HeaderButton
+        <CardHeaderButton
           label={poppedOut ? "Close separate window" : "Pop into separate window"}
           pressed={poppedOut}
           disabled={hosted !== null && hosted.overlay?.hasWebContents !== true}
           onClick={() => void togglePopOut()}
         >
           <PictureInPictureIcon />
-        </HeaderButton>
+        </CardHeaderButton>
       ) : null}
-      <HeaderButton label="Close" tooltip="Close (the agent keeps working)" onClick={props.onClose}>
+      <CardHeaderButton
+        label="Close"
+        tooltip="Close (the agent keeps working)"
+        onClick={props.onClose}
+      >
         <XIcon />
-      </HeaderButton>
+      </CardHeaderButton>
     </span>
   );
 }

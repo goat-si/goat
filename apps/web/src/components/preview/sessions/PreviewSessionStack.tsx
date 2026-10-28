@@ -8,7 +8,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
 
 import { SquareIcon } from "~/components/solar";
-import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import {
   previewMiniPlayerSourceKey,
@@ -20,6 +19,7 @@ import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { AgentScreenCard } from "./AgentScreenCard";
+import { CardHeaderButton } from "./BrowserCardActions";
 import { AGENT_CARDS_SCROLL_ATTRIBUTE } from "./NativeBrowserPicture";
 import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
 import { useDocumentVisible } from "./PreviewSessionThumbnail";
@@ -43,16 +43,15 @@ function FloatingStopAll(props: { readonly environmentId: EnvironmentId }) {
     previewSessionsEnvironment.control.permissionAtom(props.environmentId),
   );
   return (
-    <Button
+    <CardHeaderButton
       variant="ghost-destructive"
-      size="icon-xs"
-      aria-label="Stop all agents on screen"
-      title="Stops every agent using the screen now"
+      label="Stop all agents on screen"
+      tooltip="Stop every agent on screen"
       disabled={!canControl}
       onClick={() => void stopAll()}
     >
       <SquareIcon />
-    </Button>
+    </CardHeaderButton>
   );
 }
 
