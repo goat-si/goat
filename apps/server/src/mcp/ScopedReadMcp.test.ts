@@ -440,6 +440,41 @@ it.effect("bounds diff preview files and patches with a truncation flag", () =>
     expect(Buffer.byteLength(JSON.stringify(encodePreview(result)))).toBeLessThanOrEqual(262144);
   }),
 );
+it.effect("counts a preview source's files once, so a source near the budget is kept", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    const source = {
+      id: "working-tree",
+      kind: "working-tree" as const,
+      title: "Working tree",
+      baseRef: null,
+      headRef: null,
+      diff: "+".repeat(100 * 1024),
+      diffHash: "abc",
+      truncated: false,
+      files: Array.from({ length: 256 }, (_, i) => ({
+        path: `${"d".repeat(300)}/${i}.ts`,
+        previousPath: null,
+        additions: 1,
+        deletions: 0,
+      })),
+    };
+    const result = yield* Reads.diffPreview(client(), previewInput).pipe(
+      Effect.provide(
+        Layer.merge(
+          f.layer,
+          Layer.mock(Review.ReviewService)({
+            getDiffPreview: () =>
+              Effect.succeed({ cwd: "/repo", generatedAt: now, sources: [source] }),
+          }),
+        ),
+      ),
+    );
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]?.files).toHaveLength(256);
+    expect(result.truncated).toBe(false);
+  }),
+);
 it.effect("caps each diff file side at 256 KiB on a UTF-8 boundary and reports each cut", () =>
   Effect.gen(function* () {
     const f = fixture(true);

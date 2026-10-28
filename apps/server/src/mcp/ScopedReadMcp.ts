@@ -19,6 +19,7 @@ import * as Usage from "../usage/UsageService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as ReadSchemas from "./scopedReadSchemas.ts";
 import { unavailable } from "./threadAccess.ts";
+import { bytesOf } from "./toolkits/pullRequests/readBudget.ts";
 
 const RESPONSE_BYTES = 256 * 1024;
 const STRING_BYTES = 1024;
@@ -74,6 +75,15 @@ function budget() {
   return {
     text,
     rows,
+    /** Spends size bytes when they fit; otherwise marks the cut and spends nothing. */
+    take: (size: number) => {
+      if (size > remaining) {
+        truncated = true;
+        return false;
+      }
+      remaining -= size;
+      return true;
+    },
     get truncated() {
       return truncated;
     },
@@ -248,20 +258,20 @@ export const diffPreview = Effect.fn("ScopedReadMcp.diffPreview")(function* (
     .getDiffPreview({ ...request, cwd })
     .pipe(Effect.mapError(unavailable));
   const b = budget();
-  const sources = b.rows(
-    data.sources.slice(0, 4).map((source) => {
-      const diff = b.text(source.diff, 128 * 1024);
-      const files = source.files === undefined ? undefined : b.rows(source.files, 256);
-      return {
-        ...source,
-        diff,
-        ...(files === undefined ? {} : { files }),
-        truncated:
-          source.truncated || diff !== source.diff || files?.length !== source.files?.length,
-      };
-    }),
-    4,
-  );
+  // Each source spends its shell once, then its files spend what is left.
+  const sources = [];
+  for (const source of data.sources.slice(0, 4)) {
+    const diff = b.text(source.diff, 128 * 1024);
+    const shell = { ...source, diff, files: [] };
+    if (!b.take(bytesOf(shell) + 1)) break;
+    const files = source.files === undefined ? undefined : b.rows(source.files, 256);
+    sources.push({
+      ...source,
+      diff,
+      ...(files === undefined ? {} : { files }),
+      truncated: source.truncated || diff !== source.diff || files?.length !== source.files?.length,
+    });
+  }
   const result = {
     ...data,
     sources,
