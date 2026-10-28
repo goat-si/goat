@@ -521,7 +521,6 @@
     "packages/ssh/src/tunnel.protocol-capability.test.ts",
     "packages/ssh/src/tunnel.protocol-upgrade.test.ts",
     "packages/ssh/src/tunnel.protocol.fixture.ts",
-    "packages/ssh/src/tunnel.reconnect-probe.test.ts",
     "packages/ssh/src/tunnel.runtime-fallback.test.ts",
     "packages/ssh/src/tunnel.ts",
     "packages/ssh/src/tunnelOwner.ts",
