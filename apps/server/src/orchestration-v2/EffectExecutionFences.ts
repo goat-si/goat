@@ -14,16 +14,20 @@ export class EffectExecutionFences extends Context.Service<
       readonly titleThreads: ReadonlyArray<string>;
       readonly mainThreads: ReadonlyArray<string>;
     }>;
+    readonly admissions: Effect.Effect<ReadonlyArray<OrchestrationEffectV2>>;
     readonly admitClaim: (effect: OrchestrationEffectV2) => Effect.Effect<void>;
-    readonly begin: (effectId: string) => Effect.Effect<Option.Option<string>>;
-    readonly warnSlowCleanup: (token: string) => Effect.Effect<void>;
-    readonly retireJoined: (token: string) => Effect.Effect<void>;
-    readonly retireAdmission: (effectId: string) => Effect.Effect<void>;
+    readonly begin: (
+      claim: OrchestrationEffectV2,
+    ) => Effect.Effect<Option.Option<OrchestrationEffectV2>>;
+    readonly warnSlowCleanup: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
+    readonly retireJoined: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
+    readonly retireAdmission: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/EffectExecutionFences") {}
 
 // Process-local occupancy deliberately supplies no native retirement or restart guarantee.
 export const layer = Layer.sync(EffectExecutionFences, () => {
+  // Each decoded claim object identifies its generation, even when a retry refunds its attempt.
   const active = new Map<string, { effect: OrchestrationEffectV2; executing: boolean }>();
   let generalCapacity = 4;
   return EffectExecutionFences.of({
@@ -50,23 +54,24 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
         mainThreads,
       };
     }),
+    admissions: Effect.sync(() => Array.from(active.values(), ({ effect }) => effect)),
     admitClaim: Effect.fn("EffectExecutionFences.admitClaim")((effect) =>
       Effect.sync(() => {
         active.set(effect.id, { effect, executing: false });
       }),
     ),
-    begin: Effect.fn("EffectExecutionFences.begin")((effectId) =>
+    begin: Effect.fn("EffectExecutionFences.begin")((claim) =>
       Effect.sync(() => {
-        const entry = active.get(effectId);
-        if (entry === undefined) return Option.none();
+        const entry = active.get(claim.id);
+        if (entry?.effect !== claim) return Option.none();
         entry.executing = true;
-        return Option.some(effectId);
+        return Option.some(claim);
       }),
     ),
-    warnSlowCleanup: Effect.fn("EffectExecutionFences.warnSlowCleanup")((token) =>
+    warnSlowCleanup: Effect.fn("EffectExecutionFences.warnSlowCleanup")((claim) =>
       Effect.suspend(() => {
-        const entry = active.get(token);
-        return entry === undefined
+        const entry = active.get(claim.id);
+        return entry?.effect !== claim
           ? Effect.void
           : Effect.logWarning("orchestration-v2.effect-cleanup-unresolved", {
               lane: EFFECT_LANES[entry.effect.request.type],
@@ -75,14 +80,15 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
             });
       }),
     ),
-    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((token) =>
+    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((claim) =>
       Effect.sync(() => {
-        active.delete(token);
+        if (active.get(claim.id)?.effect === claim) active.delete(claim.id);
       }),
     ),
-    retireAdmission: Effect.fn("EffectExecutionFences.retireAdmission")((effectId) =>
+    retireAdmission: Effect.fn("EffectExecutionFences.retireAdmission")((claim) =>
       Effect.sync(() => {
-        if (active.get(effectId)?.executing === false) active.delete(effectId);
+        const entry = active.get(claim.id);
+        if (entry?.effect === claim && !entry.executing) active.delete(claim.id);
       }),
     ),
   });
