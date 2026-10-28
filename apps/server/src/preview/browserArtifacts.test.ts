@@ -81,6 +81,22 @@ it("drops a save that outlasted its caller instead of giving it its name", () =>
     expect(await NodeFSP.readdir(dir)).toEqual([]);
   }));
 
+it("removes a file whose rename finished after the caller's deadline", () =>
+  withDir(async (dir) => {
+    // Checked before the save, before the rename, and after it: only the last finds it expired.
+    let checks = 0;
+    await expect(
+      publishArtifact(
+        dir,
+        "browser-fetch-x.bin",
+        (path) => NodeFSP.writeFile(path, "late"),
+        () => ++checks >= 3,
+      ),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(checks).toBe(3);
+    expect(await NodeFSP.readdir(dir)).toEqual([]);
+  }));
+
 it("leaves an ordinary result's own body field alone", () =>
   withDir(async (dir) => {
     const evaluated = { body: "hello", status: 200 };

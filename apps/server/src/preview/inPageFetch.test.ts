@@ -148,6 +148,24 @@ describe("inPageFetch privacy", () => {
       inPageFetch(page as unknown as Page, control, { url: "/me" }),
     ).rejects.toMatchObject({ reason: "privateMode" });
   });
+
+  it("gives up on a page that never answers, releases its handle and frees the tab", async () => {
+    const control = new SessionControl("agent");
+    const disposed = Promise.withResolvers<void>();
+    const page = {
+      url: () => "https://app.example/",
+      evaluateHandle: async () => ({
+        evaluate: () => new Promise<never>(() => undefined),
+        dispose: async () => disposed.resolve(),
+      }),
+      context: () => ({ cookies: async () => [] }),
+    };
+    await expect(
+      inPageFetch(page as unknown as Page, control, { url: "/me", timeoutMs: 1 }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    await disposed.promise;
+    expect(await control.observe(async () => "next")).toBe("next");
+  });
 });
 
 describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {

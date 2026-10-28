@@ -343,9 +343,14 @@ const fetchInPage = async (
   });
   // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
   // binary body in the page, out of reach of page scripts, until it is read and disposed.
-  const held = await page.evaluateHandle<Held>(
+  const pending = page.evaluateHandle<Held>(
     `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`,
   );
+  const held = await beforeDeadline(pending, deadline, url).catch((cause: unknown) => {
+    // A handle that arrives after the deadline is released as soon as it does.
+    void pending.then((late) => late.dispose()).catch(() => undefined);
+    throw cause;
+  });
   try {
     return await shapeOutcome(page, held, url, format, maxChars, timeoutMs, deadline);
   } finally {
@@ -362,7 +367,11 @@ const shapeOutcome = async (
   timeoutMs: number,
   deadline: number,
 ): Promise<InPageFetchResult> => {
-  const outcome = await held.evaluate((value) => value.outcome, undefined);
+  const outcome = await beforeDeadline(
+    held.evaluate((value) => value.outcome, undefined),
+    deadline,
+    url,
+  );
   if ("error" in outcome) {
     // A page's own fetch can fail with any message, the tab's cookie values included.
     const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));

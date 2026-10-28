@@ -112,6 +112,11 @@ export const publishArtifact = async (
     // A save that outlasted its caller never takes its final name.
     if (expired()) throw notSaved();
     await NodeFSP.rename(partial, path);
+    // Nor keeps it, when the rename itself ran past the deadline.
+    if (expired()) {
+      await NodeFSP.rm(path, { force: true }).catch(() => undefined);
+      throw notSaved();
+    }
     return path;
   } catch (cause) {
     await NodeFSP.rm(partial, { force: true }).catch(() => undefined);
