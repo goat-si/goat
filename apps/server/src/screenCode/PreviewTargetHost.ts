@@ -62,6 +62,8 @@ interface BoundTarget {
   readonly observationId?: string;
   /** The document the latest observation saw, when the host reports one; points belong to it. */
   readonly documentGeneration?: number;
+  /** The latest observation, when its tree was incomplete: its refs are held to its document. */
+  readonly incompleteObservationId?: string;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -496,12 +498,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           observations,
           arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
+        const { incompleteObservationId: _previous, ...kept } = reading;
         targets.set(bound.ref.id, {
-          ...reading,
+          ...kept,
           observationId: result.value.observationId,
           ...(current.documentGeneration === undefined
             ? {}
             : { documentGeneration: current.documentGeneration }),
+          ...(result.value.complete || result.value.elements.length === 0
+            ? {}
+            : { incompleteObservationId: result.value.observationId }),
         });
         return result;
       }
@@ -575,6 +581,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if (point && bound.documentGeneration !== current.documentGeneration)
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
+        );
+      // A ref from an incomplete tree is held to its document the same way: the browser's ref
+      // table alone was never relied on for those.
+      const documentBound =
+        bound.incompleteObservationId !== undefined &&
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly observationId?: unknown }).observationId ===
+              bound.incompleteObservationId,
+        );
+      if (documentBound && bound.documentGeneration !== current.documentGeneration)
+        return yield* Effect.fail(
+          fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
       if (point?.kind === "document")
         return yield* Effect.fail(
@@ -748,8 +769,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       else observations.index.invalidatePoints(bound.ref.id);
-      // A point carries its screenshot's document so the browser's input gate can refuse it.
-      const pointDocument = point ? bound.documentGeneration : undefined;
+      // A point, or a ref from an incomplete tree, carries its document so the browser's input
+      // gate can refuse it.
+      const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
       const result = yield* invoke(
         bound,
         context,
