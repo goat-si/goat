@@ -74,9 +74,14 @@ never from a border plus a diffuse shadow on the same element.
 
 ## Structure
 
-Every page exists in English at `/` and Korean at `/ko/`, under the deploy's base path (`/goat/`
+Marketing pages exist in English at `/` and Korean at `/ko/`, under the deploy's base path (`/goat/`
 on GitHub Pages). Every internal link, image `src`/`srcset`, canonical, `hreflang`, Open Graph URL
 and manifest field is built from the base path.
+
+User guides live at `/docs/user/` in the language of their source in `docs/user/*.md` (currently
+English). Astro renders those files at build time without a second copy. Guide pages share the
+site's header, footer and base path, and omit language alternatives until translated sources exist.
+Relative links between guides resolve to published pages; repository references remain source links.
 
 | Page     | Purpose                                                                                                     |
 | -------- | ----------------------------------------------------------------------------------------------------------- |

@@ -1,8 +1,10 @@
+import { withBase } from "./paths";
+
 const REPOSITORY = "https://github.com/goat-si/goat";
 
 export const LINKS = {
   repository: REPOSITORY,
-  guides: `${REPOSITORY}/tree/dev/docs/user`,
+  guides: withBase("docs/user/"),
   contributing: `${REPOSITORY}/blob/dev/CONTRIBUTING.md`,
   structure: `${REPOSITORY}/blob/dev/structure/INDEX.md`,
   license: `${REPOSITORY}/blob/dev/LICENSE`,
@@ -20,7 +22,7 @@ export const LINKS = {
 
 /** A user guide in docs/user, with an optional heading anchor. */
 export function guide(name: string, anchor?: string): string {
-  return `${REPOSITORY}/blob/dev/docs/user/${name}.md${anchor ? `#${anchor}` : ""}`;
+  return `${withBase(`docs/user/${name}/`)}${anchor ? `#${anchor}` : ""}`;
 }
 
 export const INSTALL_COMMANDS = {

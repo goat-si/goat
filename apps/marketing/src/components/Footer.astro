@@ -7,9 +7,10 @@ import Mark from "./Mark.astro";
 interface Props {
   locale: Locale;
   path: string;
+  localized?: boolean;
 }
 
-const { locale, path } = Astro.props;
+const { locale, path, localized = true } = Astro.props;
 const t = messages(locale);
 const alternate = otherLocale(locale);
 const links = [
@@ -39,7 +40,7 @@ const links = [
             </li>
           ))
         }
-        <li>
+        {localized && <li>
           <a
             href={localePath(alternate, path)}
             hreflang={messages(alternate).htmlLang}
@@ -47,7 +48,7 @@ const links = [
           >
             {t.switchLabel}
           </a>
-        </li>
+        </li>}
       </ul>
     </nav>
   </div>
