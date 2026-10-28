@@ -11,8 +11,8 @@ const call = (name: string, args: Record<string, unknown>) =>
     params: { name, arguments: args },
   });
 const window = { pid: 4, window_id: 9 };
-const sent = (line: string) => {
-  const result = resolveKeyCall(line);
+const sent = (line: string, options?: { readonly keypad?: boolean }) => {
+  const result = resolveKeyCall(line, options);
   assert.isTrue("line" in result, JSON.stringify(result));
   return (JSON.parse((result as { line: string }).line) as { params: { arguments: unknown } })
     .params.arguments;
@@ -36,13 +36,16 @@ describe("key names before a call reaches the driver", () => {
     });
   });
 
-  it("splits an xdotool combination and maps keypad keys to the main-row key", () => {
+  it("splits an xdotool combination and, for a driver without keypad codes, maps keypad keys to the main row", () => {
     assert.deepEqual(sent(call("press_key", { ...window, key: "super+c" })), {
       ...window,
       key: "c",
       modifiers: ["cmd"],
     });
-    assert.deepEqual(sent(call("press_key", { ...window, key: "KP_0" })), { ...window, key: "0" });
+    assert.deepEqual(sent(call("press_key", { ...window, key: "KP_0" }), { keypad: false }), {
+      ...window,
+      key: "0",
+    });
     assert.deepEqual(sent(call("press_key", { ...window, key: "Prior" })), {
       ...window,
       key: "pageup",
