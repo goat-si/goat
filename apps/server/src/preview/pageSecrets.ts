@@ -178,16 +178,23 @@ export const maskSnapshotRecords = (
 
 const FRAME_ANSWER_MS = 1_000;
 
-// Include password and CSS-masked text in open shadow roots, normalized like accessible text.
+// Include password, phone, email and one-time-code fields and CSS-masked text in open shadow
+// roots, normalized like accessible text. A field counts by its type or an autocomplete token.
 const DOTTED_SCRIPT = `(() => {
   const values = [];
+  const sensitive = (element) =>
+    ["password", "tel", "email"].includes(element.type) ||
+    String(element.getAttribute("autocomplete") ?? "")
+      .toLowerCase()
+      .split(/\\s+/)
+      .some((token) => /^(?:tel(?:-.*)?|email|cc-.*|one-time-code|current-password|new-password)$/.test(token));
   const visit = (root) => {
     for (const element of root.querySelectorAll("*")) {
       if (element.shadowRoot) visit(element.shadowRoot);
       const field = element.localName === "input" || element.localName === "textarea";
       if (!field && !element.isContentEditable) continue;
       const dots = getComputedStyle(element).getPropertyValue("-webkit-text-security");
-      if (element.type !== "password" && (dots === "none" || dots === "")) continue;
+      if (!(field && sensitive(element)) && (dots === "none" || dots === "")) continue;
       // Raw as page text shows it, and normalized as the tree does.
       for (const value of field ? [element.value, element.defaultValue] : [element.textContent ?? ""])
         values.push(value, value.replace(/[\\u200b\\u00ad]/g, "").trim().replace(/\\s+/g, " "));
