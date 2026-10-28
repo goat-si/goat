@@ -58,6 +58,15 @@ const attachedScreenSurfaces = (input: ScreenSurfaceInput): TurnCapability[] => 
 export const screenSurfaceAttached = (input: ScreenSurfaceInput): boolean =>
   resolveBuiltInSkills({ attached: attachedScreenSurfaces(input) }).active.includes("screen-code");
 
+/**
+ * The one decision on the driver's own tools. A turn that lists goat_screen_run reaches the
+ * desktop through it, so the model never sees the driver's tools there. Every provider that can
+ * run the driver gets GOAT's MCP server in the same attach, so only a turn without the screen
+ * surface gets them.
+ */
+export const driverToolSurface = (screenListed: boolean): ComputerUse.DriverToolSurface =>
+  screenListed ? "hidden" : "listed";
+
 export const resolveAttachedScreenSkills = Effect.fn("ScreenSkills.resolveAttached")(function* (
   input: ScreenSurfaceInput & {
     readonly serverSettings: Option.Option<ServerSettings.ServerSettingsService["Service"]>;
@@ -99,14 +108,12 @@ export const prepareScreenTurn = Effect.fn("ScreenSkills.prepareTurn")(function*
   },
 ) {
   const computerUseAttached = input.computerUse._tag === "proxied";
-  if (
-    screenSurfaceAttached({
-      browserToolsAvailable: input.browserToolsAvailable,
-      usableThread: input.usableThread,
-      computerUseAttached,
-    })
-  )
-    input.capabilities.add("screen");
+  const screenListed = screenSurfaceAttached({
+    browserToolsAvailable: input.browserToolsAvailable,
+    usableThread: input.usableThread,
+    computerUseAttached,
+  });
+  if (screenListed) input.capabilities.add("screen");
   const activeSkills = yield* resolveAttachedScreenSkills({
     browserToolsAvailable: input.browserToolsAvailable,
     usableThread: input.usableThread,
@@ -121,5 +128,6 @@ export const prepareScreenTurn = Effect.fn("ScreenSkills.prepareTurn")(function*
       { ...config, builtInSkills: activeSkills, ...screenSkillPath(skillPath) },
       input.computerUse,
       COMPUTER_USE_LEASE_ROUTE,
+      driverToolSurface(screenListed),
     );
 });

@@ -25,6 +25,7 @@ import * as ComputerUseOrigin from "./ComputerUseOrigin.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { driverToolSurface } from "../orchestration-v2/ScreenSkills.ts";
 
 const mcp: CuaDriverMcpConfiguration = {
   command: "/driver/cua-driver",
@@ -253,6 +254,39 @@ describe("computerUseAttachment", () => {
         "attachment:new",
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a turn with screen code hides the driver's tools and drops their skill and pointer",
+    () =>
+      Effect.gen(function* () {
+        const attached = yield* decide(fakeDriver({ enabled: true, running: true }), {
+          leases: fakeLeases({}).leases,
+        });
+        if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+        const hidden = ComputerUse.withComputerUse(
+          { ...session, builtInSkills: ["computer-use", "screen-code"] },
+          { ...attached, skillPath: "/state/skills/computer-use/SKILL.md" },
+          ROUTE,
+          driverToolSurface(true),
+        );
+        const names = (hidden.cuaDriver?.environment ?? []).map((entry) => entry.name);
+        assert.include(names, "GOAT_CUA_DRIVER_TOOLS");
+        assert.notInclude(names, ComputerUse.LEASE_PROXY_ENV.skill);
+        assert.deepEqual(hidden.builtInSkills, ["screen-code"]);
+        assert.isFalse(McpProviderSession.carriesComputerUseSkill(hidden));
+        const listed = ComputerUse.withComputerUse(
+          session,
+          attached,
+          ROUTE,
+          driverToolSurface(false),
+        );
+        assert.notInclude(
+          (listed.cuaDriver?.environment ?? []).map((entry) => entry.name),
+          "GOAT_CUA_DRIVER_TOOLS",
+        );
+        assert.isTrue(McpProviderSession.carriesComputerUseSkill(listed));
+      }),
   );
 
   it.effect.each(["codex", "fx"])(

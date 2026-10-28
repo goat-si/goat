@@ -11,6 +11,7 @@ import {
   ScreenRunError,
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
+import { cellProgram } from "./ScreenCellScope.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
 
 // Both packages stay external; a single-executable resolves them from disk only through require.
@@ -112,6 +113,8 @@ export async function runScreenChild(
   let vm = runtime.newContext();
   runtime.setMemoryLimit(limits.heapBytes);
   runtime.setMaxStackSize(limits.stackBytes);
+  let runId = "";
+  let turnId = "";
   let cellId = "";
   let deadline = 0;
   let nextCallId = 0;
@@ -157,8 +160,8 @@ export async function runScreenChild(
           : undefined;
       const call: ScreenHostCall = {
         t: "call",
-        runId: boot.runId,
-        turnId: boot.turnId,
+        runId,
+        turnId,
         cellId,
         callId,
         ...(targetRef === undefined ? {} : { targetRef }),
@@ -250,7 +253,36 @@ export async function runScreenChild(
           )
           .join(
             ",",
-          )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});`;
+          )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});
+      {
+        const own = new Set(Object.getOwnPropertyNames(globalThis));
+        own.add('__screenKeep');
+        // A kept name reads and writes the cell's own binding, so its closures and later cells
+        // share one value. The probe runs under a throwing stand-in for the global, so a name that
+        // is not a binding of the cell reaches neither a getter nor an inherited property.
+        Object.defineProperty(globalThis, '__screenKeep', {
+          value: (name, read, write) => {
+            if (own.has(name)) return;
+            const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+            if (previous && !previous.configurable) return;
+            const absent = {};
+            Object.defineProperty(globalThis, name, {
+              get() { throw absent; }, set() { throw absent; }, configurable: true,
+            });
+            try { read(); } catch {
+              delete globalThis[name];
+              if (previous) Object.defineProperty(globalThis, name, previous);
+              return;
+            }
+            Object.defineProperty(globalThis, name, {
+              get: read,
+              set: write ?? (() => { throw new TypeError('Assignment to constant variable.'); }),
+              configurable: true,
+              enumerable: true,
+            });
+          },
+        });
+      }`;
     const evaluated = vm.evalCode(setup);
     vm.unwrapResult(evaluated).dispose();
   };
@@ -284,7 +316,7 @@ export async function runScreenChild(
         throw new Error("Invalid frame");
       if (frame.t === "reply") {
         const reply = decodeUnknownScreenHostReply(frame);
-        if (reply.runId !== boot.runId || reply.cellId !== cellId) continue;
+        if (reply.runId !== runId || reply.cellId !== cellId) continue;
         const promise = pending.get(reply.callId);
         if (!promise) continue;
         pending.delete(reply.callId);
@@ -310,6 +342,8 @@ export async function runScreenChild(
       if (cell.resetValues) reset();
       runtime.setMemoryLimit(currentLimits.heapBytes);
       runtime.setMaxStackSize(currentLimits.stackBytes);
+      runId = cell.runId;
+      turnId = cell.turnId;
       cellId = cell.cellId;
       nextCallId = 0;
       callCount = 0;
@@ -339,7 +373,7 @@ export async function runScreenChild(
         Math.max(0, deadline - Date.now()),
       );
       try {
-        const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
+        const evaluation = vm.evalCode(cellProgram(cell.source));
         const handle = vm.unwrapResult(evaluation);
         const settled = vm.resolvePromise(handle);
         handle.dispose();
