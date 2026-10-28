@@ -55,8 +55,6 @@ export interface OutstandingCall {
   readonly reservationId?: string;
   readonly connectionId: string;
   readonly cancelled?: boolean;
-  /** The driver's reply line arrived; GOAT may still be checking it. */
-  readonly answered?: boolean;
   readonly sink: ReplySink;
 }
 

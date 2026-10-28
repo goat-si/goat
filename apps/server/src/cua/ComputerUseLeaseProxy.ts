@@ -271,7 +271,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
-        outstanding.set(key, { ...request, answered: true });
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
           finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
@@ -358,6 +357,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
+      Stream.tap(unanswered.received),
       Stream.buffer({ capacity: "unbounded" }),
       Stream.runForEach(handle),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper
@@ -416,7 +416,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ),
   });
   const start = lifecycle.start;
-  const watchUnanswered = makeUnansweredWatch(
+  const unanswered = makeUnansweredWatch(
     { lock: lifecycleLock, scope, outstanding, lifecycle },
     { active, interrupt, start, end },
   );
@@ -984,7 +984,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     }
     if (primitive !== undefined && isRequest)
-      yield* watchUnanswered(JSON.stringify(id), primitiveDeadline);
+      yield* unanswered.watch(JSON.stringify(id), primitiveDeadline);
   });
   yield* forwardPrimitiveRequests(
     options.primitiveRequests,
