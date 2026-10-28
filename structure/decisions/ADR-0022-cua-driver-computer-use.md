@@ -238,8 +238,8 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   for every replacement child; the proxy adds the approved apps to a batch that names none once
   that child has. A driver without it could run the scope unscoped, so there a batch naming one is
   refused (`outside_manifest`) and one without stays refused. A background scope
-  takes neither the shared screen nor foreground approval, and a `run_steps` whose steps name only
-  its own window reserves that window alone; any other batch reserves the desktop.
+  takes neither the shared screen nor foreground approval, and a `run_steps` whose steps, checks
+  included, name only its own window reserves that window alone; any other batch reserves the desktop.
 - **Controls.** Every attached driver runs under a control the server mints per thread: an
   unattended one lives on its grant, an interactive one for 60 minutes. Stop on a turn
   (`ProviderTurnControlService` interrupt and restart) and the host kill switch

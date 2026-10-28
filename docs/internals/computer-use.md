@@ -225,7 +225,8 @@ Element clicks, typing and `set_value` that a cell starts on one app window with
 each leave the guest as one batch group and reach the driver as one `run_steps`, kept by
 `app_scope` to that window's app in the background (`ScreenBatchGroups.ts`,
 `DesktopTargetHost.dispatchBatch`). The runtime admits a group whole or refuses all of it before
-any goes out, and the group takes one pending place. Each call keeps its own admission, receipt and
+any goes out, and the group takes one pending place; a refused group stops the cell's later input, as
+a failed call does, while reads still run. Each call keeps its own admission, receipt and
 reply. The group's first call holds the window's gate until every member has passed its own checks,
 so a member refused on admission sends none of the group. Each step's receipt reads the driver's
 effect and code for that step, which stay on a failed call's error and receipt as evidence. Steps

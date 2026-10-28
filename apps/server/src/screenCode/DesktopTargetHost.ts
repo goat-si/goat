@@ -165,7 +165,13 @@ const driverResult = (tool: string, reply: ComputerUsePrimitiveReply): ScreenHos
   return {
     value,
     category,
-    evidence: effect === "confirmed" ? ["driver:effect=confirmed"] : [],
+    // A result that did not do what was asked fails at the bridge; it keeps the driver's words.
+    evidence:
+      effect === "confirmed"
+        ? ["driver:effect=confirmed"]
+        : category === "unverifiable"
+          ? []
+          : driverEvidence(object(value)),
     safety: driverOutcomeSafety(tool, reply),
   };
 };

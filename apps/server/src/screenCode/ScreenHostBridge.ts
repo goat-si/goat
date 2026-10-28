@@ -475,6 +475,7 @@ export class ScreenHostBridge {
           ...failure(safety.possibleCommit ? "unknown_outcome" : "downstream_failure", call.callId),
           effectStarted: safety.possibleCommit,
           safety,
+          ...(outcome.evidence?.length ? { evidence: outcome.evidence.slice(0, 16) } : {}),
         });
       if (!outcome.image) {
         const bytes = yield* Effect.try({

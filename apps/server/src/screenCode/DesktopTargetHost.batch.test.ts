@@ -229,3 +229,25 @@ it.live("a refused group stops the cell's later input, while reads still run", (
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("a step the driver calls a no-op keeps the driver's words in its error and receipt", () => {
+  const { host } = fixture({
+    run_steps: ranSteps(
+      [
+        { ok: true, effect: "suspected_noop", code: "no_change" },
+        { ok: true, effect: "confirmed" },
+      ],
+      2,
+    ),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} ${clicks(2)} return (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.evidence ?? []);`,
+    );
+    const said = ["driver:effect=suspected_noop", "driver:code=no_change"];
+    expect(result.value).toEqual([said, "confirmed"]);
+    const failed = result.journal.find((entry) => entry.receipt.method === "click");
+    expect(failed?.receipt.evidence).toEqual(expect.arrayContaining(said));
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
