@@ -28,7 +28,9 @@ import {
   type SidebarChildAttention,
   withSidebarChildRequest,
 } from "../Sidebar.logic";
+import { withoutBotThreads } from "./botVisibility";
 import { foldLaunchedThreads } from "./launchFold";
+import { useBotThreadKeys } from "./useBotThreadKeys";
 
 function resolveProjectThreadStatus(
   thread: SidebarThreadSummary,
@@ -67,6 +69,8 @@ export function useProjectThreads(
   const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const goatBotRef = useGlobalAgentStore((state) => state.botRef);
+  // Counts and lookups keep GOAT Bot's threads, so removing a project still sees them.
+  const { hidden: hiddenBotThreadKeys } = useBotThreadKeys();
   const projectThreads = pinnedThreads ?? sidebarThreads;
   const threadLastVisitedAts = useUiStateStore(
     useShallow((state) =>
@@ -112,16 +116,19 @@ export function useProjectThreads(
     ]),
   );
   const listedInProjects = sortThreads(
-    excludeGlobalAgentThreads(
-      sidebarThreads.filter((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return isProjectsViewListedThread(
-          thread,
-          childAttentionByKey.has(key) || openSubagentOwnerKey === key,
-        );
-      }),
-      globalAgentRef,
-      goatBotRef,
+    withoutBotThreads(
+      excludeGlobalAgentThreads(
+        sidebarThreads.filter((thread) => {
+          const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+          return isProjectsViewListedThread(
+            thread,
+            childAttentionByKey.has(key) || openSubagentOwnerKey === key,
+          );
+        }),
+        globalAgentRef,
+        goatBotRef,
+      ),
+      hiddenBotThreadKeys,
     ),
     threadSortOrder,
   );
@@ -129,7 +136,10 @@ export function useProjectThreads(
   const nowMinute = useNowMinute();
   // Launched threads fold under their launcher, pinned or not; the project status still counts
   // them. The pinned section shows pinned roots and a project list the rest.
-  const pinnedRoots = pinnedThreads ?? sidebarThreads.filter(isProjectsViewPinnedThread);
+  const pinnedRoots = withoutBotThreads(
+    pinnedThreads ?? sidebarThreads.filter(isProjectsViewPinnedThread),
+    hiddenBotThreadKeys,
+  );
   const pinnedKeys = new Set(pinnedRoots.map(keyOfThread));
   const logicalProjectOf = (thread: SidebarThreadSummary) => {
     const key = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));

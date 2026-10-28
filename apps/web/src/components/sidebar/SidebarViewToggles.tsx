@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, SearchIcon } from "~/components/solar";
+import { BellIcon, BotIcon, SearchIcon } from "~/components/solar";
 import { useSyncExternalStore } from "react";
 
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
@@ -22,8 +22,10 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { requestSidebarSearchFocus } from "./sidebarSearchFocus";
+import { withoutBotThreads } from "./botVisibility";
 import { foldedPriorityMember } from "./foldedPriority";
 import { foldLaunchedThreads } from "./launchFold";
+import { useBotThreadKeys, useShowBotThreads } from "./useBotThreadKeys";
 
 export function useSidebarActivityToggle() {
   const projectsSidebar = useLegacySidebarEnabled();
@@ -48,12 +50,16 @@ export function useSidebarPriorityCount() {
   const localLastVisitedAtByKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const botRef = useGlobalAgentStore((state) => state.botRef);
+  const { hidden: hiddenBotThreadKeys } = useBotThreadKeys();
   if (publishedPriorityCount !== null) return publishedPriorityCount;
   const index = buildSidebarSubagentIndex(threads);
-  const visible = excludeGlobalAgentThreads(
-    filterSidebarV2VisibleThreads(threads, null, new Set(index.attentionByOwnerKey.keys())),
-    globalAgentRef,
-    botRef,
+  const visible = withoutBotThreads(
+    excludeGlobalAgentThreads(
+      filterSidebarV2VisibleThreads(threads, null, new Set(index.attentionByOwnerKey.keys())),
+      globalAgentRef,
+      botRef,
+    ),
+    hiddenBotThreadKeys,
   );
   const now = `${nowMinute}:00.000Z`;
   const capabilitiesOf = (id: EnvironmentId) => serverConfigs.get(id)?.environment.capabilities;
@@ -97,6 +103,8 @@ export function SidebarPriorityCountBadge({ priorityCount }: { priorityCount: nu
 export function SidebarViewToggles() {
   const { activityActive, toggleActivity } = useSidebarActivityToggle();
   const priorityCount = useSidebarPriorityCount();
+  const [botThreadsShown, setBotThreadsShown] = useShowBotThreads();
+  const botThreadsLabel = botThreadsShown ? "Hide GOAT Bot threads" : "Show GOAT Bot threads";
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const activityLabel = activityActive ? "Turn off activity view" : "View activity";
   const activityName =
@@ -130,6 +138,24 @@ export function SidebarViewToggles() {
         </TooltipPopup>
       </Tooltip>
       <SidebarPriorityCountBadge priorityCount={priorityCount} />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="relative top-auto translate-y-0"
+              aria-label={botThreadsLabel}
+              aria-pressed={botThreadsShown}
+              data-pressed={botThreadsShown ? "" : undefined}
+              onClick={() => setBotThreadsShown(!botThreadsShown)}
+            >
+              <BotIcon />
+            </Button>
+          }
+        />
+        <TooltipPopup side="bottom">{botThreadsLabel}</TooltipPopup>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger
           render={

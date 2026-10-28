@@ -153,6 +153,8 @@ import {
   partitionSidebarThreads,
   type SidebarOptimisticDrop,
 } from "./sidebar/sidebarPartition";
+import { withBotSearchCandidates } from "./sidebar/botVisibility";
+import { useBotThreadKeys } from "./sidebar/useBotThreadKeys";
 import { usePromoteThread } from "./promoteThread";
 import { SidebarPriorityHeader } from "./sidebar/SidebarPriorityHeader";
 import { useSidebarPriorityRead } from "./sidebar/useSidebarPriorityRead";
@@ -398,6 +400,7 @@ function useSidebarThreads(input: {
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const localLastVisitedAtByKey = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const botThreads = useBotThreadKeys();
   const [priorityHolds, setPriorityHolds] = useState<SidebarPriorityHolds>(() => new Map());
   const [acknowledgedWakes, setAcknowledgedWakes] = useState<ReadonlySet<string>>(() => new Set());
   const [priorityReleases, setPriorityReleases] = useState<ReadonlySet<string>>(() => new Set());
@@ -449,6 +452,7 @@ function useSidebarThreads(input: {
     priorityReleases,
     workingShelfEnabled,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
+    hiddenBotThreadKeys: botThreads.hidden,
   });
   if (!sameKeys(partition.acknowledgedWakes, acknowledgedWakes)) {
     setAcknowledgedWakes(partition.acknowledgedWakes);
@@ -544,14 +548,19 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     launchGroups,
-    searchableThreads: [
-      ...priorityThreads,
-      ...pinnedThreads,
-      ...activeThreads,
-      ...workingThreads,
-      ...snoozedThreads,
-      ...settledProjection.searchable,
-    ],
+    searchableThreads: withBotSearchCandidates(
+      [
+        ...priorityThreads,
+        ...pinnedThreads,
+        ...activeThreads,
+        ...workingThreads,
+        ...snoozedThreads,
+        ...settledProjection.searchable,
+      ],
+      threads,
+      botThreads.observation,
+      scopedProjectKeys,
+    ),
     settledVisibleCount,
     settledCount,
     olderSettledShelf,
@@ -1200,6 +1209,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const threadSearchResultKeys = threadSearchResults.map((thread) =>
     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
   );
+  // A listed GOAT Bot subagent is its own result, not a row nested under its owner.
+  const searchListsOpenSubagent =
+    openSubagentEntry !== null && threadSearchResultKeys.includes(routeThreadKey ?? "");
+  const searchRouteKey = searchListsOpenSubagent ? routeThreadKey : routeRowThreadKey;
 
   // The highlight follows its thread, so rows that arrive late do not move
   // it under Enter; a new query starts at the top.
@@ -3026,7 +3039,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           EMPTY_PROVIDER_ENTRIES
                         }
                         isHighlighted={activeSearchResultIndex === index}
-                        isRouteActive={routeRowThreadKey === threadKey}
+                        isRouteActive={searchRouteKey === threadKey}
                         resultId={threadSearchResultId(index)}
                         searchMatch={
                           threadSearchMatchByKey.get(
@@ -3043,7 +3056,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         onFileDropThreads={handleThreadFileDrop}
                       />
                     );
-                    return openSubagentEntry?.ownerKey === threadKey ? (
+                    return !searchListsOpenSubagent && openSubagentEntry?.ownerKey === threadKey ? (
                       <Fragment key={threadKey}>
                         {row}
                         <li>

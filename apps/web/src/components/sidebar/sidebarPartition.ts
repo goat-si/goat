@@ -27,6 +27,7 @@ import {
   type SidebarSection,
 } from "../Sidebar.logic";
 import { foldedPriorityMember, wakesBeforeFold } from "./foldedPriority";
+import { withoutBotThreads } from "./botVisibility";
 import { foldLaunchedThreads, foldedSections, liftedPriorityRank } from "./launchFold";
 
 export const inboxReturns = createInboxReturnTracker();
@@ -57,6 +58,8 @@ export interface SidebarThreadPartitionInput {
   readonly priorityHolds: SidebarPriorityHolds;
   readonly acknowledgedWakes: ReadonlySet<string>;
   readonly priorityReleases: ReadonlySet<string>;
+  /** GOAT Bot's observation threads the list leaves out. */
+  readonly hiddenBotThreadKeys: ReadonlySet<string>;
 }
 
 export function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
@@ -74,14 +77,18 @@ export function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     acknowledgedWakes,
     priorityReleases,
     workingShelfEnabled,
+    hiddenBotThreadKeys,
   } = input;
   const preciseNow = new Date().toISOString();
   const retainedArchivedKeys = new Set(attentionByOwnerKey.keys());
   if (openSubagentOwnerKey !== undefined) retainedArchivedKeys.add(openSubagentOwnerKey);
-  const visible = excludeGlobalAgentThreads(
-    filterSidebarV2VisibleThreads(threads, scopedProjectKeys, retainedArchivedKeys),
-    globalAgentRef,
-    goatBotRef,
+  const visible = withoutBotThreads(
+    excludeGlobalAgentThreads(
+      filterSidebarV2VisibleThreads(threads, scopedProjectKeys, retainedArchivedKeys),
+      globalAgentRef,
+      goatBotRef,
+    ),
+    hiddenBotThreadKeys,
   );
   const acknowledged = new Set(acknowledgedWakes);
   const wakes = wakesBeforeFold({
