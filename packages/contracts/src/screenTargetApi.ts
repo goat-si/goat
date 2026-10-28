@@ -30,7 +30,7 @@ interface Element { index: number; role: string; name: string; text?: string; ac
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
-  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first
+  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
   click(t: Target, o?: { button?: "right"; count?: number }): Promise<Done>;
   type(text: string, t?: Target): Promise<Done>;
   press(key: string, t?: Target): Promise<Done>; // "Enter", "cmd+a"; a target is clicked first
