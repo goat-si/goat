@@ -13,6 +13,8 @@ export class WindowsTaskkillError extends Schema.TaggedError<WindowsTaskkillErro
   }
 }
 
+const isWindowsTaskkillError = Schema.is(WindowsTaskkillError);
+
 export const TaskkillSpawner = Context.Reference<
   (
     pid: number,
@@ -45,7 +47,7 @@ export const terminateWindowsTree = Effect.fn("WindowsTaskkill.terminateTree")(f
   }).pipe(
     Effect.timeout("5 seconds"),
     Effect.mapError((cause) =>
-      cause instanceof WindowsTaskkillError ? cause : new WindowsTaskkillError({ pid, cause }),
+      isWindowsTaskkillError(cause) ? cause : new WindowsTaskkillError({ pid, cause }),
     ),
     Effect.interruptible,
   );
