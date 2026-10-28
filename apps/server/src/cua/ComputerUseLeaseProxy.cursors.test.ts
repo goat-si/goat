@@ -1,7 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   type AgentCursorEvent,
-  type ComputerUsePrimitiveReply,
   type ComputerUseOverlayCommand,
   type ComputerUseOverlayHideReason,
   EnvironmentId,
@@ -65,6 +64,7 @@ const cursorHarness = Effect.fn(function* (
   gates: {
     readonly hideGate?: Deferred.Deferred<void>;
     readonly lockGate?: Deferred.Deferred<void>;
+    readonly acquire?: (index: number) => Effect.Effect<void>;
   } = {},
 ) {
   const draws = yield* Queue.unbounded<ComputerUseOverlayCommand>();
@@ -72,6 +72,7 @@ const cursorHarness = Effect.fn(function* (
   let applied = 0;
   const h = yield* harness({
     cursorEvents: true,
+    ...(gates.acquire === undefined ? {} : { acquire: gates.acquire }),
     overlay: (command) =>
       Queue.offer(draws, command).pipe(
         Effect.andThen(
@@ -241,19 +242,40 @@ describe("ComputerUseLeaseProxy and a window that turns private or is taken over
         yield* cursor(show(1));
         yield* cursor(hide(2, "private"));
         yield* drawn(2);
+        // Refused at the fence while the closure still waits for the lock.
         yield* h.sendPrimitive(listApps("request:fenced", first.connectionId));
+        const fenced = yield* h.primitiveReply;
+        assert.equal(fenced.requestId, "request:fenced");
+        assert.equal(fenced.status, "not_started");
+        assert.include(JSON.stringify(fenced.result), "Nothing was sent");
         yield* Deferred.succeed(lockGate, undefined);
-        const replies = new Map<string, ComputerUsePrimitiveReply>();
-        for (const _ of [1, 2]) {
-          const reply = yield* h.primitiveReply;
-          replies.set(reply.requestId, reply);
-        }
-        const said = (requestId: string) => JSON.stringify(replies.get(requestId)?.result);
-        assert.equal(replies.get("request:fenced")?.status, "not_started");
-        assert.include(said("request:fenced"), "Nothing was sent");
-        assert.equal(replies.get("request:click")?.status, "unknown_outcome");
-        assert.include(said("request:click"), "may already have acted");
-        assert.notInclude(said("request:click"), "Nothing was sent");
+        const cut = yield* h.primitiveReply;
+        assert.equal(cut.requestId, "request:click");
+        assert.equal(cut.status, "unknown_outcome");
+        assert.include(JSON.stringify(cut.result), "may already have acted");
+        assert.notInclude(JSON.stringify(cut.result), "Nothing was sent");
+      }),
+  );
+
+  it.effect(
+    "a closure whose new driver never starts holds back neither a pause and resume nor a later private hide",
+    () =>
+      Effect.gen(function* () {
+        const { h, first, cursor } = yield* cursorHarness({
+          acquire: (index) => (index === 1 ? Effect.never : Effect.void),
+        });
+        assert.equal(yield* h.applied, "active");
+        yield* cursor(show(1));
+        yield* cursor(hide(2, "private"));
+        assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        assert.equal(yield* h.applied, "paused");
+        yield* h.push(active());
+        assert.equal(yield* h.applied, "active");
+        const resumed = yield* h.driverStarted;
+        yield* cursor(show(3, 2), resumed.connectionId);
+        yield* cursor(hide(4, "private", 2), resumed.connectionId);
+        assert.equal((yield* h.driverCutoff).connectionId, resumed.connectionId);
       }),
   );
 });

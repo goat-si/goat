@@ -52,11 +52,13 @@ export const forwardProxyCursors = (input: {
           const draw = input.overlay
             .draw({ type: "cursor", event: update.event })
             .pipe(Effect.timeoutOption(CURSOR_DRAW_LIMIT), Effect.asVoid);
+          // The fence above already keeps calls off the chain; its closure runs on its own fiber,
+          // so a lock or cutoff it waits on cannot hold back the cursor events after it.
           return closes
-            ? Effect.all(
-                [draw, input.targetClose().closeTarget(reason, update.connectionGeneration)],
-                { concurrency: "unbounded", discard: true },
-              )
+            ? input
+                .targetClose()
+                .closeTarget(reason, update.connectionGeneration)
+                .pipe(Effect.forkScoped, Effect.andThen(draw))
             : draw;
         }),
         Effect.forkScoped,

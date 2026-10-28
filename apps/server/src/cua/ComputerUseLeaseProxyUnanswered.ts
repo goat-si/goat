@@ -65,12 +65,12 @@ export const makeUnansweredWatch = <E>(
     if (overdue.delete(key)) wake();
   };
   /**
-   * The chain is closing: from here no call is admitted to it, and calls held for it wake now,
-   * before its cleanup and before a new driver is acquired. Connection ids are never reused, so
-   * the fence can stay until another chain's replaces it.
+   * The chain is gone or closing: calls held for it wake now, before its cleanup and before a new
+   * driver is acquired. Only the current chain takes the fence, so a stale cleanup never lifts a
+   * newer chain's; connection ids are never reused, so a fence can stay until the next one.
    */
-  const close = (connectionId: string) => {
-    fenced = connectionId;
+  const close = (connectionId: string, current: boolean) => {
+    if (current) fenced = connectionId;
     for (const [key, chain] of overdue) if (chain === connectionId) overdue.delete(key);
     wake();
   };
@@ -84,15 +84,23 @@ export const makeUnansweredWatch = <E>(
           const live = act.active() && proxy.lifecycle.current?.connectionId === connectionId;
           // Rechecked under the lock: a reply that landed while this waited keeps the child.
           if (live && !due()) return Effect.succeedNone;
-          close(connectionId);
+          close(connectionId, live);
           return live ? act.interrupt(cause).pipe(Effect.asSome) : Effect.succeedNone;
         }).pipe(Effect.uninterruptible),
       )
       .pipe(
+        // The new driver is acquired on its own fiber: the caller is done once the old chain is
+        // cut off, and a pause or end supersedes an acquisition that never completes.
         Effect.flatMap((token) =>
-          Option.isSome(token) && act.active() ? act.start(token.value) : Effect.void,
+          Option.isSome(token) && act.active()
+            ? act.start(token.value).pipe(
+                Effect.catchCause(() => act.end("lost")),
+                Effect.forkIn(proxy.scope),
+              )
+            : Effect.void,
         ),
         Effect.catchCause(() => act.end("lost")),
+        Effect.asVoid,
       );
   const replace = (key: string) =>
     Effect.suspend(() => {
