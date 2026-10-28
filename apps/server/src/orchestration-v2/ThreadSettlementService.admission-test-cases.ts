@@ -608,7 +608,7 @@ function admissionWorkerTests() {
         for (let key = 0; key < 8; key++) yield* worker.enqueue(key);
         for (let index = 0; index < 8; index++) yield* Queue.take(entered);
         for (let key = 8; key < 256; key++) yield* worker.enqueue(key);
-        for (let index = 0; index < 100; index++) yield* worker.enqueue(0, true);
+        for (let index = 0; index < 100; index++) yield* worker.enqueue(0);
         for (let key = 256; key < 512; key++) yield* worker.enqueue(key);
         const snapshot = yield* worker.snapshot;
         assert.strictEqual(snapshot.reserved, 256);

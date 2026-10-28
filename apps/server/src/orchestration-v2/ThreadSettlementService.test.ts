@@ -525,6 +525,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
 ) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make(options.snapshot);
+  const currentThreads = yield* Ref.make(options.currentThreads ?? []);
   const snapshotReadCount = yield* Ref.make(0);
   const snapshotReads = yield* Queue.unbounded<number>();
   const candidateReads = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
@@ -635,12 +636,27 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
               : snapshot.threads.filter((thread) => thread.id === threadId),
           ),
         ),
-      getThread: (threadId) => {
-        const thread = options.currentThreads?.find((candidate) => candidate.id === threadId);
-        return thread
-          ? Effect.succeed(thread)
-          : Effect.die(new Error(`Unexpected thread read: ${threadId}`));
-      },
+      getThread: (threadId) =>
+        Effect.gen(function* () {
+          const current = (yield* Ref.get(currentThreads)).find(
+            (candidate) => candidate.id === threadId,
+          );
+          const candidate = (yield* Ref.get(snapshots)).threads.find(
+            (candidate) => candidate.id === threadId,
+          );
+          const thread =
+            current ??
+            (candidate === undefined
+              ? undefined
+              : {
+                  ...appThread(threadId, candidate.settledOverride, candidate.worktreePath),
+                  archivedAt: candidate.archivedAt,
+                  deletedAt: candidate.deletedAt ?? null,
+                });
+          return thread
+            ? thread
+            : yield* Effect.die(new Error(`Unexpected thread read: ${threadId}`));
+        }),
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       streamDomainEvents: Stream.fromPubSub(domainEvents),
@@ -678,6 +694,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
   return {
     activation,
     snapshots,
+    currentThreads,
     snapshotReadCount,
     snapshotReads,
     candidateReads,
