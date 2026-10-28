@@ -106,13 +106,23 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
           Map<string, TabClaim>,
         ];
       const existing = current.get(key);
-      if (existing)
+      // The same turn claiming again, after its control generation or connection moved, renews
+      // its claim: what opened the tab and why it is kept still hold.
+      const renewed = existing !== undefined && turnOf(existing) === turnOf(input);
+      if (existing && !renewed)
         return [{ code: "conflict" } satisfies TabClaimError, current] as readonly [
           TabClaim | TabClaimError,
           Map<string, TabClaim>,
         ];
       const next = new Map(current);
-      const value: TabClaim = { ...input, claimEpoch: ++epoch, provenance };
+      const value: TabClaim = renewed
+        ? {
+            ...existing,
+            ...input,
+            claimEpoch: existing.claimEpoch,
+            provenance: existing.provenance,
+          }
+        : { ...input, claimEpoch: ++epoch, provenance };
       next.set(key, value);
       return [value, next] as readonly [TabClaim | TabClaimError, Map<string, TabClaim>];
     }).pipe(

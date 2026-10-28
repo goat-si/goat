@@ -525,6 +525,68 @@ it.live("one cell reads a tab and an app through one Target API", () => {
   });
 });
 
+it.live("a cell binds a tab by its id string and catches a failed call as a ScreenError", () => {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("tab_1"),
+    title: "Page",
+    url: "https://example.test/",
+    owner: "unclaimed" as const,
+    ownedByCaller: false,
+    controlGeneration: 0,
+  };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([tab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      request.operation === "status"
+        ? Effect.succeed({
+            tabId: tab.tabId,
+            url: tab.url,
+            control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+          } as A)
+        : Effect.die("only status is expected"),
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const request = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env" };
+      const result = yield* service.runCell({
+        ...request,
+        invocation: {
+          ...invocation,
+          capabilities: new Set(["preview" as const]),
+          reauthorize: () => Effect.void,
+        },
+        source: `const tab = await screen.tab("tab_1");
+          try { await tab.click({ ref: "missing" }); return "clicked"; }
+          catch (error) {
+            return [error instanceof Error, error.name, typeof error.code, error.effectStarted, typeof error.message];
+          }`,
+      });
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual([true, "ScreenError", "string", false, "string"]);
+      expect(result.journal.map((entry) => entry.receipt.method)).toEqual(["select_tab", "click"]);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+          tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+});
+
 it.live("a second cell in a busy turn is refused and Stop still cuts the running one", () =>
   Effect.gen(function* () {
     const offered = yield* Deferred.make<void>();

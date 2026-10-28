@@ -195,7 +195,28 @@ export async function runScreenChild(
           return true;
         }
       });
-      const __call = async (method, arg) => JSON.parse(await __host(method, JSON.stringify([arg])));
+      class ScreenError extends Error {
+        constructor(raw) {
+          let detail;
+          try { detail = JSON.parse(raw); } catch { detail = undefined; }
+          if (typeof detail !== 'object' || detail === null) detail = { message: String(raw) };
+          super(detail.message ?? detail.nextStep ?? detail.code ?? 'screen call failed');
+          this.name = 'ScreenError';
+          for (const key of ['code', 'callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'receipts'])
+            if (detail[key] !== undefined) this[key] = detail[key];
+          Object.defineProperty(this, '__receipt', { value: String(raw) });
+        }
+      }
+      globalThis.ScreenError = ScreenError;
+      const __invoke = async (method, args) => {
+        let out;
+        try { out = await __host(method, JSON.stringify(args)); }
+        catch (raw) { throw new ScreenError(raw); }
+        return JSON.parse(out);
+      };
+      const __call = (method, arg) => __invoke(method, [arg]);
+      const __tabQuery = (query) =>
+        typeof query === 'string' ? (/^[a-z][a-z0-9+.-]*:/i.test(query) ? { url: query } : { tabId: query }) : query;
       const __target = (binding) => {
         const ref = binding.targetRef ?? binding;
         const call = (method, arg = {}) => __call(method, { ...arg, targetRef: ref });
@@ -243,14 +264,11 @@ export async function runScreenChild(
           return result;
         },
         app: async (query = {}) => __target(await __call('bind_app', query)),
-        tab: async (query = {}) => __target(await __call('select_tab', query)),
+        tab: async (query = {}) => __target(await __call('select_tab', __tabQuery(query))),
         openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
         listTabs: () => __call('list_tabs', {}),
         ${methods
-          .map(
-            (method) =>
-              `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,
-          )
+          .map((method) => `${method}: (...args) => __invoke(${JSON.stringify(method)}, args)`)
           .join(
             ",",
           )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});
@@ -386,7 +404,16 @@ export async function runScreenChild(
                 return;
               }
               if (outcome.error) {
-                const dumped = vm.dump(outcome.error);
+                // A ScreenError the guest let escape still carries its host receipt verbatim.
+                const receipt =
+                  vm.typeof(outcome.error) === "object"
+                    ? vm.getProp(outcome.error, "__receipt")
+                    : undefined;
+                const dumped =
+                  receipt && vm.typeof(receipt) === "string"
+                    ? vm.getString(receipt)
+                    : vm.dump(outcome.error);
+                receipt?.dispose();
                 outcome.error.dispose();
                 let error: ScreenRunResult["error"];
                 if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {

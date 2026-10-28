@@ -477,12 +477,22 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const operation = actions[call.method];
       if (!operation || call.method === "select_text")
         return yield* Effect.fail(fail("unsupported", "This tab operation is unavailable."));
+      // The caller's own tab, such as one goat_preview_open made, needs no separate claim.
+      const ownedByCaller = current.control?.ownedByCaller === true;
       if (call.method !== "wait_for") {
-        yield* claims
-          .assertCurrent(claimIdentity)
-          .pipe(
-            Effect.mapError(() => fail("permission_denied", "Claim the tab before changing it.")),
-          );
+        yield* claims.assertCurrent(claimIdentity).pipe(
+          Effect.catch(() =>
+            ownedByCaller
+              ? claims.acquireTab({ ...claimIdentity, owner: "agent", ownedByCaller: true })
+              : Effect.fail(undefined),
+          ),
+          Effect.mapError(() =>
+            fail(
+              "permission_denied",
+              "Call tab.claim() before changing this tab; a tab a person or another agent controls cannot be claimed.",
+            ),
+          ),
+        );
       }
       const locator =
         arg.ref && typeof arg.ref === "object"
@@ -525,9 +535,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const claim = yield* claims
           .assertCurrent(claimIdentity)
           .pipe(Effect.mapError(() => fail("permission_denied", "Claim this tab first.")));
-        if (claim.provenance !== "agent-created")
+        if (claim.provenance !== "agent-created" && !ownedByCaller)
           return yield* Effect.fail(
-            fail("permission_denied", "Only tabs opened by this run can be closed."),
+            fail("permission_denied", "Only tabs this agent opened can be closed."),
           );
       }
       let input: Record<string, unknown> = {};
@@ -646,8 +656,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const ownClose =
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
-      observations.index.invalidateTarget(bound.ref.id);
+      // Refs outlive completed in-page input, as computer use tokens do: the browser refuses a ref
+      // from a replaced document before any input. A failure or a new document retires them.
+      const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
+      if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
+      else observations.index.invalidatePoints(bound.ref.id);
       const result = yield* invoke(bound, context, operation, input, cellBudgetMs).pipe(
+        Effect.tapError(() => retire),
         Effect.ensuring(
           Effect.sync(() => {
             if (!ownClose) return;
@@ -662,10 +677,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
+      // A click the browser saw change something is confirmed; nothing seen stays unverifiable,
+      // since late effects can follow, so the cell goes on and one observation settles it.
+      const seen =
+        operation === "click" && typeof result === "object" && result !== null
+          ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
+          : undefined;
+      const confirmed = seen?.effect === "confirmed" && Array.isArray(seen.evidence);
       return {
         value: result,
-        category: "unverifiable",
-        evidence: ["dispatched; observe to confirm"],
+        category: confirmed ? "confirmed" : "unverifiable",
+        evidence: confirmed
+          ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
+          : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
       };
     },

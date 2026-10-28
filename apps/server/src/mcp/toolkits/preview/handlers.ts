@@ -114,6 +114,21 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     ].includes(operation)
   )
     return { result, ...safety };
+  // A result that names its page's URL already says where the tab is.
+  const resultUrl =
+    operation === "click" && typeof result === "object" && result !== null && "url" in result
+      ? result.url
+      : undefined;
+  if (typeof resultUrl === "string") {
+    const { url: _url, ...rest } = result as { readonly url: string };
+    return {
+      result: rest as A,
+      ...safety,
+      ...(/^https?:\/\//i.test(resultUrl) && resultUrl.length <= 4096
+        ? { toolIcon: { _tag: "website" as const, pageUrl: resultUrl } }
+        : {}),
+    };
+  }
   const statusTabId =
     (operation !== "evaluate" && typeof result === "object" && result !== null
       ? (result as { tabId?: PreviewTabId }).tabId
