@@ -11,8 +11,8 @@ it.effect(
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 111 });
       yield* sql`INSERT INTO auth_pairing_links
-      (id, credential, method, role, subject, created_at, expires_at)
-      VALUES ('legacy', 'synthetic-credential', 'link', 'full', 'cloud-connect', '2026-10-15', '2026-10-16')`;
+      (id, credential, method, scopes, subject, created_at, expires_at)
+      VALUES ('legacy', 'synthetic-credential', 'link', '["memory:read"]', 'cloud-connect', '2026-10-15', '2026-10-16')`;
       const legacy = yield* sql`SELECT * FROM auth_pairing_links`;
 
       assert.deepStrictEqual(yield* runMigrations(), [[112, "ConnectLinkTrust"]]);
