@@ -10,6 +10,7 @@ export const makeStorageCleanupWorker = Effect.fn("StorageCleanup.makeWorker")(f
   ) => Effect.Effect<StorageCleanupReport, ServerSettingsError, R>,
 ) {
   const automationHold = yield* AutomationHold.AutomationHold;
+  let closed = false;
   let pendingManual: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined;
   const worker = yield* makeDrainableWorker(
     (_wake: void) =>
@@ -34,12 +35,14 @@ export const makeStorageCleanupWorker = Effect.fn("StorageCleanup.makeWorker")(f
   // A full slot already promises a fresh sweep; requests carry no per-event state.
   const requestSweep = worker.enqueue(undefined).pipe(Effect.asVoid);
   yield* Effect.addFinalizer(() => {
+    closed = true;
     const completion = pendingManual;
     pendingManual = undefined;
     return completion ? Deferred.interrupt(completion) : Effect.void;
   });
   const runNow = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
+      if (closed) return yield* Effect.interrupt;
       const completion = (pendingManual ??= Deferred.makeUnsafe<
         StorageCleanupReport,
         ServerSettingsError
