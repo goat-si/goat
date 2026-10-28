@@ -3,6 +3,7 @@ import { reservedCleanup, cancellationFence, heldTitleDeadline } from "./EffectW
 import {
   replacementClaimSurvivesOldFinalizer,
   cancellationRollbackPreservesClaim,
+  drainWaitsForOtherWorker,
 } from "./EffectWorker.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
@@ -809,6 +810,10 @@ it.effect(
 );
 
 it.effect("runs independent cleanup while four general effects remain held", () => reservedCleanup);
+it.effect(
+  "drains another worker's admission, finalizers and newly enqueued work",
+  () => drainWaitsForOtherWorker,
+);
 it.effect("keeps cancelled operations fenced until their finalizers join", () =>
   cancellationFence(),
 );
