@@ -160,9 +160,9 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
       const [next, commands] = overlayStep(state, event);
       state = next;
       const draw = sink();
-      if (event.type === "cursor" && scopedReport) yield* scopedReport(event.event);
-      // A call that brought its own owner ahead of the owner's phases reports that owner too.
-      else if (next.scoped !== before && next.scoped !== undefined && scopedReport)
+      // Only what the overlay took: an owner's phase, or the owner a call brought ahead of its
+      // phases. A late phase of an older owner the overlay refused would steal the preview.
+      if (next.scoped !== before && next.scoped !== undefined && scopedReport)
         yield* scopedReport(next.scoped);
       for (const command of commands) {
         if (next.scoped === undefined || (command.op === "hide" && command.reason === "capture"))

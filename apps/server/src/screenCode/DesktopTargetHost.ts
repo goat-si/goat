@@ -538,13 +538,15 @@ export const createDesktopTargetHost = (deps: {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
-        // Without its window in the tree, the window's own bounds place the elements.
+        // Without its window in the tree, the window's own bounds place the elements. The lookup
+        // only places the cursor, so it gets a second of the cell's time, not the rest of it.
+        const lookupEnds = Math.min(call.deadlineMillis, (yield* Clock.currentTimeMillis) + 1_000);
         const listed =
           elements.some((entry) => frameOf(entry) !== undefined) && !hasWindowRoot(elements)
             ? yield* request(
                 "list_windows",
                 { pid: bound.pid },
-                call,
+                { ...call, deadlineMillis: lookupEnds },
                 context,
                 bound.connectionGeneration,
               ).pipe(Effect.option)

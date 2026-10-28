@@ -18,6 +18,47 @@ const pngOf = (width: number, height: number) => {
 };
 
 describe("agent cursor reports", () => {
+  it.effect("a late phase of an older owner does not take the preview from the current one", () =>
+    Effect.gen(function* () {
+      const reports: AgentCursorReport[] = [];
+      const drawer = yield* makeOverlayDrawer(
+        undefined,
+        () => undefined,
+        (report) => Effect.sync(() => reports.push(report) > 0),
+      );
+      const older = {
+        environmentId: EnvironmentId.make("environment"),
+        runId: "run",
+        turnId: "turn",
+        targetId: "a",
+        generation: 1,
+      };
+      const current = { ...older, targetId: "b", generation: 2 };
+      yield* drawer.draw({
+        type: "cursor",
+        event: { op: "show", identity: { ...current, sequence: 1 }, phase: "thinking" },
+      });
+      // The overlay refuses this: a newer owner is showing.
+      yield* drawer.draw({
+        type: "cursor",
+        event: { op: "show", identity: { ...older, sequence: 5 }, phase: "resting" },
+      });
+      yield* drawer.draw({
+        type: "call",
+        id: "1",
+        name: "click",
+        args: { pid: 4, window_id: 9, element_token: "s1:1" },
+        codeMode: true,
+        cursor: { owner: { ...current, sequence: 0 }, point: { fx: 0.5, fy: 0.45 } },
+      });
+      yield* TestClock.adjust("250 millis");
+      assert.deepEqual(reports.at(-1), {
+        identity: { ...current, sequence: 1 },
+        phase: "thinking",
+        cursor: { windowId: 9, point: { fx: 0.5, fy: 0.45 }, phase: "acting" },
+      });
+    }),
+  );
   it.effect("a scoped preview report carries the point the overlay drew for that owner", () =>
     Effect.gen(function* () {
       const reports: AgentCursorReport[] = [];

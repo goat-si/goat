@@ -30,7 +30,10 @@ const clickEach = Effect.fn("DesktopTargetHostCursorTest.clickEach")(function* (
     context,
   );
   const ref = bound.value as ScreenTargetRef;
-  const read = yield* host.observe(call("get_accessibility_tree", {}, ref), context);
+  const read = yield* host.observe(
+    { ...call("get_accessibility_tree", {}, ref), deadlineMillis: 60_000 },
+    context,
+  );
   const refs = (read.value as { elements: Array<{ index: number; ref: ScreenElementRef }> })
     .elements;
   for (const index of indexes)
@@ -81,7 +84,7 @@ it.effect("an element click sends that element's center in its window as the cur
 it.effect("a tree without its window places elements by the window's listed bounds", () =>
   Effect.gen(function* () {
     // macOS indexes only actionable elements, so a window without actions is not in the tree.
-    const { host, sent } = fixture({
+    const { host, sent, deadlines } = fixture({
       list_windows: {
         windows: [
           {
@@ -99,5 +102,10 @@ it.effect("a tree without its window places elements by the window's listed boun
     });
     const clicks = yield* clickEach(host, sent, [1, 3]);
     expect(clicks.map((entry) => entry.cursor?.point)).toEqual([{ fx: 0.5, fy: 0.45 }, undefined]);
+    // The lookup only places the cursor: a second of the cell's time, not all that remains.
+    expect(deadlines.filter((entry) => entry.tool !== "click").slice(-2)).toEqual([
+      { tool: "get_window_state", deadlineMillis: 60_000 },
+      { tool: "list_windows", deadlineMillis: 1_000 },
+    ]);
   }),
 );
