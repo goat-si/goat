@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { boundedRead, typedEffect } from "./typedEffect.ts";
+import { boundedRead, deadlineExpiry, typedEffect } from "./typedEffect.ts";
 
 describe("typed text effect", () => {
   const before = { value: "helo", start: 3, end: 3 };
@@ -33,5 +33,16 @@ describe("typed text effect", () => {
     await expect(boundedRead(Promise.resolve("ok"), new Promise(() => undefined))).resolves.toBe(
       "ok",
     );
+  });
+
+  it("the evidence timer counts on the actions' clock, so a deadline still ahead has not expired", async () => {
+    // The deadline is 60 s past the actions' clock reading; the timer must wait for it.
+    const { expired, clear } = deadlineExpiry(1_060_000, () => 1_000_000);
+    await expect(
+      Promise.race([expired.then(() => "expired"), Promise.resolve("pending")]),
+    ).resolves.toBe("pending");
+    clear();
+    const passed = deadlineExpiry(999_999, () => 1_000_000);
+    await expect(passed.expired.then(() => "expired")).resolves.toBe("expired");
   });
 });

@@ -42,6 +42,7 @@ import {
   deadlineExpiry,
   probeAfter,
   probeBefore,
+  retireProbe,
   typedEffect,
 } from "./typedEffect.ts";
 import {
@@ -843,24 +844,27 @@ export const type = async (
     // delivered and unverifiable, and frees the tab's queue.
     const { expired, clear } = deadlineExpiry(deadline);
     // A text field's value and selection just before the input predict what it should hold after;
-    // a listener notes whether this input's own trusted insert reaches the field.
-    const before =
-      handle === null || input.text === ""
-        ? undefined
-        : await boundedRead(probeBefore(handle), expired);
-    remaining(deadline);
-    gate();
-    // One input after the gate: a key press is held off by the input fence; inserted text is a
-    // single call with nothing to wait for.
-    if (input.text === "") {
-      if (input.clear) await page.keyboard.press("Delete");
+    // a probe notes whether this input's own trusted insert reaches the field.
+    const pending =
+      handle !== null && input.text !== "" ? probeBefore(handle, deadline) : undefined;
+    const probe = pending ? await boundedRead(pending, expired) : undefined;
+    if (pending && !probe) void pending.then(retireProbe, constVoid);
+    try {
+      remaining(deadline);
+      gate();
+      // One input after the gate: a key press is held off by the input fence; inserted text is a
+      // single call with nothing to wait for.
+      if (input.text === "") {
+        if (input.clear) await page.keyboard.press("Delete");
+        return undefined;
+      }
+      await page.keyboard.insertText(input.text);
+      const after = probe ? await boundedRead(probeAfter(probe), expired) : undefined;
+      return typedEffect(probe?.before, input.text, after);
+    } finally {
       clear();
-      return undefined;
+      retireProbe(probe);
     }
-    await page.keyboard.insertText(input.text);
-    const after = before && handle ? await boundedRead(probeAfter(handle), expired) : undefined;
-    clear();
-    return typedEffect(before, input.text, after);
   } finally {
     void handle?.dispose().catch(constVoid);
   }

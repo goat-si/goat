@@ -46,4 +46,21 @@ describe.skipIf(!chromiumInstalled)("typed text read back", () => {
     await page.evaluate("tail.focus(); tail.setSelectionRange(3, 3)");
     await expect(typed("#tail", "lo")).resolves.toBeUndefined();
   });
+
+  it("a page that cancels the input and fakes an insert of its own does not get it confirmed", async () => {
+    await page.setContent('<input id="field" value="hel">');
+    await page.evaluate(`
+      field.addEventListener("beforeinput", (event) => {
+        event.preventDefault();
+        field.value = "hello";
+        field.__goatTyped = { inserted: true };
+        field.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "lo" }));
+      });
+      field.focus();
+      field.setSelectionRange(3, 3);
+    `);
+    await expect(
+      ServerBrowserPage.type(page, { locator: "#field", text: "lo" }),
+    ).resolves.toBeUndefined();
+  });
 });

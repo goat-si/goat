@@ -1,9 +1,9 @@
-// @effect-diagnostics globalDate:off globalTimers:off - Playwright actions run outside the Effect runtime.
-import type { ElementHandle } from "playwright-core";
+// @effect-diagnostics globalTimers:off - Playwright actions run outside the Effect runtime.
+import type { ElementHandle, JSHandle } from "playwright-core";
 
 /**
  * Whether typed text took effect, decided from two bounded reads of the field around the input,
- * kept free of Playwright so it can be tested.
+ * kept free of Playwright where it can be so it can be tested.
  */
 
 /** The field just before the input: its value and selection. */
@@ -25,8 +25,8 @@ export const boundedRead = <A>(read: Promise<A>, expired: Promise<void>): Promis
 
 /**
  * Confirmed only when this input itself inserted into the field (a trusted insert event, which a
- * cancelled input never fires and a page script cannot forge) and the field now holds exactly
- * what the text makes of its earlier value and selection.
+ * cancelled input never fires) and the field now holds exactly what the text makes of its earlier
+ * value and selection.
  */
 export const typedEffect = (
   before: TypedBefore | undefined,
@@ -40,56 +40,100 @@ export const typedEffect = (
     : undefined;
 };
 
-/** A timer for the action's deadline; `clear` stops it once the reads are done. */
-export const deadlineExpiry = (deadline: number) => {
+/** A timer for an action's deadline, on the actions' clock (`performance.now()`). */
+export const deadlineExpiry = (deadline: number, now: () => number = () => performance.now()) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<void>((done) => {
-    timer = setTimeout(done, Math.max(0, deadline - Date.now()));
+    timer = setTimeout(done, Math.max(0, deadline - now()));
   });
   return { expired, clear: () => clearTimeout(timer) };
 };
 
-interface ProbedField {
-  readonly value?: unknown;
-  readonly selectionStart?: number | null;
-  readonly selectionEnd?: number | null;
-  addEventListener(type: string, listener: (event: unknown) => void, capture: boolean): void;
-  removeEventListener(type: string, listener: (event: unknown) => void, capture: boolean): void;
-  __goatTyped?: { inserted: boolean; listener: (event: unknown) => void };
+interface PageProbe extends TypedBefore {
+  /** Stops listening (idempotent) and reads the field. */
+  readonly finish: () => TypedAfter;
+}
+
+/** A field being watched for this input; its state lives in a closure the page cannot reach. */
+export interface TypedProbe {
+  readonly before: TypedBefore;
+  readonly handle: JSHandle<PageProbe | undefined>;
 }
 
 /**
- * Reads a text field's value and selection just before the input, and starts noting whether a
- * trusted insert reaches it. Anything without a text selection is not read.
+ * Reads a text field's value and selection just before the input and starts noting whether a
+ * trusted insert reaches it. The note is kept in the probe's closure, held only through
+ * Playwright's handle (as the click watch is), and the listener removes itself at the deadline.
  */
-export const probeBefore = (handle: ElementHandle): Promise<TypedBefore | undefined> =>
-  handle.evaluate((element) => {
-    const field = element as unknown as ProbedField;
-    if (
-      typeof field.value !== "string" ||
-      typeof field.selectionStart !== "number" ||
-      typeof field.selectionEnd !== "number"
+export const probeBefore = async (
+  element: ElementHandle,
+  deadline: number,
+): Promise<TypedProbe | undefined> => {
+  const handle = (await element.evaluateHandle(
+    (node, lifetimeMs) => {
+      const field = node as unknown as {
+        readonly value?: unknown;
+        readonly selectionStart?: number | null;
+        readonly selectionEnd?: number | null;
+        addEventListener(type: string, listener: (event: unknown) => void, capture: boolean): void;
+        removeEventListener(
+          type: string,
+          listener: (event: unknown) => void,
+          capture: boolean,
+        ): void;
+      };
+      if (
+        typeof field.value !== "string" ||
+        typeof field.selectionStart !== "number" ||
+        typeof field.selectionEnd !== "number"
+      )
+        return undefined;
+      let inserted = false;
+      let listening = true;
+      const listener = (event: unknown) => {
+        const fired = event as { readonly isTrusted?: unknown; readonly inputType?: unknown };
+        if (fired.isTrusted === true && String(fired.inputType ?? "").startsWith("insert"))
+          inserted = true;
+      };
+      const stop = () => {
+        if (listening) field.removeEventListener("input", listener, true);
+        listening = false;
+      };
+      field.addEventListener("input", listener, true);
+      setTimeout(stop, lifetimeMs);
+      return {
+        value: field.value,
+        start: field.selectionStart,
+        end: field.selectionEnd,
+        finish: () => {
+          stop();
+          return { value: field.value, inserted };
+        },
+      };
+    },
+    Math.max(0, deadline - performance.now()),
+  )) as JSHandle<PageProbe | undefined>;
+  const before = await handle
+    .evaluate((probe) =>
+      probe ? { value: probe.value, start: probe.start, end: probe.end } : undefined,
     )
-      return undefined;
-    const probe = {
-      inserted: false,
-      listener: (event: unknown) => {
-        const fired = event as { readonly isTrusted?: boolean; readonly inputType?: string };
-        if (fired.isTrusted && String(fired.inputType ?? "").startsWith("insert"))
-          probe.inserted = true;
-      },
-    };
-    field.__goatTyped = probe;
-    field.addEventListener("input", probe.listener, true);
-    return { value: field.value, start: field.selectionStart, end: field.selectionEnd };
-  });
+    .catch(() => undefined);
+  if (before) return { before, handle };
+  void handle.dispose().catch(() => undefined);
+  return undefined;
+};
 
-/** Reads the field after the input and stops noting inserts. */
-export const probeAfter = (handle: ElementHandle): Promise<TypedAfter> =>
-  handle.evaluate((element) => {
-    const field = element as unknown as ProbedField;
-    const probe = field.__goatTyped;
-    if (probe) field.removeEventListener("input", probe.listener, true);
-    delete field.__goatTyped;
-    return { value: field.value, inserted: probe?.inserted === true };
-  });
+/** Stops the probe and reads the field after the input. */
+export const probeAfter = (probe: TypedProbe): Promise<TypedAfter | undefined> =>
+  probe.handle.evaluate((watch) => watch?.finish());
+
+/** Stops a probe that is no longer read (a late answer, a failed input) and lets it go. */
+export const retireProbe = (probe: TypedProbe | undefined) => {
+  if (!probe) return;
+  void probe.handle
+    .evaluate((watch) => {
+      watch?.finish();
+    })
+    .catch(() => undefined)
+    .finally(() => probe.handle.dispose().catch(() => undefined));
+};
