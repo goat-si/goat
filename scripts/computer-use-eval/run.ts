@@ -507,12 +507,10 @@ const snapshot = async (arm: ArmSpec, task: Task): Promise<Snapshot> => ({
 
 /** What the run left open, measured before anything is cleaned up. */
 const leftoversOf = async (
-  client: Client | null,
   arm: ArmSpec,
   task: Task,
   before: Snapshot,
   after: Snapshot,
-  outputs: ReadonlyArray<string>,
   final: JsonObject,
 ) => {
   const known = new Set(before.windows.map((window) => window.id));
@@ -536,27 +534,17 @@ const leftoversOf = async (
     final["display"].replace(/[^\d]/gu, "") !== "0"
   )
     left.push("Calculator display left at " + final["display"]);
-  const notes: Array<string> = [];
-  if (client !== null && arm.driver === "goat" && task.surface === "web") {
-    const ids = new Set(
-      outputs.flatMap((output) =>
-        [...output.matchAll(/"tabId"\s*:\s*"([^"]+)"/gu)].flatMap((match) =>
-          match[1] === undefined ? [] : [match[1]],
-        ),
-      ),
-    );
-    for (const tabId of ids)
-      try {
-        const status = await client.call("preview.status", { tabId });
-        if (status["tabId"] === tabId)
-          left.push("GOAT tab " + tabId + " " + String(status["url"] ?? ""));
-      } catch (error) {
-        notes.push(
-          "GOAT tab " + tabId + " is not live to the runner: " + String(error).slice(0, 120),
-        );
-      }
-  }
-  return { left, notes };
+  // GOAT's preview tabs belong to the eval thread, and no outside caller can list them.
+  const unobserved = arm.driver === "goat" && task.surface === "web";
+  return {
+    left,
+    unobserved,
+    notes: unobserved
+      ? [
+          "the eval thread's GOAT tabs cannot be listed from outside it, so tab cleanup was not observed",
+        ]
+      : [],
+  };
 };
 
 const promptFor = (task: Task, arm: ArmSpec) =>
@@ -613,12 +601,13 @@ const runStep = async (
     active.observer = null;
     if (error instanceof HaltError) throw error;
     const after = await snapshot(arm, task).catch(() => null);
-    const left = after === null ? null : await leftoversOf(null, arm, task, before, after, [], {});
+    const left = after === null ? null : await leftoversOf(arm, task, before, after, {});
     return {
       ...head,
       status: "error",
       error: String(error),
       leftovers: left?.left ?? [],
+      cleanupUnobserved: left?.unobserved ?? true,
       notes: after === null ? ["the end of the run could not be observed"] : [],
     };
   }
@@ -644,15 +633,7 @@ const runStep = async (
     notes: ran.notes,
     truncated: ran.transcript.incomplete,
   };
-  const leftovers = await leftoversOf(
-    client,
-    arm,
-    task,
-    before,
-    after,
-    observed.toolOutputs,
-    final,
-  );
+  const leftovers = await leftoversOf(arm, task, before, after, final);
   const scored = scoreRun(task, arm, {
     ...observed,
     notes: [...observed.notes, ...leftovers.notes],
@@ -662,6 +643,7 @@ const runStep = async (
     status: "ran",
     ...scored,
     leftovers: leftovers.left,
+    cleanupUnobserved: leftovers.unobserved,
     tokens: ran.transcript.tokens,
     wallMs: ran.wallMs,
     ref: ran.ref,

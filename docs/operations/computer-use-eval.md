@@ -68,14 +68,18 @@ another GOAT thread blocked with
 once after the lease expires, and left out of every score.
 
 Before and after each run the runner lists on-screen windows, Chrome's tabs and, for Aside arms,
-Aside's tabs. Anything new that remains is a leftover. The runner reports leftovers and does not
+Aside's tabs. Anything new that remains is a leftover. GOAT's preview tabs belong to the eval thread
+and no outside caller can list them, so a GOAT web run's tab cleanup is unobserved: it shows as
+`tabs ?` and counts toward coexistence only when something else was left. The runner reports
+leftovers and does not
 close them, because it has no admitted way to operate another product's windows; the operator
 closes them.
 
 A run's agent never outlives it. `codex exec` runs in its own process group, which the runner
 stops with TERM and then KILL and confirms gone; a GOAT thread is interrupted unless it already
 ended and confirmed terminal. When either cannot be confirmed, the campaign stops, so the next run
-never shares the screen with a live agent. Ctrl-C stops the current run's agent and observer the same way
+never shares the screen with a live agent. Ctrl-C stops the current run's agent and observer the
+same way
 before the runner exits.
 
 ## Scores
