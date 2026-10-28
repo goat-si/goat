@@ -14,6 +14,7 @@ import {
   ProviderDriverKind,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { NodeHttpServer } from "@effect/platform-node";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
@@ -31,7 +32,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 
 import { McpInvocationContext } from "./McpInvocationContext.ts";
-import { catalog, client, dependencies } from "./agentSurface.testkit.ts";
+import { catalog, client, dependencies, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import * as Workspace from "./AgentWorkspaceMcpService.ts";
 import * as Access from "./AgentWorkspaceTerminalAccess.ts";
 import * as Audit from "./AgentWorkspaceTerminalAudit.ts";
@@ -858,5 +859,45 @@ it.effect("#2059 the generic settings tool refuses to enable workspace or termin
         ),
       ),
     ),
+  ),
+);
+
+it.effect("#2059 lists workspace and terminal tools only for explicitly granted credentials", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const grants: ReadonlyArray<AuthEnvironmentScope> = [
+      "filesystem:read",
+      "filesystem:write",
+      "terminal:read",
+      "terminal:operate",
+    ];
+    const http = yield* serveCatalogOverHttp(
+      {
+        ungranted: { ...f.scope, grantedScopes: [] },
+        granted: { ...f.scope, grantedScopes: grants },
+      },
+      "full",
+    );
+    const withheld = (yield* http.listTools("ungranted")).map((tool) => tool.name);
+    const offered = (yield* http.listTools("granted")).map((tool) => tool.name);
+    for (const name of [
+      "workspace_list",
+      "workspace_search",
+      "workspace_read",
+      "workspace_write",
+      "terminal_list",
+      "terminal_read",
+      "terminal_open",
+      "terminal_write",
+      "terminal_clear",
+      "terminal_restart",
+      "terminal_close",
+    ]) {
+      expect(withheld).not.toContain(`goat_${name}`);
+      expect(offered).toContain(`goat_${name}`);
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer)),
   ),
 );

@@ -687,7 +687,13 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
     const listed = (yield* http.listTools("thread")).map((tool) => tool.name);
-    const forThreads = entries.filter((e) => e.requires !== "client" && e.verb !== "screen_run");
+    const forThreads = entries.filter(
+      (e) =>
+        e.requires !== "client" &&
+        e.verb !== "screen_run" &&
+        e.resource !== "workspace" &&
+        e.resource !== "terminal",
+    );
     expect(listed.toSorted()).toEqual(forThreads.map(listedToolName).sort());
     expect(listed).toContain("goat_task_create");
     expect(listed).not.toContain("delegate_task");
@@ -772,7 +778,7 @@ it.effect("goat_describe answers at three depths with availability for this call
       now: false,
       reason: "Needs an agent running inside a GOAT thread.",
     });
-    const write = entries.find((entry) => entry.effect !== "read" && entry.requires === "either")!;
+    const write = agentSurfaceRegistry["thread.send"];
     expect((yield* detail(readOnly, write.path)).available).toEqual({
       now: false,
       reason: "This MCP client was approved for read-only access.",
