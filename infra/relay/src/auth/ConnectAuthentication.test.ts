@@ -11,6 +11,15 @@ import * as RelayConfiguration from "../Config.ts";
 
 vi.mock("@clerk/backend", () => ({ createClerkClient: vi.fn(), verifyToken: vi.fn() }));
 const NOW = 1800000000;
+
+// The worker's ES2023 lib has no Promise.withResolvers.
+function promiseWithResolvers<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve: (value: T) => resolve(value) };
+}
 const config = RelayConfiguration.make({
   relayIssuer: "https://relay.example.test",
   apns: null,
@@ -180,9 +189,9 @@ it.effect("a pending Clerk lookup times out closed without OAuth fallback", () =
   Effect.gen(function* () {
     const { getSession } = setup();
     yield* TestClock.setTime(NOW * 1000);
-    const started = Promise.withResolvers<void>();
+    const started = promiseWithResolvers<void>();
     vi.mocked(verifyToken).mockResolvedValue(claims as never);
-    const lookup = Promise.withResolvers<{ userId: string; status: string }>();
+    const lookup = promiseWithResolvers<{ userId: string; status: string }>();
     getSession.mockImplementation(() => {
       started.resolve();
       return lookup.promise;

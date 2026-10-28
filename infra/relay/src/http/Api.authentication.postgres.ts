@@ -11,6 +11,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -36,6 +37,7 @@ import * as Publisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as Signatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
+import * as HookInbox from "../hooks/HookInbox.ts";
 import {
   config,
   environmentKeyPair,
@@ -44,6 +46,8 @@ import {
 } from "../environments/EnvironmentLinker.testkit.ts";
 
 vi.mock("@clerk/backend", () => ({ createClerkClient: vi.fn(), verifyToken: vi.fn() }));
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 it.effect(
   "real HTTP middleware restricts stale CLI OAuth to owned withdrawal and denies link/admission/recovery",
@@ -110,6 +114,7 @@ it.effect(
         Layer.provideMerge(Layer.mock(MobileRegistrations.MobileRegistrations, {})),
         Layer.provideMerge(Layer.mock(Signatures.EnvironmentPublishSignatures, {})),
         Layer.provideMerge(Layer.mock(HeldHooks.HeldHooks, {})),
+        Layer.provideMerge(Layer.mock(HookInbox.HookInbox, {})),
       );
       const context = yield* Layer.build(services);
       const dependencies = Layer.succeedContext(context);
@@ -134,7 +139,7 @@ it.effect(
         Effect.sync(() =>
           HttpRouter.toWebHandler(
             HttpApiBuilder.layer(
-              HttpApi.make("ConnectAuthBoundary")
+              HttpApi.make("RelayApi")
                 .add(RelayApi.groups.client)
                 .add(RelayApi.groups.server)
                 .add(RelayApi.groups.token)
@@ -167,7 +172,12 @@ it.effect(
       const clientKey = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
       const jwk = clientKey.publicKey.export({ format: "jwk" });
       let nonce = 0;
-      const request = (path: string, body?: unknown, token = "oauth", method = "POST") => {
+      const request = Effect.fn("request")((
+        path: string,
+        body?: unknown,
+        token = "oauth",
+        method = "POST",
+      ) => {
         const url = `${config.relayIssuer}${path}`;
         const origin = new URL(url);
         const header = Buffer.from(JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk })).toString(
@@ -198,12 +208,12 @@ it.effect(
               ...(body === undefined
                 ? {}
                 : {
-                    body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body),
+                    body: body instanceof URLSearchParams ? body.toString() : encodeJson(body),
                   }),
             }),
           ),
         );
-      };
+      });
       clientId = "wrong-client";
       expect(
         (yield* request(

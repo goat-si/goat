@@ -489,6 +489,7 @@ describe("EnvironmentConnector", () => {
       updatedAt: "2026-05-25T00:00:00.000Z",
       generation: 2,
       tunnelReleasedAt: "2026-05-26T00:00:00.000Z",
+      incarnationId: "allocation-test",
     });
 
     return Effect.gen(function* () {

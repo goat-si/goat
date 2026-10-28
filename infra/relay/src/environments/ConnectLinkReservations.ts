@@ -18,6 +18,7 @@ import * as Result from "effect/Result";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Base64Url from "effect/encoding/Base64Url";
+import * as SqlError from "effect/sql/SqlError";
 import * as RelayDb from "../db.ts";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as Config from "../Config.ts";
@@ -48,6 +49,11 @@ const unavailable = () =>
     reason: "persistence_failed",
     traceId: "connect-reservation",
   });
+const sqlUnavailable = <E>(error: E | SqlError.SqlError): E | RelayInternalError =>
+  SqlError.isSqlError(error) ? unavailable() : error;
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(UnknownJson);
+const decodeJson = Schema.decodeSync(UnknownJson);
 type ReservationError =
   | RelayInternalError
   | ReturnType<typeof strengthRequired>
@@ -132,7 +138,7 @@ const make = Effect.gen(function* () {
             additionalData: new TextEncoder().encode(`${input.userId}:${input.challengeId}`),
           },
           key,
-          new TextEncoder().encode(JSON.stringify(outcome)),
+          new TextEncoder().encode(encodeJson(outcome)),
         ),
       catch: unavailable,
     });
@@ -152,7 +158,7 @@ const make = Effect.gen(function* () {
           key,
           new Uint8Array(Result.getOrThrow(Base64Url.decode(ciphertext))),
         );
-        return JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
+        return decodeJson(new TextDecoder().decode(plaintext));
       },
       catch: unavailable,
     }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Outcome)), Effect.mapError(unavailable)),
@@ -220,7 +226,7 @@ const make = Effect.gen(function* () {
           return null;
         }),
       )
-      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
+      .pipe(Effect.mapError(sqlUnavailable));
   });
   const complete: ConnectLinkReservations["Service"]["complete"] = Effect.fn(
     "ConnectLinkReservations.complete",
@@ -251,7 +257,7 @@ const make = Effect.gen(function* () {
           return result;
         }),
       )
-      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
+      .pipe(Effect.mapError(sqlUnavailable));
   });
   // A separate transaction pins the execution lock without rolling back durable provisioning milestones.
   const exclusive: ConnectLinkReservations["Service"]["exclusive"] = Effect.fn(
@@ -316,7 +322,7 @@ const make = Effect.gen(function* () {
           return claimed.flat();
         }),
       )
-      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
+      .pipe(Effect.mapError(sqlUnavailable));
     for (const row of rows) {
       yield* cleanup(row.environment_id);
       yield* db.$client`UPDATE relay_connect_link_reservations
@@ -350,7 +356,7 @@ const make = Effect.gen(function* () {
           return yield* revoke;
         }),
       )
-      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) })),
+      .pipe(Effect.mapError(sqlUnavailable)),
   );
   return ConnectLinkReservations.of({
     exclusive,
