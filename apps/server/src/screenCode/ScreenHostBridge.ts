@@ -193,6 +193,7 @@ export class ScreenHostBridge {
       dispatched: boolean,
       evidence: readonly string[] = [],
       safety = screenActionSafety(call, "refused", false),
+      outcome: { readonly outcome?: ScreenActionOutcome } = {},
     ): number | undefined => {
       if (state.journal.length >= context.limits.journalEntries) {
         if (!state.truncated.includes("journal")) state.truncated.push("journal");
@@ -211,6 +212,7 @@ export class ScreenHostBridge {
           category,
           dispatched,
           evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)),
+          ...outcome,
         },
       });
       return index;
@@ -223,10 +225,15 @@ export class ScreenHostBridge {
       error.code === "not_run" && state.haltedBy !== undefined
         ? [`not_run:after_call:${state.haltedBy}`]
         : [];
+    // Tab input reports its dispatch and effect apart, on failures as on success.
+    const axes = (dispatch: ScreenActionOutcome["dispatch"]) =>
+      call.targetRef?.kind === "tab" && !isScreenRead(call.method)
+        ? { outcome: { dispatch, effect: "unknown" as const } }
+        : {};
     const deny = (error: ScreenRunError) => {
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
-      record("refused", "settled", false, notRunEvidence(error), safety);
+      record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
       halt();
       return refused(call, { ...error, safety, receipts });
     };
@@ -354,7 +361,7 @@ export class ScreenHostBridge {
         error.effectStarted,
         notRunEvidence(error),
         safety,
-        refusalOf(error),
+        { ...refusalOf(error), ...axes(safety.possibleCommit ? "unknown" : "refused") },
       );
       halt();
     };
