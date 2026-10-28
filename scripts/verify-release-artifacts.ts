@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command, Flag } from "effect/cli";
+import Plist from "plist";
 import {
   assembleRelease,
   releaseAssetKey,
@@ -22,6 +23,50 @@ import {
   type ReleaseCommandRunner,
   type ReleaseReport,
 } from "./lib/release-verify.ts";
+
+const AUDIO_INPUT_ENTITLEMENT = "com.apple.security.device.audio-input";
+const CAMERA_ENTITLEMENT = "com.apple.security.device.camera";
+// Electron's renderer, GPU and plugin helpers; the audio service runs in one of them.
+const ELECTRON_HELPER_APP =
+  /\.app[\\/]Contents[\\/]Frameworks[\\/][^\\/]+ Helper(?: \([^)\\/]+\))?\.app$/;
+
+const readPlistDict = (xml: string | undefined): Record<string, unknown> | string => {
+  if (!xml?.trim()) return "unreadable";
+  try {
+    const parsed: unknown = Plist.parse(xml);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? Object.fromEntries(Object.entries(parsed))
+      : "invalid";
+  } catch {
+    return "invalid";
+  }
+};
+
+/** Signed GOAT apps claim the microphone for voice input and never the camera. */
+export function macEntitlementProblems(xml: string | undefined): string[] {
+  const entitlements = readPlistDict(xml);
+  if (entitlements === "unreadable") return ["entitlements unreadable"];
+  if (entitlements === "invalid") return ["entitlements are not a valid plist"];
+  const problems: string[] = [];
+  if (!(AUDIO_INPUT_ENTITLEMENT in entitlements))
+    problems.push(`missing ${AUDIO_INPUT_ENTITLEMENT}`);
+  else if (entitlements[AUDIO_INPUT_ENTITLEMENT] !== true)
+    problems.push(`${AUDIO_INPUT_ENTITLEMENT} is not true`);
+  if (CAMERA_ENTITLEMENT in entitlements) problems.push(`claims ${CAMERA_ENTITLEMENT}`);
+  return problems;
+}
+
+export function macUsageDescriptionProblems(xml: string | undefined): string[] {
+  const info = readPlistDict(xml);
+  if (info === "unreadable") return ["Info.plist unreadable"];
+  if (info === "invalid") return ["Info.plist is not a valid plist"];
+  const problems: string[] = [];
+  const microphone = info.NSMicrophoneUsageDescription;
+  if (typeof microphone !== "string" || !microphone.trim())
+    problems.push("missing NSMicrophoneUsageDescription");
+  if ("NSCameraUsageDescription" in info) problems.push("declares NSCameraUsageDescription");
+  return problems;
+}
 
 export const verifyMacPayload = Effect.fn("verifyMacPayload")(function* (
   root: string,
@@ -51,9 +96,22 @@ export const verifyMacPayload = Effect.fn("verifyMacPayload")(function* (
       problems.push(`${label}: ${output.trim() || `exit ${result.exitCode}`}`);
     else checks.push(`unsigned/unverified: ${label}`);
   });
+  const checkPlist = Effect.fn("checkMacPlist")(function* (
+    program: string,
+    args: readonly string[],
+    label: string,
+    findProblems: (xml: string | undefined) => string[],
+  ) {
+    const result = yield* runner(program, args);
+    const found = findProblems(result.exitCode === 0 ? result.stdout : undefined);
+    if (found.length === 0) checks.push(label);
+    else if (requireSigning) problems.push(`${label}: ${found.join("; ")}`);
+    else checks.push(`unsigned/unverified: ${label}`);
+  });
   for (const entry of entries) {
     if (entry.type === "directory" && entry.relative.endsWith(".app")) {
       apps++;
+      const outermost = !/\.app[\\/]/.test(entry.relative);
       yield* check(
         "codesign",
         ["--verify", "--deep", "--strict", entry.absolute],
@@ -66,11 +124,25 @@ export const verifyMacPayload = Effect.fn("verifyMacPayload")(function* (
       );
       // The notarization ticket is stapled to the outermost app; Electron's nested
       // helper apps are covered by it and never carry their own.
-      if (!/\.app[\\/]/.test(entry.relative))
+      if (outermost)
         yield* check(
           "xcrun",
           ["stapler", "validate", entry.absolute],
           `app staple ${entry.relative}`,
+        );
+      if (outermost || ELECTRON_HELPER_APP.test(entry.relative))
+        yield* checkPlist(
+          "codesign",
+          ["-d", "--entitlements", "-", "--xml", entry.absolute],
+          `app entitlements ${entry.relative}`,
+          macEntitlementProblems,
+        );
+      if (outermost)
+        yield* checkPlist(
+          "plutil",
+          ["-convert", "xml1", "-o", "-", `${entry.absolute}/Contents/Info.plist`],
+          `app usage descriptions ${entry.relative}`,
+          macUsageDescriptionProblems,
         );
     }
   }

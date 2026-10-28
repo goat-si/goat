@@ -38,7 +38,12 @@ import {
   runtimeManifestAssetName,
 } from "@goat/shared/runtimeManifest";
 import { finalizeMacosDmgs, rewriteDmgManifest } from "./finalize-macos-dmg.ts";
-import { verifyMacPayload, verifyReleaseDirectory } from "./verify-release-artifacts.ts";
+import {
+  macEntitlementProblems,
+  macUsageDescriptionProblems,
+  verifyMacPayload,
+  verifyReleaseDirectory,
+} from "./verify-release-artifacts.ts";
 import { mergeUpdateManifestFiles } from "./merge-update-manifests.ts";
 import { buildNpmLauncher } from "./build-npm-launcher.ts";
 import {
@@ -49,6 +54,22 @@ import {
 
 const version = "0.1.0-nightly.20261012.1";
 const bytes = (text: string) => new TextEncoder().encode(text);
+const plist = (body: string) =>
+  `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${body}</dict></plist>`;
+const signedEntitlements = plist(
+  "<key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.device.audio-input</key><true/>",
+);
+const signedInfo = plist(
+  "<key>NSMicrophoneUsageDescription</key><string>GOAT uses this Mac's microphone.</string>",
+);
+const signedMacOutput = (args: readonly string[]) =>
+  args[0] === "-dvv"
+    ? "TeamIdentifier=U9ATA49N28\n"
+    : args.includes("--entitlements")
+      ? signedEntitlements
+      : args[0] === "-convert"
+        ? signedInfo
+        : "";
 const testLayer = Layer.mergeAll(
   NodeServices.layer,
   Layer.succeed(HostProcess.Platform, "linux"),
@@ -491,7 +512,7 @@ describe("release payload filesystem verification", () => {
           expect(dry.checks.join("\n")).toContain("unsigned/unverified");
           expect(
             (yield* verifyMacPayload(root, "U9ATA49N28", true, unsigned)).problems,
-          ).toHaveLength(5);
+          ).toHaveLength(7);
           const wrongTeam: ReleaseCommandRunner = () =>
             Effect.succeed({ exitCode: 0, stdout: "", stderr: "TeamIdentifier=WRONGTEAM" });
           expect(
@@ -499,6 +520,77 @@ describe("release payload filesystem verification", () => {
           ).toContain("Mach-O team");
         }),
       ),
+  );
+  it("requires the microphone entitlement and no camera claim in a signed app", () => {
+    expect(macEntitlementProblems(signedEntitlements)).toEqual([]);
+    expect(macEntitlementProblems(undefined)).toEqual(["entitlements unreadable"]);
+    expect(macEntitlementProblems("")).toEqual(["entitlements unreadable"]);
+    expect(macEntitlementProblems("<plist><dict><key>")).toEqual([
+      "entitlements are not a valid plist",
+    ]);
+    expect(
+      macEntitlementProblems(plist("<key>com.apple.security.cs.allow-jit</key><true/>")),
+    ).toEqual(["missing com.apple.security.device.audio-input"]);
+    expect(
+      macEntitlementProblems(plist("<key>com.apple.security.device.audio-input</key><false/>")),
+    ).toEqual(["com.apple.security.device.audio-input is not true"]);
+    expect(
+      macEntitlementProblems(
+        plist("<key>com.apple.security.device.audio-input</key><string>true</string>"),
+      ),
+    ).toEqual(["com.apple.security.device.audio-input is not true"]);
+    expect(
+      macEntitlementProblems(
+        plist(
+          "<key>com.apple.security.device.audio-input</key><true/><key>com.apple.security.device.camera</key><false/>",
+        ),
+      ),
+    ).toEqual(["claims com.apple.security.device.camera"]);
+
+    expect(macUsageDescriptionProblems(signedInfo)).toEqual([]);
+    expect(macUsageDescriptionProblems(undefined)).toEqual(["Info.plist unreadable"]);
+    expect(
+      macUsageDescriptionProblems(
+        plist(
+          "<key>NSMicrophoneUsageDescription</key><string> </string><key>NSCameraUsageDescription</key><string>camera</string>",
+        ),
+      ),
+    ).toEqual(["missing NSMicrophoneUsageDescription", "declares NSCameraUsageDescription"]);
+  });
+  it.effect("fails a signed app whose Electron helper lacks the microphone entitlement", () =>
+    run(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-s1-test-" });
+        const helper = "GOAT.app/Contents/Frameworks/GOAT Helper (Renderer).app";
+        for (const executable of [
+          "GOAT.app/Contents/MacOS/goat",
+          `${helper}/Contents/MacOS/helper`,
+        ]) {
+          yield* fs.makeDirectory(path.dirname(path.join(root, executable)), { recursive: true });
+          yield* fs.writeFile(
+            path.join(root, executable),
+            new Uint8Array([0xcf, 0xfa, 0xed, 0xfe]),
+          );
+        }
+        const runner: ReleaseCommandRunner = (_program, args) =>
+          Effect.succeed({
+            exitCode: 0,
+            stdout:
+              args.includes("--entitlements") && args.at(-1)?.endsWith("(Renderer).app")
+                ? plist("<key>com.apple.security.cs.allow-jit</key><true/>")
+                : signedMacOutput(args),
+            stderr: "",
+          });
+        const result = yield* verifyMacPayload(root, "U9ATA49N28", true, runner);
+        expect(result.problems).toEqual([
+          `app entitlements ${helper}: missing com.apple.security.device.audio-input`,
+        ]);
+        expect(result.checks).toContain("app entitlements GOAT.app");
+        expect(result.checks).toContain("app usage descriptions GOAT.app");
+      }),
+    ),
   );
   it.effect("verifies Mach-O files inside every ASAR and embedded runtime archive", () =>
     run(
@@ -535,7 +627,7 @@ describe("release payload filesystem verification", () => {
               );
             return {
               exitCode: 0,
-              stdout: args[0] === "-dvv" ? "TeamIdentifier=U9ATA49N28\n" : "",
+              stdout: signedMacOutput(args),
               stderr: "",
             };
           });
