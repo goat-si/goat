@@ -794,7 +794,7 @@ const make = Effect.gen(function* () {
     updateFileChooserInterception(tab);
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
     page.on("popup", (popup) => void adoptPopup(tab, popup));
-    cdp.on("Page.windowOpen", () => tab.popups.opened(tab, Date.now()));
+    void AgentTabState.watchOpenings(cdp, tab).catch(constVoid);
     // Playwright cannot reload a crashed page, so it must leave the tab list.
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
@@ -1110,7 +1110,8 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = opener.popups.owner(opener, Date.now());
+    const targetId = await AgentTabState.targetIdOf(popup).catch(() => undefined);
+    const agentId = opener.popups.owner(targetId, opener, Date.now());
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;

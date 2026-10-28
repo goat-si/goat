@@ -5,7 +5,7 @@
  * @module agentTabState
  */
 import { closedPopupMessage, type PreviewViewportSetting } from "@goat/contracts";
-import type { CDPSession } from "playwright-core";
+import type { CDPSession, Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 /** How long after an agent's input a popup still counts as opened by it. */
@@ -40,36 +40,57 @@ export const popupOwner = (
     : null;
 };
 
-/** How long an opened window may take to become a popup tab before its owner is forgotten. */
-const POPUP_ARRIVAL_MS = 30_000;
+/** Openings remembered per tab; the oldest goes first once a tab opens more windows than this. */
+const OPENINGS_KEPT = 32;
 
 type Opener = Omit<Parameters<typeof popupOwner>[0], "lastAgentInput">;
 
 /**
  * Who a tab's popups belong to. Playwright reports a popup only after its first response, when
- * another agent may have acted on the opener, so the owner is decided when the opener announces
- * the window (CDP Page.windowOpen) and taken in order when the popup arrives.
+ * another agent may have acted on the opener, so the owner is decided when the window is created
+ * and looked up by its CDP target id when the popup arrives, in whatever order they arrive.
  */
 export class PopupAttribution {
   /** The agent whose input last reached the tab. */
   lastInput: AgentInput | undefined;
-  private readonly openings: Array<{ readonly agentId: string | null; readonly at: number }> = [];
+  private readonly openings = new Map<string, string | null>();
 
-  opened(opener: Opener, now: number) {
-    this.openings.push({
-      agentId: popupOwner({ ...opener, lastAgentInput: this.lastInput }, now),
-      at: now,
-    });
+  opened(targetId: string, opener: Opener, now: number) {
+    this.openings.set(targetId, popupOwner({ ...opener, lastAgentInput: this.lastInput }, now));
+    if (this.openings.size > OPENINGS_KEPT)
+      this.openings.delete(this.openings.keys().next().value ?? "");
   }
 
-  owner(opener: Opener, now: number) {
-    while (this.openings[0] && now - this.openings[0].at > POPUP_ARRIVAL_MS) this.openings.shift();
-    const opening = this.openings.shift();
-    return opening
-      ? opening.agentId
-      : popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
+  owner(targetId: string | undefined, opener: Opener, now: number) {
+    const opening = targetId === undefined ? undefined : this.openings.get(targetId);
+    if (opening === undefined)
+      return popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
+    this.openings.delete(targetId ?? "");
+    return opening;
   }
 }
+
+/** Records each window the tab's page opens, as Chromium creates it, before any later input. */
+export const watchOpenings = async (
+  cdp: Pick<CDPSession, "send" | "on">,
+  tab: Opener & { readonly popups: PopupAttribution },
+) => {
+  const self = (await cdp.send("Target.getTargetInfo")).targetInfo.targetId;
+  cdp.on("Target.targetCreated", ({ targetInfo }) => {
+    if (targetInfo.openerId === self) tab.popups.opened(targetInfo.targetId, tab, Date.now());
+  });
+  await cdp.send("Target.setDiscoverTargets", { discover: true });
+};
+
+/** A popup page's CDP target id, which its opening was recorded under. */
+export const targetIdOf = async (popup: Page) => {
+  const session = await popup.context().newCDPSession(popup);
+  try {
+    return (await session.send("Target.getTargetInfo")).targetInfo.targetId;
+  } finally {
+    void session.detach().catch(() => undefined);
+  }
+};
 
 type Size = { readonly width: number; readonly height: number };
 

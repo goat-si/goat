@@ -90,17 +90,17 @@ it("points a closed popup's caller back to its opener, without choosing it for t
   expect(closed.notFound("thread", "tab_b", new Set(["thread\u0000tab_a"])).detail).toBeUndefined();
 });
 
-it("gives a slow popup to the agent whose click opened it, though another agent acted since", () => {
+it("gives each popup to the agent whose input opened it, in whatever order popups arrive", () => {
   const popups = new PopupAttribution();
   const opener = { control: { agentId: null, generation: 0 }, agentOperating: true };
   popups.lastInput = { agentId: "agent-a", at: 1_000, generation: 0 };
-  popups.opened(opener, 1_000);
-  // The popup's first response is slow; agent B acts on the opener before it arrives.
-  popups.lastInput = { agentId: "agent-b", at: 1_500, generation: 0 };
-  expect(popups.owner(opener, 1_600)).toBe("agent-a");
-  // A popup with no announced opening falls back to the latest input.
-  expect(popups.owner(opener, 1_700)).toBe("agent-b");
-  // An opening that never became a popup is forgotten.
-  popups.opened(opener, 2_000);
-  expect(popups.owner({ ...opener, agentOperating: false }, 2_000 + 60_000)).toBeNull();
+  popups.opened("slow", opener, 1_000);
+  popups.lastInput = { agentId: "agent-b", at: 1_100, generation: 0 };
+  popups.opened("fast", opener, 1_100);
+  // B's popup answers first; A's arrives a minute later, after B acted again.
+  expect(popups.owner("fast", opener, 1_200)).toBe("agent-b");
+  expect(popups.owner("slow", { ...opener, agentOperating: false }, 61_000)).toBe("agent-a");
+  // A popup with no recorded opening falls back to the latest input, if it is recent.
+  expect(popups.owner("unknown", opener, 61_000)).toBe("agent-b");
+  expect(popups.owner(undefined, { ...opener, agentOperating: false }, 61_000)).toBeNull();
 });
