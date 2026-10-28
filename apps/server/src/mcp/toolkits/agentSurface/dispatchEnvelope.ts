@@ -7,7 +7,7 @@ import {
   fromToolResult,
 } from "@goat/contracts/agentSurface/envelope";
 import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
-import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { isDeduplicatedCall, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -88,10 +88,9 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
   host?: string,
 ) {
   const captured = yield* Ref.make<unknown>(undefined);
-  // Only a keyed write that carries a key is deduplicated; ToolAdmission holds the key.
+  // A key ToolAdmission reserves or the write's own store deduplicates makes a repeat safe.
   const entry = resolveAgentSurfaceEntry(name);
-  const deduplicated =
-    entry !== undefined && isKeyedWrite(entry) && typeof args.clientRequestId === "string";
+  const deduplicated = entry !== undefined && isDeduplicatedCall(entry, args);
   const context: CallContext = { effect, deduplicated, pathOf };
   return yield* dispatch.call(name, args).pipe(
     Effect.provideService(McpToolAccess.CallFailureCapture, {

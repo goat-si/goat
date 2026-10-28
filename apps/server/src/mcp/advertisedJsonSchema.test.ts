@@ -106,3 +106,69 @@ it("drops JSON noise, merges tagged unions, and preserves optional and required 
     required: ["beforeRunId", "every"],
   });
 });
+
+it("keeps a merged tagged union closed only when every branch refuses extra keys", () => {
+  const branch = (kind: string, extra: Record<string, unknown>, closed: boolean) => ({
+    type: "object",
+    properties: { kind: { type: "string", enum: [kind] }, ...extra },
+    required: ["kind"],
+    ...(closed ? { additionalProperties: false } : {}),
+  });
+  // The memory scope shape: a closed tagged union nested in a closed tagged union.
+  const projectKey = {
+    anyOf: [
+      branch("repository", { groupingKey: { type: "string" } }, true),
+      branch("explicit", { sharedProjectId: { type: "string" } }, true),
+    ],
+  };
+  const tool = Tool.dynamic("example", {
+    description: "Example",
+    parameters: {
+      type: "object",
+      properties: {
+        scope: {
+          anyOf: [branch("user", {}, true), branch("project", { projectKey }, true)],
+        },
+        nullable: { anyOf: [branch("a", {}, true), branch("b", {}, true), { type: "null" }] },
+        mixed: { anyOf: [branch("a", {}, true), branch("b", {}, false)] },
+        open: { anyOf: [branch("a", {}, false), branch("b", {}, false)] },
+      },
+      additionalProperties: false,
+    },
+  });
+  const tag = (...kinds: Array<string>) => ({ type: "string", enum: kinds });
+
+  expect(advertisedJsonSchema(tool).properties).toEqual({
+    scope: {
+      type: "object",
+      properties: {
+        kind: tag("user", "project"),
+        projectKey: {
+          type: "object",
+          properties: {
+            kind: tag("repository", "explicit"),
+            groupingKey: { type: "string" },
+            sharedProjectId: { type: "string" },
+          },
+          required: ["kind"],
+          additionalProperties: false,
+        },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+    },
+    nullable: {
+      anyOf: [
+        {
+          type: "object",
+          properties: { kind: tag("a", "b") },
+          required: ["kind"],
+          additionalProperties: false,
+        },
+        { type: "null" },
+      ],
+    },
+    mixed: { anyOf: [branch("a", {}, true), branch("b", {}, false)] },
+    open: { type: "object", properties: { kind: tag("a", "b") }, required: ["kind"] },
+  });
+});

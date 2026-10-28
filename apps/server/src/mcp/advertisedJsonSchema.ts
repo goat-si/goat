@@ -28,7 +28,10 @@ const tagOf = (branch: JsonObject, key: string): Json => {
     : undefined;
 };
 
-/** One object for a tagged union of objects: each property once, the tag listing every value. */
+/**
+ * One object for a tagged union of objects: each property once, the tag listing every value.
+ * It stays closed when every branch is; a union mixing closed and open branches is left alone.
+ */
 const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefined => {
   if (branches.length < 2) return undefined;
   const objects = branches.filter(
@@ -39,6 +42,8 @@ const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefin
       Predicate.isObject(branch.properties),
   );
   if (objects.length !== branches.length) return undefined;
+  const closed = objects.filter((object) => object.additionalProperties === false).length;
+  if (closed !== 0 && closed !== objects.length) return undefined;
   const tag = Object.keys(objects[0]?.properties ?? {}).find((key) => {
     const values = objects.map((object) => tagOf(object, key));
     return (
@@ -69,7 +74,12 @@ const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefin
   const requiredByAll = first.filter(
     (name) => name !== tag && others.every((required) => required.includes(name)),
   );
-  return { type: "object", properties, required: [tag, ...requiredByAll] };
+  return {
+    type: "object",
+    properties,
+    required: [tag, ...requiredByAll],
+    ...(closed === 0 ? {} : { additionalProperties: false }),
+  };
 };
 
 const compact = (schema: Json): Json => {

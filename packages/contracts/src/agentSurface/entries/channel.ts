@@ -18,6 +18,7 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "domain",
     idempotencyReason:
       "clientRequestId is required and is the inbound message's key in the channel ledger, which ingests each message once.",
     annotations: {

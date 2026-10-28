@@ -37,6 +37,15 @@ it("renders a byte-identical audit when every line of every cited file moves (#1
   expect(after.page).toBe(before.page);
 });
 
+it("refuses to measure a served catalog that lists a tool twice or leaves one out", async () => {
+  const { servedInputFor, servedInputSchemas } = await import("./inventory.ts");
+  const tool = { name: "goat_probe", inputSchema: { type: "object" } };
+  expect(() => servedInputSchemas([tool, tool])).toThrow("lists goat_probe twice");
+  expect(() => servedInputFor(servedInputSchemas([tool]), "goat_missing")).toThrow(
+    "has no tool goat_missing",
+  );
+});
+
 it("accepts documented CLI dispatch paths and boolean negation without masking invalid flags", async () => {
   shifted.on = false;
   vi.resetModules();

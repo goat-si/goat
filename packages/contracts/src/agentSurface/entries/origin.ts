@@ -12,6 +12,7 @@ export const originEntries = {
       "Send progress, a result, failure, or a need for human input to this thread's remote origin or local launcher. Only needs_input wakes a local launcher; other reports wait for its next turn. The summary is data; a completed report is a claim and does not stop the run. Retry with the same clientRequestId.",
     guide:
       "A thread launched from another machine reports to that origin. A thread launched by a thread on this machine through goat_thread_launch or goat_task_create has no origin binding; its report goes to the launcher and the result says delivery: launcher. For local launcher delivery, needs_input wakes the launcher; other reports reach its next turn. A thread nobody launched gets thread_not_found.\n\nUse status progress, completed, failed or needs_input. Keep summary within 4000 characters. Reporting completed does not settle or stop the provider run.\n\nWith clientRequestId, a repeat of the same report returns its first receipt and never reports twice, and the same key with another report is refused. goat_origin_report_receipt reads a keyed report's receipt, also after the origin collected it.",
+    idempotency: "domain",
     idempotencyReason:
       "Stores clientRequestId as a receipt in the same transaction as the origin's report row or the launcher's inbox entry, and derives a launcher wake's command id from it, so a repeat returns the first receipt and sends a recorded wake at most once; another report under the key is refused.",
     effect: "write",

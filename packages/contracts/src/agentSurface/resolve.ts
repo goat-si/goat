@@ -37,8 +37,24 @@ export const resolveAgentSurfaceEntry = (
   pathOrName: string,
 ): AgentSurfaceRegistryEntry | undefined => byName.get(pathOrName);
 
-/** Whether GOAT deduplicates this write by clientRequestId (docs/internals/agent-surface.md#idempotency). */
+/** Whether ToolAdmission reserves this write's clientRequestId (docs/internals/agent-surface.md#idempotency). */
 export const isKeyedWrite = (entry: AgentSurfaceEntry) => entry.idempotency === "key";
+
+/** Whether a repeat with the same clientRequestId can be deduplicated, by ToolAdmission or the write's own store. */
+export const deduplicatesClientRequestId = (entry: AgentSurfaceEntry) =>
+  entry.idempotency === "key" || entry.idempotency === "domain";
+
+// null and false read as omitted: optional ids decode null to absent, and stopCascade defaults false.
+const isSet = (value: unknown) => value !== undefined && value !== null && value !== false;
+
+/** Whether this call's clientRequestId deduplicates it, so a transient failure is safe to repeat. */
+export const isDeduplicatedCall = (
+  entry: AgentSurfaceEntry,
+  args: Readonly<Record<string, unknown>>,
+) =>
+  typeof args.clientRequestId === "string" &&
+  deduplicatesClientRequestId(entry) &&
+  !(entry.keyIgnoredWith ?? []).some((name) => isSet(args[name]));
 
 /**
  * Shipped tool names mapped to the name /mcp lists the tool under. A tools/call by one of them

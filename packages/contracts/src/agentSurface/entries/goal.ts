@@ -17,8 +17,10 @@ export const goalEntries = {
     requires: "either",
     dryRun: "supported",
     humanSteps: [],
+    idempotency: "domain",
+    keyIgnoredWith: ["id"],
     idempotencyReason:
-      "A create stores clientRequestId with the goal under a unique owner and key, so a retried create returns that goal; an update sets the spec, so repeating it changes nothing.",
+      "A create stores clientRequestId with the goal under a unique owner and key, so a retried create returns that goal. An update with id ignores the key: it re-reads generation and sets the spec, so a repeat can overwrite a change made in between unless expectedGeneration is passed.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
   "goal.get": entry({

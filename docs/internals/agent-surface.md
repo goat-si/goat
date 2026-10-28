@@ -168,12 +168,12 @@ Every other write records an `idempotencyReason` in the registry instead, and
 [idempotency.test.ts](../../packages/contracts/src/agentSurface/idempotency.test.ts)
 fails a write that has neither. A keyed write's reconcile read must be a
 registered read, host-routable when the write is. Writes that deduplicate in
-their own domain keep that store on purpose. Thread send, interrupt, retry and
-update, thread create-many, task create and cancel, review findings and
-schedule create turn the key into a stable orchestration command id: its
-receipt commits in the same transaction as the command, which the separate
-reservation statement cannot, and lives longer than 24 hours. Routed thread
-writes forward the key, so the host that runs them deduplicates it there. Goal
+their own domain keep that store on purpose and declare `idempotency: "domain"`,
+so `goat_call` treats a transient failure of a call that carried the key as
+safe to repeat. Thread send, interrupt, retry and update, thread create-many,
+task create and review findings turn the key into a stable orchestration
+command id: its receipt commits in the same transaction as the command, which
+the separate reservation statement cannot, and lives longer than 24 hours. Goal
 apply stores the key with the goal it creates, channel ingest uses it as the
 message key in the channel ledger, and a secret request's key is how a later
 call collects the answer. An origin report stores the key as a receipt with
@@ -181,6 +181,14 @@ its report row or the launcher's inbox entry, and derives a launcher wake's
 command id from it, so the receipt outlives the origin acknowledging the
 report. Moving these onto the reservation would add a second,
 weaker record of the same request.
+
+`keyIgnoredWith` names the arguments that take a call outside that store. A
+routed thread write (`host`) forwards the key, but the destination keys its
+receipt by this machine's dispatch session, which renews, so a routed repeat
+can run again. `stopCascade: true` re-reads delegated children on every call,
+and a goal update (`id`) ignores the key. Schedule create and task cancel keep
+only a reason: the first upserts its row with the repeated arguments, the
+second re-reads the child's tasks, so neither holds a repeat to one effect.
 
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
