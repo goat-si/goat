@@ -205,7 +205,9 @@ const INSTALL = `(() => {
   const onFocus = (event) => {
     const at = event.composedPath()[0];
     if (target !== null && within(target, at)) return;
-    if (related(event)) note("focus");
+    // A label hands focus to its control after the click's dispatch, outside the label.
+    const label = target !== null && target.closest ? target.closest("label") : null;
+    if (related(event) || (label !== null && label.control === at)) note("focus");
   };
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
