@@ -5,6 +5,7 @@ import * as SharedObservability from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
 import * as OtlpExporter from "effect/observability/OtlpExporter";
@@ -17,6 +18,8 @@ import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.t
 import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 import * as LogRedaction from "./LogRedaction.ts";
+import * as Metrics from "./Metrics.ts";
+import { keepLocalSqlSpan } from "./tracePolicy.ts";
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
@@ -44,6 +47,11 @@ export const layer = Layer.unwrap(
           maxBytes: config.traceMaxBytes,
           maxFiles: config.traceMaxFiles,
           batchWindowMs: config.traceBatchWindowMs,
+          onDrop: (reason, count) =>
+            Metric.update(
+              Metric.withAttributes(Metrics.serverTraceDroppedRecords, { reason }),
+              count,
+            ),
           onFlush: (stats) =>
             attribution.record({
               component: "server-trace",
@@ -71,6 +79,10 @@ export const layer = Layer.unwrap(
           sink,
           ...(delegate ? { delegate } : {}),
           redactCause: LogRedaction.redactCause,
+          shouldRecord:
+            config.traceMinLevel === "Debug" || config.traceMinLevel === "Trace"
+              ? () => true
+              : keepLocalSqlSpan,
         });
 
         return Layer.mergeAll(
