@@ -651,33 +651,51 @@ describe("GOAT Bot sessions", () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
         yield* setupBot;
+        const ledger = yield* ChannelLedger.ChannelLedger;
         const a = yield* ask("look: task a", "y1");
         const thread = a.worker!.threadId;
-        harness.world.addRun(ThreadId.make("thread:cloud"), MessageId.make("msg:cloud"));
-        harness.world.cloudTasks.set("thread:cloud", "running");
+        for (const [childThread, status] of [
+          ["thread:cloud", "running"],
+          ["thread:cloud-done", "completed"],
+        ] as const) {
+          harness.world.addRun(ThreadId.make(childThread), MessageId.make("msg:" + childThread));
+          harness.world.cloudTasks.set(childThread, status);
+        }
+        harness.world.addRun(ThreadId.make("thread:unreadable"), MessageId.make("msg:unreadable"));
+        harness.world.recordFailures.add("thread:unreadable");
+        const child = (id: string, childThreadId: string, status: string) => ({
+          id,
+          runId: a.worker!.runId,
+          origin: "app_owned",
+          childThreadId,
+          status,
+          completionDelivery: { state: "pending" },
+        });
         harness.world.subagents.set(thread, [
-          {
-            id: "node:done",
-            runId: a.worker!.runId,
-            origin: "app_owned",
-            childThreadId: "thread:done",
-            status: "completed",
-            completionDelivery: { state: "pending" },
-          },
-          {
-            id: "node:cloud",
-            runId: a.worker!.runId,
-            origin: "app_owned",
-            childThreadId: "thread:cloud",
-            status: "running",
-            completionDelivery: { state: "pending" },
-          },
+          child("node:done", "thread:done", "completed"),
+          child("node:cloud", "thread:cloud", "running"),
+          child("node:cloud-done", "thread:cloud-done", "completed"),
+          child("node:unreadable", "thread:unreadable", "completed"),
         ] as never);
+        const disposed = () =>
+          [
+            ...new Set(
+              harness.world.commands.flatMap((command) =>
+                command.type === "delegated_task.completion-delivery.dispose"
+                  ? [command.taskId]
+                  : [],
+              ),
+            ),
+          ].toSorted();
         yield* ask("stop:" + a.taskId, "y2");
-        const disposed = harness.world.commands.flatMap((command) =>
-          command.type === "delegated_task.completion-delivery.dispose" ? [command.taskId] : [],
-        );
-        assert.deepStrictEqual([...new Set(disposed)], ["node:done"]);
+        // A recorded cloud task keeps its promised result, finished or not; an unreadable child
+        // keeps the stop pending instead of guessing.
+        assert.deepStrictEqual(disposed(), ["node:done"]);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+        harness.world.recordFailures.delete("thread:unreadable");
+        yield* settle;
+        assert.deepStrictEqual(disposed(), ["node:done", "node:unreadable"]);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
       }).pipe(Effect.provide(harness.layer));
     },
   );

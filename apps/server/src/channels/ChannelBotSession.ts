@@ -852,25 +852,34 @@ const make = Effect.gen(function* () {
           .pipe(Effect.result);
         if (cancelled._tag === "Failure") retry = true;
       }
-      // A wake owed to a stopped task would restart it; drop each one, live child or not, except
-      // a cloud task still finishing, whose promised result the observer records (task_cancel's rule).
+      // A wake owed to a stopped task would restart it; drop each one, live child or not. A cloud
+      // task keeps its promised result for the observer to record (task_cancel's rule), and an
+      // unreadable child is decided on a later pass rather than guessed.
       for (const child of owned) {
         const state = child.completionDelivery?.state;
         if (state !== "pending" && state !== "claimed") continue;
-        const cloud =
+        const cloud: boolean | "unknown" =
           child.childThreadId === null
             ? false
-            : yield* threads.getThreadRecords(child.childThreadId, ["providerThreads"]).pipe(
-                Effect.map((records) =>
-                  records.providerThreads.some(
-                    (provider) =>
-                      provider.cloudTask?.status === "running" ||
-                      provider.cloudTask?.status === "submitting",
+            : yield* threads
+                .getThreadRecords(child.childThreadId, ["runs", "providerThreads"])
+                .pipe(
+                  Effect.map((records) => {
+                    const run =
+                      ThreadManagement.latestActiveRun(records) ??
+                      ThreadManagement.latestRun(records);
+                    return (
+                      records.providerThreads.find(
+                        (provider) => provider.id === run?.providerThreadId,
+                      )?.cloudTask !== undefined
+                    );
+                  }),
+                  Effect.catch((cause) =>
+                    Effect.succeed(isThreadMissing(cause) ? false : ("unknown" as const)),
                   ),
-                ),
-                Effect.orElseSucceed(() => false),
-              );
-        if (cloud) continue;
+                );
+        if (cloud === "unknown") retry = true;
+        if (cloud !== false) continue;
         const disposed = yield* threads
           .dispatch({
             type: "delegated_task.completion-delivery.dispose",

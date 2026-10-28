@@ -155,6 +155,8 @@ class WorkerWorld {
   failLaunchAfterAccept = false;
   /** Runs after each command a worker thread accepts, to model work landing meanwhile. */
   afterCommand: (command: OrchestrationV2ServerCommand) => void = () => {};
+  /** Worker threads whose records cannot be read right now, as a failed projection read. */
+  readonly recordFailures = new Set<string>();
 
   addRun(threadId: ThreadId, userMessageId: MessageId) {
     const existing = this.runs.get(threadId) ?? [];
@@ -393,6 +395,13 @@ export function makeHarness(
         getThreadRecords: ((threadId: ThreadId, fields: never, filter: never) => {
           if (!isWorker(threadId)) return real.getThreadRecords(threadId, fields, filter);
           const runs = world.runs.get(threadId) ?? [];
+          if (world.recordFailures.has(threadId))
+            return Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: CommandId.make("records-read"),
+                commandType: "thread.records.read",
+              }),
+            ) as never;
           const messageRunIds = (
             filter as { readonly messageRunIds?: ReadonlyArray<string> } | undefined
           )?.messageRunIds;
@@ -420,7 +429,8 @@ export function makeHarness(
                   ? [{ pendingBackgroundTasks: [{ taskId: "background" }] }]
                   : []),
                 ...(world.cloudTasks.has(threadId)
-                  ? [{ cloudTask: { status: world.cloudTasks.get(threadId) } }]
+                  ? // The scripted runs name no provider thread, so the cloud one has no id either.
+                    [{ id: null, cloudTask: { status: world.cloudTasks.get(threadId) } }]
                   : []),
               ],
               subagents: world.subagents.get(threadId) ?? [],
