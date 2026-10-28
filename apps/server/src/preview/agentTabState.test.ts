@@ -3,6 +3,7 @@ import {
   ClosedPopups,
   fillNote,
   popupOwner,
+  PopupAttribution,
   POPUP_ATTRIBUTION_MS,
   renderedViewport,
   tabChoice,
@@ -87,4 +88,19 @@ it("points a closed popup's caller back to its opener, without choosing it for t
   closed.record("thread", "tab_c", "tab_a");
   closed.record("thread", "tab_d", "tab_a");
   expect(closed.notFound("thread", "tab_b", new Set(["thread\u0000tab_a"])).detail).toBeUndefined();
+});
+
+it("gives a slow popup to the agent whose click opened it, though another agent acted since", () => {
+  const popups = new PopupAttribution();
+  const opener = { control: { agentId: null, generation: 0 }, agentOperating: true };
+  popups.lastInput = { agentId: "agent-a", at: 1_000, generation: 0 };
+  popups.opened(opener, 1_000);
+  // The popup's first response is slow; agent B acts on the opener before it arrives.
+  popups.lastInput = { agentId: "agent-b", at: 1_500, generation: 0 };
+  expect(popups.owner(opener, 1_600)).toBe("agent-a");
+  // A popup with no announced opening falls back to the latest input.
+  expect(popups.owner(opener, 1_700)).toBe("agent-b");
+  // An opening that never became a popup is forgotten.
+  popups.opened(opener, 2_000);
+  expect(popups.owner({ ...opener, agentOperating: false }, 2_000 + 60_000)).toBeNull();
 });

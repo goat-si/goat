@@ -322,8 +322,8 @@ interface ServerTab {
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
   agentOperating: boolean;
-  /** The agent whose input last reached this tab; popups it opens are its. */
-  lastAgentInput?: AgentTabState.AgentInput;
+  /** Whose input last reached this tab, and so whose popups it opens. */
+  readonly popups: AgentTabState.PopupAttribution;
   fileChooserIntercepted: boolean;
   readonly onFileChooser: (chooser: FileChooser) => void;
 
@@ -698,6 +698,7 @@ const make = Effect.gen(function* () {
       actionTimeline: [],
       control,
       agentOperating: false,
+      popups: new AgentTabState.PopupAttribution(),
       fileChooserIntercepted: false,
       onFileChooser: (chooser) => void offerFileChooser(tab, chooser),
       isolatedContext,
@@ -793,6 +794,7 @@ const make = Effect.gen(function* () {
     updateFileChooserInterception(tab);
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
     page.on("popup", (popup) => void adoptPopup(tab, popup));
+    cdp.on("Page.windowOpen", () => tab.popups.opened(tab, Date.now()));
     // Playwright cannot reload a crashed page, so it must leave the tab list.
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
@@ -1108,7 +1110,7 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = AgentTabState.popupOwner(opener, Date.now());
+    const agentId = opener.popups.owner(opener, Date.now());
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;
@@ -1850,13 +1852,13 @@ const make = Effect.gen(function* () {
         const generation = tab.control.generation;
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
         if (tab.agentOperating)
-          tab.lastAgentInput = { agentId: agentSessionId, at: Date.now(), generation };
+          tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(tab, request, deadlineMs, signal);
         } finally {
           if (tab.agentOperating)
-            tab.lastAgentInput = { agentId: agentSessionId, at: Date.now(), generation };
+            tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);

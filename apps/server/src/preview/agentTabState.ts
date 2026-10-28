@@ -40,6 +40,37 @@ export const popupOwner = (
     : null;
 };
 
+/** How long an opened window may take to become a popup tab before its owner is forgotten. */
+const POPUP_ARRIVAL_MS = 30_000;
+
+type Opener = Omit<Parameters<typeof popupOwner>[0], "lastAgentInput">;
+
+/**
+ * Who a tab's popups belong to. Playwright reports a popup only after its first response, when
+ * another agent may have acted on the opener, so the owner is decided when the opener announces
+ * the window (CDP Page.windowOpen) and taken in order when the popup arrives.
+ */
+export class PopupAttribution {
+  /** The agent whose input last reached the tab. */
+  lastInput: AgentInput | undefined;
+  private readonly openings: Array<{ readonly agentId: string | null; readonly at: number }> = [];
+
+  opened(opener: Opener, now: number) {
+    this.openings.push({
+      agentId: popupOwner({ ...opener, lastAgentInput: this.lastInput }, now),
+      at: now,
+    });
+  }
+
+  owner(opener: Opener, now: number) {
+    while (this.openings[0] && now - this.openings[0].at > POPUP_ARRIVAL_MS) this.openings.shift();
+    const opening = this.openings.shift();
+    return opening
+      ? opening.agentId
+      : popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
+  }
+}
+
 type Size = { readonly width: number; readonly height: number };
 
 /** A desktop page's CSS layout viewport, which Playwright's viewportSize() does not know. */
