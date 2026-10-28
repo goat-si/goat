@@ -1,3 +1,4 @@
+export const CLOUD_WITHDRAWAL_FENCE = "cloud-connect-withdrawal-pending";
 import {
   RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,

@@ -23,6 +23,12 @@ bundled server. `apps/mobile` is a separate React Native app. Shared client beha
 User workflows stay in `docs/user/`. The longer architectural constraints stay in
 `docs/internals/overview.md`. This folder is the current-shape map.
 
+`infra/relay` owns the separate managed Connect trust boundary. PostgreSQL records account epochs,
+ownership, lifecycle progress, and permanent endpoint retirement. Strict hourly budgets live in
+`infra/relay/src/accounts/AccountRateLimitObject.ts`; held-hook Durable Objects authorize autonomous
+delivery against current relay state. The [Connect architecture](../docs/internals/goat-connect.md#account-trust-and-endpoint-retirement)
+explains why endpoint identity survives allocation replacement.
+
 ## Product boundary
 
 The command the repository ships is `goat`. `apps/server/src/binCli.ts` builds

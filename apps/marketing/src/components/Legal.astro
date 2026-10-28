@@ -51,6 +51,11 @@ const policyLinks = (["privacy", "terms", "security"] as const).map((key) => ({
       }
     </nav>
 
+    <section aria-labelledby="account-deletion">
+      <h2 id="account-deletion">{t.accountDeletion.title}</h2>
+      <p><a class="text-link" href={localePath(locale, "/account/delete/")}>{t.accountDeletion.action}</a></p>
+    </section>
+
     <section aria-labelledby="operator">
       <h2 id="operator">{l.operatorTitle}</h2>
       <p>{l.operator}</p>

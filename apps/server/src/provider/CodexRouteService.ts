@@ -370,6 +370,7 @@ export class CodexRouteService extends Context.Service<
       input: { readonly mutation: ProviderInstanceMutation; readonly patch?: ServerSettingsPatch },
       caller: { readonly kind: "client"; readonly sessionId: AuthSessionId },
       approval?: ApprovedInstancePrecondition,
+      authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
     readonly reserveUse: (
       id: ProviderInstanceId,
@@ -406,9 +407,10 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
-    mutateProviderInstance: (input, caller, approval) =>
+    mutateProviderInstance: (input, caller, approval, authorizeAtCommit) =>
       Effect.gen(function* () {
         const authorize = Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
           const active = yield* sessions
             .listActive()
             .pipe(
@@ -424,6 +426,7 @@ const make = Effect.gen(function* () {
             (approval && !permissions.includes("orchestration:operate"))
           )
             return yield* RouteSettingsError.explained("This client cannot manage providers.");
+          if (authorizeAtCommit) yield* authorizeAtCommit;
         });
         yield* authorize;
         if (

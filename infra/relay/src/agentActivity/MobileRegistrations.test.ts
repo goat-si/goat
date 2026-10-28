@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import type {
   RelayAgentActivityState,
   RelayDeviceRegistrationRequest,
@@ -21,6 +22,7 @@ import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
 import * as FcmDeliveries from "./FcmDeliveries.ts";
 
 const layerPublisher = AgentActivityPublisher.layer.pipe(
+  Layer.provide(policyUnitLayer),
   Layer.provide(
     Layer.succeed(FcmDeliveries.FcmDeliveries, {
       enqueue: () => Effect.succeed(null),
@@ -160,13 +162,20 @@ function layerRegistrationReplay(input: {
   readonly queuedJobs: Array<SignedApnsDeliveryJob>;
 }) {
   return MobileRegistrations.layer.pipe(
+    Layer.provide(policyUnitLayer),
     Layer.provide(layerPublisher),
     Layer.provide(
       ApnsDeliveries.layer.pipe(
+        Layer.provide(policyUnitLayer),
         Layer.provide(ApnsClient.layer.pipe(Layer.provide(ApnsProviderTokens.layer))),
       ),
     ),
-    Layer.provide(ApnsDeliveryQueue.layer.pipe(Layer.provide(NodeCryptoLayer.layer))),
+    Layer.provide(
+      ApnsDeliveryQueue.layer.pipe(
+        Layer.provide(policyUnitLayer),
+        Layer.provide(NodeCryptoLayer.layer),
+      ),
+    ),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(Devices.Devices, input.devices),
@@ -212,6 +221,7 @@ describe("MobileRegistrations", () => {
       }).pipe(
         Effect.provide(
           MobileRegistrations.layer.pipe(
+            Layer.provide(policyUnitLayer),
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(Devices.Devices, makeDevices()),
@@ -261,6 +271,7 @@ describe("MobileRegistrations", () => {
         listTargets: () =>
           Effect.succeed([
             {
+              account_epoch: 1,
               user_id: "dev:alex",
               device_id: "device-1",
               platform: "ios",

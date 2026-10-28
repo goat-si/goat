@@ -1,15 +1,21 @@
-import { hubProxyNodePath } from "@goat/contracts";
+import { buildEnvironmentAuthHeaders } from "../state/environmentHttpAuth.ts";
+import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
+import { environmentEndpointUrl, hubProxyEndpointUrl } from "../environment/endpoint.ts";
 import { executeEnvironmentHttpRequest } from "../rpc/http.ts";
-import { ConnectionBlockedError, ConnectionTransientError } from "./model.ts";
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  ConnectionAttemptSuperseded,
+} from "./model.ts";
 import { mapRemoteEnvironmentError } from "./errors.ts";
 import type { HubProxyAuthorization } from "./hubProxyAuthSource.ts";
 
 const isConnectionBlockedError = Schema.is(ConnectionBlockedError);
 const isConnectionTransientError = Schema.is(ConnectionTransientError);
+const isSuperseded = Schema.is(ConnectionAttemptSuperseded);
 
 /**
  * The hub is up but cannot reach the node: asleep, off, or its SSH or runtime failing. That is the
@@ -28,11 +34,11 @@ export const hubProxyNodeUnavailable = (body: unknown): ConnectionTransientError
 };
 
 export const hubProxyHttpBaseUrl = (httpBaseUrl: string, nodeId: string): string =>
-  environmentEndpointUrl(httpBaseUrl, `${hubProxyNodePath(nodeId)}/`);
+  hubProxyEndpointUrl(httpBaseUrl, nodeId);
 
 const nodeUnavailableResult = (body: unknown) => {
   const offline = hubProxyNodeUnavailable(body);
-  return offline === undefined ? undefined : ({ offline } as const);
+  return offline === undefined ? undefined : ({ _tag: "Offline", error: offline } as const);
 };
 
 /**
@@ -51,7 +57,7 @@ export const hubProxyRefusal = (body: unknown): ConnectionBlockedError => {
     return new ConnectionBlockedError({
       reason: "permission",
       detail:
-        "This device was paired without hub access. Pair it again with goat pair --hub-proxy on the hub.",
+        "Enable GOAT Connect device access in the hub’s Settings → Hub, then sign out of GOAT Connect and sign back in. Paired clients can pair again with goat pair --hub-proxy.",
     });
   return new ConnectionBlockedError({
     reason: "permission",
@@ -62,45 +68,90 @@ export const hubProxyRefusal = (body: unknown): ConnectionBlockedError => {
   });
 };
 
-export const requestHubProxyJson = <A, E>(
+export const requestHubProxyJson = Effect.fn("HubProxy.requestJson")(function* <A, E>(
   auth: HubProxyAuthorization,
-  requestUrl: string,
+  nodeId: string,
+  route: string,
   decode: (input: unknown) => Effect.Effect<A, E>,
   method: "GET" | "POST" = "GET",
-) =>
-  executeEnvironmentHttpRequest(
-    requestUrl,
-    10_000,
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const headers =
-        auth.authorization?._tag === "Bearer"
-          ? { authorization: `Bearer ${auth.authorization.token}` }
-          : {};
-      const response = yield* client.execute(
-        HttpClientRequest.make(method)(requestUrl, { headers }),
+) {
+  return yield* Effect.gen(function* () {
+    let selected = auth.current === undefined ? auth : yield* auth.current();
+    let rejected = false;
+    for (;;) {
+      const actualUrl = environmentEndpointUrl(
+        hubProxyEndpointUrl(selected.httpBaseUrl, nodeId),
+        route,
       );
-      // Returned, not failed: the request wrapper turns every failure into a transport error.
-      if (response.status === 403)
-        return {
-          refused: yield* response.json.pipe(Effect.orElseSucceed((): unknown => null)),
-        } as const;
-      if (response.status === 503) {
-        const unavailable = nodeUnavailableResult(
-          yield* response.json.pipe(Effect.orElseSucceed((): unknown => null)),
-        );
-        if (unavailable !== undefined) return unavailable;
+      const result = yield* executeEnvironmentHttpRequest(
+        actualUrl,
+        10_000,
+        Effect.gen(function* () {
+          const client = yield* HttpClient.HttpClient;
+          const headers = yield* buildEnvironmentAuthHeaders(
+            selected.authorization,
+            method,
+            actualUrl,
+            Option.fromUndefinedOr(selected.signer),
+          );
+          const response = yield* client.execute(
+            HttpClientRequest.make(method)(actualUrl, { headers: { ...headers } }),
+          );
+          if (
+            response.status === 401 &&
+            selected.authorization?._tag === "Dpop" &&
+            auth.current !== undefined &&
+            !rejected
+          )
+            return { _tag: "Renew", token: selected.authorization.accessToken } as const;
+          // Returned, not failed: the request wrapper turns every failure into a transport error.
+          if (response.status === 403)
+            return {
+              _tag: "Refused",
+              body: yield* response.json.pipe(Effect.orElseSucceed((): unknown => null)),
+            } as const;
+          if (response.status === 503) {
+            const unavailable = nodeUnavailableResult(
+              yield* response.json.pipe(Effect.orElseSucceed((): unknown => null)),
+            );
+            if (unavailable !== undefined) return unavailable;
+          }
+          const ok = yield* HttpClientResponse.filterStatusOk(response);
+          return { _tag: "Value", value: yield* decode(yield* ok.json) } as const;
+        }),
+      ).pipe((request) =>
+        selected.authorization === null
+          ? request.pipe(
+              Effect.provideService(FetchHttpClient.RequestInit, { credentials: "include" }),
+            )
+          : request,
+      );
+      if (result._tag === "Renew" && auth.current !== undefined) {
+        selected = yield* auth.current(result.token);
+        rejected = true;
+        continue;
       }
-      const ok = yield* HttpClientResponse.filterStatusOk(response);
-      return { value: yield* decode(yield* ok.json) } as const;
-    }),
-  ).pipe(
-    Effect.flatMap((result): Effect.Effect<A, ConnectionBlockedError | ConnectionTransientError> =>
-      "refused" in result
-        ? Effect.fail(hubProxyRefusal(result.refused))
-        : "offline" in result
-          ? Effect.fail(result.offline)
-          : Effect.succeed(result.value),
+      return result;
+    }
+  }).pipe(
+    Effect.flatMap(
+      (result): Effect.Effect<A, ConnectionBlockedError | ConnectionTransientError> => {
+        switch (result._tag) {
+          case "Refused":
+            return Effect.fail(hubProxyRefusal(result.body));
+          case "Offline":
+            return Effect.fail(result.error);
+          case "Value":
+            return Effect.succeed(result.value);
+          case "Renew":
+            return Effect.fail(
+              new ConnectionBlockedError({
+                reason: "authentication",
+                detail: "The hub rejected authorization.",
+              }),
+            );
+        }
+      },
     ),
     (request) =>
       auth.authorization === null
@@ -109,7 +160,7 @@ export const requestHubProxyJson = <A, E>(
           )
         : request,
     Effect.mapError((error) =>
-      isConnectionBlockedError(error) || isConnectionTransientError(error)
+      isConnectionBlockedError(error) || isConnectionTransientError(error) || isSuperseded(error)
         ? error
         : error._tag === "RemoteEnvironmentAuthUndeclaredStatusError" &&
             (error.status === 401 || error.status === 403)
@@ -123,3 +174,4 @@ export const requestHubProxyJson = <A, E>(
           : mapRemoteEnvironmentError(error),
     ),
   );
+});

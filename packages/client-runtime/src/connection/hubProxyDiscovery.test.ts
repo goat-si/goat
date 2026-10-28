@@ -461,3 +461,25 @@ describe("hub proxy discovery coordinator", () => {
       }),
   );
 });
+
+it.effect("definitive permission loss removes only routes owned by that hub connection", () =>
+  Effect.gen(function* () {
+    const h = yield* makeRegistry;
+    const update = {
+      hubEnvironmentId: HUB,
+      hubConnectionId: "another-route",
+      hubLabel: "Hub",
+      nodes: [],
+      sessionScopes: [],
+    };
+    yield* watchHubProxyDiscovery(Stream.succeed(update)).pipe(
+      Effect.provideService(EnvironmentRegistry, h.registry),
+    );
+    expect(yield* Deferred.isDone(h.removed)).toBe(false);
+    yield* watchHubProxyDiscovery(Stream.succeed({ ...update, hubConnectionId: "primary" })).pipe(
+      Effect.provideService(EnvironmentRegistry, h.registry),
+    );
+    expect(yield* Deferred.isDone(h.removed)).toBe(true);
+    expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
+  }),
+);

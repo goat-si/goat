@@ -3,6 +3,7 @@ import { withBase } from "./paths";
 const REPOSITORY = "https://github.com/goat-si/goat";
 
 export const LINKS = {
+  deleteAccount: "https://app.trygoat.ai/account/delete",
   repository: REPOSITORY,
   guides: withBase("docs/user/"),
   contributing: `${REPOSITORY}/blob/dev/CONTRIBUTING.md`,

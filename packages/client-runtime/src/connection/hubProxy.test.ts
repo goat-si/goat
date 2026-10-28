@@ -1,3 +1,6 @@
+import { openHubProxySocket } from "./hubProxySocket.ts";
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { EnvironmentId, ExecutionEnvironmentDescriptor, hubProxyNodePath } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -28,7 +31,7 @@ import {
 } from "./routes.ts";
 import { environmentMcpUrl } from "./presentation.ts";
 import { reconcileHubProxyRoutes } from "./hubProxyDiscovery.ts";
-import { hubProxyNodeUnavailable, hubProxyRefusal } from "./hubProxyHttp.ts";
+import { hubProxyNodeUnavailable, hubProxyRefusal, requestHubProxyJson } from "./hubProxyHttp.ts";
 import { make as makeAuth } from "./hubProxyAuthSource.ts";
 import { ConnectionProfileStore } from "./profileStore.ts";
 import { ConnectionCredentialStore } from "./credentialStore.ts";
@@ -102,6 +105,70 @@ const withStores = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideService(ConnectionProfileStore, authStores.profile),
     Effect.provideService(ConnectionCredentialStore, authStores.credential),
   );
+
+it.effect.each([".well-known/goat/environment", "snapshot", "api/orchestration/shell"])(
+  "JSON %s signs the outgoing deployment prefix before and after rejected-token renewal",
+  (route) =>
+    Effect.gen(function* () {
+      const urls: string[] = [];
+      const proofs: Array<{ method: string; url: string; accessToken?: string }> = [];
+      const rejectedTokens: Array<string | undefined> = [];
+      const signer = ManagedRelayDpopSigner.of({
+        thumbprint: Effect.succeed("key"),
+        createProof: (input) =>
+          Effect.sync(() => {
+            proofs.push(input);
+            return "proof";
+          }),
+      });
+      const current = (rejected?: string) =>
+        Effect.sync(() => {
+          rejectedTokens.push(rejected);
+          return {
+            httpBaseUrl:
+              rejected === undefined ? "https://hub.test/base/" : "https://fresh.test/deployed/",
+            authorization: {
+              _tag: "Dpop" as const,
+              accessToken: rejected === undefined ? "old-token" : "new-token",
+              expiresAtEpochMs: 3600000,
+            },
+            signer,
+          };
+        });
+      const auth = {
+        httpBaseUrl: "https://hub.test/base/",
+        authorization: {
+          _tag: "Dpop" as const,
+          accessToken: "old-token",
+          expiresAtEpochMs: 3600000,
+        },
+        signer,
+        current,
+      };
+      const fetchFn: typeof fetch = async (url) => {
+        urls.push(String(url));
+        return urls.length === 1
+          ? Response.json({}, { status: 401 })
+          : Response.json({ value: "node" });
+      };
+      const result = yield* requestHubProxyJson(auth, NODE_ID, `/${route}`, (value) =>
+        Effect.succeed(value),
+      ).pipe(Effect.provide(layerRemoteHttpClient(fetchFn)));
+      expect(result).toEqual({ value: "node" });
+      expect(urls).toEqual([
+        `https://hub.test/base${hubProxyNodePath(NODE_ID)}/${route}`,
+        `https://fresh.test/deployed${hubProxyNodePath(NODE_ID)}/${route}`,
+      ]);
+      expect(proofs).toEqual(
+        urls.map((url, index) => ({
+          method: "GET",
+          url,
+          accessToken: index === 0 ? "old-token" : "new-token",
+        })),
+      );
+      expect(rejectedTokens).toEqual([undefined, "old-token"]);
+    }),
+);
 
 describe("hub proxy routes", () => {
   it("encodes node ids, ranks after SSH and before relay, and never learns or advertises MCP", () => {
@@ -363,3 +430,124 @@ describe("hubProxyNodeUnavailable", () => {
     expect(hubProxyNodeUnavailable(null)).toBeUndefined();
   });
 });
+
+it.effect(
+  "Connect proxy authorization belongs to the hub and keeps a verified direct address",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<
+        Parameters<RemoteEnvironmentAuthorization["Service"]["authorizeDpopHttp"]>[0]
+      > = [];
+      const remote = RemoteEnvironmentAuthorization.of({
+        authorizeBearer: () => Effect.die("unexpected bearer"),
+        authorizeDpop: () => Effect.die("unexpected socket"),
+        authorizeDpopHttp: (input) =>
+          Effect.sync(() => {
+            calls.push(input);
+            return {
+              environmentId: HUB,
+              label: "Hub",
+              httpBaseUrl: input.directEndpoint?.httpBaseUrl ?? "https://managed.test/prefix/",
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: "hub-token",
+                expiresAtEpochMs: 3600000,
+              },
+            };
+          }),
+      });
+      const signer = ManagedRelayDpopSigner.of({
+        thumbprint: Effect.succeed("key"),
+        createProof: () => Effect.succeed("proof"),
+      });
+      const source = yield* makeAuth.pipe(
+        Effect.provideService(ConnectionProfileStore, {
+          ...authStores.profile,
+          get: () =>
+            Effect.succeedSome(
+              new BearerConnectionProfile({ ...bearerProfile, authorization: "t3-connect" }),
+            ),
+        }),
+        Effect.provideService(ConnectionCredentialStore, {
+          ...authStores.credential,
+          get: () => Effect.die("Connect tokens must not enter the node credential store"),
+        }),
+        Effect.provideService(RemoteEnvironmentAuthorization, remote),
+        Effect.provideService(ManagedRelayDpopSigner, signer),
+      );
+      const direct = yield* source.resolve(profile);
+      expect(direct.httpBaseUrl).toBe(bearerProfile.httpBaseUrl);
+      expect(calls[0]).toEqual({
+        expectedEnvironmentId: HUB,
+        directEndpoint: { httpBaseUrl: bearerProfile.httpBaseUrl },
+      });
+      expect(direct.authorization).toMatchObject({
+        _tag: "Dpop",
+        hubProxyOwner: { environmentId: HUB, nodeId: NODE_ID, endpointMode: "direct" },
+      });
+      const relay = yield* source.resolve(
+        new HubProxyConnectionProfile({ ...profile, hubConnectionId: "relay" }),
+      );
+      expect(calls[1]).toEqual({ expectedEnvironmentId: HUB });
+      expect(relay.httpBaseUrl).toBe("https://managed.test/prefix/");
+    }),
+);
+
+it.effect(
+  "Connect socket renewal signs the refreshed node prefix and binds the upgrade proof to its RPC ticket",
+  () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const proofs: Array<{ method: string; url: string; accessToken?: string }> = [];
+      const signer = ManagedRelayDpopSigner.of({
+        thumbprint: Effect.succeed("key"),
+        createProof: (input) =>
+          Effect.sync(() => {
+            proofs.push(input);
+            return "proof";
+          }),
+      });
+      const current = (rejected?: string) =>
+        Effect.succeed({
+          httpBaseUrl:
+            rejected === undefined ? "https://hub.test/base/" : "https://fresh.test/deployed/",
+          authorization: {
+            _tag: "Dpop" as const,
+            accessToken: rejected === undefined ? "old-token" : "new-token",
+            expiresAtEpochMs: 3600000,
+          },
+          signer,
+        });
+      const auth = { ...(yield* current()), current };
+      const fetchFn: typeof fetch = async (url) => {
+        calls.push(String(url));
+        return calls.length === 1
+          ? Response.json(
+              {
+                _tag: "EnvironmentAuthInvalidError",
+                code: "auth_invalid",
+                reason: "invalid_credential",
+                traceId: "test",
+              },
+              { status: 401 },
+            )
+          : Response.json({ ticket: "bound-ticket", expiresAt: "2026-10-28T00:00:00.000Z" });
+      };
+      const socket = yield* openHubProxySocket(auth, NODE_ID, {
+        label: "GOAT Test",
+        deviceType: "mobile",
+      }).pipe(Effect.provide(layerRemoteHttpClient(fetchFn)));
+      expect(calls).toEqual([
+        `https://hub.test/base${hubProxyNodePath(NODE_ID)}/api/auth/websocket-ticket/rpc`,
+        `https://fresh.test/deployed${hubProxyNodePath(NODE_ID)}/api/auth/websocket-ticket/rpc`,
+      ]);
+      expect(proofs.map((proof) => proof.accessToken)).toEqual([
+        "old-token",
+        "new-token",
+        "bound-ticket",
+      ]);
+      expect(proofs.at(-1)?.url).toBe(`https://fresh.test/deployed${hubProxyNodePath(NODE_ID)}/ws`);
+      expect(socket.socketUrl).toContain("wsTicket=bound-ticket");
+      expect(socket.httpBaseUrl).toBe(`https://fresh.test/deployed${hubProxyNodePath(NODE_ID)}/`);
+    }),
+);

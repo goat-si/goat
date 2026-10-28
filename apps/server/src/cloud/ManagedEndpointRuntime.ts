@@ -1,3 +1,9 @@
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import {
+  probePublicEndpoint,
+  PUBLIC_PROBE_INTERVAL_MS,
+  nextProbeFailures,
+} from "./managedEndpointProbe.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@goat/contracts/relay";
 import * as RelayClient from "@goat/shared/relayClient";
 import * as Clock from "effect/Clock";
@@ -165,9 +171,11 @@ const stopConnector = (connector: ActiveConnector | null) =>
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const relayClient = yield* RelayClient.RelayClient;
-  const httpClient = HttpClient.withScope(yield* HttpClient.HttpClient);
+  const unscopedHttpClient = yield* HttpClient.HttpClient;
+  const httpClient = HttpClient.withScope(unscopedHttpClient);
   const activeRef = yield* Ref.make<ActiveConnector | null>(null);
   const desiredConfigRef = yield* Ref.make<RelayManagedEndpointRuntimeConfig | null>(null);
   const recoveryRequests = yield* Queue.sliding<RelayManagedEndpointRuntimeConfig>(1);
@@ -392,6 +400,8 @@ export const make = Effect.gen(function* () {
   const watchConnectorReadiness = Effect.fnUntraced(function* (connector: ActiveConnector) {
     const readyUrl = `http://${yield* Deferred.await(connector.metricsAddress)}/ready`;
     let notReadyChecks = 0;
+    let publicFailures = 0;
+    let nextPublicProbeAt = 0;
     let lastReady: boolean | null = null;
     while (true) {
       yield* Effect.sleep(CONNECTOR_READINESS_INTERVAL);
@@ -409,6 +419,24 @@ export const make = Effect.gen(function* () {
         lastReady = ready;
       }
       if (status.value === 200) {
+        const now = yield* Clock.currentTimeMillis;
+        if (now >= nextPublicProbeAt) {
+          nextPublicProbeAt = now + PUBLIC_PROBE_INTERVAL_MS;
+          const metricsUrl = `http://${yield* Deferred.await(connector.metricsAddress)}`;
+          const configuration = yield* readMetrics(`${metricsUrl}/config`, ConnectorConfigBody);
+          const hostname = configuration?.config.ingress?.find((rule) => rule.hostname)?.hostname;
+          if (hostname) {
+            const environmentId = yield* identity.getEnvironmentId;
+            const healthy = yield* probePublicEndpoint({ hostname, environmentId }).pipe(
+              Effect.provideService(HttpClient.HttpClient, unscopedHttpClient),
+            );
+            publicFailures = nextProbeFailures(publicFailures, healthy);
+            if (publicFailures >= 2) {
+              publicFailures = 0;
+              yield* Queue.offer(recoveryRequests, connector.config);
+            }
+          }
+        }
         notReadyChecks = 0;
         yield* Ref.set(notReadyChecksBeforeRestartRef, CONNECTOR_NOT_READY_CHECKS_BEFORE_RESTART);
         continue;

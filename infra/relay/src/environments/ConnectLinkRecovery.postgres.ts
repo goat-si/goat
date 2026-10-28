@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Independent environments need distinct signing keys.
+import * as NodeCrypto from "node:crypto";
 import { RELAY_LINK_PROOF_TYP } from "@goat/shared/relayJwt";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -7,141 +8,122 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Hex from "effect/encoding/Hex";
-import * as Layer from "effect/Layer";
 import * as Statement from "effect/sql/Statement";
 import * as RelayDb from "../db.ts";
-import * as Configuration from "../Config.ts";
+import { subjectDigest } from "../accounts/SubjectDigest.ts";
 import * as Dpop from "../auth/DpopProofs.ts";
 import * as Tokens from "../auth/RelayTokens.ts";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
 import { unlinkEnvironmentRecord } from "../http/Api.ts";
-import * as HookInbox from "../hooks/HookInbox.ts";
-import { awaitPostgresMilestone, postgresFixture } from "../auth/connectPostgres.testkit.ts";
+import { awaitPostgresMilestone } from "../auth/connectPostgres.testkit.ts";
 import * as Allocations from "./ManagedEndpointAllocations.ts";
-import * as Limits from "./ManagedTunnelLimits.ts";
 import * as Provider from "./ManagedEndpointProvider.ts";
 import * as Reservations from "./ConnectLinkReservations.ts";
 import * as Linker from "./EnvironmentLinker.ts";
 import * as Links from "./EnvironmentLinks.ts";
 import * as Credentials from "./EnvironmentCredentials.ts";
+import * as Ownership from "./EnvironmentOwnership.ts";
 import { setup } from "./EnvironmentLinker.postgres.testkit.ts";
+import { fixture } from "./ConnectLinkRecovery.postgres.testkit.ts";
 import {
-  config,
   environmentKeyPair,
   makeAssurance,
   intent,
   signTestJwt,
 } from "./EnvironmentLinker.testkit.ts";
 
-function fixture(gate?: {
-  readonly at: "create" | "token";
-  readonly wait: Effect.Effect<void>;
-  readonly replacementWait?: Effect.Effect<void>;
-}) {
-  let heldToken = false;
-  const tunnels = new Map<string, string>();
-  const dns = new Map<string, string>();
-  let sequence = 0;
-  let failDelete = false;
-  const tunnelClient = Provider.layerTunnelClient({
-    get: (id) =>
-      Effect.suspend(() =>
-        tunnels.has(id)
-          ? Effect.succeed({ id, name: tunnels.get(id) ?? null })
-          : Effect.fail(
-              new Provider.ManagedEndpointTunnelClientError({
-                operation: "get",
-                tunnelId: id,
-                cause: { _tag: "NotFound" },
-              }),
+it.effect("link completion holds the environment key and account fence in one transaction", () =>
+  Effect.gen(function* () {
+    const test = fixture();
+    return yield* Effect.gen(function* () {
+      const { request } = yield* setup;
+      const db = yield* RelayDb.RelayDb;
+      const digest = yield* subjectDigest("user_123");
+      const completing = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const link = yield* (yield* Linker.EnvironmentLinker)
+        .link({ userId: "user_123", request })
+        .pipe(
+          Effect.provideService(Statement.CurrentTransformer, (statement) =>
+            statement.compile()[0].startsWith('update "relay_connect_link_reservations"')
+              ? Deferred.succeed(completing, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(statement),
+                )
+              : Effect.succeed(statement),
+          ),
+          Effect.forkChild,
+        );
+      yield* awaitPostgresMilestone(completing, link);
+      const [locks] = yield* db.$client.withTransaction(
+        db.$client<{ key: boolean; account: boolean }>`SELECT
+          pg_try_advisory_xact_lock(hashtextextended(${`relay:key:${intent.environmentPublicKey}`}, 0)) AS key,
+          pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0)) AS account`,
+      );
+      expect(locks).toEqual({ key: false, account: false });
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(link)).environmentId).toBe(intent.environmentId);
+    }).pipe(Effect.provide(test.layer));
+  }),
+);
+
+for (const reuseReadyTunnel of [false, true]) {
+  it.effect(
+    `release excludes ${reuseReadyTunnel ? "ready-tunnel reuse" : "provisioning adoption"} until tunnel deletion settles`,
+    () =>
+      Effect.gen(function* () {
+        const deleting = yield* Deferred.make<void>();
+        const resumeDeletion = yield* Deferred.make<void>();
+        const adopting = yield* Deferred.make<void>();
+        const test = fixture({
+          at: "delete",
+          wait: Deferred.succeed(deleting, undefined).pipe(
+            Effect.andThen(Deferred.await(resumeDeletion)),
+          ),
+        });
+        return yield* Effect.gen(function* () {
+          const { request } = yield* setup;
+          const provider = yield* Provider.ManagedEndpointProvider;
+          const input = {
+            userId: "user_123",
+            environmentId: intent.environmentId,
+            origin: intent.origin,
+          };
+          const original = yield* (yield* Linker.EnvironmentLinker).link({
+            userId: input.userId,
+            request,
+          });
+          const originalTunnelId = original.endpointRuntime?.tunnelId;
+          const release = yield* provider.release(input).pipe(Effect.forkChild);
+          yield* awaitPostgresMilestone(deleting, release);
+
+          const db = yield* RelayDb.RelayDb;
+          const digest = yield* subjectDigest(input.userId);
+          const [lock] = yield* db.$client.withTransaction(
+            db.$client<{ available: boolean }>`SELECT
+              pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0)) AS available`,
+          );
+          expect(lock?.available).toBe(false);
+
+          const provision = yield* provider.provision({ ...input, reuseReadyTunnel }).pipe(
+            Effect.provideService(Statement.CurrentTransformer, (statement) =>
+              statement.compile()[0].startsWith("SELECT pg_advisory_xact_lock")
+                ? Deferred.succeed(adopting, undefined).pipe(Effect.as(statement))
+                : Effect.succeed(statement),
             ),
-      ),
-    list: () => Effect.sync(() => ({ result: [...tunnels].map(([id, name]) => ({ id, name })) })),
-    create: Effect.fn("ConnectLinkRecovery.tunnels.create")(function* ({ name }) {
-      const id = `tunnel-${++sequence}`;
-      tunnels.set(id, name);
-      if (gate?.at === "create" && !heldToken) {
-        heldToken = true;
-        yield* gate.wait;
-      } else if (gate?.at === "create" && gate.replacementWait) {
-        yield* gate.replacementWait;
-      }
-      return { id, name };
-    }),
-    putConfiguration: () => Effect.void,
-    getToken: Effect.fn("ConnectLinkRecovery.tunnels.getToken")(function* (id) {
-      if (gate?.at === "token" && !heldToken) {
-        heldToken = true;
-        yield* gate.wait;
-      }
-      return `connector:${id}`;
-    }),
-    delete: (id) =>
-      Effect.suspend(() =>
-        failDelete
-          ? Effect.fail(
-              new Provider.ManagedEndpointTunnelClientError({
-                operation: "delete",
-                tunnelId: id,
-                cause: "unavailable",
-              }),
-            )
-          : Effect.sync(() => {
-              tunnels.delete(id);
-            }),
-      ),
-  });
-  const dnsClient = Provider.layerDnsClient({
-    listRecords: (name) =>
-      Effect.sync(() => [...dns].filter(([, value]) => value === name).map(([id]) => ({ id }))),
-    createRecord: ({ name }) =>
-      Effect.sync(() => {
-        const id = `dns-${++sequence}`;
-        dns.set(id, name);
-        return { id };
+            Effect.forkChild,
+          );
+          yield* awaitPostgresMilestone(adopting, provision);
+          expect(test.tunnels.has(originalTunnelId ?? "")).toBe(true);
+          yield* Deferred.succeed(resumeDeletion, undefined);
+          expect(yield* Fiber.join(release)).toBe(true);
+          const adopted = yield* Fiber.join(provision);
+          expect(adopted.runtime.tunnelId).not.toBe(originalTunnelId);
+          expect(test.tunnels.has(adopted.runtime.tunnelId ?? "")).toBe(true);
+          expect(adopted.runtime.connectorToken).toBe(`connector:${adopted.runtime.tunnelId}`);
+        }).pipe(Effect.provide(test.layer));
       }),
-    updateRecord: (id, { name }) =>
-      Effect.sync(() => {
-        dns.set(id, name);
-      }),
-    deleteRecord: (id) =>
-      Effect.sync(() => {
-        dns.delete(id);
-      }),
-  });
-  const provider = Layer.effect(Provider.ManagedEndpointProvider, Provider.make).pipe(
-    Layer.provide(Layer.mergeAll(tunnelClient, dnsClient, Allocations.layer, Limits.layer)),
   );
-  const layer = Linker.layer.pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        provider,
-        Reservations.layer,
-        Links.layer,
-        Credentials.layer,
-        Tokens.layer,
-        Dpop.layer,
-        Allocations.layer,
-      ),
-    ),
-    Layer.provideMerge(postgresFixture),
-    Layer.provide(
-      Configuration.layer({
-        ...config,
-        managedEndpointBaseDomain: "connect.example.test",
-        managedEndpointNamespace: "test",
-      }),
-    ),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(Layer.mock(HookInbox.HookInbox, { clear: () => Effect.void })),
-  );
-  return {
-    layer,
-    tunnels,
-    dns,
-    setDeleteFailure: (value: boolean) => {
-      failDelete = value;
-    },
-  };
 }
 
 const abandoned = Effect.gen(function* () {
@@ -179,16 +161,30 @@ const abandoned = Effect.gen(function* () {
       }),
     ),
   );
+  // The linker claims the environment before it provisions; abandoned work starts from that claim.
+  yield* (yield* Ownership.EnvironmentOwnership).claim({
+    ...(yield* (yield* AccountAccess.AccountAccess).capture(reservation.userId)),
+    environmentId: reservation.environmentId,
+    environmentPublicKey: payload.environmentPublicKey,
+  });
   return { request, reservation };
 });
 
 const replacementRequest = Effect.fn("test.replacementRequest")(function* (environmentId: string) {
   const { payload, request } = yield* setup;
+  const keyPair =
+    environmentId === intent.environmentId
+      ? environmentKeyPair
+      : NodeCrypto.generateKeyPairSync("ed25519", {
+          privateKeyEncoding: { format: "pem", type: "pkcs8" },
+          publicKeyEncoding: { format: "pem", type: "spki" },
+        });
+  const environmentPublicKey = keyPair.publicKey.trim();
   const challenge = yield* (yield* Tokens.RelayTokens).issueLinkChallenge({
     userId: "user_123",
     request,
     assurance: makeAssurance(1800000000),
-    intent: { ...intent, environmentId, managedTunnelsEnabled: true },
+    intent: { ...intent, environmentId, environmentPublicKey, managedTunnelsEnabled: true },
     jti: `challenge-${environmentId}`,
     issuedAtEpochSeconds: 1800000000,
     expiresAtEpochSeconds: 1800000300,
@@ -201,12 +197,13 @@ const replacementRequest = Effect.fn("test.replacementRequest")(function* (envir
         iss: `goat-env:${environmentId}`,
         sub: environmentId,
         environmentId,
+        environmentPublicKey,
         descriptor: { ...payload.descriptor, environmentId },
         challenge,
         jti: `proof-${environmentId}`,
       },
       RELAY_LINK_PROOF_TYP,
-      environmentKeyPair.privateKey,
+      keyPair.privateKey,
     ),
   };
 });
@@ -237,6 +234,8 @@ const commitOutcome = Effect.fn("test.commitOutcome")(function* (
     endpoint: provisioned?.endpoint ?? payload.endpoint,
   });
   const environmentCredential = yield* (yield* Credentials.EnvironmentCredentials).create({
+    userId: "user_123",
+    accountEpoch: 1,
     environmentId: payload.environmentId,
     environmentPublicKey: payload.environmentPublicKey,
   });
@@ -408,25 +407,96 @@ it.effect(
           .pipe(Effect.result))._tag,
       ).toBe("Failure");
       yield* db.$client`INSERT INTO relay_managed_tunnel_limits (user_id, max_tunnels, created_at, updated_at) VALUES ('user_123', 1, '2026-01-01', '2026-01-01')`;
-      expect(
-        (yield* reservations
-          .reserve(
-            {
-              ...reservation,
-              challengeId: "different-challenge",
-              environmentId: "different-environment",
-              attemptId: yield* crypto.randomUUIDv4(),
-            },
-            Effect.void,
-          )
-          .pipe(Effect.result))._tag,
-      ).toBe("Failure");
+      // Capacity belongs to the allocation, which recovery keeps until cleanup deletes the tunnel.
+      const other = {
+        userId: "user_123",
+        environmentId: "different-environment",
+        origin: intent.origin,
+      };
+      yield* (yield* Ownership.EnvironmentOwnership).claim({
+        ...(yield* (yield* AccountAccess.AccountAccess).capture(other.userId)),
+        environmentId: other.environmentId,
+        environmentPublicKey: NodeCrypto.generateKeyPairSync("ed25519", {
+          privateKeyEncoding: { format: "pem", type: "pkcs8" },
+          publicKeyEncoding: { format: "pem", type: "spki" },
+        }).publicKey.trim(),
+      });
+      expect((yield* provider.provision(other).pipe(Effect.flip))._tag).toBe(
+        "ManagedTunnelLimitExceeded",
+      );
       yield* Deferred.succeed(releaseCleanup, undefined);
       yield* Fiber.join(recovery);
       expect(test.tunnels.size).toBe(0);
       expect(
         (yield* db.$client`SELECT status FROM relay_connect_link_reservations`)[0]?.status,
       ).toBe("failed");
+      expect((yield* provider.provision(other)).runtime.tunnelId).toBeDefined();
+    }).pipe(Effect.provide(test.layer));
+  },
+);
+
+it.effect(
+  "recovery that settles a fenced provision has the tunnel it created by name collected, and relinking gets a fresh name",
+  () => {
+    const test = fixture();
+    return Effect.gen(function* () {
+      const { reservation } = yield* abandoned;
+      const provider = yield* Provider.ManagedEndpointProvider;
+      const input = { ...reservation, origin: intent.origin };
+      const first = yield* provider.provision(input);
+      const recordedTunnel = first.runtime.tunnelId ?? "";
+      const tunnelName = test.tunnels.get(recordedTunnel);
+      // The recorded tunnel disappears, so an older provision creates another one with the same name.
+      test.tunnels.delete(recordedTunnel);
+      const created = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let recorded = false;
+      let paused = false;
+      const stale = yield* provider.provision(input).pipe(
+        // Stop after the intent records the new tunnel and before the allocation does.
+        Effect.provideService(Statement.CurrentTransformer, (statement) => {
+          const query = statement.compile()[0];
+          if (query.startsWith("UPDATE relay_managed_provisioning_intents SET tunnel_id"))
+            recorded = true;
+          else if (recorded && !paused && query.includes("pg_advisory_xact_lock")) {
+            paused = true;
+            return Deferred.succeed(created, undefined).pipe(
+              Effect.andThen(Deferred.await(resume)),
+              Effect.as(statement),
+            );
+          }
+          return Effect.succeed(statement);
+        }),
+        Effect.forkChild,
+      );
+      yield* awaitPostgresMilestone(created, stale);
+      const db = yield* RelayDb.RelayDb;
+      const [pending] = yield* db.$client<{
+        state: string;
+        tunnel_id: string;
+      }>`SELECT state, tunnel_id FROM relay_managed_provisioning_intents WHERE state <> 'recorded'`;
+      expect(pending?.state).toBe("created");
+      const orphan = pending?.tunnel_id ?? "";
+      expect(test.tunnels.get(orphan)).toBe(tunnelName);
+      const reservations = yield* Reservations.ConnectLinkReservations;
+      yield* reservations.exclusive("user_123", (assertOwner) =>
+        reservations.recover("user_123", assertOwner, (environmentId) =>
+          Effect.gen(function* () {
+            expect(yield* provider.deprovision({ userId: "user_123", environmentId })).toBe(true);
+          }),
+        ),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      expect((yield* Fiber.await(stale))._tag).toBe("Failure");
+      expect(
+        (yield* db.$client`SELECT state FROM relay_managed_provisioning_intents WHERE tunnel_id = ${orphan}`)[0]
+          ?.state,
+      ).toBe("abandoned");
+      yield* test.collectRetired;
+      expect(test.tunnels.size).toBe(0);
+      const relinked = yield* provider.provision(input);
+      expect(test.tunnels.get(relinked.runtime.tunnelId ?? "")).not.toBe(tunnelName);
+      expect(test.tunnels.size).toBe(1);
     }).pipe(Effect.provide(test.layer));
   },
 );
@@ -461,10 +531,11 @@ it.effect(
       const result = yield* reservations.exclusive("user_123", (assertOwner) =>
         Effect.gen(function* () {
           const db = yield* RelayDb.RelayDb;
+          const digest = yield* subjectDigest("user_123");
           const lock = yield* db.$client.withTransaction(
             db.$client<{
               acquired: boolean;
-            }>`SELECT pg_try_advisory_xact_lock(hashtextextended('user_123', 0)) AS acquired`,
+            }>`SELECT pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0)) AS acquired`,
           );
           expect(lock[0]?.acquired).toBe(false);
           const recoveryEntered = yield* Deferred.make<void>();

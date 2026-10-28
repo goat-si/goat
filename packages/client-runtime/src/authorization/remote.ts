@@ -329,6 +329,7 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
     readonly url: string;
     readonly accessToken: string;
   }) => Effect.Effect<string, E>;
+  readonly allowUnboundFallback?: boolean;
   readonly clientMetadata?: AuthClientPresentationMetadata;
   readonly connectionMethod?: ClientConnectionMethod;
   readonly timeoutMs?: number;
@@ -343,13 +344,17 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
     accessToken: input.accessToken,
     dpopProof: ticketProof,
     use: "rpc",
-    fallbackProof: Effect.suspend(() =>
-      input.createProof({
-        method: "POST",
-        url: environmentEndpointUrl(input.httpBaseUrl, webSocketTicketPath(undefined)),
-        accessToken: input.accessToken,
-      }),
-    ),
+    ...(input.allowUnboundFallback === false
+      ? {}
+      : {
+          fallbackProof: Effect.suspend(() =>
+            input.createProof({
+              method: "POST",
+              url: environmentEndpointUrl(input.httpBaseUrl, webSocketTicketPath(undefined)),
+              accessToken: input.accessToken,
+            }),
+          ),
+        }),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   });
   const url = rpcSocketUrl(input.wsBaseUrl, input.httpBaseUrl);

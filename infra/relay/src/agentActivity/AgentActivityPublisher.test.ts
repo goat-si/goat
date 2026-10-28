@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import type { RelayAgentActivityState, RelayDeliveryResult } from "@goat/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -11,6 +12,7 @@ import * as FcmDeliveries from "./FcmDeliveries.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 
 const layerPublisher = AgentActivityPublisher.layer.pipe(
+  Layer.provide(policyUnitLayer),
   Layer.provide(
     Layer.succeed(FcmDeliveries.FcmDeliveries, {
       enqueue: () => Effect.succeed(null),
@@ -33,6 +35,7 @@ const state: RelayAgentActivityState = {
 
 function target(deviceId: string): LiveActivities.TargetRow {
   return {
+    account_epoch: 1,
     user_id: "dev:alex",
     device_id: deviceId,
     platform: "ios",
@@ -155,8 +158,16 @@ describe("AgentActivityPublisher", () => {
         environmentPublicKey: "key",
         threadId: state.threadId,
       };
-      yield* publisher.publish({ ...input, state });
-      yield* publisher.publish({ ...input, state: null });
+      yield* publisher.publish({
+        userId: "dev:alex",
+        ...input,
+        state,
+      });
+      yield* publisher.publish({
+        userId: "dev:alex",
+        ...input,
+        state: null,
+      });
       expect(alerts).toBe(0);
       expect(fcm.at(-1)?.state).toBeNull();
       expect(apple).toHaveLength(2);
@@ -164,6 +175,7 @@ describe("AgentActivityPublisher", () => {
     }).pipe(
       Effect.provide(
         AgentActivityPublisher.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(
             Layer.mergeAll(
               Layer.succeed(
@@ -223,6 +235,7 @@ describe("AgentActivityPublisher", () => {
     return Effect.gen(function* () {
       const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
       yield* publisher.publish({
+        userId: "dev:alex",
         environmentId: state.environmentId,
         environmentPublicKey: "key",
         threadId: state.threadId,
@@ -240,6 +253,7 @@ describe("AgentActivityPublisher", () => {
     }).pipe(
       Effect.provide(
         AgentActivityPublisher.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(
             Layer.mergeAll(
               Layer.succeed(AgentActivityRows.AgentActivityRows, makeAgentActivityRows()),
@@ -363,6 +377,7 @@ describe("AgentActivityPublisher", () => {
         const result = yield* Effect.gen(function* () {
           const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
           return yield* publisher.publish({
+            userId: "dev:alex",
             environmentId: "env",
             environmentPublicKey: "environment-public-key",
             threadId: "thread",

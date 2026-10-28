@@ -1,3 +1,9 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import {
+  RelayAuthorizationUnavailableError,
+  RelayEnvironmentOwnerMismatchError,
+} from "@goat/contracts/relayErrors";
 import type { RelayAgentActivityState } from "@goat/contracts/relay";
 import { RelayAgentActivityState as RelayAgentActivityStateSchema } from "@goat/contracts/relay";
 import * as Context from "effect/Context";
@@ -66,17 +72,31 @@ export class AgentActivityRows extends Context.Service<
   AgentActivityRows,
   {
     readonly upsert: (input: {
+      readonly userId: string;
+      readonly accountEpoch: number;
       readonly environmentPublicKey: string;
       readonly state: RelayAgentActivityState;
-    }) => Effect.Effect<void, AgentActivityRowUpsertPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      | AgentActivityRowUpsertPersistenceError
+      | AccountAccess.AccountAccessError
+      | RelayEnvironmentOwnerMismatchError
+    >;
     readonly pruneTerminal: (input: {
       readonly updatedBefore: string;
     }) => Effect.Effect<void, AgentActivityRowPruneTerminalPersistenceError>;
     readonly remove: (input: {
+      readonly userId: string;
+      readonly accountEpoch: number;
       readonly environmentId: string;
       readonly environmentPublicKey: string;
       readonly threadId: string;
-    }) => Effect.Effect<void, AgentActivityRowDeletePersistenceError>;
+    }) => Effect.Effect<
+      void,
+      | AgentActivityRowDeletePersistenceError
+      | AccountAccess.AccountAccessError
+      | RelayEnvironmentOwnerMismatchError
+    >;
     readonly listForUser: (input: {
       readonly userId: string;
     }) => Effect.Effect<
@@ -101,81 +121,145 @@ const decodeRelayAgentActivityState = Schema.decodeUnknownOption(RelayAgentActiv
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const access = yield* AccountAccess.AccountAccess;
+  const tx = yield* AccountTransactions.AccountTransactions;
+  const guard = Effect.fn("AgentActivityRows.guard")(function* (
+    input: { userId: string; accountEpoch: number; environmentPublicKey: string },
+    environmentId: string,
+  ) {
+    yield* access.requireAllowed(input);
+    const [owner] = yield* db.$client<{
+      valid: boolean;
+    }>`SELECT EXISTS(SELECT 1 FROM relay_environment_owners WHERE user_id=${input.userId} AND environment_public_key=${input.environmentPublicKey} AND environment_id=${environmentId} AND account_epoch=${input.accountEpoch} AND state='active') AS valid`.pipe(
+      Effect.mapError(
+        () =>
+          new RelayAuthorizationUnavailableError({
+            code: "authorization_unavailable",
+            traceId: "relay",
+          }),
+      ),
+    );
+    if (!owner?.valid)
+      return yield* new RelayEnvironmentOwnerMismatchError({
+        code: "environment_owner_mismatch",
+        traceId: "relay",
+      });
+  });
 
   return AgentActivityRows.of({
     upsert: Effect.fn("relay.agent_activity_rows.upsert")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.state.environmentId,
-        "relay.thread_id": input.state.threadId,
-      });
-      const now = yield* DateTime.now;
-      const stateJson = yield* encodeRelayAgentActivityStateJson(input.state).pipe(
-        Effect.flatMap(decodeJsonString),
-        Effect.map(Function.cast<unknown, RelayAgentActivityState>),
-        Effect.mapError(
-          (cause) =>
-            new AgentActivityRowUpsertPersistenceError({
-              environmentId: input.state.environmentId,
-              threadId: input.state.threadId,
-              cause,
-            }),
-        ),
-      );
-      yield* db
-        .insert(relayAgentActivityRows)
-        .values({
-          environmentId: input.state.environmentId,
-          environmentPublicKey: input.environmentPublicKey,
-          threadId: input.state.threadId,
-          stateJson,
-          updatedAt: input.state.updatedAt,
-          createdAt: DateTime.formatIso(now),
-        })
-        .onConflictDoUpdate({
-          target: [
-            relayAgentActivityRows.environmentId,
-            relayAgentActivityRows.environmentPublicKey,
-            relayAgentActivityRows.threadId,
-          ],
-          set: {
-            stateJson,
-            updatedAt: input.state.updatedAt,
-          },
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentActivityRowUpsertPersistenceError({
+      return yield* tx
+        .run(
+          { userIds: [input.userId] },
+          Effect.gen(function* () {
+            yield* guard(input, input.state.environmentId);
+            yield* Effect.annotateCurrentSpan({
+              "relay.environment_id": input.state.environmentId,
+              "relay.thread_id": input.state.threadId,
+            });
+            const now = yield* DateTime.now;
+            const stateJson = yield* encodeRelayAgentActivityStateJson(input.state).pipe(
+              Effect.flatMap(decodeJsonString),
+              Effect.map(Function.cast<unknown, RelayAgentActivityState>),
+              Effect.mapError(
+                (cause) =>
+                  new AgentActivityRowUpsertPersistenceError({
+                    environmentId: input.state.environmentId,
+                    threadId: input.state.threadId,
+                    cause,
+                  }),
+              ),
+            );
+            yield* db
+              .insert(relayAgentActivityRows)
+              .values({
+                ownerUserId: input.userId,
+                accountEpoch: input.accountEpoch,
                 environmentId: input.state.environmentId,
+                environmentPublicKey: input.environmentPublicKey,
                 threadId: input.state.threadId,
-                cause,
-              }),
+                stateJson,
+                updatedAt: input.state.updatedAt,
+                createdAt: DateTime.formatIso(now),
+              })
+              .onConflictDoUpdate({
+                target: [
+                  relayAgentActivityRows.environmentId,
+                  relayAgentActivityRows.environmentPublicKey,
+                  relayAgentActivityRows.threadId,
+                ],
+                set: {
+                  ownerUserId: input.userId,
+                  accountEpoch: input.accountEpoch,
+                  stateJson,
+                  updatedAt: input.state.updatedAt,
+                },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AgentActivityRowUpsertPersistenceError({
+                      environmentId: input.state.environmentId,
+                      threadId: input.state.threadId,
+                      cause,
+                    }),
+                ),
+              );
+          }),
+        )
+        .pipe(
+          Effect.mapError((e) =>
+            e._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                })
+              : e,
           ),
         );
     }),
 
     remove: Effect.fn("relay.agent_activity_rows.remove")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.environmentId,
-        "relay.thread_id": input.threadId,
-      });
-      yield* db
-        .delete(relayAgentActivityRows)
-        .where(
-          and(
-            eq(relayAgentActivityRows.environmentId, input.environmentId),
-            eq(relayAgentActivityRows.environmentPublicKey, input.environmentPublicKey),
-            eq(relayAgentActivityRows.threadId, input.threadId),
-          ),
+      return yield* tx
+        .run(
+          { userIds: [input.userId] },
+          Effect.gen(function* () {
+            yield* guard(input, input.environmentId);
+            yield* Effect.annotateCurrentSpan({
+              "relay.environment_id": input.environmentId,
+              "relay.thread_id": input.threadId,
+            });
+            yield* db
+              .delete(relayAgentActivityRows)
+              .where(
+                and(
+                  eq(relayAgentActivityRows.ownerUserId, input.userId),
+                  eq(relayAgentActivityRows.accountEpoch, input.accountEpoch),
+                  eq(relayAgentActivityRows.environmentId, input.environmentId),
+                  eq(relayAgentActivityRows.environmentPublicKey, input.environmentPublicKey),
+                  eq(relayAgentActivityRows.threadId, input.threadId),
+                ),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AgentActivityRowDeletePersistenceError({
+                      environmentId: input.environmentId,
+                      threadId: input.threadId,
+                      cause,
+                    }),
+                ),
+              );
+          }),
         )
         .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentActivityRowDeletePersistenceError({
-                environmentId: input.environmentId,
-                threadId: input.threadId,
-                cause,
-              }),
+          Effect.mapError((e) =>
+            e._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                })
+              : e,
           ),
         );
     }),
@@ -220,6 +304,9 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayAgentActivityRows.ownerUserId, input.userId),
+            eq(relayAgentActivityRows.accountEpoch, relayEnvironmentLinks.accountEpoch),
+            sql`EXISTS(SELECT 1 FROM relay_account_access a WHERE a.user_id=${input.userId} AND a.status='allowed' AND a.account_epoch=${relayAgentActivityRows.accountEpoch})`,
             isNull(relayEnvironmentLinks.revokedAt),
             eq(relayEnvironmentLinks.liveActivitiesEnabled, true),
           ),
@@ -256,6 +343,9 @@ export const make = Effect.gen(function* () {
         .where(
           and(
             eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayAgentActivityRows.ownerUserId, input.userId),
+            eq(relayAgentActivityRows.accountEpoch, relayEnvironmentLinks.accountEpoch),
+            sql`EXISTS(SELECT 1 FROM relay_account_access a WHERE a.user_id=${input.userId} AND a.status='allowed' AND a.account_epoch=${relayAgentActivityRows.accountEpoch})`,
             isNull(relayEnvironmentLinks.revokedAt),
             eq(relayAgentActivityRows.environmentId, input.environmentId),
             eq(relayAgentActivityRows.threadId, input.threadId),

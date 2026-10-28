@@ -12,6 +12,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { Cookies, FetchHttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ManagedRelay } from "@goat/client-runtime/relay";
+import { RelayAccountAccessDeniedError } from "@goat/contracts/relay";
 
 import type { EnvironmentId } from "@goat/contracts";
 import { verifyDpopProof } from "@goat/shared/dpop";
@@ -596,26 +597,136 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     }).pipe(Effect.provide(layerRelayTest));
   });
 
-  it.effect("does not re-register the same account when nothing has changed", () => {
-    Constants.expoConfig!.extra = {
-      relay: {
-        url: "https://relay.example.test/",
-      },
-    };
-    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+  it.effect(
+    "explicit repair re-registers the same account even when its persisted signature matches",
+    () => {
+      Constants.expoConfig!.extra = {
+        relay: {
+          url: "https://relay.example.test/",
+        },
+      };
+      setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
 
-    return Effect.gen(function* () {
-      yield* refreshAgentAwarenessRegistration();
-      expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
-      expect(saveAgentAwarenessRegistrationRecord).toHaveBeenCalledTimes(1);
-      expect(registrationRecordStore.current).not.toBeNull();
+      return Effect.gen(function* () {
+        yield* refreshAgentAwarenessRegistration();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+        expect(saveAgentAwarenessRegistrationRecord).toHaveBeenCalledTimes(1);
+        expect(registrationRecordStore.current).not.toBeNull();
 
-      vi.mocked(saveAgentAwarenessRegistrationRecord).mockClear();
-      yield* refreshAgentAwarenessRegistration();
-      expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
-      expect(saveAgentAwarenessRegistrationRecord).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(layerRelayTest));
-  });
+        vi.mocked(saveAgentAwarenessRegistrationRecord).mockClear();
+        yield* refreshAgentAwarenessRegistration();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+        expect(saveAgentAwarenessRegistrationRecord).toHaveBeenCalledTimes(1);
+      }).pipe(Effect.provide(layerRelayTest));
+    },
+  );
+
+  it.effect.each(["ios", "android"] as const)(
+    "invalidates %s registration after suspension and repairs the same device and token after allow",
+    (platform) => {
+      vi.spyOn(Platform, "OS", "get").mockReturnValue(platform);
+      vi.spyOn(Platform, "Version", "get").mockReturnValue(platform === "ios" ? "18.0" : 35);
+      vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
+        type: platform,
+        data: "same-token",
+      });
+      Constants.expoConfig!.extra = { relay: { url: "https://relay.example.test/" } };
+      let suspended = false;
+      const accepted: unknown[] = [];
+      const layer = Layer.mock(ManagedRelay.ManagedRelayClient, {
+        relayUrl: "https://relay.example.test",
+        registerDevice: (input) =>
+          Effect.suspend(() =>
+            suspended
+              ? Effect.fail(
+                  new ManagedRelay.ManagedRelayRequestFailedError({
+                    action: "register relay mobile device",
+                    status: 403,
+                    relayError: new RelayAccountAccessDeniedError({
+                      code: "account_access_denied",
+                      reason: "suspended",
+                      traceId: "fixture",
+                    }),
+                    cause: "suspended",
+                  }),
+                )
+              : Effect.sync(() => {
+                  accepted.push(input.payload);
+                  return { ok: true };
+                }),
+          ),
+      });
+      setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"), "owner");
+      return Effect.gen(function* () {
+        yield* runBackgroundOperations();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+        suspended = true;
+        yield* refreshAgentAwarenessRegistration();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("failed");
+        expect(registrationRecordStore.current).toBeNull();
+        suspended = false;
+        yield* refreshAgentAwarenessRegistration();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+        expect(accepted).toHaveLength(2);
+        expect(accepted[1]).toEqual(accepted[0]);
+        expect(registrationRecordStore.current).not.toBeNull();
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "policy rejection clears the accepted iOS activity token cache and repairs device before reusing the token",
+    () => {
+      Constants.expoConfig!.extra = { relay: { url: "https://relay.example.test/" } };
+      const calls: string[] = [];
+      let suspended = false;
+      const layer = Layer.mock(ManagedRelay.ManagedRelayClient, {
+        relayUrl: "https://relay.example.test",
+        registerDevice: () =>
+          Effect.suspend(() =>
+            suspended
+              ? Effect.fail(
+                  new ManagedRelay.ManagedRelayRequestFailedError({
+                    action: "register relay mobile device",
+                    cause: "suspended",
+                    relayError: new RelayAccountAccessDeniedError({
+                      code: "account_access_denied",
+                      reason: "suspended",
+                      traceId: "fixture",
+                    }),
+                    status: 403,
+                  }),
+                )
+              : Effect.sync(() => {
+                  calls.push("device");
+                  return { ok: true };
+                }),
+          ),
+        registerLiveActivity: () =>
+          Effect.sync(() => {
+            calls.push("activity");
+            return { ok: true };
+          }),
+      });
+      const activity = {
+        getId: () => "activity",
+        getPushToken: () => Promise.resolve("same-activity-token"),
+        addPushTokenListener: () => ({ remove: () => {} }),
+      };
+      setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token"), "owner");
+      return Effect.gen(function* () {
+        yield* runBackgroundOperations();
+        yield* registerLiveActivityPushToken({ activity: activity as never });
+        suspended = true;
+        yield* refreshAgentAwarenessRegistration();
+        expect(getAgentAwarenessRegistrationStatus()).toBe("failed");
+        suspended = false;
+        yield* registerLiveActivityPushToken({ activity: activity as never });
+        expect(calls).toEqual(["device", "activity", "device", "activity"]);
+        expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("continues queued device registration after a failed auth lookup", () => {
     Constants.expoConfig!.extra = {

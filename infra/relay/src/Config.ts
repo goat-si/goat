@@ -52,6 +52,10 @@ export class RelayConfiguration extends Context.Service<
   RelayConfiguration,
   {
     readonly relayIssuer: string;
+    readonly mintDisabled?: boolean;
+    readonly subjectDigestKey?: Redacted.Redacted<string>;
+    readonly clerkWebhookSigningSecret?: Redacted.Redacted<string>;
+    readonly clerkSessionIssuer?: string;
     readonly apns: ApnsCredentials | null;
     readonly fcmServiceAccount?: Redacted.Redacted<string>;
     readonly clerkSecretKey: Redacted.Redacted<string>;

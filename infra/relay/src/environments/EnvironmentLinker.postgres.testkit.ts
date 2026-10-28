@@ -4,18 +4,19 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { RELAY_LINK_PROOF_TYP } from "@goat/shared/relayJwt";
 import * as RelayConfiguration from "../Config.ts";
-import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
-import { postgresFixture } from "../auth/connectPostgres.testkit.ts";
+import {
+  allowAccount,
+  postgresFixture,
+  postgresPolicyFixture,
+} from "../auth/connectPostgres.testkit.ts";
 import * as Reservations from "./ConnectLinkReservations.ts";
 import * as Linker from "./EnvironmentLinker.ts";
-import * as Links from "./EnvironmentLinks.ts";
-import * as Credentials from "./EnvironmentCredentials.ts";
 import * as Provider from "./ManagedEndpointProvider.ts";
 import {
-  config,
   makeRequest,
+  postgresConfig,
   signTestJwt,
   environmentKeyPair,
   intent,
@@ -25,11 +26,10 @@ import {
 export function layer(calls: string[], failProvision = false, expireDuringProvision = false) {
   return Linker.layer.pipe(
     Layer.provideMerge(Reservations.layer),
-    Layer.provideMerge(
-      Layer.mergeAll(Links.layer, Credentials.layer, RelayTokens.layer, DpopProofs.layer),
-    ),
+    Layer.provideMerge(Layer.mergeAll(RelayTokens.layer, DpopProofs.layer)),
+    Layer.provideMerge(postgresPolicyFixture),
     Layer.provideMerge(postgresFixture),
-    Layer.provide(RelayConfiguration.layer(config)),
+    Layer.provide(RelayConfiguration.layer(postgresConfig)),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(
       Layer.mock(Provider.ManagedEndpointProvider, {
@@ -65,7 +65,7 @@ export function layer(calls: string[], failProvision = false, expireDuringProvis
 }
 export const setup = Effect.gen(function* () {
   yield* TestClock.setTime(1800000000000);
-  yield* (yield* ConnectAccounts.ConnectAccounts).authorize("user_123");
+  yield* allowAccount("user_123");
   const fixture = yield* makeRequest;
   const challenge = yield* (yield* RelayTokens.RelayTokens).issueLinkChallenge({
     userId: "user_123",

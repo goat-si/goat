@@ -1,3 +1,6 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
+import * as AccountDeviceAdmission from "../accounts/AccountDeviceAdmission.ts";
 import type {
   RelayAgentActivitySnapshotResponse,
   RelayDeviceRegistrationRequest,
@@ -14,6 +17,9 @@ import * as LiveActivities from "./LiveActivities.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
 
 export type MobileRegistrationError =
+  | AccountAccess.AccountAccessError
+  | RelayRateLimits.RateLimitError
+  | AccountDeviceAdmission.DeviceAdmissionError
   | Devices.DeviceRegistrationPersistenceError
   | Devices.DeviceUnregistrationPersistenceError
   | LiveActivities.LiveActivityRegistrationPersistenceError
@@ -41,6 +47,8 @@ export class MobileRegistrations extends Context.Service<
 >()("goat-relay/agentActivity/MobileRegistrations") {}
 
 export const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const rows = yield* AgentActivityRows.AgentActivityRows;
   const devices = yield* Devices.Devices;
   const liveActivities = yield* LiveActivities.LiveActivities;
@@ -52,28 +60,10 @@ export const make = Effect.gen(function* () {
         "relay.mobile.device_id": input.payload.deviceId,
         "relay.mobile.platform": input.payload.platform,
       });
-      yield* devices.register({ userId: input.userId, registration: input.payload });
-      yield* publisher
-        .replayForLiveActivityRegistration({
-          userId: input.userId,
-          deviceId: input.payload.deviceId,
-        })
-        .pipe(
-          Effect.tapError((error) =>
-            Effect.logWarning("device registration activity replay failed", {
-              errorTag: error._tag,
-            }),
-          ),
-          Effect.ignore,
-        );
-      return { ok: true as const };
-    }),
-    registerLiveActivity: Effect.fn("relay.mobile_registrations.register_live_activity")(
-      function* (input) {
-        yield* Effect.annotateCurrentSpan({
-          "relay.mobile.device_id": input.payload.deviceId,
-        });
-        yield* liveActivities.register({ userId: input.userId, registration: input.payload });
+      const admitted = yield* access.admit(input.userId);
+      yield* rates.charge({ userId: input.userId, operation: "mobile_registration" });
+      return yield* Effect.gen(function* () {
+        yield* devices.register({ userId: input.userId, registration: input.payload });
         yield* publisher
           .replayForLiveActivityRegistration({
             userId: input.userId,
@@ -81,19 +71,49 @@ export const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.tapError((error) =>
-              Effect.logWarning("live activity registration replay failed", {
+              Effect.logWarning("device registration activity replay failed", {
                 errorTag: error._tag,
               }),
             ),
             Effect.ignore,
           );
+        yield* access.requireAllowed(admitted);
         return { ok: true as const };
+      }).pipe(Effect.provideService(AccountAccess.AccountRequestAdmission, admitted));
+    }),
+    registerLiveActivity: Effect.fn("relay.mobile_registrations.register_live_activity")(
+      function* (input) {
+        yield* Effect.annotateCurrentSpan({
+          "relay.mobile.device_id": input.payload.deviceId,
+        });
+        const admitted = yield* access.admit(input.userId);
+        yield* rates.charge({ userId: input.userId, operation: "mobile_registration" });
+        return yield* Effect.gen(function* () {
+          yield* liveActivities.register({ userId: input.userId, registration: input.payload });
+          yield* publisher
+            .replayForLiveActivityRegistration({
+              userId: input.userId,
+              deviceId: input.payload.deviceId,
+            })
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.logWarning("live activity registration replay failed", {
+                  errorTag: error._tag,
+                }),
+              ),
+              Effect.ignore,
+            );
+          yield* access.requireAllowed(admitted);
+          return { ok: true as const };
+        }).pipe(Effect.provideService(AccountAccess.AccountRequestAdmission, admitted));
       },
     ),
     getAgentActivitySnapshot: Effect.fn("relay.mobile_registrations.get_agent_activity_snapshot")(
       function* (input) {
+        const admitted = yield* access.admit(input.userId);
         const activeStates = yield* rows.listForUser({ userId: input.userId });
         const now = yield* DateTime.now;
+        yield* access.requireAllowed(admitted);
         return {
           aggregate: AgentActivityPublisher.makeAggregateState({
             activeStates,

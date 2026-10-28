@@ -5,6 +5,8 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   AutomationHold,
+  HubSettings,
+  HubSettingsPatch,
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
@@ -23,6 +25,10 @@ import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const PreferenceFields = {
+  hub: Schema.Struct({
+    enabled: HubSettings.fields.enabled,
+    connectDevicesHubProxy: HubSettings.fields.connectDevicesHubProxy,
+  }),
   defaultThreadEnvMode: ServerSettings.fields.defaultThreadEnvMode,
   newWorktreesStartFromOrigin: ServerSettings.fields.newWorktreesStartFromOrigin,
   enableProviderUpdateChecks: ServerSettings.fields.enableProviderUpdateChecks,
@@ -67,6 +73,12 @@ const EnvironmentPreferencesTool = Tool.make(
     ...shared,
     description: agentSurfaceRegistry["environment.preferences_update"].description,
     parameters: Schema.Struct({
+      hub: Schema.optionalKey(
+        Schema.Struct({
+          enabled: HubSettingsPatch.fields.enabled,
+          connectDevicesHubProxy: HubSettingsPatch.fields.connectDevicesHubProxy,
+        }),
+      ),
       defaultThreadEnvMode: ServerSettingsPatch.fields.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: ServerSettingsPatch.fields.newWorktreesStartFromOrigin,
       enableProviderUpdateChecks: ServerSettingsPatch.fields.enableProviderUpdateChecks,

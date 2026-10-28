@@ -751,3 +751,50 @@ describe("command permissions through a hub", () => {
     ),
   );
 });
+
+it.effect(
+  "the hub consent command checks the destination settings grant and refuses proxied nodes",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        registry.mount(sessions(other));
+        const commandRuntime = Atom.runtime(
+          Layer.mergeAll(
+            Layer.succeed(EnvironmentRegistry, {
+              run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) => effect,
+            } as unknown as EnvironmentRegistry["Service"]),
+            Layer.mock(Persistence.EnvironmentCacheStore)({}),
+          ),
+        );
+        const command = createServerEnvironmentAtoms(commandRuntime, {
+          initialConfigValueAtom: () => Atom.make(null),
+        }).updateSettings;
+        const payload = { patch: { hub: { connectDevicesHubProxy: true } } };
+        const writer = {
+          ...grant(false),
+          scopes: [AuthSettingsWriteScope],
+          permissions: [AuthSettingsWriteScope],
+        };
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        registry.set(sessions(other), AsyncResult.success(writer));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect(
+          (yield* Effect.promise(() =>
+            command.run(registry, { environmentId: env, input: payload }),
+          ))._tag,
+        ).toBe("Failure");
+        registry.set(sessions(env), AsyncResult.success(writer));
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        const permission = createCommandPermissions(runtime, WS_METHODS.serverUpdateSettings);
+        yield* permission.authorize(registry, env, payload);
+        registry.set(sessions(env), AsyncResult.success({ ...writer, proxiedByHub: true }));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect(
+          (yield* Effect.promise(() =>
+            command.run(registry, { environmentId: env, input: payload }),
+          ))._tag,
+        ).toBe("Failure");
+      }),
+    ),
+);

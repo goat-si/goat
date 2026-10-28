@@ -4,8 +4,11 @@ import type {
   RelayAgentAwarenessPreferences,
   RelayManagedEndpointOrigin,
 } from "@goat/contracts/relay";
+import { sql } from "drizzle-orm";
 import {
   bigint,
+  check,
+  timestamp,
   boolean,
   index,
   integer,
@@ -21,6 +24,8 @@ import {
 export const relayMobileDevices = pgTable(
   "relay_mobile_devices",
   {
+    deliveryDisabledAt: timestamp("delivery_disabled_at", { withTimezone: true, mode: "string" }),
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 255 }).notNull(),
     deviceId: varchar("device_id", { length: 255 }).notNull(),
     label: text("label").notNull().default("iOS device"),
@@ -37,6 +42,10 @@ export const relayMobileDevices = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayMobileDevices_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.userId, table.deviceId] }),
     uniqueIndex("idx_relay_mobile_devices_push_token").on(table.pushToken),
     uniqueIndex("idx_relay_mobile_devices_push_to_start_token").on(table.pushToStartToken),
@@ -46,6 +55,8 @@ export const relayMobileDevices = pgTable(
 export const relayLiveActivities = pgTable(
   "relay_live_activities",
   {
+    deliveryDisabledAt: timestamp("delivery_disabled_at", { withTimezone: true, mode: "string" }),
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 255 }).notNull(),
     deviceId: varchar("device_id", { length: 255 }).notNull(),
     activityPushToken: text("activity_push_token"),
@@ -58,6 +69,10 @@ export const relayLiveActivities = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayLiveActivities_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.userId, table.deviceId] }),
     uniqueIndex("idx_relay_live_activities_activity_push_token").on(table.activityPushToken),
   ],
@@ -66,10 +81,11 @@ export const relayLiveActivities = pgTable(
 export const relayEnvironmentLinks = pgTable(
   "relay_environment_links",
   {
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
     connectAuthPolicyVersion: integer("connect_auth_policy_version"),
-    environmentLabel: text("environment_label").notNull().default("T3 Environment"),
+    environmentLabel: text("environment_label").notNull().default("GOAT Environment"),
     environmentPublicKey: text("environment_public_key").notNull(),
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
     endpointWsBaseUrl: text("endpoint_ws_base_url").notNull(),
@@ -84,6 +100,13 @@ export const relayEnvironmentLinks = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayEnvironmentLinks_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
+    uniqueIndex("idx_relay_links_active_key")
+      .on(table.environmentPublicKey)
+      .where(sql`${table.revokedAt} IS NULL`),
     primaryKey({ columns: [table.userId, table.environmentId] }),
     index("idx_relay_environment_links_environment").on(table.environmentId, table.revokedAt),
   ],
@@ -92,9 +115,13 @@ export const relayEnvironmentLinks = pgTable(
 export const relayManagedEndpointAllocations = pgTable(
   "relay_managed_endpoint_allocations",
   {
+    incarnationId: uuid("incarnation_id").notNull().defaultRandom().primaryKey(),
+    endpointGeneration: integer("endpoint_generation").notNull().default(0),
+    capacityReleasedAt: timestamp("capacity_released_at", { withTimezone: true, mode: "string" }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "string" }),
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
-    incarnationId: uuid("incarnation_id").notNull().defaultRandom(),
     hostname: text("hostname").notNull(),
     tunnelId: varchar("tunnel_id", { length: 191 }),
     tunnelName: text("tunnel_name").notNull(),
@@ -109,9 +136,20 @@ export const relayManagedEndpointAllocations = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
-    primaryKey({ columns: [table.userId, table.environmentId] }),
-    uniqueIndex("idx_relay_managed_endpoint_allocations_hostname").on(table.hostname),
-    uniqueIndex("idx_relay_managed_endpoint_allocations_tunnel_name").on(table.tunnelName),
+    check(
+      "relayManagedEndpointAllocations_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
+    uniqueIndex("idx_relay_allocations_live_owner")
+      .on(table.userId, table.environmentId)
+      .where(sql`${table.deletedAt} IS NULL`),
+    index("idx_relay_allocations_capacity").on(table.userId, table.capacityReleasedAt),
+    uniqueIndex("idx_relay_managed_endpoint_allocations_hostname")
+      .on(table.hostname)
+      .where(sql`${table.deletedAt} IS NULL`),
+    uniqueIndex("idx_relay_managed_endpoint_allocations_tunnel_name")
+      .on(table.tunnelName)
+      .where(sql`${table.deletedAt} IS NULL`),
   ],
 );
 
@@ -122,16 +160,22 @@ export const relayUpstreamApiPauses = pgTable("relay_upstream_api_pauses", {
   pausedUntilMs: bigint("paused_until_ms", { mode: "number" }).notNull(),
 });
 
-export const relayManagedTunnelLimits = pgTable("relay_managed_tunnel_limits", {
-  userId: varchar("user_id", { length: 191 }).primaryKey(),
-  maxTunnels: integer("max_tunnels").notNull(),
-  createdAt: varchar("created_at", { length: 64 }).notNull(),
-  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
-});
+export const relayManagedTunnelLimits = pgTable(
+  "relay_managed_tunnel_limits",
+  {
+    userId: varchar("user_id", { length: 191 }).primaryKey(),
+    maxTunnels: integer("max_tunnels").notNull(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [check("relay_tunnel_limit_nonnegative", sql`${table.maxTunnels} >= 0`)],
+);
 
 export const relayEnvironmentCredentials = pgTable(
   "relay_environment_credentials",
   {
+    userId: varchar("user_id", { length: 255 }),
+    accountEpoch: integer("account_epoch"),
     credentialId: varchar("credential_id", { length: 64 }).primaryKey(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
     environmentPublicKey: text("environment_public_key").notNull(),
@@ -141,6 +185,15 @@ export const relayEnvironmentCredentials = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relay_credentials_owner_epoch",
+      sql`(${table.userId} IS NULL AND ${table.accountEpoch} IS NULL) OR (${table.userId} IS NOT NULL AND ${table.accountEpoch} IS NOT NULL AND ${table.accountEpoch} >= 1)`,
+    ),
+    index("idx_relay_credentials_owner_epoch").on(
+      table.userId,
+      table.accountEpoch,
+      table.revokedAt,
+    ),
     uniqueIndex("idx_relay_environment_credentials_hash").on(table.credentialHash),
     index("idx_relay_environment_credentials_environment").on(table.environmentId, table.revokedAt),
     index("idx_relay_environment_credentials_environment_key").on(
@@ -156,12 +209,18 @@ export const relayAgentActivityRows = pgTable(
   {
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
     environmentPublicKey: text("environment_public_key").notNull(),
+    ownerUserId: varchar("owner_user_id", { length: 255 }),
+    accountEpoch: integer("account_epoch"),
     threadId: varchar("thread_id", { length: 512 }).notNull(),
     stateJson: jsonb("state_json").notNull().$type<RelayAgentActivityState>(),
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayAgentActivityRows_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.environmentId, table.environmentPublicKey, table.threadId] }),
     index("idx_relay_agent_activity_rows_updated").on(table.updatedAt),
   ],
@@ -172,6 +231,7 @@ export const relayDeliveryAttempts = pgTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 255 }),
     environmentId: varchar("environment_id", { length: 191 }),
     threadId: varchar("thread_id", { length: 512 }),
@@ -185,6 +245,7 @@ export const relayDeliveryAttempts = pgTable(
     transportError: text("transport_error"),
   },
   (table) => [
+    index("idx_relay_delivery_attempts_owner_epoch").on(table.userId, table.accountEpoch),
     index("idx_relay_delivery_attempts_environment").on(
       table.environmentId,
       table.threadId,
@@ -209,6 +270,8 @@ export const relayDpopProofs = pgTable(
   ],
 );
 
+export * from "./accountSchema.ts";
+
 export const relayClientKeys = pgTable(
   "relay_client_keys",
   {
@@ -223,12 +286,6 @@ export const relayClientKeys = pgTable(
   },
   (table) => [primaryKey({ columns: [table.userId, table.clientId, table.thumbprint] })],
 );
-
-export const relayConnectAccounts = pgTable("relay_connect_accounts", {
-  userId: varchar("user_id", { length: 255 }).primaryKey(),
-  generation: integer("generation").notNull(),
-  status: varchar("status", { length: 32 }).notNull().$type<"active" | "suspended" | "deleted">(),
-});
 
 export const relayConnectLinkReservations = pgTable(
   "relay_connect_link_reservations",

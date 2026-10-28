@@ -92,7 +92,9 @@ const layerLinkProofRoutes = HttpApiBuilder.layer(LinkProofTestApi).pipe(
         capabilities: { repositoryIdentity: false },
       }),
     }),
-    Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({}),
+    Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({
+      withLinkStateLock: (effect) => effect,
+    }),
     Layer.mock(CliTokenManager.CloudCliTokenManager)({}),
     Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({}),
     Layer.mock(HttpServer.HttpServer)({

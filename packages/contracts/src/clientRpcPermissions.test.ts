@@ -209,3 +209,35 @@ it("note mutations require orchestration operation permission", () => {
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
+
+it("guards standing consent without changing provider-only permissions", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, undefined)).toEqual([
+    "settings:write",
+  ]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+      patch: { hub: { connectDevicesHubProxy: true } },
+    }),
+  ).toEqual(["settings:write"]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, { patch: { providerInstances: {} } }),
+  ).toEqual(["providers:manage"]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+      patch: { providerInstances: {}, hub: { enabled: false } },
+    }),
+  ).toEqual(["settings:write", "providers:manage"]);
+  const providerInstanceMutation = { operation: "remove", instanceId: "codex_work" };
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+      patch: {},
+      providerInstanceMutation,
+    }),
+  ).toEqual(["providers:manage"]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, {
+      patch: { hub: { connectDevicesHubProxy: true } },
+      providerInstanceMutation,
+    }),
+  ).toEqual(["settings:write", "providers:manage"]);
+});

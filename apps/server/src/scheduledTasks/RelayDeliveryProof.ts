@@ -1,3 +1,4 @@
+import { CLOUD_WITHDRAWAL_FENCE } from "../cloud/config.ts";
 // Trust relay headers only with a mint-key-signed proof; otherwise handle the webhook as a direct request.
 import { RelayHookDeliveryProofPayload } from "@goat/contracts/relay";
 import {
@@ -47,6 +48,7 @@ const make = Effect.gen(function* () {
       if (proof === undefined || deliveryId === undefined || receivedAt === undefined) {
         return Option.none();
       }
+      if (Option.isSome(yield* secrets.get(CLOUD_WITHDRAWAL_FENCE))) return Option.none();
       const publicKey = text(yield* secrets.get(CLOUD_MINT_PUBLIC_KEY));
       const issuer = Option.orElse(text(yield* secrets.get(RELAY_ISSUER_SECRET)), () =>
         Option.none<string>(),

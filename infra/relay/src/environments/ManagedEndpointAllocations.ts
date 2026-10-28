@@ -1,5 +1,10 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import * as ManagedTunnelLimits from "./ManagedTunnelLimits.ts";
+import * as EndpointIdentity from "./EndpointIdentity.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import type { RelayManagedEndpoint, RelayManagedEndpointOrigin } from "@goat/contracts/relay";
-import { and, eq, exists, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, lt, notExists, sql } from "drizzle-orm";
 import { QueryBuilder } from "drizzle-orm/pg-core";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -11,12 +16,21 @@ import * as SqlError from "effect/sql/SqlError";
 
 import * as RelayDb from "../db.ts";
 import { isManagedEndpointHostname, managedEndpointForHostname } from "../deploymentConfig.ts";
-import { relayEnvironmentLinks, relayManagedEndpointAllocations } from "../persistence/schema.ts";
+import {
+  relayEndpointIdentities,
+  relayEnvironmentLinks,
+  relayManagedEndpointAllocations,
+  relayManagedProvisioningIntents,
+  relayRetiredEndpoints,
+} from "../persistence/schema.ts";
 
 export interface ManagedEndpointAllocation {
+  readonly incarnationId: string;
+  readonly accountEpoch: number | null;
+  readonly endpointGeneration: number;
+  readonly capacityReleasedAt: string | null;
   readonly userId: string;
   readonly environmentId: string;
-  readonly incarnationId: string;
   readonly hostname: string;
   readonly tunnelId: string | null;
   readonly tunnelName: string;
@@ -67,6 +81,7 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
       "remove",
       "remove-claimed",
       "get-by-tunnel-name",
+      "release-capacity",
     ]),
     stage: Schema.Literals(["database-request", "resolve-reservation"]),
     userId: Schema.String,
@@ -84,6 +99,7 @@ export class ManagedEndpointAllocationPersistenceError extends Schema.TaggedErro
 }
 
 interface ManagedEndpointAllocationKey {
+  readonly incarnationId?: string;
   readonly userId: string;
   readonly environmentId: string;
 }
@@ -147,7 +163,13 @@ export class ManagedEndpointAllocations extends Context.Service<
     ) => Effect.Effect<ManagedEndpointAllocation | null, ManagedEndpointAllocationPersistenceError>;
     readonly reserve: (
       input: ReserveManagedEndpointAllocationInput,
-    ) => Effect.Effect<ManagedEndpointAllocation, ManagedEndpointAllocationPersistenceError>;
+    ) => Effect.Effect<
+      ManagedEndpointAllocation,
+      | ManagedEndpointAllocationPersistenceError
+      | AccountAccess.AccountAccessError
+      | ManagedTunnelLimits.ManagedTunnelLimitExceeded
+      | ManagedTunnelLimits.ManagedTunnelLimitPersistenceError
+    >;
     readonly recordTunnel: (
       input: RecordManagedEndpointTunnelInput,
     ) => Effect.Effect<number | null, ManagedEndpointAllocationPersistenceError>;
@@ -180,6 +202,13 @@ export class ManagedEndpointAllocations extends Context.Service<
     readonly claimDeprovision: (
       input: ClaimManagedEndpointDeprovisionInput,
     ) => Effect.Effect<number | null, ManagedEndpointAllocationPersistenceError>;
+    readonly markCapacityReleased: (
+      input: ManagedEndpointAllocationKey & {
+        readonly incarnationId: string;
+        readonly generation: number;
+        readonly markReleased?: boolean;
+      },
+    ) => Effect.Effect<boolean, ManagedEndpointAllocationPersistenceError>;
     readonly remove: (
       input: ManagedEndpointAllocationKey,
     ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
@@ -191,6 +220,9 @@ export class ManagedEndpointAllocations extends Context.Service<
 
 const allocationSelection = {
   incarnationId: relayManagedEndpointAllocations.incarnationId,
+  accountEpoch: relayManagedEndpointAllocations.accountEpoch,
+  endpointGeneration: relayManagedEndpointAllocations.endpointGeneration,
+  capacityReleasedAt: relayManagedEndpointAllocations.capacityReleasedAt,
   userId: relayManagedEndpointAllocations.userId,
   environmentId: relayManagedEndpointAllocations.environmentId,
   hostname: relayManagedEndpointAllocations.hostname,
@@ -208,10 +240,20 @@ const whereAllocation = (input: ManagedEndpointAllocationKey) =>
   and(
     eq(relayManagedEndpointAllocations.userId, input.userId),
     eq(relayManagedEndpointAllocations.environmentId, input.environmentId),
+    isNull(relayManagedEndpointAllocations.deletedAt),
+    input.incarnationId === undefined
+      ? undefined
+      : eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
   );
+
+const isAuthorizationUnavailable = Schema.is(RelayAuthorizationUnavailableError);
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const access = yield* AccountAccess.AccountAccess;
+  const tx = yield* AccountTransactions.AccountTransactions;
+  const limits = yield* ManagedTunnelLimits.ManagedTunnelLimits;
+  const identities = yield* EndpointIdentity.EndpointIdentity;
 
   return ManagedEndpointAllocations.of({
     get: Effect.fn("relay.managed_endpoint_allocations.get")(function* (
@@ -241,7 +283,12 @@ export const make = Effect.gen(function* () {
       return yield* db
         .select(allocationSelection)
         .from(relayManagedEndpointAllocations)
-        .where(eq(relayManagedEndpointAllocations.tunnelName, tunnelName))
+        .where(
+          and(
+            eq(relayManagedEndpointAllocations.tunnelName, tunnelName),
+            isNull(relayManagedEndpointAllocations.deletedAt),
+          ),
+        )
         .limit(1)
         .pipe(
           Effect.map((rows) => rows[0] ?? null),
@@ -261,57 +308,144 @@ export const make = Effect.gen(function* () {
     reserve: Effect.fn("relay.managed_endpoint_allocations.reserve")(function* (
       input: ReserveManagedEndpointAllocationInput,
     ) {
-      const now = DateTime.formatIso(yield* DateTime.now);
-      const inserted = yield* db
-        .insert(relayManagedEndpointAllocations)
-        .values({
-          ...input,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoNothing()
-        .returning(allocationSelection)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ManagedEndpointAllocationPersistenceError({
-                operation: "reserve",
-                stage: "database-request",
+      const admitted = yield* access.admit(input.userId);
+      return yield* tx
+        .run(
+          { userIds: [input.userId] },
+          Effect.gen(function* () {
+            yield* access.requireAllowed(admitted);
+            const identity = yield* identities.resolve(input);
+            yield* limits.ensureCapacity(input);
+            const now = DateTime.formatIso(yield* DateTime.now);
+            const inserted = yield* db
+              .insert(relayManagedEndpointAllocations)
+              .values({
                 ...input,
-                cause,
-              }),
+                hostname: identity.hostname,
+                tunnelName: identity.tunnelName,
+                endpointGeneration: identity.endpointGeneration,
+                accountEpoch: admitted.accountEpoch,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .onConflictDoNothing()
+              .returning(allocationSelection)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ManagedEndpointAllocationPersistenceError({
+                      operation: "reserve",
+                      stage: "database-request",
+                      ...input,
+                      cause,
+                    }),
+                ),
+              );
+
+            const allocation =
+              inserted[0] ??
+              (yield* db
+                .select(allocationSelection)
+                .from(relayManagedEndpointAllocations)
+                .where(whereAllocation(input))
+                .limit(1)
+                .pipe(
+                  Effect.map((rows) => rows[0]),
+                  Effect.mapError(
+                    (cause) =>
+                      new ManagedEndpointAllocationPersistenceError({
+                        operation: "reserve",
+                        stage: "database-request",
+                        ...input,
+                        cause,
+                      }),
+                  ),
+                ));
+
+            if (allocation === undefined) {
+              return yield* new ManagedEndpointAllocationPersistenceError({
+                operation: "reserve",
+                stage: "resolve-reservation",
+                ...input,
+              });
+            }
+
+            if (allocation.accountEpoch === null) {
+              yield* db
+                .update(relayManagedEndpointAllocations)
+                .set({ accountEpoch: admitted.accountEpoch })
+                .where(whereAllocation(input))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ManagedEndpointAllocationPersistenceError({
+                        operation: "reserve",
+                        stage: "database-request",
+                        ...input,
+                        cause,
+                      }),
+                  ),
+                );
+            } else if (
+              allocation.accountEpoch !== admitted.accountEpoch ||
+              allocation.endpointGeneration !== identity.endpointGeneration
+            )
+              return yield* new RelayAuthorizationUnavailableError({
+                code: "authorization_unavailable",
+                traceId: "relay",
+              });
+            if (allocation.capacityReleasedAt !== null)
+              yield* db
+                .update(relayManagedEndpointAllocations)
+                .set({
+                  capacityReleasedAt: null,
+                  generation: sql`${relayManagedEndpointAllocations.generation}+1`,
+                })
+                .where(whereAllocation(input))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ManagedEndpointAllocationPersistenceError({
+                        operation: "reserve",
+                        stage: "database-request",
+                        ...input,
+                        cause,
+                      }),
+                  ),
+                );
+            const [current] = yield* db
+              .select(allocationSelection)
+              .from(relayManagedEndpointAllocations)
+              .where(whereAllocation(input))
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ManagedEndpointAllocationPersistenceError({
+                      operation: "reserve",
+                      stage: "database-request",
+                      ...input,
+                      cause,
+                    }),
+                ),
+              );
+            if (!current)
+              return yield* new RelayAuthorizationUnavailableError({
+                code: "authorization_unavailable",
+                traceId: "relay",
+              });
+            return current;
+          }),
+        )
+        .pipe(
+          Effect.mapError((e) =>
+            e._tag === "SqlError"
+              ? new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                })
+              : e,
           ),
         );
-
-      const allocation =
-        inserted[0] ??
-        (yield* db
-          .select(allocationSelection)
-          .from(relayManagedEndpointAllocations)
-          .where(whereAllocation(input))
-          .limit(1)
-          .pipe(
-            Effect.map((rows) => rows[0]),
-            Effect.mapError(
-              (cause) =>
-                new ManagedEndpointAllocationPersistenceError({
-                  operation: "reserve",
-                  stage: "database-request",
-                  ...input,
-                  cause,
-                }),
-            ),
-          ));
-
-      if (allocation === undefined) {
-        return yield* new ManagedEndpointAllocationPersistenceError({
-          operation: "reserve",
-          stage: "resolve-reservation",
-          ...input,
-        });
-      }
-
-      return allocation;
     }),
     recordTunnel: Effect.fn("relay.managed_endpoint_allocations.record_tunnel")(function* (
       input: RecordManagedEndpointTunnelInput,
@@ -500,7 +634,12 @@ export const make = Effect.gen(function* () {
                   isNull(relayEnvironmentLinks.revokedAt),
                 ),
               )
-              .where(inArray(relayManagedEndpointAllocations.tunnelName, batch))
+              .where(
+                and(
+                  inArray(relayManagedEndpointAllocations.tunnelName, batch),
+                  isNull(relayManagedEndpointAllocations.deletedAt),
+                ),
+              )
               .pipe(
                 Effect.map((rows) =>
                   rows.map(
@@ -586,8 +725,10 @@ export const make = Effect.gen(function* () {
             ...(input.tunnelId === null ? {} : { tunnelId: input.tunnelId }),
             cause,
           });
-        return yield* db.$client
-          .withTransaction(
+        // Release finalization reenters AccountTransactions, so take the account lock before the row.
+        return yield* tx
+          .run(
+            { userIds: [input.userId] },
             db
               .select({ generation: relayManagedEndpointAllocations.generation })
               .from(relayManagedEndpointAllocations)
@@ -611,7 +752,11 @@ export const make = Effect.gen(function* () {
               ),
           )
           .pipe(
-            Effect.mapError((cause) => (SqlError.isSqlError(cause) ? lockError(cause) : cause)),
+            Effect.mapError((cause) =>
+              SqlError.isSqlError(cause) || isAuthorizationUnavailable(cause)
+                ? lockError(cause)
+                : cause,
+            ),
           );
       },
     ),
@@ -647,11 +792,64 @@ export const make = Effect.gen(function* () {
         );
       return claimed;
     }),
+    markCapacityReleased: Effect.fn("relay.managed_endpoint_allocations.release_capacity")(
+      function* (input) {
+        return yield* tx
+          .run(
+            { userIds: [input.userId] },
+            Effect.gen(function* () {
+              const now = DateTime.formatIso(yield* DateTime.now);
+              return yield* db
+                .update(relayManagedEndpointAllocations)
+                .set({
+                  capacityReleasedAt: now,
+                  generation: sql`${relayManagedEndpointAllocations.generation}+1`,
+                  ...(input.markReleased ? { tunnelReleasedAt: now } : {}),
+                })
+                .where(
+                  and(
+                    whereAllocation(input),
+                    eq(relayManagedEndpointAllocations.generation, input.generation),
+                    notExists(
+                      new QueryBuilder()
+                        .select({ id: relayManagedProvisioningIntents.id })
+                        .from(relayManagedProvisioningIntents)
+                        .where(
+                          and(
+                            eq(
+                              relayManagedProvisioningIntents.allocationIncarnationId,
+                              relayManagedEndpointAllocations.incarnationId,
+                            ),
+                            inArray(relayManagedProvisioningIntents.state, ["intent", "created"]),
+                          ),
+                        ),
+                    ),
+                  ),
+                )
+                .returning({ id: relayManagedEndpointAllocations.incarnationId })
+                .pipe(Effect.map((rows) => rows.length > 0));
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ManagedEndpointAllocationPersistenceError({
+                  operation: "release-capacity",
+                  stage: "database-request",
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  cause,
+                }),
+            ),
+          );
+      },
+    ),
     remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
       input: ManagedEndpointAllocationKey,
     ) {
       yield* db
-        .delete(relayManagedEndpointAllocations)
+        .update(relayManagedEndpointAllocations)
+        .set({ deletedAt: DateTime.formatIso(yield* DateTime.now) })
         .where(whereAllocation(input))
         .pipe(
           Effect.mapError(
@@ -668,18 +866,106 @@ export const make = Effect.gen(function* () {
     removeClaimed: Effect.fn("relay.managed_endpoint_allocations.remove_claimed")(function* (
       input: RemoveClaimedManagedEndpointAllocationInput,
     ) {
-      return yield* db
-        .delete(relayManagedEndpointAllocations)
-        .where(
-          and(
-            whereAllocation(input),
-            eq(relayManagedEndpointAllocations.incarnationId, input.incarnationId),
-            eq(relayManagedEndpointAllocations.generation, input.generation),
-          ),
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const intents = relayManagedProvisioningIntents;
+      return yield* tx
+        .run(
+          { userIds: [input.userId] },
+          Effect.gen(function* () {
+            // The teardown claim fences provisions begun at older generations from recording a tunnel, so a
+            // stopped or crashed one would otherwise block removal and the next intent for this endpoint.
+            const abandoned = yield* db
+              .update(intents)
+              .set({ state: "abandoned", updatedAt: sql`now()` })
+              .where(
+                and(
+                  eq(intents.allocationIncarnationId, input.incarnationId),
+                  inArray(intents.state, ["intent", "created"]),
+                  lt(intents.allocationGeneration, input.generation),
+                  exists(
+                    new QueryBuilder()
+                      .select({ id: relayManagedEndpointAllocations.incarnationId })
+                      .from(relayManagedEndpointAllocations)
+                      .where(
+                        and(
+                          whereAllocation(input),
+                          eq(relayManagedEndpointAllocations.generation, input.generation),
+                        ),
+                      ),
+                  ),
+                ),
+              )
+              .returning({
+                stage: intents.stage,
+                endpointKey: intents.endpointKey,
+                tunnelName: intents.tunnelName,
+                tunnelId: intents.tunnelId,
+              });
+            const [removed] = yield* db
+              .update(relayManagedEndpointAllocations)
+              .set({ deletedAt: now, capacityReleasedAt: now })
+              .where(
+                and(
+                  whereAllocation(input),
+                  notExists(
+                    new QueryBuilder()
+                      .select({ id: intents.id })
+                      .from(intents)
+                      .where(
+                        and(
+                          eq(
+                            intents.allocationIncarnationId,
+                            relayManagedEndpointAllocations.incarnationId,
+                          ),
+                          inArray(intents.state, ["intent", "created"]),
+                        ),
+                      ),
+                  ),
+                  eq(relayManagedEndpointAllocations.generation, input.generation),
+                ),
+              )
+              .returning({
+                endpointGeneration: relayManagedEndpointAllocations.endpointGeneration,
+                hostname: relayManagedEndpointAllocations.hostname,
+                dnsRecordId: relayManagedEndpointAllocations.dnsRecordId,
+              });
+            if (removed === undefined) return false;
+            // An abandoned provision may have created, or may still create, a tunnel under this name that no
+            // allocation records. Retire the name for the collector, as suspension does, and advance the
+            // endpoint generation so the next allocation for this environment gets a name that is not retired.
+            for (const intent of abandoned) {
+              yield* db
+                .insert(relayRetiredEndpoints)
+                .values({
+                  stage: intent.stage,
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  generation: removed.endpointGeneration,
+                  endpointKey: intent.endpointKey,
+                  tunnelName: intent.tunnelName,
+                  hostname: removed.hostname,
+                  tunnelId: intent.tunnelId,
+                  dnsRecordId: removed.dnsRecordId,
+                })
+                .onConflictDoNothing();
+              yield* db
+                .update(relayEndpointIdentities)
+                .set({
+                  highWaterGeneration: sql`${relayEndpointIdentities.highWaterGeneration} + 1`,
+                })
+                .where(
+                  and(
+                    eq(relayEndpointIdentities.stage, intent.stage),
+                    eq(relayEndpointIdentities.userId, input.userId),
+                    eq(relayEndpointIdentities.environmentId, input.environmentId),
+                    eq(relayEndpointIdentities.highWaterGeneration, removed.endpointGeneration),
+                  ),
+                );
+            }
+            return true;
+          }),
         )
-        .returning({ userId: relayManagedEndpointAllocations.userId })
         .pipe(
-          Effect.map((rows) => rows.length > 0),
           Effect.mapError(
             (cause) =>
               new ManagedEndpointAllocationPersistenceError({

@@ -1,3 +1,4 @@
+import { AccountDeletionSection } from "../cloud/AccountDeletionSection";
 import { findErrorTraceId } from "@goat/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -203,6 +204,7 @@ export function GoatConnectUserProfilePage() {
         />
       }
     >
+      <AccountDeletionSection />
       <div>
         {environmentsState.error ? (
           <div className="mb-4 border-t border-destructive/35 py-3 text-xs" role="alert">

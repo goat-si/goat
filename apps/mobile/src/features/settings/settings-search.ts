@@ -1,4 +1,5 @@
 import { foldSearchQuery, rankSearchItems, scoreSearchTerms } from "@goat/shared/paletteSearch";
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 
 import type { SettingsPageTarget } from "./components/settings-page-targets";
 import type { GoatSettingsPageTarget } from "./components/goat-settings-page-targets";
@@ -114,7 +115,14 @@ export function filterSettingsSections<
         rankSearchItems(rows, ({ row, section }, options) =>
           scoreSearchTerms(
             normalizedQuery,
-            [row.label, ...(section ? [section] : []), ...(termsById.get(row.id) ?? [])],
+            [
+              row.label,
+              ...(section ? [section] : []),
+              ...(termsById.get(row.id) ?? []),
+              ...(row.id === "SettingsHubNodes" && isGoatConnectEnabled()
+                ? ["connect", "access", "grant", "revoke"]
+                : []),
+            ],
             options,
           ),
         ).map(({ item }) => item.row),

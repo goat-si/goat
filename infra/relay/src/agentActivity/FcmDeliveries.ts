@@ -1,3 +1,6 @@
+import * as DeliveryAuthorization from "./DeliveryAuthorization.ts";
+import { signDeliveryPayload, verifyDeliverySignature } from "./deliveryJobSigning.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import { and, eq } from "drizzle-orm";
 import {
   RelayAgentActivityState,
@@ -33,6 +36,9 @@ import {
 } from "./agentActivityAlerts.ts";
 
 export const FcmDeliveryJob = Schema.Struct({
+  version: Schema.Literal(2),
+  jobId: Schema.String,
+  accountEpoch: Schema.Int.check(Schema.isGreaterThan(0)),
   userId: Schema.String,
   deviceId: Schema.String,
   token: Schema.String,
@@ -41,7 +47,8 @@ export const FcmDeliveryJob = Schema.Struct({
   replay: Schema.optional(Schema.Boolean),
 });
 export type FcmDeliveryJob = typeof FcmDeliveryJob.Type;
-const decodeJob = Schema.decodeUnknownEffect(FcmDeliveryJob);
+const SignedFcmDeliveryJob = Schema.Struct({ payload: FcmDeliveryJob, signature: Schema.String });
+const decodeJob = Schema.decodeUnknownEffect(SignedFcmDeliveryJob);
 const decodePreferences = Schema.decodeUnknownOption(
   Schema.fromJsonString(RelayAgentAwarenessPreferences),
 );
@@ -120,11 +127,15 @@ export class FcmDeliveries extends Context.Service<
       readonly target: LiveActivities.TargetRow;
       readonly state: RelayAgentActivityState | null;
       readonly replay?: boolean;
-    }) => Effect.Effect<RelayDeliveryResult | null, FcmDeliveryError>;
+    }) => Effect.Effect<
+      RelayDeliveryResult | null,
+      FcmDeliveryError | RelayAuthorizationUnavailableError
+    >;
     readonly process: (
       body: unknown,
     ) => Effect.Effect<
       void,
+      | RelayAuthorizationUnavailableError
       | FcmDeliveryError
       | FcmClient.FcmClientError
       | PlatformError.PlatformError
@@ -138,6 +149,7 @@ export class FcmDeliveries extends Context.Service<
 >()("goat-relay/agentActivity/FcmDeliveries") {}
 
 export const make = Effect.gen(function* () {
+  const authorization = yield* DeliveryAuthorization.DeliveryAuthorization;
   const config = yield* RelayConfiguration.RelayConfiguration;
   const crypto = yield* Crypto.Crypto;
   const sender = yield* FcmDeliveryQueueSender.FcmDeliveryQueueSender;
@@ -162,14 +174,34 @@ export const make = Effect.gen(function* () {
         };
       }
       const now = yield* DateTime.now;
+      if (input.target.account_epoch === null) return null;
+      const payload = {
+        version: 2,
+        jobId: yield* crypto
+          .randomUUIDv4()
+          .pipe(Effect.mapError((cause) => new FcmDeliveryError({ operation: "enqueue", cause }))),
+        accountEpoch: input.target.account_epoch,
+        userId: input.target.user_id,
+        deviceId: input.target.device_id,
+        token: input.target.push_token,
+        state: input.state,
+        ...(input.replay ? { replay: true } : {}),
+        queuedAt: now.epochMilliseconds,
+      } satisfies FcmDeliveryJob;
+      if (
+        !(yield* authorization.eligible({
+          userId: payload.userId,
+          deviceId: payload.deviceId,
+          accountEpoch: payload.accountEpoch,
+          token: payload.token,
+          kind: "push_notification",
+        }))
+      )
+        return null;
       yield* sender
         .send({
-          userId: input.target.user_id,
-          deviceId: input.target.device_id,
-          token: input.target.push_token,
-          state: input.state,
-          ...(input.replay ? { replay: true } : {}),
-          queuedAt: now.epochMilliseconds,
+          payload,
+          signature: signDeliveryPayload(config.apnsDeliveryJobSigningSecret, "fcm-v2", payload),
         })
         .pipe(Effect.mapError((cause) => new FcmDeliveryError({ operation: "enqueue", cause })));
       return {
@@ -183,9 +215,27 @@ export const make = Effect.gen(function* () {
       };
     }),
     process: Effect.fn("relay.fcm.process")(function* (body) {
-      const job = yield* decodeJob(body).pipe(
+      const signed = yield* decodeJob(body).pipe(
         Effect.mapError((cause) => new FcmDeliveryError({ operation: "decode-job", cause })),
       );
+      if (
+        !verifyDeliverySignature(
+          config.apnsDeliveryJobSigningSecret,
+          "fcm-v2",
+          signed.payload,
+          signed.signature,
+        )
+      )
+        return;
+      const job = signed.payload;
+      const deliveryTarget = {
+        userId: job.userId,
+        deviceId: job.deviceId,
+        accountEpoch: job.accountEpoch,
+        token: job.token,
+        kind: "push_notification" as const,
+      };
+      if (!(yield* authorization.eligible(deliveryTarget))) return;
       const now = yield* DateTime.now;
       if (now.epochMilliseconds - job.queuedAt > 5 * 60_000) return;
       const targets = yield* devices.listTargets({ userId: job.userId });
@@ -300,6 +350,7 @@ export const make = Effect.gen(function* () {
         const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(alert.alert_id));
         data.alert_id = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
       }
+      if (!(yield* authorization.eligible(deliveryTarget))) return;
       const result = yield* client.send({
         token: job.token,
         packageName: target.bundle_id,
@@ -315,6 +366,7 @@ export const make = Effect.gen(function* () {
               eq(relayMobileDevices.userId, job.userId),
               eq(relayMobileDevices.deviceId, job.deviceId),
               eq(relayMobileDevices.pushToken, job.token),
+              eq(relayMobileDevices.accountEpoch, job.accountEpoch),
             ),
           )
           .pipe(
@@ -323,14 +375,16 @@ export const make = Effect.gen(function* () {
             ),
           );
       } else if (acknowledgeAggregate) {
-        yield* devices.markDelivery({
-          userId: job.userId,
-          deviceId: job.deviceId,
-          kind: active ? "live_activity_update" : "live_activity_end",
-          // Retain terminal rows as the baseline so finished-card replays cannot alert again.
-          aggregate: preferences.value.liveActivitiesEnabled ? aggregate : null,
-          deliveredAt: DateTime.formatIso(now),
-        });
+        yield* devices
+          .markDelivery({
+            userId: job.userId,
+            deviceId: job.deviceId,
+            kind: active ? "live_activity_update" : "live_activity_end",
+            // Retain terminal rows as the baseline so finished-card replays cannot alert again.
+            aggregate: preferences.value.liveActivitiesEnabled ? aggregate : null,
+            deliveredAt: DateTime.formatIso(now),
+          })
+          .pipe(Effect.provideService(DeliveryAuthorization.DeliveryContext, deliveryTarget));
       }
     }),
   });

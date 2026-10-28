@@ -1,3 +1,5 @@
+import * as AccountDeviceAdmission from "../accounts/AccountDeviceAdmission.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import type {
   RelayClientDeviceRecord,
   RelayDeviceRegistrationRequest,
@@ -59,11 +61,17 @@ export class Devices extends Context.Service<
     readonly register: (input: {
       readonly userId: string;
       readonly registration: RelayDeviceRegistrationRequest;
-    }) => Effect.Effect<void, DeviceRegistrationPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      DeviceRegistrationPersistenceError | AccountDeviceAdmission.DeviceAdmissionError
+    >;
     readonly unregister: (input: {
       readonly userId: string;
       readonly deviceId: string;
-    }) => Effect.Effect<void, DeviceUnregistrationPersistenceError>;
+    }) => Effect.Effect<
+      void,
+      DeviceUnregistrationPersistenceError | RelayAuthorizationUnavailableError
+    >;
     readonly listForUser: (input: {
       readonly userId: string;
     }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, DeviceListPersistenceError>;
@@ -72,146 +80,168 @@ export class Devices extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const admission = yield* AccountDeviceAdmission.AccountDeviceAdmission;
 
   return Devices.of({
     register: Effect.fn("relay.devices.register")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.mobile.device_id": input.registration.deviceId,
-      });
-      const updatedAt = DateTime.formatIso(yield* DateTime.now);
-      const registration = input.registration;
-
-      // Alchemy's lazy drizzle proxies become Effects only at yield*; Effect.all sends raw proxies into a spinning fiber.
-      if (registration.pushToken) {
-        yield* db
-          .update(relayMobileDevices)
-          .set({ pushToken: null, updatedAt })
-          .where(eq(relayMobileDevices.pushToken, registration.pushToken))
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new DeviceRegistrationPersistenceError({
-                  userId: input.userId,
-                  deviceId: registration.deviceId,
-                  stage: "claim-push-token",
-                  cause,
-                }),
-            ),
-          );
-      }
-      if (registration.pushToStartToken) {
-        yield* db
-          .update(relayMobileDevices)
-          .set({ pushToStartToken: null, updatedAt })
-          .where(eq(relayMobileDevices.pushToStartToken, registration.pushToStartToken))
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new DeviceRegistrationPersistenceError({
-                  userId: input.userId,
-                  deviceId: registration.deviceId,
-                  stage: "claim-push-to-start-token",
-                  cause,
-                }),
-            ),
-          );
-      }
-
-      yield* db
-        .insert(relayMobileDevices)
-        .values({
+      return yield* admission.write(
+        {
           userId: input.userId,
-          deviceId: registration.deviceId,
-          label: registration.label,
-          platform: registration.platform,
-          iosMajorVersion: registration.iosMajorVersion ?? null,
-          androidApiLevel: registration.androidApiLevel ?? null,
-          appVersion: registration.appVersion ?? null,
-          bundleId: registration.bundleId ?? null,
-          apsEnvironment: registration.apsEnvironment ?? null,
-          pushToken: registration.pushToken ?? null,
-          pushToStartToken: registration.pushToStartToken ?? null,
-          preferencesJson: registration.preferences,
-          createdAt: updatedAt,
-          updatedAt,
-        })
-        .onConflictDoUpdate({
-          target: [relayMobileDevices.userId, relayMobileDevices.deviceId],
-          set: {
-            platform: registration.platform,
-            label: registration.label,
-            iosMajorVersion: registration.iosMajorVersion ?? null,
-            androidApiLevel: registration.androidApiLevel ?? null,
-            appVersion: registration.appVersion ?? null,
-            // Older builds must preserve newer routing fields on re-registration.
-            bundleId: sql`coalesce(excluded.bundle_id, ${relayMobileDevices.bundleId})`,
-            apsEnvironment: sql`coalesce(
+          deviceId: input.registration.deviceId,
+          tokens: [input.registration.pushToken, input.registration.pushToStartToken].filter(
+            (t): t is string => !!t,
+          ),
+        },
+        (accountEpoch) =>
+          Effect.gen(function* () {
+            yield* Effect.annotateCurrentSpan({
+              "relay.mobile.device_id": input.registration.deviceId,
+            });
+            const updatedAt = DateTime.formatIso(yield* DateTime.now);
+            const registration = input.registration;
+
+            // Alchemy's lazy drizzle proxies become Effects only at yield*; Effect.all sends raw proxies into a spinning fiber.
+            if (registration.pushToken) {
+              yield* db
+                .update(relayMobileDevices)
+                .set({ pushToken: null, updatedAt })
+                .where(eq(relayMobileDevices.pushToken, registration.pushToken))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new DeviceRegistrationPersistenceError({
+                        userId: input.userId,
+                        deviceId: registration.deviceId,
+                        stage: "claim-push-token",
+                        cause,
+                      }),
+                  ),
+                );
+            }
+            if (registration.pushToStartToken) {
+              yield* db
+                .update(relayMobileDevices)
+                .set({ pushToStartToken: null, updatedAt })
+                .where(eq(relayMobileDevices.pushToStartToken, registration.pushToStartToken))
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new DeviceRegistrationPersistenceError({
+                        userId: input.userId,
+                        deviceId: registration.deviceId,
+                        stage: "claim-push-to-start-token",
+                        cause,
+                      }),
+                  ),
+                );
+            }
+
+            yield* db
+              .insert(relayMobileDevices)
+              .values({
+                userId: input.userId,
+                accountEpoch,
+                deliveryDisabledAt: null,
+                deviceId: registration.deviceId,
+                label: registration.label,
+                platform: registration.platform,
+                iosMajorVersion: registration.iosMajorVersion ?? null,
+                androidApiLevel: registration.androidApiLevel ?? null,
+                appVersion: registration.appVersion ?? null,
+                bundleId: registration.bundleId ?? null,
+                apsEnvironment: registration.apsEnvironment ?? null,
+                pushToken: registration.pushToken ?? null,
+                pushToStartToken: registration.pushToStartToken ?? null,
+                preferencesJson: registration.preferences,
+                createdAt: updatedAt,
+                updatedAt,
+              })
+              .onConflictDoUpdate({
+                target: [relayMobileDevices.userId, relayMobileDevices.deviceId],
+                set: {
+                  accountEpoch,
+                  deliveryDisabledAt: null,
+                  platform: registration.platform,
+                  label: registration.label,
+                  iosMajorVersion: registration.iosMajorVersion ?? null,
+                  androidApiLevel: registration.androidApiLevel ?? null,
+                  appVersion: registration.appVersion ?? null,
+                  // Older builds must preserve newer routing fields on re-registration.
+                  bundleId: sql`coalesce(excluded.bundle_id, ${relayMobileDevices.bundleId})`,
+                  apsEnvironment: sql`coalesce(
                 excluded.aps_environment,
                 ${relayMobileDevices.apsEnvironment}
               )`,
-            pushToken: sql`coalesce(excluded.push_token, ${relayMobileDevices.pushToken})`,
-            pushToStartToken: sql`coalesce(
+                  pushToken: sql`coalesce(excluded.push_token,CASE WHEN ${relayMobileDevices.accountEpoch}=excluded.account_epoch THEN ${relayMobileDevices.pushToken} ELSE NULL END)`,
+                  pushToStartToken: sql`coalesce(
                 excluded.push_to_start_token,
-                ${relayMobileDevices.pushToStartToken}
+                CASE WHEN ${relayMobileDevices.accountEpoch}=excluded.account_epoch THEN ${relayMobileDevices.pushToStartToken} ELSE NULL END
               )`,
-            preferencesJson: registration.preferences,
-            updatedAt,
-          },
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new DeviceRegistrationPersistenceError({
-                userId: input.userId,
-                deviceId: registration.deviceId,
-                stage: "upsert-device",
-                cause,
-              }),
-          ),
-        );
+                  preferencesJson: registration.preferences,
+                  updatedAt,
+                },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new DeviceRegistrationPersistenceError({
+                      userId: input.userId,
+                      deviceId: registration.deviceId,
+                      stage: "upsert-device",
+                      cause,
+                    }),
+                ),
+              );
+          }),
+      );
     }),
     unregister: Effect.fn("relay.devices.unregister")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.mobile.device_id": input.deviceId,
-      });
-      yield* db
-        .delete(relayLiveActivities)
-        .where(
-          and(
-            eq(relayLiveActivities.userId, input.userId),
-            eq(relayLiveActivities.deviceId, input.deviceId),
-          ),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new DeviceUnregistrationPersistenceError({
-                userId: input.userId,
-                deviceId: input.deviceId,
-                stage: "delete-live-activity",
-                cause,
-              }),
-          ),
-        );
-      yield* db
-        .delete(relayMobileDevices)
-        .where(
-          and(
-            eq(relayMobileDevices.userId, input.userId),
-            eq(relayMobileDevices.deviceId, input.deviceId),
-          ),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new DeviceUnregistrationPersistenceError({
-                userId: input.userId,
-                deviceId: input.deviceId,
-                stage: "delete-device",
-                cause,
-              }),
-          ),
-        );
+      return yield* admission.unregister(
+        input.userId,
+        Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan({
+            "relay.mobile.device_id": input.deviceId,
+          });
+          yield* db
+            .delete(relayLiveActivities)
+            .where(
+              and(
+                eq(relayLiveActivities.userId, input.userId),
+                eq(relayLiveActivities.deviceId, input.deviceId),
+              ),
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DeviceUnregistrationPersistenceError({
+                    userId: input.userId,
+                    deviceId: input.deviceId,
+                    stage: "delete-live-activity",
+                    cause,
+                  }),
+              ),
+            );
+          yield* db
+            .delete(relayMobileDevices)
+            .where(
+              and(
+                eq(relayMobileDevices.userId, input.userId),
+                eq(relayMobileDevices.deviceId, input.deviceId),
+              ),
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DeviceUnregistrationPersistenceError({
+                    userId: input.userId,
+                    deviceId: input.deviceId,
+                    stage: "delete-device",
+                    cause,
+                  }),
+              ),
+            );
+        }),
+      );
     }),
     listForUser: Effect.fn("relay.devices.listForUser")(function* (input) {
       const rows = yield* db

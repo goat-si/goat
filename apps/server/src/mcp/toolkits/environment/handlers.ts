@@ -1,6 +1,7 @@
 import * as ScopedReadMcp from "../../ScopedReadMcp.ts";
 import {
   OrchestratorMcpFailure,
+  ServerSettingsError,
   type ProjectId,
   type ProjectSettingsOverrides,
   type ServerSettings,
@@ -32,6 +33,10 @@ export function preferences(settings: ServerSettings) {
       projectStandingInstructions[projectId as ProjectId] = overrides.standingInstructions;
   }
   return {
+    hub: {
+      enabled: settings.hub.enabled,
+      connectDevicesHubProxy: settings.hub.connectDevicesHubProxy,
+    },
     defaultThreadEnvMode,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
@@ -98,6 +103,7 @@ export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
   goat_environment_preferences_update: McpToolAccess.destructive(
     McpToolAccess.writesEnvironment((input, check) =>
       Effect.gen(function* () {
+        const context = yield* Effect.context<Effect.Services<typeof check>>();
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
         const update = Effect.gen(function* () {
@@ -119,6 +125,18 @@ export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
                 projectSettingsOverrides === undefined
                   ? patch
                   : { ...patch, projectSettingsOverrides },
+                check.pipe(
+                  Effect.asVoid,
+                  Effect.provideContext(context),
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerSettingsError({
+                        settingsPath: "environment",
+                        operation: "write-file",
+                        cause,
+                      }),
+                  ),
+                ),
               )
               .pipe(Effect.mapError(unavailable)),
           );

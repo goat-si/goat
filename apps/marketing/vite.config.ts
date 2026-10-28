@@ -1,7 +1,10 @@
-import { defineConfig } from "vite-plus";
+import { defineConfig, type ViteUserConfig } from "vite-plus";
+import "vite-plus/test/config";
+import { getViteConfig } from "astro/config";
 
-// Astro reads astro.config.mjs. This file only configures `vp run` tasks.
-export default defineConfig({
+// Astro and Vite+ resolve separate Vite type copies; keep their recursive plugin types apart.
+const config: Pick<ViteUserConfig, "root" | "test" | "run"> = defineConfig({
+  test: { name: "marketing", include: ["src/**/*.test.ts"] },
   run: {
     tasks: {
       // `astro check` regenerates .astro/*.d.ts and then reads them, which
@@ -13,3 +16,6 @@ export default defineConfig({
     },
   },
 });
+
+// Root-level runs (CI's changed-test list) start elsewhere; Astro resolves src/pages from its root.
+export default getViteConfig(config, { root: import.meta.dirname });
