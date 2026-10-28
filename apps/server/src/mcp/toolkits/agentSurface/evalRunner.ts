@@ -373,7 +373,14 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
       bytes: 0,
       live: 0,
       restored: 0,
-      inflightWrite: undefined as string | undefined,
+      inflightWrite: undefined as
+        | {
+            readonly at: string;
+            readonly path: string;
+            readonly reconcile: string | undefined;
+            readonly keyRequired: boolean;
+          }
+        | undefined,
       completed: [] as Array<EvalStepRef>,
       operations: [] as Array<EvalOperation>,
     };
@@ -581,7 +588,13 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
           }),
           at,
         );
-        if (entry.effect !== "read") state.inflightWrite = at;
+        if (entry.effect !== "read")
+          state.inflightWrite = {
+            at,
+            path: entry.path,
+            reconcile,
+            keyRequired: "keyRequired" in entry && entry.keyRequired === true,
+          };
         const answered = yield* invoke(entry.path, sent).pipe(
           Effect.map(textOnly),
           Effect.onInterrupt(() =>
@@ -800,7 +813,15 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
                   ),
                   "run",
                 )
-              : halt(unknownOutcome(state.inflightWrite, undefined), state.inflightWrite),
+              : halt(
+                  unknownOutcome(
+                    state.inflightWrite.path,
+                    state.inflightWrite.reconcile,
+                    undefined,
+                    state.inflightWrite.keyRequired,
+                  ),
+                  state.inflightWrite.at,
+                ),
           ),
       }),
       Effect.result,

@@ -10,9 +10,11 @@ import {
 import { agentSurfaceRegistry, type AgentSurfaceEntry } from "@goat/contracts/agentSurface";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
@@ -57,6 +59,7 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
     plan?: boolean;
     partial?: "comment" | "submitReview";
     refuse?: "comment";
+    hang?: "comment";
   } = {},
 ) {
   const calls = yield* Ref.make<ReadonlyArray<{ method: string; input: unknown }>>([]);
@@ -66,14 +69,15 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
       Effect.andThen(
         options.partial === method
           ? Effect.fail(
-              // The host failed mid-request, so the write may have landed.
+              // The host failed after an earlier request of the same write, so part of it may have
+              // landed; a GitLab review can be throttled after its comments posted.
               new PullRequestOperationError({
                 operation: method,
                 detail: "partly posted",
                 cause: new PullRequestProviderError({
                   provider: SourceControlProviderKind.make("github"),
                   operation: method,
-                  reason: "failed",
+                  reason: method === "submitReview" ? "rate-limited" : "failed",
                   detail: "partly posted",
                 }),
               }),
@@ -87,7 +91,9 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
                     "You need write access on this repository to comment on a change request.",
                 }),
               )
-            : Effect.void,
+            : options.hang === method
+              ? Effect.never
+              : Effect.void,
       ),
     );
   const project = makeProject();
@@ -526,6 +532,28 @@ it.effect("keeps the pull request guidance when goat_eval stops on an unknown ou
           error: { code: "unknown_outcome", message: guidance },
         });
       expect(yield* Ref.get(h.calls)).toHaveLength(1);
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect("keeps the pull request caution when goat_eval times out during a write", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ hang: "comment" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const program =
+        '(pull_request.comment :url "https://github.com/sample-tools/goat/pull/42" :body "Slow")';
+      const running = yield* Effect.forkChild(
+        call("goat_eval", { program, clientRequestId: "eval-slow" }),
+      );
+      yield* TestClock.adjust("121 seconds");
+      expect(yield* Fiber.join(running)).toMatchObject({
+        status: "error",
+        error: {
+          code: "unknown_outcome",
+          message: expect.stringContaining("Never resend with a new key"),
+        },
+      });
     }).pipe(Effect.provide(h.registered));
   }),
 );

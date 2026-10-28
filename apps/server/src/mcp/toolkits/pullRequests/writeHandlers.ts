@@ -14,20 +14,15 @@ import { loadCaller, reauthorizationFailure } from "../../threadAccess.ts";
 import type { PullRequestTargetInput, PullRequestToolError, PullRequestsToolkit } from "./tools.ts";
 import { PullRequestWriteFailedError, PullRequestWriteRefusedError } from "./writeTools.ts";
 
-// Host answers that mean the request was never taken: no tool, no login, throttled, or no such PR.
-const NOT_TAKEN = new Set(["missing-tool", "unauthenticated", "rate-limited", "not-found"]);
-
-/** The service's own checks fail without a host cause; a host failure past them may have landed. */
-const classified = (error: PullRequests.PullRequestError) => {
-  const cause: unknown = error.cause;
-  const hostReason =
-    typeof cause === "object" && cause !== null && "reason" in cause ? cause.reason : undefined;
-  return error._tag === "PullRequestUnavailableError" ||
-    cause === undefined ||
-    (typeof hostReason === "string" && NOT_TAKEN.has(hostReason))
+/**
+ * The service's own checks fail before any host request and carry no host cause. Any host error
+ * may follow an earlier request of the same write (GitLab posts a review in several), so it stays
+ * an unknown outcome.
+ */
+const classified = (error: PullRequests.PullRequestError) =>
+  error.cause === undefined
     ? new PullRequestWriteRefusedError({ detail: error.message })
     : new PullRequestWriteFailedError({ cause: error });
-};
 
 const prWriteGate = Effect.fn("PullRequestsToolkit.prWriteGate")(function* () {
   const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
