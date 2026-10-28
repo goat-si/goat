@@ -16,7 +16,14 @@ interface TreeLine {
 // `- [12] AXRow "title" = "value" (description) [id=… actions=[…]]`; unnumbered lines lack `[n]`.
 const LINE = /^(\s*)- (?:\[(\d+)\] )?(\w+)(.*)$/;
 const QUOTED = /^\s*(?:"((?:[^"\\]|\\.)*)")?(?:\s*=\s*"((?:[^"\\]|\\.)*)")?/;
-const ID = /\[(?:[^\]]*\s)?id=([^\s\]]+)/;
+// The trailing metadata group, read with quoted text blanked so a title or value cannot supply it.
+const META = /\[((?:[^[\]]|\[[^\]]*\])*)\]\s*$/;
+const QUOTES = /"(?:[^"\\]|\\.)*"/g;
+const idOf = (rest: string) => {
+  const meta = META.exec(rest.replace(QUOTES, '""'))?.[1]?.replace(/actions=\[[^\]]*\]/g, "");
+  const ids = [...(meta ?? "").matchAll(/(?:^|\s)id=(\S+)/g)];
+  return ids.length === 1 ? ids[0]?.[1] : undefined;
+};
 /** Containers the driver leaves unnamed whose name is the text written in them. */
 const NAMED_BY_TEXT: ReadonlySet<string> = new Set(["AXRow", "AXCell", "AXOutlineRow"]);
 const TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
@@ -36,7 +43,7 @@ export const parseTree = (markdown: string): ReadonlyArray<TreeLine> =>
     const [, indent = "", index, role = "", rest = ""] = parsed;
     const quoted = QUOTED.exec(rest);
     const raw = quoted?.[2] ?? quoted?.[1];
-    const id = ID.exec(rest)?.[1];
+    const id = idOf(rest);
     return [
       {
         depth: indent.length,

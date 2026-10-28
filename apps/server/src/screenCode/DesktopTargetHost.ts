@@ -49,6 +49,7 @@ import {
   pageDraft,
   queryOmission,
   renderFailure,
+  tooLargeStep,
   READ_BOUNDS,
   viewportOf,
   type DesktopPages,
@@ -463,7 +464,7 @@ export const createDesktopTargetHost = (deps: {
       const search = query && driverQuery(query);
       // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
       // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
-      const read = (limit: number) =>
+      const read = (limit: number, filter?: string) =>
         request(
           "get_window_state",
           {
@@ -473,42 +474,41 @@ export const createDesktopTargetHost = (deps: {
             include_screenshot: capture,
             max_elements: limit,
             ...(capture ? {} : { tree_format: "both" }),
-            ...(search === undefined ? {} : { query: search }),
+            ...(filter === undefined ? {} : { query: filter }),
           },
           call,
           context,
           bound.connectionGeneration,
         );
-      let limit: number = READ_BOUNDS[0];
-      let reply = yield* read(limit);
-      // A whole tree too large to carry walks fewer elements, within the call's deadline; a
-      // query walks at least the driver's own floor, so a smaller bound would not shrink it.
-      for (const smaller of capture || query ? [] : READ_BOUNDS.slice(1)) {
-        if (object(driverValue(reply))?.code !== COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) break;
-        if ((yield* Clock.currentTimeMillis) >= call.deadlineMillis) break;
-        limit = smaller;
-        reply = yield* read(limit);
-      }
-      const state = object(driverValue(reply));
-      // The read ran and retired the driver's earlier tokens, so their refs go even when this
+      // A read that ran retired the driver's earlier tokens, so their refs go even when its
       // answer is unusable; only a driver naming another window makes the binding stale.
       const retire = () => {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
+        delete bound.pages;
       };
+      let limit: number = READ_BOUNDS[0];
+      let reply = yield* read(limit);
+      const oversized = () =>
+        object(driverValue(reply))?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE;
+      // Retire before any retry, which may fail after this read already retired the old tokens.
+      if (oversized()) retire();
+      // A query reads the bounded window whole, where names from nearby text are known, and asks
+      // the driver to filter only when that is too large.
+      const filtered = query !== undefined && search !== undefined && oversized();
+      if (filtered) reply = yield* read(limit, search);
+      // A whole tree too large to carry walks fewer elements, within the call's deadline; a
+      // query walks at least the driver's own floor, so a smaller bound would not shrink it.
+      for (const smaller of capture || query ? [] : READ_BOUNDS.slice(1)) {
+        if (!oversized() || (yield* Clock.currentTimeMillis) >= call.deadlineMillis) break;
+        limit = smaller;
+        reply = yield* read(limit);
+      }
+      const state = object(driverValue(reply));
       if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) {
         retire();
-        return yield* Effect.fail(
-          fail(
-            "tree_limit",
-            capture
-              ? "This window's capture answer is larger than GOAT carries in one read; nothing changed. Observe again."
-              : query
-                ? "Too many matches to return; use a more specific name or text."
-                : "This window's accessibility tree is larger than GOAT carries even at 256 elements; nothing changed. Take a screenshot of it, or observe({query:{name}}).",
-          ),
-        );
+        return yield* Effect.fail(fail("tree_limit", tooLargeStep(capture, query !== undefined)));
       }
       if (!state || integer(state.pid) === undefined || integer(state.window_id) === undefined) {
         retire();
@@ -546,7 +546,7 @@ export const createDesktopTargetHost = (deps: {
             )
           : treeText;
       const omitted = query
-        ? queryOmission(state, shown.length)
+        ? queryOmission(state, shown.length, filtered)
         : limit < READ_BOUNDS[0]
           ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
           : [];
@@ -578,7 +578,7 @@ export const createDesktopTargetHost = (deps: {
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
               indexedText: shownText,
-              complete: state.elements_complete === true,
+              complete: state.elements_complete === true && !filtered,
               truncated: state.truncated === true || limit < READ_BOUNDS[0],
               loading: false,
               elements: shown,

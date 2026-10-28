@@ -32,7 +32,7 @@ type Node = {
 };
 
 /** Activity Monitor-shaped: a large process table first, its toolbar (tabs, search, sort) last. */
-const activityMonitor = (rows: number) => {
+const activityMonitor = (rows: number, options: { readonly headerInTable?: boolean } = {}) => {
   const nodes: Node[] = [
     { index: 0, role: "AXWindow", depth: 0, label: "Activity Monitor", actions: ["AXRaise"] },
     { index: 1, role: "AXScrollArea", depth: 1, parent: 0 },
@@ -59,6 +59,19 @@ const activityMonitor = (rows: number) => {
         text: words,
         frame: { x: column * 200, y, w: 200, h: 20 },
       });
+  }
+  // A column header with its sort button inside the outline, after the rows, as AppKit tables have.
+  if (options.headerInTable) {
+    const column = next++;
+    nodes.push({ index: column, role: "AXColumn", depth: 3, parent: 2 });
+    nodes.push({
+      index: next++,
+      role: "AXButton",
+      depth: 4,
+      parent: column,
+      label: "Process Name",
+      actions: ["AXPress"],
+    });
   }
   const toolbar = next++;
   nodes.push({ index: toolbar, role: "AXToolbar", depth: 1, parent: 0 });
@@ -402,4 +415,74 @@ it.live(
       ]);
     }).pipe(Effect.provide(cellService(host)));
   },
+);
+
+it.effect(
+  "a page ref given the first page's observation id is refused before anything is sent",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent, ref, first } = yield* paged();
+      const page = (yield* host.observe(
+        call("get_window_state", { after: nextPage(first) }, ref),
+        context,
+      )).value as Observed;
+      const cell = page.elements.find((element) => element.role === "AXCell");
+      if (!cell) throw new Error("The page must carry a cell");
+      const before = sent.length;
+      const forged = yield* host
+        .invoke(
+          call("click", { elementRef: { ...cell.ref, observationId: first.observationId } }, ref),
+          context,
+        )
+        .pipe(Effect.result);
+      expect(forged._tag === "Failure" && forged.failure.code).toBe("stale_reference");
+      expect(sent).toHaveLength(before);
+    }),
+);
+
+it.effect("an oversized read retires earlier refs even when its smaller retry fails", () =>
+  Effect.gen(function* () {
+    let phase = 0;
+    const { host, sent } = fixture({
+      get_window_state: (args: Record<string, unknown>) =>
+        phase === 0
+          ? activityMonitor(1)
+          : Number(args.max_elements) >= 4096
+            ? tooLarge
+            : new DriverError({ status: "failed" }, "AX walk failed"),
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const ref = bound.value as ScreenTargetRef;
+    const first = (yield* host.observe(call("get_window_state", {}, ref), context))
+      .value as Observed;
+    phase = 1;
+    const failed = yield* host
+      .observe(call("get_window_state", {}, ref), context)
+      .pipe(Effect.result);
+    expect(failed._tag).toBe("Failure");
+    const cpu = first.elements.find((element) => element.name === "CPU");
+    if (!cpu) throw new Error("The first read must carry CPU");
+    const before = sent.length;
+    const click = yield* host
+      .invoke(call("click", { elementRef: cpu.ref }, ref), context)
+      .pipe(Effect.result);
+    expect(click._tag === "Failure" && click.failure.code).toBe("stale_reference");
+    expect(sent).toHaveLength(before);
+  }),
+);
+
+it.effect("a sort header inside the table outlasts the table's cells", () =>
+  Effect.gen(function* () {
+    // No window bounds, so nothing is off-window and table body goes from its end.
+    const { first: observation } = yield* paged({
+      list_windows: { windows: [{ pid: 42, window_id: 7, title: "Activity Monitor" }] },
+      get_window_state: activityMonitor(500, { headerInTable: true }),
+    });
+    expect(observation.truncated).toBe(true);
+    expect(observation.elements.map((element) => element.name)).toContain("Process Name");
+    expect(observation.elements.some((element) => element.role === "AXCell")).toBe(false);
+  }),
 );

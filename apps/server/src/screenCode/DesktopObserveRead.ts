@@ -135,6 +135,8 @@ export const matchesQuery = (row: DesktopRow, query: DesktopQuery) =>
 export const queryOmission = (
   state: Record<string, unknown>,
   matched: number,
+  /** The driver filtered the read, so names GOAT takes from text beside an element were not there. */
+  filtered = false,
 ): NonNullable<ScreenObservation["omitted"]> => {
   if (state.truncated === true) {
     const reason = string(state.truncation_reason)?.slice(0, 40) ?? "element limit";
@@ -145,6 +147,14 @@ export const queryOmission = (
       },
     ];
   }
+  if (filtered && matched === 0)
+    return [
+      {
+        kind: "budget",
+        detail:
+          "Not found in the driver's filtered read; names taken from text beside an element were not searched.",
+      },
+    ];
   return state.elements_complete === true || matched > 0
     ? []
     : [
@@ -204,3 +214,11 @@ export const renderFailure = (cause: unknown) =>
       ? "tree_limit"
       : "downstream_failure",
   );
+
+/** What to do about a read too large to carry, by what was read. */
+export const tooLargeStep = (capture: boolean, query: boolean) =>
+  capture
+    ? "This window's capture answer is larger than GOAT carries in one read; nothing changed. Observe again."
+    : query
+      ? "Too many matches to return; use a more specific name or text."
+      : "This window's accessibility tree is larger than GOAT carries even at 256 elements; nothing changed. Take a screenshot of it, or observe({query:{name}}).";

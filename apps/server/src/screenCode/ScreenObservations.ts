@@ -153,8 +153,8 @@ class ObservationIndex {
     string,
     {
       observationId: string;
-      /** Later pages of the same read; their refs resolve beside the first page's. */
-      pages: Set<string>;
+      /** Later pages of the same read, by the ref ids each one issued. */
+      pageOf: Map<string, string>;
       surfaceGeneration: number;
       tokens: Map<string, string>;
       editable: Set<string>;
@@ -183,7 +183,7 @@ class ObservationIndex {
   ): void {
     this.byTarget.set(targetId, {
       observationId,
-      pages: new Set(),
+      pageOf: new Map(),
       surfaceGeneration,
       tokens,
       editable,
@@ -201,15 +201,18 @@ class ObservationIndex {
   ): boolean {
     const entry = this.byTarget.get(targetId);
     if (!entry || entry.observationId !== baseObservationId) return false;
-    entry.pages.add(observationId);
-    for (const [id, token] of tokens) entry.tokens.set(id, token);
+    for (const [id, token] of tokens) {
+      entry.tokens.set(id, token);
+      entry.pageOf.set(id, observationId);
+    }
     for (const id of editable) entry.editable.add(id);
     return true;
   }
+  /** The entry when the ref was issued by that observation: the read, or the page that carried it. */
   private current(ref: ScreenElementRef) {
     const entry = this.byTarget.get(ref.targetId);
     return entry &&
-      (entry.observationId === ref.observationId || entry.pages.has(ref.observationId)) &&
+      (entry.pageOf.get(ref.id) ?? entry.observationId) === ref.observationId &&
       entry.surfaceGeneration === ref.surfaceGeneration
       ? entry
       : undefined;

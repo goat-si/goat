@@ -39,6 +39,7 @@ const TABLES: ReadonlySet<string> = new Set([
   "AXGrid",
 ]);
 const ROWS: ReadonlySet<string> = new Set(["AXRow", "AXOutlineRow"]);
+const HEADERS: ReadonlySet<string> = new Set(["AXColumn", "AXHeader"]);
 const CONTAINERS: ReadonlySet<string> = new Set([
   "AXGroup",
   "AXScrollArea",
@@ -119,7 +120,14 @@ export const desktopCutOrder = (
   const children = new Map<number, number[]>();
   walk(parse(markdown), (line, owner, ancestors) => {
     if (line.index === undefined) return;
-    if (ancestors.some((ancestor) => TABLES.has(ancestor.role))) body.add(line.index);
+    const table = ancestors.findIndex((ancestor) => TABLES.has(ancestor.role));
+    const inside = table < 0 ? [] : ancestors.slice(table + 1);
+    // Column headers and sort buttons sit inside the table but are chrome.
+    const header =
+      HEADERS.has(line.role) ||
+      inside.some((ancestor) => HEADERS.has(ancestor.role)) ||
+      (line.role === "AXButton" && !inside.some((ancestor) => ROWS.has(ancestor.role)));
+    if (table >= 0 && !header) body.add(line.index);
     if (owner !== undefined) children.set(owner, [...(children.get(owner) ?? []), line.index]);
   });
   const byIndex = new Map(elements.map((element) => [element.index, element]));

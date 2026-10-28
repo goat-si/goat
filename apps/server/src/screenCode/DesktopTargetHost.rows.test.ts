@@ -148,6 +148,27 @@ it.effect("elements carry their accessibility id", () =>
   }),
 );
 
+it.effect("an id written in a title or value never becomes the element's id", () =>
+  Effect.gen(function* () {
+    const observation = yield* read(
+      [
+        '- [7] AXButton "Save [id=delete]" [id=save actions=[press]]',
+        '- [8] AXTextField "Note" = "x [id=send]"',
+        "- [9] AXButton (Run [id=erase])",
+      ],
+      [
+        { index: 7, role: "AXButton", label: "Save [id=delete]", actions: ["AXPress"] },
+        { index: 8, role: "AXTextField", label: "Note", value: "x [id=send]" },
+        { index: 9, role: "AXButton", label: "Run [id=erase]" },
+      ],
+    );
+    const elements = byIndex(observation);
+    expect(elements[7]?.id).toBe("save");
+    expect(elements[8]?.id).toBeUndefined();
+    expect(elements[9]?.id).toBeUndefined();
+  }),
+);
+
 it.effect("a custom action string shows as its name", () =>
   Effect.gen(function* () {
     const observation = yield* read(
