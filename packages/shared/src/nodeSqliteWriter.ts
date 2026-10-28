@@ -66,6 +66,8 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   admissionPolicy: () => typeof Effect.interruptible | undefined,
 ) {
   const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  let initialized = false;
   const worker = yield* Effect.acquireRelease(
     Effect.try({
       try: () =>
@@ -86,14 +88,25 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
         }),
       catch: (cause) => failure(cause, "open"),
     }),
-    (worker) => Effect.promise(() => worker.terminate()),
+    (worker) =>
+      Effect.suspend(() => {
+        const retiring = worker.terminate();
+        if (initialized) return Effect.promise(() => retiring);
+        // Native startup can outlive termination; this instance never replaces its writer.
+        worker.unref();
+        return Effect.sync(() => {
+          runFork(
+            Effect.promise(() => retiring).pipe(
+              Effect.catchCause(() => Effect.logWarning("SQLite writer retirement failed")),
+            ),
+          );
+        });
+      }),
   );
   const requests = yield* Semaphore.make(1);
-  const runFork = Effect.runForkWith(yield* Effect.context<never>());
   let sequence = 0;
   let owner = 0;
   let stopped: SqlError | undefined;
-  let initialized = false;
   let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
   const failPending = (cause: unknown) => {
     stopped ??= failure(cause, "execute");

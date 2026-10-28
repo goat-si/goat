@@ -3,6 +3,17 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
 
+export const awaitWorkerExit = (worker: NodeWorkerThreads.Worker) =>
+  Effect.callback<void>((resume) => {
+    if (worker.threadId === -1) {
+      resume(Effect.void);
+      return;
+    }
+    const exit = () => resume(Effect.void);
+    worker.once("exit", exit);
+    return Effect.sync(() => worker.off("exit", exit));
+  });
+
 export const initialCheckpointPrelude = `
 (() => {
   const { parentPort } = require("node:worker_threads");

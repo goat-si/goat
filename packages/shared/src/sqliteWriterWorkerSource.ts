@@ -63,8 +63,9 @@ const initialize = () => {
       }
       return constants.SQLITE_OK;
     });
-    maintain();
+    maintain(true);
     parentPort.postMessage({ type: "ready" });
+    if (workerData.checkpoint && wal) idle = setTimeout(maintain, 100);
   } catch (error) {
     try { if (db) db.close(); } finally { db = undefined; }
     parentPort.postMessage({ type: "unavailable", message: String(error.message || error),
@@ -93,18 +94,18 @@ const prepare = (sql, cached) => {
   }
   return entry;
 };
-const maintain = () => {
+const maintain = (observeOnly = false) => {
   clearTimeout(idle);
   if (!workerData.checkpoint || !db || !wal || db.isTransaction) return;
   try {
     let state = db.prepare("PRAGMA wal_checkpoint(NOOP)").get();
     const limit = Number(db.prepare("PRAGMA journal_size_limit").get().journal_size_limit);
     const oversized = () => limit >= 0 && (statSync(workerData.filename + "-wal", { throwIfNoEntry: false })?.size ?? 0) > limit;
-    if (state.log - state.checkpointed >= 1000 || oversized()) {
+    if (!observeOnly && (state.log - state.checkpointed >= 1000 || oversized())) {
       db.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
       state = db.prepare("PRAGMA wal_checkpoint(NOOP)").get();
     }
-    if (state.log === state.checkpointed && (state.log >= 10000 || oversized())) {
+    if (!observeOnly && state.log === state.checkpointed && (state.log >= 10000 || oversized())) {
       const timeout = Number(db.prepare("PRAGMA busy_timeout").get().timeout);
       db.exec("PRAGMA busy_timeout = 0;");
       try { db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); }
@@ -114,11 +115,11 @@ const maintain = () => {
     blocked = state.log >= 10000 || oversized();
     if (unknown) parentPort.postMessage({ type: "maintenance-recovered" });
     unknown = false;
-    if (blocked || state.log - state.checkpointed >= 1000) idle = setTimeout(maintain, 100);
+    if (!observeOnly && (blocked || state.log - state.checkpointed >= 1000)) idle = setTimeout(maintain, 100);
   } catch {
     if (!unknown) parentPort.postMessage({ type: "maintenance-unavailable" });
     unknown = true;
-    idle = setTimeout(maintain, 100);
+    if (!observeOnly) idle = setTimeout(maintain, 100);
   }
 };
 parentPort.on("message", (request) => {

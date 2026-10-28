@@ -21,6 +21,7 @@ import {
   observeFailures,
   initialCheckpointPrelude,
   holdInitialCheckpoint,
+  awaitWorkerExit,
 } from "./nodeSqliteWriter.testFixtures.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
@@ -521,6 +522,7 @@ it.effect("fails startup without running inline SQLite", () =>
     assert.isTrue(Result.isFailure(failed));
     assert.equal(calls, 0);
     assert.equal(startedWorkers.length, 1);
+    yield* awaitWorkerExit(startedWorkers[0]!);
     assert.equal(startedWorkers[0]?.threadId, -1);
   }),
 );
@@ -560,6 +562,7 @@ it.effect(
       yield* TestClock.adjust("10 seconds");
       assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
       const worker = startedWorkers[0]!;
+      yield* awaitWorkerExit(worker);
       assert.equal(worker.threadId, -1);
       assert.equal(closeRequests, 0);
       restore();
@@ -725,9 +728,13 @@ it.effect(
         assert.deepEqual(startupCheckpoints, [], "startup must only observe WAL pressure");
         const firstReply = yield* Deferred.make<{ backpressure?: boolean }>();
         const worker = startedWorkers[0]!;
-        const listener = (reply: { backpressure?: boolean }) =>
-          Deferred.doneUnsafe(firstReply, Effect.succeed(reply));
-        worker.once("message", listener);
+        const listener = (reply: { id?: number; backpressure?: boolean }) => {
+          if (reply.id !== undefined) {
+            worker.off("message", listener);
+            Deferred.doneUnsafe(firstReply, Effect.succeed(reply));
+          }
+        };
+        worker.on("message", listener);
         yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
         const transaction = yield* sql
           .withTransaction(sql`INSERT INTO existing_wal VALUES ('after pressure')`)
