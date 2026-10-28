@@ -1,6 +1,60 @@
 import { entry } from "../entry.ts";
 
 export const hostEntries = {
+  "host.resource_history": entry({
+    resource: "host",
+    verb: "resource_history",
+    name: "goat_host_resource_history",
+    toolkit: "hostStatus",
+    summary: "Read bounded host resource telemetry history.",
+    description:
+      "Read bounded host resource telemetry history. Requires an explicit diagnostics:read client grant and live reauthorization.",
+    guide:
+      "Returns host telemetry buckets, top processes and collection health. The window is capped at 1 hour, with 240 points, 64 processes and 1 KiB command/name strings within 256 KiB. truncated marks cuts or a clamped request. Only outside MCP clients with an explicit diagnostics:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+    parameters: {
+      windowMs: "Requested history window in milliseconds, clamped to 1 second through 1 hour.",
+      bucketMs: "Requested bucket width in milliseconds; raised to limit the result to 240 points.",
+    },
+    examples: [
+      {
+        title: "Read bounded host resource telemetry history.",
+        args: { windowMs: 3600000, bucketMs: 60000 },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
+  "host.process_history": entry({
+    resource: "host",
+    verb: "process_history",
+    name: "goat_host_process_history",
+    toolkit: "hostStatus",
+    summary: "Read bounded GOAT process resource history.",
+    description:
+      "Read bounded GOAT process resource history. Requires an explicit diagnostics:read client grant and live reauthorization.",
+    guide:
+      "Returns CPU and memory history for GOAT backend processes. The window is capped at 1 hour, with 240 points, 64 processes and 1 KiB command strings within 256 KiB. truncated marks cuts or a clamped request. Only outside MCP clients with an explicit diagnostics:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+    parameters: {
+      windowMs: "Requested history window in milliseconds, clamped to 1 second through 1 hour.",
+      bucketMs: "Requested bucket width in milliseconds; raised to limit the result to 240 points.",
+    },
+    examples: [
+      {
+        title: "Read bounded GOAT process resource history.",
+        args: { windowMs: 3600000, bucketMs: 60000 },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "host.status": entry({
     resource: "host",
     verb: "status",

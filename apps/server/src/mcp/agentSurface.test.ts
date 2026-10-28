@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(233);
+  expect(entries).toHaveLength(238);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -387,6 +387,23 @@ const REASONS = {
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
+  "environment.usage": { reason: "grantChecked", readOnlyClient: "denied", fullClient: "denied" },
+  "host.process_history": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "host.resource_history": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "worktree.diff_preview": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "worktree.diff_file": { reason: "grantChecked", readOnlyClient: "denied", fullClient: "denied" },
   "scheduler.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "pending_request.list": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },

@@ -1,3 +1,7 @@
+import * as Usage from "../usage/UsageService.ts";
+import * as Processes from "../diagnostics/ProcessResourceMonitor.ts";
+import * as Telemetry from "../resourceTelemetry/ResourceTelemetry.ts";
+import * as Review from "../review/ReviewService.ts";
 import {
   type AgentToolListing,
   DEFAULT_AGENT_TOOL_LISTING,
@@ -234,6 +238,10 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
   Layer.mock(PreviewManager.PreviewManager)({}),
   Layer.mock(PreviewHandoffs.PreviewHandoffs)({}),
+  Layer.mock(Usage.UsageService)({}),
+  Layer.mock(Processes.ProcessResourceMonitor)({}),
+  Layer.mock(Telemetry.ResourceTelemetry)({}),
+  Layer.mock(Review.ReviewService)({}),
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(ProviderDiagnosisRouting.ProviderDiagnosisRouting)({}),
   Layer.mock(CloudAgentService.CloudAgentService)({}),

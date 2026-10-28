@@ -1,6 +1,82 @@
 import { entry } from "../entry.ts";
 
 export const worktreeEntries = {
+  "worktree.diff_file": entry({
+    resource: "worktree",
+    verb: "diff_file",
+    name: "goat_worktree_diff_file",
+    toolkit: "worktree",
+    summary: "Read bounded old and new file contents from a known GOAT checkout.",
+    description:
+      "Read bounded old and new file contents from a known GOAT checkout. Requires an explicit filesystem:read client grant and live reauthorization.",
+    guide:
+      "Returns oldContents and newContents for a review comparison, capped at 256 KiB per side on a UTF-8 boundary. oldTruncated, newTruncated and truncated mark cuts. Only outside MCP clients with an explicit filesystem:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+    parameters: {
+      projectId: "Registered project checkout; supply exactly one of projectId or threadId.",
+      threadId: "Registered thread worktree, or its project checkout when unbound.",
+      sourceKind: "working-tree, branch-range, staged or unstaged comparison.",
+      changeType: "change, rename-pure, rename-changed, new or deleted.",
+      baseRef: "Base revision, or null for the comparison default.",
+      headRef: "Head revision, or null for the comparison default.",
+      oldPath: "Old repository-relative file path.",
+      newPath: "New repository-relative file path.",
+    },
+    examples: [
+      {
+        title: "Read bounded old and new file contents from a known GOAT checkout.",
+        args: {
+          threadId: "thread:example",
+          sourceKind: "working-tree",
+          changeType: "change",
+          baseRef: null,
+          headRef: null,
+          oldPath: "README.md",
+          newPath: "README.md",
+        },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
+  "worktree.diff_preview": entry({
+    resource: "worktree",
+    verb: "diff_preview",
+    name: "goat_worktree_diff_preview",
+    toolkit: "worktree",
+    summary: "Read a bounded diff preview of a known GOAT checkout.",
+    description:
+      "Read a bounded diff preview of a known GOAT checkout. Requires an explicit filesystem:read client grant and live reauthorization.",
+    guide:
+      "Returns review sources, patches and file statistics for a registered project or thread checkout. At most four sources, 256 files per source and 128 KiB patch text per source fit within 256 KiB total. truncated marks omitted or cut output. Only outside MCP clients with an explicit filesystem:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+    parameters: {
+      projectId: "Registered project checkout; supply exactly one of projectId or threadId.",
+      threadId: "Registered thread worktree, or its project checkout when unbound.",
+      scope:
+        "working-tree, branch-range, staged or unstaged; omitted returns the normal review views.",
+      baseRef: "Base revision for a branch-range comparison.",
+      ignoreWhitespace: "Ignore whitespace changes when true.",
+      file: "Optional one-file comparison with path, previousPath and sourceKind.",
+      "file.path": "Repository-relative file path.",
+      "file.previousPath": "Previous repository-relative path for a rename, or null.",
+      "file.sourceKind": "Comparison containing the selected file.",
+    },
+    examples: [
+      {
+        title: "Read a bounded diff preview of a known GOAT checkout.",
+        args: { projectId: "project:example", scope: "working-tree" },
+      },
+    ],
+    effect: "read",
+    hostRoutable: false,
+    requires: "client",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "worktree.handoff": entry({
     resource: "worktree",
     verb: "handoff",

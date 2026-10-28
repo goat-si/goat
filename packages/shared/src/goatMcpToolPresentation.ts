@@ -406,6 +406,26 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_environment_usage: tool(
+    ["Read", "Reading", "Read", "environment usage"],
+    "environment-usage",
+  ),
+  goat_host_process_history: tool(
+    ["Read", "Reading", "Read", "process resource history"],
+    "host-process-history",
+  ),
+  goat_host_resource_history: tool(
+    ["Read", "Reading", "Read", "host resource history"],
+    "host-resource-history",
+  ),
+  goat_worktree_diff_preview: tool(
+    ["Read", "Reading", "Read", "worktree diff preview"],
+    "worktree-diff-preview",
+  ),
+  goat_worktree_diff_file: tool(
+    ["Read", "Reading", "Read", "worktree file contents"],
+    "worktree-diff-file",
+  ),
   goat_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",

@@ -1,3 +1,6 @@
+import { UsageSummaryInput } from "@goat/contracts";
+import * as Usage from "../../../usage/UsageService.ts";
+import * as ReadSchemas from "../../scopedReadSchemas.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -77,4 +80,17 @@ const EnvironmentPreferencesTool = Tool.make(
     success: Schema.Struct(PreferenceFields),
   },
 ).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.preferences_update"]));
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const UsageTool = Tool.make(agentSurfaceRegistry["environment.usage"].name, {
+  description: agentSurfaceRegistry["environment.usage"].description,
+  parameters: UsageSummaryInput,
+  success: ReadSchemas.UsageResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [McpInvocationContext.McpInvocationContext, Usage.UsageService],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.usage"]));
+
+export const EnvironmentToolkit = Toolkit.make(
+  UsageTool,
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+);
