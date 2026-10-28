@@ -115,8 +115,6 @@ import {
   type PullRequestRef,
   type ScheduledTaskListResult,
   AutomationResumeError,
-  type ServerLifecycleStreamEvent,
-  type TerminalMetadataStreamEvent,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -310,6 +308,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
+import { terminalMetadataStream } from "./terminalMetadataStream.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -3404,12 +3403,7 @@ export const layerWsRpc = (
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
           terminalOutputStream(terminalManager.subscribe),
         [WS_METHODS.subscribeTerminalMetadata]: (_input) =>
-          Stream.callback<TerminalMetadataStreamEvent>((queue) =>
-            Effect.acquireRelease(
-              terminalManager.subscribeMetadata((event) => Queue.offer(queue, event)),
-              (unsubscribe) => Effect.sync(unsubscribe),
-            ),
-          ),
+          terminalMetadataStream(terminalManager.subscribeMetadata),
         [WS_METHODS.previewOpen]: (input) => previewManager.open(input),
         [WS_METHODS.previewNavigate]: (input) => previewManager.navigate(input),
         [WS_METHODS.previewResize]: (input) => previewManager.resize(input),
@@ -3578,28 +3572,8 @@ export const layerWsRpc = (
             }),
           ),
         [WS_METHODS.subscribeServerLifecycle]: (input) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const liveBuffer = yield* Queue.unbounded<ServerLifecycleStreamEvent>();
-              yield* Effect.forkScoped(
-                lifecycleEvents.stream.pipe(
-                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
-                ),
-                { startImmediately: true },
-              );
-              const snapshot = yield* lifecycleEvents.snapshot;
-              const snapshotEvents = Array.from(snapshot.events)
-                .filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true)
-                .toSorted((left, right) => left.sequence - right.sequence);
-              const liveEvents = Stream.fromQueue(liveBuffer).pipe(
-                Stream.filter(
-                  (event) =>
-                    event.sequence > snapshot.sequence &&
-                    (event.type !== "runtimeDrain" || input.runtimeDrain === true),
-                ),
-              );
-              return Stream.concat(rpcInitialItems(snapshotEvents), liveEvents);
-            }),
+          lifecycleEvents.stream.pipe(
+            Stream.filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true),
           ),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           Stream.unwrap(
