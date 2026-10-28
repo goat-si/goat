@@ -2,6 +2,14 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+// D-10: shipped code never links to the source repository. A guide's link to it keeps its text,
+// and a bare URL is named; the published guides on the site keep their links.
+const SOURCE_REPO = String.raw`(?:https?:\/\/)?github\.com\/goat-si\/goat(?!-releases|_)`;
+const sourceLink = new RegExp(String.raw`\[([^\]]*)\]\(${SOURCE_REPO}[^)]*\)`, "gi");
+const sourceUrl = new RegExp(String.raw`${SOURCE_REPO}[^\s)\]>"'\`]*`, "gi");
+const withoutSourceLinks = (text: string) =>
+  text.replace(sourceLink, "$1").replace(sourceUrl, "the GOAT source repository");
+
 /**
  * GOAT's user guides (docs/user/*.md) keyed by page id, for the server pack build to inline as
  * __GOAT_USER_DOCS__ (apps/server/src/userDocs/UserDocs.ts). Every packaged runtime runs that one
@@ -15,7 +23,7 @@ export function readUserGuides(repoRoot: string): Record<string, string> {
       .sort()
       .map((file) => [
         file.slice(0, -".md".length),
-        NodeFS.readFileSync(NodePath.join(directory, file), "utf8"),
+        withoutSourceLinks(NodeFS.readFileSync(NodePath.join(directory, file), "utf8")),
       ]),
   );
   if (Object.keys(guides).length === 0) throw new Error(`No user guides in ${directory}.`);
