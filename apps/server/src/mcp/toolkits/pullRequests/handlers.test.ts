@@ -855,7 +855,15 @@ describe("pull request reads", () => {
           number: 9,
         });
         expect(aliased.url).toBe(result.url);
+        // So does that host with the path past the organization, as its own URLs spell it.
+        const aliasedPath = yield* lone.call("goat_pull_request_checks", {
+          host: "two.visualstudio.com",
+          repository: "project/_git/web",
+          number: 9,
+        });
+        expect(aliasedPath.url).toBe(result.url);
         expect((yield* Ref.get(lone.reads)).map((ref) => [ref.projectId, ref.repository])).toEqual([
+          ["project-two-web", result.repository],
           ["project-two-web", result.repository],
           ["project-two-web", result.repository],
           ["project-two-web", result.repository],

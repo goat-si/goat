@@ -337,8 +337,15 @@ const make = Effect.gen(function* () {
     };
     const holds = (project: OrchestrationProjectShell, repository: string, host?: string) => {
       const own = projectHostAndProvider(project).host;
+      if (own === null) return false;
+      // A full path names its repository on the host given, so it is normalized there; only a
+      // short name needs the project's own host to expand it.
+      if (repository.includes("/")) {
+        const key = repositoryKeyOf(project);
+        const target = normalizeThreadPullRequestKey({ host: host ?? own, repository, number: 1 });
+        return key !== null && target.host === key.host && target.repository === key.repository;
+      }
       return (
-        own !== null &&
         (host === undefined || namesHost(project, host)) &&
         projectForPullRequest([project], { host: own, repository }, undefined) !== undefined
       );
