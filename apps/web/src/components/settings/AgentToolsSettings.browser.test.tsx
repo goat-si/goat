@@ -19,15 +19,18 @@ const state = vi.hoisted(() => ({
 vi.mock(import("../../state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: ((command: unknown) =>
-    command === "updateSettings" ? state.updateSettings : vi.fn()) as never,
+    command === state.updateSettings ? state.updateSettings : vi.fn()) as never,
 }));
 vi.mock(import("../../state/server"), async (original) => {
   const actual = await original();
+  const { Atom } = await import("effect/reactivity");
   return {
     ...actual,
     serverEnvironment: {
       ...actual.serverEnvironment,
-      updateSettings: "updateSettings",
+      updateSettings: Object.assign(state.updateSettings, {
+        permissionAtom: () => Atom.make(true),
+      }),
     } as unknown as typeof actual.serverEnvironment,
   };
 });
