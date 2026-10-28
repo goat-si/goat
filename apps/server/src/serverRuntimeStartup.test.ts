@@ -19,6 +19,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
@@ -304,6 +305,206 @@ it.effect("enqueueCommand fails queued work when readiness fails", () =>
       assert.equal(error.message, "Server runtime startup failed before command readiness.");
     }),
   ),
+);
+
+it.effect("does not execute a startup mutation whose caller cancelled before readiness", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const gate = yield* ServerRuntimeStartup.makeCommandGate;
+      const mutations = yield* Ref.make(0);
+      const cancelled = yield* gate
+        .enqueueCommand(Ref.update(mutations, (count) => count + 1))
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Fiber.interrupt(cancelled);
+      const sentinel = yield* gate
+        .enqueueCommand(Effect.succeed("drained"))
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* gate.signalCommandReady;
+      assert.equal(yield* Fiber.join(sentinel), "drained");
+      assert.equal(yield* Ref.get(mutations), 0);
+    }),
+  ),
+);
+
+it.effect(
+  "caps startup admission at 64 including the worker's pre-ready entry and reuses cancelled slots",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* ServerRuntimeStartup.makeCommandGate;
+        const mutations: number[] = [];
+        const enqueue = (id: number) =>
+          gate
+            .enqueueCommand(Effect.sync(() => mutations.push(id)))
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+        const pending = yield* Effect.forEach(
+          Array.from({ length: 64 }, (_, id) => id),
+          enqueue,
+        );
+        const refused = yield* enqueue(64);
+        assert.isDefined(refused.pollUnsafe(), "65th startup command must fail immediately");
+        const error = yield* Effect.flip(Fiber.join(refused));
+        assert.equal(error._tag, "ServerRuntimeStartupError");
+        assert.equal(error.cause, "startup-command-capacity");
+        assert.deepEqual(mutations, []);
+
+        const [cancelled, ...remaining] = pending;
+        if (cancelled === undefined) return yield* Effect.die("missing queued caller");
+        yield* Fiber.interrupt(cancelled);
+        const replacement = yield* enqueue(65);
+        assert.isUndefined(
+          replacement.pollUnsafe(),
+          "cancellation must release capacity before ready",
+        );
+        yield* gate.signalCommandReady;
+        yield* Effect.forEach([...remaining, replacement], Fiber.join);
+        assert.deepEqual(mutations, [...Array.from({ length: 63 }, (_, id) => id + 1), 65]);
+      }),
+    ),
+);
+
+it.effect(
+  "keeps the first startup failure terminal across late ready signals for every waiter",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* ServerRuntimeStartup.makeCommandGate;
+        const mutations = yield* Ref.make(0);
+        const failure = new ServerRuntimeStartup.ServerRuntimeStartupError({
+          mode: "web",
+          host: null,
+          port: 3773,
+          cause: "first-failure",
+        });
+        const commands = yield* Effect.forEach([0, 1, 2], () =>
+          gate
+            .enqueueCommand(Ref.update(mutations, (n) => n + 1))
+            .pipe(Effect.forkScoped({ startImmediately: true })),
+        );
+        const waiter = yield* gate.awaitCommandReady.pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* gate.failCommandReady(failure);
+        yield* gate.signalCommandReady;
+        yield* gate.failCommandReady(
+          new ServerRuntimeStartup.ServerRuntimeStartupError({
+            mode: "web",
+            host: null,
+            port: 3773,
+            cause: "later-failure",
+          }),
+        );
+        yield* gate.signalCommandReady;
+        for (const command of commands) {
+          assert.strictEqual(yield* Effect.flip(Fiber.join(command)), failure);
+        }
+        assert.strictEqual(yield* Effect.flip(Fiber.join(waiter)), failure);
+        assert.strictEqual(yield* Effect.flip(gate.awaitCommandReady), failure);
+        const late = yield* Effect.exit(gate.enqueueCommand(Ref.update(mutations, (n) => n + 1)));
+        assert.isTrue(Exit.isFailure(late));
+        assert.equal(yield* Ref.get(mutations), 0);
+      }),
+    ),
+);
+
+it.effect(
+  "rechecks failed readiness before draining later commands without undoing a started command",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* ServerRuntimeStartup.makeCommandGate;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const completed = yield* Deferred.make<void>();
+        const mutations: string[] = [];
+        const active = yield* gate
+          .enqueueCommand(
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.sync(() => mutations.push("active"))),
+              Effect.andThen(Deferred.succeed(completed, undefined)),
+            ),
+          )
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const pending = yield* gate
+          .enqueueCommand(Effect.sync(() => mutations.push("pending")))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* gate.signalCommandReady;
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(active);
+        const failure = new ServerRuntimeStartup.ServerRuntimeStartupError({
+          mode: "web",
+          host: null,
+          port: 3773,
+          cause: "failed-after-ready",
+        });
+        yield* gate.failCommandReady(failure);
+        const late = yield* Effect.exit(gate.enqueueCommand(Effect.succeed("must-not-run")));
+        assert.isTrue(Exit.isFailure(late));
+        const ready = yield* Effect.exit(gate.awaitCommandReady);
+        assert.isTrue(Exit.isFailure(ready));
+        assert.strictEqual(yield* Effect.flip(Fiber.join(pending)), failure);
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(completed);
+        assert.deepEqual(mutations, ["active"]);
+        yield* gate.signalCommandReady;
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(gate.enqueueCommand(Effect.void))));
+      }),
+    ),
+);
+
+it.effect("settles pending startup callers when the gate scope closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const gate = yield* ServerRuntimeStartup.makeCommandGate.pipe(
+        Effect.provideService(Scope.Scope, scope),
+      );
+      const pending = yield* gate
+        .enqueueCommand(Effect.succeed("must-not-run"))
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Scope.close(scope, Exit.void);
+      assert.isDefined(pending.pollUnsafe(), "scope close must settle the pending result");
+      const error = yield* Effect.flip(Fiber.join(pending));
+      assert.equal(error._tag, "ServerRuntimeStartupError");
+      yield* gate.signalCommandReady;
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(gate.enqueueCommand(Effect.void))));
+    }),
+  ),
+);
+
+it.effect(
+  "drains startup commands serially despite command failures and keeps ready calls direct",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* ServerRuntimeStartup.makeCommandGate;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const first = yield* gate
+          .enqueueCommand(
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail("command-failed")),
+            ),
+          )
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const cancelled = yield* gate
+          .enqueueCommand(Effect.die("cancelled command ran"))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const last = yield* gate
+          .enqueueCommand(Effect.succeed("last"))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* gate.signalCommandReady;
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(cancelled);
+        assert.isUndefined(last.pollUnsafe());
+        assert.equal(yield* gate.enqueueCommand(Effect.succeed("direct")), "direct");
+        yield* Deferred.succeed(release, undefined);
+        assert.equal(yield* Effect.flip(Fiber.join(first)), "command-failed");
+        assert.equal(yield* Fiber.join(last), "last");
+      }),
+    ),
 );
 
 it.effect("automatic pull only updates enabled, behind, clean default-branch checkouts", () =>
