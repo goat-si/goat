@@ -259,7 +259,10 @@ const unsentOnTimeout = (cause: unknown) =>
       )
     : cause;
 
-/** Playwright's actionability waits, without the mouse move its trial runs make. */
+/**
+ * Waits for visible and enabled before the gate. Stability is left to the Playwright action after
+ * the gate, which checks it again with the hit target; checking it twice cost a frame per action.
+ */
 const settled = async (locator: Locator, deadline: number, enabled = true) => {
   const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
     throw unsentOnTimeout(cause);
@@ -267,7 +270,6 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
   try {
     await handle.waitForElementState("visible", { timeout: remaining(deadline) });
     if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
-    await handle.waitForElementState("stable", { timeout: remaining(deadline) });
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {
@@ -301,10 +303,21 @@ const locatePoint = async (
   } finally {
     void target.dispose().catch(constVoid);
   }
-  await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
-  const box = await locator.boundingBox({ timeout: remaining(deadline) });
-  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  // Scrolling waits a frame even when nothing moves, so a target already in view is not scrolled.
   const viewport = page.viewportSize();
+  let box = await locator.boundingBox({ timeout: remaining(deadline) });
+  const inView =
+    box !== null &&
+    viewport !== null &&
+    box.x >= 0 &&
+    box.y >= 0 &&
+    box.x + box.width <= viewport.width &&
+    box.y + box.height <= viewport.height;
+  if (!inView) {
+    await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+    box = await locator.boundingBox({ timeout: remaining(deadline) });
+  }
+  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
 };
 
