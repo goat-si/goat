@@ -53,8 +53,9 @@ const decodeClaudeRouting = Schema.decodeUnknownEffect(
     }),
   ),
 );
+// Claude Code's own truthiness: anything else leaves the backend off.
 const enabledFlag = (value: string | undefined) =>
-  value !== undefined && !["", "0", "false", "no", "off"].includes(value.trim().toLowerCase());
+  value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 
 /** An OpenCodex that is installed here: its pool, or why GOAT could not read it. */
 export type QuotaPoolSnapshot =

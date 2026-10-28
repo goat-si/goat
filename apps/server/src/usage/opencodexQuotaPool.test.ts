@@ -452,6 +452,12 @@ it.effect.each([
     settingsEnv: { CLAUDE_CODE_USE_BEDROCK: "0" },
     routed: true,
   },
+  {
+    scenario: "keeps the route when a backend flag holds a value Claude Code does not enable",
+    env: LOCAL_CLAUDE,
+    bedrock: "disabled",
+    routed: true,
+  },
 ] as const)("Claude $scenario", (input) => {
   const f = fixture({
     files: {
