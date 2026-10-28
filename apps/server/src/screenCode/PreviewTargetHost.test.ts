@@ -61,7 +61,9 @@ const call = (
   ...(targetRef ? { targetRef } : {}),
 });
 
-const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* () {
+const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* (
+  ownedByCaller = false,
+) {
   const tab = {
     environmentId: "env",
     browserInstanceId: "server-browser",
@@ -70,8 +72,8 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     tabId: PreviewTabId.make("tab"),
     title: "Workspace",
     url: "https://example.test/",
-    owner: "unclaimed" as const,
-    ownedByCaller: false,
+    owner: ownedByCaller ? ("agent" as const) : ("unclaimed" as const),
+    ownedByCaller,
     controlGeneration: 0,
   };
   const state = {
@@ -95,7 +97,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
           url: state.url,
           title: tab.title,
           loading: false,
-          control: { owner: tab.owner, ownedByCaller: false, generation: state.generation },
+          control: { owner: tab.owner, ownedByCaller, generation: state.generation },
         } as A);
       if (request.operation === "snapshot") {
         if (state.snapshotFailure) return Effect.fail(state.snapshotFailure);
@@ -143,7 +145,15 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     expect(reply?.outcome).toBe("ok");
     return reply?.value as ScreenObservation;
   });
-  return { state, requests, dispatch, observe, bridge, ref };
+  const rebind = Effect.fn("PreviewTargetHostTest.rebind")(function* () {
+    const reply = yield* bridge.handle(
+      { ...call("select_tab", ++callId, { tabId: tab.tabId }), cellId },
+      { ...context, cellId },
+    );
+    if (!reply || reply.outcome !== "ok") throw new Error("Expected the tab to bind again");
+    return (reply.value as { targetRef: ScreenTargetRef }).targetRef;
+  });
+  return { state, requests, dispatch, observe, bridge, ref, rebind, tab };
 });
 
 it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
@@ -195,6 +205,26 @@ it.effect("a click the browser saw change something is a confirmed receipt", () 
       ["confirmed", ["click:dom"]],
       ["unverifiable", ["dispatched; observe to confirm"]],
     ]);
+  }),
+);
+
+it.effect("the caller's own tab takes input without a claim, also after its control moved", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture(true);
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    // Taking control moved the generation; a new binding in a later cell still acts.
+    fixture.state.generation += 1;
+    fixture.tab.controlGeneration = 1;
+    const targetRef = yield* fixture.rebind();
+    const reply = yield* fixture.bridge.handle(
+      {
+        ...call("navigate_tab", 50, { url: "https://example.test/next" }, targetRef),
+        cellId: "later",
+      },
+      { ...context, cellId: "later" },
+    );
+    expect(reply?.outcome).toBe("ok");
   }),
 );
 

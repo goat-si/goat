@@ -477,12 +477,22 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const operation = actions[call.method];
       if (!operation || call.method === "select_text")
         return yield* Effect.fail(fail("unsupported", "This tab operation is unavailable."));
+      // The caller's own tab, such as one goat_preview_open made, needs no separate claim.
+      const ownedByCaller = current.control?.ownedByCaller === true;
       if (call.method !== "wait_for") {
-        yield* claims
-          .assertCurrent(claimIdentity)
-          .pipe(
-            Effect.mapError(() => fail("permission_denied", "Claim the tab before changing it.")),
-          );
+        yield* claims.assertCurrent(claimIdentity).pipe(
+          Effect.catch(() =>
+            ownedByCaller
+              ? claims.acquireTab({ ...claimIdentity, owner: "agent", ownedByCaller: true })
+              : Effect.fail(undefined),
+          ),
+          Effect.mapError(() =>
+            fail(
+              "permission_denied",
+              "Call tab.claim() before changing this tab; a tab a person or another agent controls cannot be claimed.",
+            ),
+          ),
+        );
       }
       const locator =
         arg.ref && typeof arg.ref === "object"
@@ -525,9 +535,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const claim = yield* claims
           .assertCurrent(claimIdentity)
           .pipe(Effect.mapError(() => fail("permission_denied", "Claim this tab first.")));
-        if (claim.provenance !== "agent-created")
+        if (claim.provenance !== "agent-created" && !ownedByCaller)
           return yield* Effect.fail(
-            fail("permission_denied", "Only tabs opened by this run can be closed."),
+            fail("permission_denied", "Only tabs this agent opened can be closed."),
           );
       }
       let input: Record<string, unknown> = {};
