@@ -584,3 +584,22 @@ it("credits a popup to the link the click followed, not to one an earlier click 
       evidence: expect.arrayContaining(["popup"]),
     });
   }));
+
+it("does not confirm a new-window link the frame's sandbox blocks", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<iframe sandbox="allow-scripts" srcdoc="<a id=help target=_blank href='https://page.test/help'>help</a>"></iframe>`,
+      }),
+    );
+    await page.goto("https://page.test/");
+    const help = page.frameLocator("iframe").locator("#help");
+    await help.focus();
+    await expect(
+      ServerBrowserPage.click(page, {
+        selector: "iframe >> internal:control=enter-frame >> #help",
+      }),
+    ).resolves.toMatchObject({ effect: "suspected_noop" });
+    expect(page.context().pages()).toHaveLength(1);
+  }));

@@ -333,6 +333,16 @@ const findAim = async (page: Page, locator: Locator | null, point: Point): Promi
  */
 export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) => {
   const seen = new Set<ClickEvidence>();
+  // The page says the click followed a link into a new window; the browser says one opened. A
+  // popup counts only with both: a blocked one (a sandboxed frame) or an earlier click's does not.
+  let opened = false;
+  let openedNow = constVoid;
+  const windowOpened = new Promise<void>((resolve) => (openedNow = resolve));
+  const onPopup = () => {
+    opened = true;
+    openedNow();
+  };
+  page.on("popup", onPopup);
   // A page that cannot run script, or that a dialog holds, still reports a dialog the press opened.
   const installing = Promise.resolve()
     .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
@@ -340,6 +350,7 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   const watch = await bounded(installing, INSTALL_MS);
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {
+    page.off("popup", onPopup);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);
   };
@@ -380,6 +391,9 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
           ),
         );
       }
+      // The window's page appears a little after the link activation; a blocked one never does.
+      if (seen.has("popup") && !opened) await bounded(windowOpened, INSTALL_MS);
+      if (!opened) seen.delete("popup");
       return { effect: seen.size > 0 ? "confirmed" : "suspected_noop", evidence: [...seen] };
     } finally {
       release();
