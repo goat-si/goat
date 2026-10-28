@@ -33,6 +33,8 @@ import {
   PreviewAutomationSetColorSchemeInput,
   PreviewAutomationSetColorSchemeResult,
   PreviewAutomationSnapshot,
+  PreviewAutomationRead,
+  PreviewAutomationReadInput,
   PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
   PreviewAutomationTabTargetInput,
@@ -59,14 +61,22 @@ const dependencies = [
 const PreviewToolFailure = Schema.Union([PreviewAutomationError, OrchestratorMcpFailure]);
 
 const safetyFields = { safety: Schema.optionalKey(ActionOutcomeSafety) };
-const presentationFields = { toolIcon: Schema.optional(ToolActivityIcon), ...safetyFields };
+const presentationFields = {
+  toolIcon: Schema.optional(ToolActivityIcon),
+  next: Schema.optional(Schema.String),
+  ...safetyFields,
+};
 
 const PreviewActionResult = Schema.Struct(presentationFields);
 
 const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name, {
   description: agentSurfaceRegistry["preview.status"].description,
   parameters: PreviewAutomationTabTargetInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -75,7 +85,11 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
 const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   description: agentSurfaceRegistry["preview.open"].description,
   parameters: withClientRequestId(PreviewAutomationOpenInput),
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -84,7 +98,11 @@ const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
 const PreviewDialogTool = Tool.make(agentSurfaceRegistry["preview.dialog"].name, {
   description: agentSurfaceRegistry["preview.dialog"].description,
   parameters: PreviewAutomationDialogInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -93,7 +111,11 @@ const PreviewDialogTool = Tool.make(agentSurfaceRegistry["preview.dialog"].name,
 const PreviewNavigateTool = Tool.make(agentSurfaceRegistry["preview.navigate"].name, {
   description: agentSurfaceRegistry["preview.navigate"].description,
   parameters: PreviewAutomationNavigateInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -102,7 +124,11 @@ const PreviewNavigateTool = Tool.make(agentSurfaceRegistry["preview.navigate"].n
 const PreviewBackTool = Tool.make(agentSurfaceRegistry["preview.back"].name, {
   description: agentSurfaceRegistry["preview.back"].description,
   parameters: PreviewAutomationHistoryInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -111,7 +137,11 @@ const PreviewBackTool = Tool.make(agentSurfaceRegistry["preview.back"].name, {
 const PreviewForwardTool = Tool.make(agentSurfaceRegistry["preview.forward"].name, {
   description: agentSurfaceRegistry["preview.forward"].description,
   parameters: PreviewAutomationHistoryInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -120,7 +150,11 @@ const PreviewForwardTool = Tool.make(agentSurfaceRegistry["preview.forward"].nam
 const PreviewReloadTool = Tool.make(agentSurfaceRegistry["preview.reload"].name, {
   description: agentSurfaceRegistry["preview.reload"].description,
   parameters: PreviewAutomationReloadInput,
-  success: Schema.Struct({ ...PreviewAutomationStatus.fields, ...safetyFields }),
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
@@ -179,6 +213,14 @@ const PreviewLogsTool = Tool.make(agentSurfaceRegistry["preview.logs"].name, {
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.logs"]));
+
+const PreviewReadTool = Tool.make(agentSurfaceRegistry["preview.read"].name, {
+  description: agentSurfaceRegistry["preview.read"].description,
+  parameters: PreviewAutomationReadInput,
+  success: PreviewAutomationRead,
+  failure: PreviewToolFailure,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.read"]));
 
 const PreviewFetchTool = Tool.make(agentSurfaceRegistry["preview.fetch"].name, {
   description: agentSurfaceRegistry["preview.fetch"].description,
@@ -338,6 +380,7 @@ export const PreviewToolkit = Toolkit.make(
   PreviewSnapshotTool,
   PreviewLogsTool,
   PreviewFetchTool,
+  PreviewReadTool,
   PreviewScrollCollectTool,
   PreviewClickTool,
   PreviewTypeTool,
@@ -357,6 +400,7 @@ export const PreviewToolkit = Toolkit.make(
 export const PreviewStandardToolkit = Toolkit.make(
   PreviewLogsTool,
   PreviewFetchTool,
+  PreviewReadTool,
   PreviewScrollCollectTool,
   PreviewDialogTool,
   PreviewStatusTool,

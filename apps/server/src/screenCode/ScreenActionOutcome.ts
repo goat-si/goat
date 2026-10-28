@@ -14,6 +14,8 @@ const reads = new Set<ScreenHostCall["method"]>([
   "bind_app",
   "select_tab",
   "observe",
+  "tab_status",
+  "read_page",
   "wait_for",
   "get_window_state",
   "get_accessibility_tree",

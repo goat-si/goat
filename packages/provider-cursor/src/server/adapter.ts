@@ -2199,7 +2199,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Ref.set(liveAgent, next);
           return next;
         });
-
         let cursorSkillNames: ReadonlySet<string> | undefined;
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -2236,6 +2235,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             }),
             runOrdinal: turnInput.runOrdinal,
             hasGoatMcp: mcpServers !== undefined,
+            browser: (yield* mcpSessions.read(turnInput.threadId))?.browserToolsAvailable,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),

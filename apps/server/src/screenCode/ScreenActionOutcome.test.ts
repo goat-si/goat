@@ -16,7 +16,7 @@ const result = (receipts: ScreenRunResult["journal"][number]["receipt"][]): Scre
   imageMetadata: [],
   images: [],
 });
-const receipt = (method: "click" | "observe", committed: boolean) => ({
+const receipt = (method: "click" | "observe" | "tab_status" | "read_page", committed: boolean) => ({
   callId: 1,
   method,
   journalState: "settled" as const,
@@ -33,5 +33,9 @@ it("a cell whose earlier write committed may have committed as a whole, so it is
   // Reads and refusals alone leave the cell's error as it was.
   expect(
     cellResultSafety(result([receipt("observe", true), receipt("click", false)])).error,
+  ).not.toHaveProperty("safety");
+  // Reading a tab's status or page text commits nothing either.
+  expect(
+    cellResultSafety(result([receipt("tab_status", true), receipt("read_page", true)])).error,
   ).not.toHaveProperty("safety");
 });

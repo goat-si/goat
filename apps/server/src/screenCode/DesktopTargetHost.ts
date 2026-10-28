@@ -586,14 +586,16 @@ export const createDesktopTargetHost = (deps: {
       return [{ kind: "app" as const, available: false, reason }];
     }),
     dispatch: (call, context) =>
-      call.method === "bind_app"
-        ? bindApp(call, context)
-        : call.method === "list_apps" || call.method === "list_windows"
-          ? discover(call, context)
-          : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                call.method,
-              )
-            ? observe(call, context)
-            : invoke(call, context),
+      call.method === "tab_status" || call.method === "read_page"
+        ? Effect.fail(fail("unsupported"))
+        : call.method === "bind_app"
+          ? bindApp(call, context)
+          : call.method === "list_apps" || call.method === "list_windows"
+            ? discover(call, context)
+            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
+                  call.method,
+                )
+              ? observe(call, context)
+              : invoke(call, context),
   };
 };

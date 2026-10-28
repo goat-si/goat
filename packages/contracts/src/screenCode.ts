@@ -74,6 +74,8 @@ export const ScreenMethod = Schema.Literals([
   "forward_tab",
   "close_tab",
   "observe",
+  "tab_status",
+  "read_page",
   "select",
   "select_text",
   "wait_for",
@@ -210,6 +212,8 @@ export const ScreenObservation = Schema.Struct({
   complete: Schema.Boolean,
   truncated: Schema.Boolean,
   loading: Schema.Boolean,
+  title: Schema.optionalKey(text(1024)),
+  url: Schema.optionalKey(text(8192)),
   indexedText: utf8Text(128 * 1024),
   elements: Schema.Array(
     Schema.Struct({
@@ -290,6 +294,7 @@ export const ScreenRunError = Schema.Struct({
   limit: Schema.optionalKey(Schema.Struct({ name: text(80), maximum: natural })),
   receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt).check(Schema.isMaxLength(16))),
   nextStep: text(1024),
+  message: Schema.optionalKey(text(200)),
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 

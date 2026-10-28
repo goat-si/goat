@@ -31,6 +31,7 @@ export const PREVIEW_ADMISSION_REASONS: ReadonlySet<PreviewAutomationControlReas
 const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set([
   "status",
   "snapshot",
+  "read",
   "logs",
   "fetch",
   "waitFor",

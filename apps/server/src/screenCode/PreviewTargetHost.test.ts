@@ -8,6 +8,9 @@ import {
   ProviderInstanceId,
   ThreadId,
   PreviewTabId,
+  PreviewAutomationInvalidSelectorError,
+  type PreviewAutomationError,
+  type ScreenObservation,
   type ScreenHostCall,
   type ScreenTargetRef,
 } from "@goat/contracts";
@@ -41,7 +44,7 @@ const context = {
   limits: DEFAULT_SCREEN_RUN_LIMITS,
 };
 const call = (
-  method: "list_tabs" | "select_tab" | "observe" | "open_tab" | "claim_tab" | "click",
+  method: ScreenHostCall["method"],
   callId: number,
   args: ScreenHostCall["args"],
   targetRef?: ScreenTargetRef,
@@ -56,6 +59,292 @@ const call = (
   deadlineMillis: 1000,
   ...(targetRef ? { targetRef } : {}),
 });
+
+const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* () {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("tab"),
+    title: "Workspace",
+    url: "https://example.test/",
+    owner: "unclaimed" as const,
+    ownedByCaller: false,
+    controlGeneration: 0,
+  };
+  const state = {
+    url: tab.url,
+    generation: 0,
+    statusTabId: tab.tabId,
+    clicked: false,
+    failure: undefined as PreviewAutomationError | undefined,
+    snapshotFailure: undefined as PreviewAutomationError | undefined,
+    navigateOnClick: false,
+  };
+  const requests: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0][] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([tab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      requests.push(request);
+      if (request.operation === "status")
+        return Effect.succeed({
+          tabId: state.statusTabId,
+          url: state.url,
+          title: tab.title,
+          loading: false,
+          control: { owner: tab.owner, ownedByCaller: false, generation: state.generation },
+        } as A);
+      if (request.operation === "snapshot") {
+        if (state.snapshotFailure) return Effect.fail(state.snapshotFailure);
+        return Effect.succeed({
+          url: state.url,
+          title: tab.title,
+          loading: false,
+          accessibilityTree:
+            "- heading Workspace\n- button Save [ref=e1]\n- text: Ready" +
+            (state.clicked ? "\n- button Cancel [ref=e2]" : ""),
+          treeComplete: true,
+          refGeneration: state.clicked ? "ns-4" : "ns-3",
+        } as A);
+      }
+      if (state.failure) return Effect.fail(state.failure);
+      if (request.operation === "read")
+        return Effect.succeed({ url: state.url, title: tab.title, text: "# Workspace" } as A);
+      state.clicked = true;
+      if (state.navigateOnClick) state.url = "https://next.test/";
+      return Effect.succeed({ ok: true } as A);
+    },
+  };
+  const host = yield* makePreviewTargetHost(broker);
+  const bridge = new ScreenHostBridge();
+  bridge.setDispatcher(host);
+  const binding = yield* bridge.handle(call("select_tab", 1, { tabId: tab.tabId }), context);
+  if (!binding || binding.outcome !== "ok") throw new Error("Expected exact tab binding");
+  const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+  let callId = 1;
+  // A failed call halts its cell, so the next call starts a new cell as an agent would.
+  let cellId = "cell";
+  let cells = 0;
+  const dispatch = (method: ScreenHostCall["method"], args: ScreenHostCall["args"] = {}) =>
+    bridge.handle({ ...call(method, ++callId, args, ref), cellId }, { ...context, cellId }).pipe(
+      Effect.tap((reply) =>
+        Effect.sync(() => {
+          if (reply?.outcome === "error") cellId = `cell-${++cells}`;
+        }),
+      ),
+    );
+  const observe = Effect.fn("PreviewTargetHostTest.observe")(function* (
+    args: ScreenHostCall["args"] = {},
+  ) {
+    const reply = yield* dispatch("observe", args);
+    expect(reply?.outcome).toBe("ok");
+    return reply?.value as ScreenObservation;
+  });
+  return { state, requests, dispatch, observe, bridge, ref };
+});
+
+it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    const first = yield* fixture.observe();
+    const page = yield* fixture.dispatch("read_page", {
+      scope: { ref: first.elements[0]!.ref },
+      format: "text",
+      maxBytes: 48_000,
+    });
+    expect(page?.value).toMatchObject({ text: "# Workspace" });
+    const request = fixture.requests.find((entry) => entry.operation === "read");
+    expect(request?.input).toMatchObject({ scope: { ref: "e1" }, format: "text" });
+    expect((request?.input as { maxBytes: number } | undefined)?.maxBytes).toBeLessThan(
+      DEFAULT_SCREEN_RUN_LIMITS.returnBytes,
+    );
+    expect(request?.exact).not.toHaveProperty("controlGeneration");
+    for (const invalid of [{ expand: true }, { offset: -2 }, { format: "oops" }, { tabId: "x" }])
+      expect((yield* fixture.dispatch("read_page", invalid))?.error?.code).toBe("invalid_argument");
+    expect((yield* fixture.dispatch("read_page", { maxChars: 500 }))?.outcome).toBe("ok");
+    const tiny = yield* fixture.bridge.handle(
+      { ...call("read_page", 90, {}, fixture.ref), cellId: "cell-tiny" },
+      {
+        ...context,
+        cellId: "cell-tiny",
+        limits: { ...DEFAULT_SCREEN_RUN_LIMITS, returnBytes: 900 },
+      },
+    );
+    expect(tiny?.error?.code).toBe("output_limit");
+    expect(fixture.requests.filter((entry) => entry.operation === "read")).toHaveLength(2);
+  }),
+);
+
+it.effect("observe passes interactive-only and scope narrowing to the snapshot", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.observe({ interactiveOnly: true, scope: { selector: "main" } });
+    expect(fixture.requests.find((entry) => entry.operation === "snapshot")?.input).toMatchObject({
+      interactiveOnly: true,
+      scope: { selector: "main" },
+    });
+  }),
+);
+
+it.effect("actions retire refs while preserving the last complete tree for a diff", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    const ref = first.elements[0]!.ref;
+    const clicked = yield* fixture.dispatch("click", { ref });
+    expect(clicked?.outcome).toBe("ok");
+    const stale = yield* fixture.dispatch("click", { ref });
+    expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    const diff = yield* fixture.observe({ mode: "diff" });
+    expect(diff.mode).toBe("diff");
+    expect(diff.indexedText).toBe("+ - button Cancel [ref=e2]");
+    expect(diff.elements).toHaveLength(1);
+    const receipt = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.find((entry) => entry.receipt.method === "click")?.receipt;
+    expect(receipt).toMatchObject({
+      category: "unverifiable",
+      dispatched: true,
+      evidence: ["dispatched; observe to confirm"],
+    });
+  }),
+);
+
+it.effect("same-tab origin changes require observation before further input", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    fixture.state.navigateOnClick = true;
+    yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+    const fenced = yield* fixture.dispatch("press_key", { key: "Enter" });
+    expect(fenced?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    const status = yield* fixture.dispatch("tab_status");
+    expect(status?.value).toMatchObject({ url: "https://next.test/" });
+    expect((yield* fixture.dispatch("press_key", { key: "Enter" }))?.outcome).toBe("error");
+    const next = yield* fixture.observe({ mode: "diff", baseObservationId: first.observationId });
+    expect(next).toMatchObject({ mode: "full", url: "https://next.test/" });
+    expect((yield* fixture.dispatch("click", { ref: first.elements[0]!.ref }))?.error?.code).toBe(
+      "stale_reference",
+    );
+    expect((yield* fixture.dispatch("click", { ref: next.elements[0]!.ref }))?.outcome).toBe("ok");
+    expect(
+      fixture.requests.filter((request) => request.operation === "click").at(-1)?.exact?.origin,
+    ).toBe("https://next.test");
+  }),
+);
+
+it.effect("observation cannot refresh a replaced tab or control generation", () =>
+  Effect.gen(function* () {
+    for (const changed of [{ generation: 1 }, { statusTabId: PreviewTabId.make("replacement") }]) {
+      const fixture = yield* browserFixture();
+      yield* fixture.observe();
+      Object.assign(fixture.state, changed, { url: "https://next.test/" });
+      expect((yield* fixture.dispatch("observe"))?.error).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+      });
+      expect(fixture.requests.filter((request) => request.operation === "snapshot")).toHaveLength(
+        1,
+      );
+    }
+  }),
+);
+
+it.effect("tab status reads an unclaimed tab and rejects unexpected arguments", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    expect((yield* fixture.dispatch("tab_status"))?.value).toMatchObject({
+      control: { owner: "unclaimed" },
+    });
+    expect(
+      (yield* fixture.dispatch("tab_status", { url: "https://other.test/" }))?.error?.code,
+    ).toBe("invalid_argument");
+    expect((yield* fixture.dispatch("press_key", { key: "Enter" }))?.error?.code).toBe(
+      "permission_denied",
+    );
+  }),
+);
+
+const actionErrorContext = {
+  operation: "click" as const,
+  environmentId: scope.environmentId,
+  threadId: scope.thread.threadId,
+  providerSessionId: "session",
+  providerInstanceId: scope.thread.providerInstanceId,
+  clientId: "server-browser",
+  connectionId: "connection",
+  requestId: "request",
+  timeoutMs: 1000,
+  remoteTag: "PreviewAutomationExecutionError",
+  remoteMessageLength: 100,
+  cause: undefined,
+};
+
+it.effect(
+  "action failures retain bounded safe detail and retire refs even when input is uncertain",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const first = yield* fixture.observe();
+      fixture.state.failure = new PreviewAutomationExecutionError({
+        ...actionErrorContext,
+        reason:
+          "\u001b[31mOverlay intercepts pointer input\nhttps://private.test/?token=hidden password=hidden " +
+          "x".repeat(250),
+      });
+      const failed = yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+      expect(failed?.error).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+      expect(failed?.error?.message).toContain("Overlay intercepts pointer input");
+      expect(failed?.error?.message?.length).toBeLessThanOrEqual(200);
+      expect(failed?.error?.message).not.toMatch(/hidden|private\.test|\u001b/);
+      const stale = yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+      expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    }),
+);
+
+it.effect("selector rejection reports that input did not start", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    fixture.state.failure = new PreviewAutomationInvalidSelectorError({
+      ...actionErrorContext,
+      staleRef: true,
+    });
+    const failed = yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+    expect(failed?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
+    expect(failed?.error?.message).toContain("stale");
+  }),
+);
+
+it.effect("a failed observation cannot authorize input on a changed origin", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    fixture.state.url = "https://next.test/";
+    fixture.state.snapshotFailure = new PreviewAutomationExecutionError({
+      ...actionErrorContext,
+      operation: "snapshot",
+      reason: "Tree capture failed",
+    });
+    const failed = yield* fixture.dispatch("observe");
+    expect(failed?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
+    expect((yield* fixture.dispatch("press_key", { key: "Enter" }))?.error?.code).toBe(
+      "stale_reference",
+    );
+    fixture.state.snapshotFailure = undefined;
+    const next = yield* fixture.observe();
+    expect((yield* fixture.dispatch("click", { ref: first.elements[0]!.ref }))?.error?.code).toBe(
+      "stale_reference",
+    );
+    expect((yield* fixture.dispatch("click", { ref: next.elements[0]!.ref }))?.outcome).toBe("ok");
+  }),
+);
 
 it.effect("refuses a full-page image point before dispatching a viewport click", () =>
   Effect.gen(function* () {

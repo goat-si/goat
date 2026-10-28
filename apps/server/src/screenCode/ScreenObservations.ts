@@ -19,6 +19,8 @@ export interface ScreenObservationDraft {
   readonly complete: boolean;
   readonly truncated: boolean;
   readonly loading: boolean;
+  readonly title?: string;
+  readonly url?: string;
   readonly lineage?: string;
   readonly elements: readonly {
     readonly role: string;
@@ -151,6 +153,8 @@ class ObservationIndex {
 
 export class ScreenObservations {
   readonly index = new ObservationIndex();
+  private nextTabGeneration = 0;
+  private readonly tabGenerations = new Map<string, { key: string; generation: number }>();
   private readonly previous = new Map<
     string,
     { observation: ScreenObservation; draft: ScreenObservationDraft }
@@ -159,6 +163,7 @@ export class ScreenObservations {
   evictTarget(targetId: string): void {
     this.index.invalidateTarget(targetId);
     this.previous.delete(targetId);
+    this.tabGenerations.delete(targetId);
   }
 
   normalizeAppTree(input: ScreenObservationDraft): ScreenObservationDraft {
@@ -183,17 +188,29 @@ export class ScreenObservations {
       const name = line.replace(/\[ref=[^\]]+\]/g, "").trim();
       elements.push({ role, name, driverToken: `aria-ref=${ref}` });
     }
-    const surfaceGeneration = Number(snapshot.refGeneration);
-    const validGeneration = Number.isSafeInteger(surfaceGeneration) && surfaceGeneration >= 0;
+    const validGeneration =
+      typeof snapshot.refGeneration === "string" && snapshot.refGeneration.length > 0;
+    const key = JSON.stringify([
+      input.connectionId,
+      input.controlGeneration,
+      snapshot.refGeneration,
+    ]);
+    let generation = this.tabGenerations.get(input.targetRef.id);
+    if (!generation || generation.key !== key) {
+      generation = { key, generation: ++this.nextTabGeneration };
+      this.tabGenerations.set(input.targetRef.id, generation);
+    }
     return {
       targetRef: input.targetRef,
       targetGeneration: input.targetGeneration,
-      surfaceGeneration: validGeneration ? surfaceGeneration : 0,
+      surfaceGeneration: generation.generation,
       lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${snapshot.url}`,
       indexedText: tree,
       complete: snapshot.treeComplete === true && validGeneration,
       truncated: snapshot.treeComplete !== true || !validGeneration,
       loading: snapshot.loading,
+      title: snapshot.title.slice(0, 1024),
+      url: snapshot.url.slice(0, 8192),
       elements: snapshot.treeComplete === true && validGeneration ? elements : [],
     };
   }
@@ -336,6 +353,8 @@ export class ScreenObservations {
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,
       loading: draft.loading,
+      ...(draft.title === undefined ? {} : { title: draft.title }),
+      ...(draft.url === undefined ? {} : { url: draft.url }),
       truncated,
       indexedText: text,
       elements,

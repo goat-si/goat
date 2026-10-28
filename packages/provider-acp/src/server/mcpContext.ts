@@ -14,6 +14,7 @@ export interface AcpMcpContext {
   readonly computerUseKey?: string;
   /** The thread's turns carry the computer use skill (`carriesComputerUseSkill`). */
   readonly computerUseSkill?: boolean;
+  readonly browser?: boolean;
   readonly screenCodeSkill?: boolean;
   readonly screenCodeSkillPath?: string;
 }
@@ -56,6 +57,7 @@ export function acpMcpContext(
     computerUse: cua.length > 0,
     computerUseKey: McpProviderSession.cuaDriverKey(session.cuaDriver),
     computerUseSkill: McpProviderSession.carriesComputerUseSkill(session),
+    browser: session.browserToolsAvailable,
     screenCodeSkill: McpProviderSession.carriesScreenCodeSkill(session),
     ...(session.screenCodeSkillPath === undefined
       ? {}

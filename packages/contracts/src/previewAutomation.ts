@@ -19,6 +19,15 @@ import {
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import * as Screen from "./previewAutomationScreen.ts";
+import {
+  PreviewAutomationFeature,
+  PreviewAutomationConsoleEntry,
+  PreviewAutomationNetworkEntry,
+  PreviewAutomationPageError,
+} from "./previewAutomationSnapshot.ts";
+import { PreviewAutomationReadError } from "./previewAutomationRead.ts";
+export * from "./previewAutomationSnapshot.ts";
+export * from "./previewAutomationRead.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
@@ -66,6 +75,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "fetch",
   "scrollCollect",
   "fillSecret",
+  "read",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
@@ -76,17 +86,6 @@ const PreviewAutomationTabTargetFields = {
 
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
-
-export const PreviewAutomationSnapshotInput = Schema.Struct({
-  ...PreviewAutomationTabTargetFields,
-  fullPage: Schema.optional(
-    Schema.Boolean.annotate({
-      description:
-        "Capture the document from its top-left instead of the viewport. Defaults to false. Full-page captures are clipped to 3840 × 16384 CSS pixels and scaled to at most 3840 × 16384 image pixels and 8 MiB; screenshot.clipped reports omitted document content.",
-    }),
-  ),
-});
-export type PreviewAutomationSnapshotInput = typeof PreviewAutomationSnapshotInput.Type;
 
 export const PreviewAutomationProfile = Schema.Struct({
   id: BrowserProfileId,
@@ -500,46 +499,6 @@ export const PreviewAutomationWaitForInput = Schema.Struct({
 );
 export type PreviewAutomationWaitForInput = typeof PreviewAutomationWaitForInput.Type;
 
-export const PreviewAutomationElement = Schema.Struct({
-  tag: Schema.String,
-  role: Schema.NullOr(Schema.String),
-  name: Schema.String,
-  selector: Schema.String,
-  x: Schema.Number,
-  y: Schema.Number,
-  width: Schema.Number,
-  height: Schema.Number,
-});
-export type PreviewAutomationElement = typeof PreviewAutomationElement.Type;
-
-export const PreviewAutomationConsoleEntry = Schema.Struct({
-  level: Schema.String,
-  text: Schema.String,
-  timestamp: Schema.String,
-  source: Schema.optional(Schema.String),
-});
-export type PreviewAutomationConsoleEntry = typeof PreviewAutomationConsoleEntry.Type;
-
-export const PreviewAutomationNetworkEntry = Schema.Struct({
-  url: Schema.String,
-  method: Schema.String,
-  status: Schema.NullOr(Schema.Number),
-  failed: Schema.Boolean,
-  errorText: Schema.optional(Schema.String),
-  timestamp: Schema.String,
-  requestId: Schema.optional(Schema.String),
-  phase: Schema.optional(Schema.Literals(["request", "response", "finished", "failed"])),
-  durationMs: Schema.optional(Schema.Number),
-});
-export type PreviewAutomationNetworkEntry = typeof PreviewAutomationNetworkEntry.Type;
-
-export const PreviewAutomationPageError = Schema.Struct({
-  message: Schema.String,
-  stack: Schema.optional(Schema.String),
-  timestamp: Schema.String,
-});
-export type PreviewAutomationPageError = typeof PreviewAutomationPageError.Type;
-
 const DiagnosticFilter = Schema.String.check(Schema.isMaxLength(256));
 export const PreviewAutomationLogsInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
@@ -612,44 +571,6 @@ export const PreviewAutomationLogs = Schema.Struct({
 });
 export type PreviewAutomationLogs = typeof PreviewAutomationLogs.Type;
 
-export const PreviewAutomationActionEvent = Schema.Struct({
-  id: Schema.String,
-  action: Schema.String,
-  status: Schema.Literals(["running", "succeeded", "failed", "interrupted"]),
-  startedAt: Schema.String,
-  completedAt: Schema.optional(Schema.String),
-  error: Schema.optional(Schema.String),
-});
-export type PreviewAutomationActionEvent = typeof PreviewAutomationActionEvent.Type;
-
-export const PreviewAutomationSnapshot = Schema.Struct({
-  url: Schema.String,
-  title: Schema.String,
-  loading: Schema.Boolean,
-  visibleText: Schema.String,
-  interactiveElements: Schema.Array(PreviewAutomationElement),
-  accessibilityTree: Schema.Unknown,
-  consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
-  networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
-  actionTimeline: Schema.Array(PreviewAutomationActionEvent),
-  /** Absent when the request skipped the capture because nothing would show or save it. */
-  screenshot: Schema.optional(
-    Schema.Struct({
-      mimeType: Schema.Literal("image/png"),
-      data: Schema.String,
-      width: Schema.Int,
-      height: Schema.Int,
-      fullPage: Schema.optional(Schema.Boolean),
-      clipped: Schema.optional(Schema.Boolean),
-      byteLength: Schema.optional(Schema.Int),
-      ...Screen.ScreenshotPlacementFields,
-    }),
-  ),
-  treeComplete: Schema.optional(Schema.Boolean),
-  refGeneration: Schema.optional(Schema.String),
-});
-export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
-
 export const PreviewAutomationRecordingStatus = Schema.Struct({
   tabId: PreviewTabId,
   recording: Schema.Boolean,
@@ -684,6 +605,7 @@ export const PreviewAutomationHost = Schema.Struct({
   ...PreviewAutomationHostIdentity.fields,
   /** Missing means the V1 operation set from before capability negotiation. */
   supportedOperations: Schema.optional(Schema.Array(PreviewAutomationOperation)),
+  supportedFeatures: Schema.optional(Schema.Array(PreviewAutomationFeature)),
 });
 export type PreviewAutomationHost = typeof PreviewAutomationHost.Type;
 
@@ -828,6 +750,8 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<Pr
   },
 ) {
   override get message(): string {
+    if (this.operation === "read")
+      return "This browser host cannot read pages; use goat_preview_snapshot.";
     return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry goat_call {path:"preview.status"}, then call goat_call {path:"preview.open"} if no tab is available. If it remains unavailable, report the browser connection failure.`;
   }
 }
@@ -863,11 +787,12 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
   {
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
+    interceptedBy: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return summary;
+    return this.interceptedBy ? `${summary} ${this.interceptedBy}` : summary;
   }
 }
 
@@ -1038,6 +963,7 @@ export class PreviewAutomationRecordingDeadlineExpiredError extends Schema.Tagge
 }
 
 export const PreviewAutomationError = Schema.Union([
+  PreviewAutomationReadError,
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingTooLargeError,

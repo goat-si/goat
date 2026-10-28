@@ -4,6 +4,8 @@ import {
   PreviewAutomationControlInterruptedError,
   PreviewAutomationControlReason,
   PreviewAutomationExecutionError,
+  PreviewAutomationReadError,
+  PreviewAutomationReadFailure,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -87,6 +89,7 @@ interface ClientConnection {
   readonly connectionId: string;
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
+  readonly supportedFeatures: ReadonlySet<string>;
   readonly focused: boolean;
   readonly preferred: boolean;
   readonly inProcess: boolean;
@@ -190,6 +193,21 @@ const supportsOperation = (
   connection.supportedOperations.has(operation) &&
   (operation !== "fillSecret" || connection.inProcess);
 
+const supportsRequest = (
+  connection: ClientConnection,
+  request: PreviewAutomationInvokeInput,
+): boolean => {
+  const input = request.input;
+  return (
+    supportsOperation(connection, request.operation) &&
+    (request.operation !== "snapshot" ||
+      typeof input !== "object" ||
+      input === null ||
+      !["scope", "interactiveOnly", "diff", "annotate"].some((key) => key in input) ||
+      connection.supportedFeatures.has("snapshotOptions"))
+  );
+};
+
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
 function remoteDetailKind(detail: unknown): RemoteDetailKind {
@@ -216,6 +234,7 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
 };
 
 const MAX_REASON_CHARS = 500;
+const isReadFailure = Schema.is(PreviewAutomationReadFailure);
 
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
@@ -237,6 +256,14 @@ const classifyResponseError = (
     cause: error,
   };
   switch (error._tag) {
+    case "PreviewAutomationReadError": {
+      const reason =
+        typeof error.detail === "object" && error.detail !== null && "reason" in error.detail
+          ? error.detail.reason
+          : undefined;
+      if (isReadFailure(reason)) return new PreviewAutomationReadError({ reason });
+      return new PreviewAutomationMalformedResponseError(context);
+    }
     case "PreviewAutomationRecordingDesktopUpdateRequiredError":
       return new PreviewAutomationRecordingDesktopUpdateRequiredError({
         threadId: context.threadId,
@@ -274,9 +301,17 @@ const classifyResponseError = (
       });
     case "PreviewAutomationTimeoutError": {
       const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
+      const interceptedBy =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "interceptedBy" in error.detail &&
+        typeof error.detail.interceptedBy === "string"
+          ? error.detail.interceptedBy.slice(0, 300)
+          : undefined;
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
+        ...(interceptedBy ? { interceptedBy } : {}),
         ...(remoteTimeoutMs === undefined
           ? {}
           : { timeoutMs: Math.min(context.timeoutMs, remoteTimeoutMs) }),
@@ -430,6 +465,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       connectionId,
       environmentId: host.environmentId,
       supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
+      supportedFeatures: new Set(host.supportedFeatures ?? []),
       focused: false,
       preferred: options?.preferred ?? false,
       inProcess: options?.inProcess ?? false,
@@ -552,10 +588,12 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             (!visibleOnly || tab.visible === true) &&
             (input.tabId === undefined || tab.tabId === input.tabId),
         );
-      const screen = BoundPreviewTabs.screenConnection(current.clients, input, supportsOperation);
+      const screen = BoundPreviewTabs.screenConnection(current.clients, input, (host) =>
+        supportsRequest(host, input),
+      );
       const connection = screen
         ? screen.connection
-        : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+        : hasLiveAssignment && supportsRequest(assignedConnection, input)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined
@@ -563,7 +601,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
                 .filter(
                   (host) =>
                     host.environmentId === input.scope.environmentId &&
-                    supportsOperation(host, input.operation),
+                    supportsRequest(host, input),
                 )
                 .sort(
                   (left, right) =>
