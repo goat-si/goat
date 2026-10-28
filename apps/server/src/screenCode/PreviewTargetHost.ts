@@ -602,6 +602,20 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           break;
         }
         case "drag": {
+          if (point) {
+            const end =
+              arg.toPoint && typeof arg.toPoint === "object"
+                ? observations.index.resolvePoint(
+                    arg.toPoint as Parameters<typeof observations.index.resolvePoint>[0],
+                  )
+                : undefined;
+            if (!end || end.targetId !== bound.ref.id || end.kind === "document")
+              return yield* Effect.fail(
+                fail("stale_reference", "Observe a viewport screenshot and use two of its points."),
+              );
+            input = { from: { x: point.x, y: point.y }, to: { x: end.x, y: end.y } };
+            break;
+          }
           const source =
             arg.sourceRef && typeof arg.sourceRef === "object"
               ? observations.index.resolveElement(
@@ -622,6 +636,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         case "scroll":
           input = {
             ...(locator ? { locator } : {}),
+            ...(point ? { x: point.x, y: point.y } : {}),
             deltaX: typeof arg.deltaX === "number" ? arg.deltaX : 0,
             deltaY: typeof arg.deltaY === "number" ? arg.deltaY : 0,
           };

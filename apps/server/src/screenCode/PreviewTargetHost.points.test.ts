@@ -189,3 +189,76 @@ it.effect("an action retires the screenshot points it may have moved, and keeps 
     expect(kept.category).toBeDefined();
   }),
 );
+
+it.effect("viewport points drive a coordinate drag and a wheel at that point", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Map",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const inputs: Array<[string, unknown]> = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation !== "status" && request.operation !== "snapshot")
+          inputs.push([request.operation, request.input]);
+        return Effect.succeed(
+          (request.operation === "status"
+            ? {
+                tabId: tab.tabId,
+                url: tab.url,
+                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+              }
+            : request.operation === "snapshot"
+              ? {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: "- region Map",
+                  treeComplete: true,
+                  refGeneration: "1",
+                  screenshot: {
+                    mimeType: "image/png",
+                    data: "AQID",
+                    width: 200,
+                    height: 100,
+                    region: { kind: "viewport", x: 0, y: 0, width: 400, height: 200 },
+                    scale: 0.5,
+                  },
+                }
+              : {}) as A,
+        );
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    const image = (yield* host.dispatch(call("observe", 3, { screenshot: true }, ref), context))
+      .imageMetadata!;
+    const at = (x: number, y: number) => ({
+      observationId: image.observationId,
+      regionId: image.regionId,
+      x,
+      y,
+    });
+    yield* host.dispatch(call("drag", 4, { point: at(10, 10), toPoint: at(60, 30) }, ref), context);
+    // The drag may have moved what the screenshot showed, so the wheel uses a fresh one.
+    const again = (yield* host.dispatch(call("observe", 5, { screenshot: true }, ref), context))
+      .imageMetadata!;
+    const point = { observationId: again.observationId, regionId: again.regionId, x: 50, y: 50 };
+    yield* host.dispatch(call("scroll", 6, { point, deltaY: -120 }, ref), context);
+    expect(inputs).toEqual([
+      ["drag", { from: { x: 20, y: 20 }, to: { x: 120, y: 60 } }],
+      ["scroll", { x: 100, y: 100, deltaX: 0, deltaY: -120 }],
+    ]);
+  }),
+);

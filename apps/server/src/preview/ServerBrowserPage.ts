@@ -979,6 +979,17 @@ export const drag = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
+  if (input.from && input.to) {
+    await pointer(input.from, "move");
+    remaining(deadline);
+    gate();
+    await page.mouse.move(input.from.x, input.from.y);
+    await page.mouse.down();
+    await page.mouse.move(input.to.x, input.to.y, { steps: input.steps ?? 10 });
+    await page.mouse.up();
+    await pointer(input.to, "move");
+    return;
+  }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, deadline), "move");
@@ -1006,6 +1017,13 @@ export const scroll = async (
   gate: DispatchGate = open,
 ) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
+  if (input.x !== undefined && input.y !== undefined) {
+    gate();
+    // A real wheel goes to whatever is under the point, which page script can zoom on.
+    await page.mouse.move(input.x, input.y);
+    await page.mouse.wheel(delta[0], delta[1]);
+    return;
+  }
   const locator = targetLocator(page, input);
   if (locator === null) {
     gate();

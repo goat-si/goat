@@ -315,7 +315,7 @@ export const previewEntries = {
     summary: "Drag in preview page",
     description: "Drag a browser-page element onto another element.",
     guide:
-      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target. For a map or canvas, give from and to viewport points (and optional steps) instead.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -388,7 +388,7 @@ export const previewEntries = {
     summary: "Scroll preview page",
     description: "Scroll a browser page or a selected scroll container.",
     guide:
-      "Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls.",
+      "Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls. With x and y, a real wheel goes to the viewport point, which pages such as maps use to zoom.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",

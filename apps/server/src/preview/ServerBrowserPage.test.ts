@@ -406,6 +406,33 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     ]);
   });
 
+  const pointerPad = `<div id="pad" style="position:fixed;inset:0"></div><script>
+    window.events = [];
+    for (const type of ["mousedown", "mousemove", "mouseup", "wheel"])
+      pad.addEventListener(type, (e) => events.push([type, e.clientX, e.clientY, e.deltaY ?? 0]), { passive: true });
+    window.wheeled = new Promise((resolve) =>
+      pad.addEventListener("wheel", (e) => resolve([e.clientX, e.clientY, e.deltaY]), { once: true }));
+  </script>`;
+
+  it("drags between two page points, as a map or canvas needs", async () => {
+    await page.setContent(pointerPad);
+    await ServerBrowserPage.drag(page, {
+      from: { x: 100, y: 100 },
+      to: { x: 300, y: 200 },
+      steps: 4,
+    });
+    const events = (await page.evaluate("events")) as Array<[string, number, number, number]>;
+    expect(events.find(([type]) => type === "mousedown")).toEqual(["mousedown", 100, 100, 0]);
+    expect(events.filter(([type]) => type === "mousemove").length).toBeGreaterThanOrEqual(4);
+    expect(events.at(-1)).toEqual(["mouseup", 300, 200, 0]);
+  });
+
+  it("wheels at a page point, so the element under it receives the wheel", async () => {
+    await page.setContent(pointerPad);
+    await ServerBrowserPage.scroll(page, { x: 150, y: 120, deltaY: -240 });
+    expect(await page.evaluate("wheeled")).toEqual([150, 120, -240]);
+  });
+
   it("confirms a click only when the page visibly changed", async () => {
     await page.setContent(
       `<label><input type="checkbox"> agree</label><p id="still">static</p><button onclick="this.textContent='saved'">save</button>`,
