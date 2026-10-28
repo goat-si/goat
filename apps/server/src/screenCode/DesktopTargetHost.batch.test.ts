@@ -154,3 +154,41 @@ it.live(
     }).pipe(Effect.provide(cellService(host)));
   },
 );
+
+it.live(
+  "a group the runtime cannot take whole is refused whole, without waiting for its deadline",
+  () => {
+    const { host, sent } = fixture();
+    return Effect.gen(function* () {
+      // The second typing is past the runtime's argument limit, so none of the group goes out.
+      const result = yield* runCell(
+        `${BIND} const clicks = [app.type('a', 'Apply'), app.type('x'.repeat(66000), 'Apply')]; ${SETTLED}`,
+      );
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual(["refused:true", "refused:true"]);
+      expect(sent.map((entry) => entry.tool)).toEqual([
+        "list_apps",
+        "list_windows",
+        "get_window_state",
+      ]);
+      yield* finish;
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.live("a batch group takes one pending place, so a run longer than one group still runs", () => {
+  const { host, sent } = fixture({
+    run_steps: (args: { steps: ReadonlyArray<unknown> }) =>
+      ranSteps(
+        args.steps.map(() => ({ ok: true, effect: "confirmed" })),
+        args.steps.length,
+      ),
+  });
+  return Effect.gen(function* () {
+    // Seventeen is one group of sixteen and one more click, under a limit of four pending calls.
+    const result = yield* runCell(`${BIND} ${clicks(17)} ${SETTLED}`);
+    expect(result.value).toEqual(Array.from({ length: 17 }, () => "confirmed"));
+    expect(sent.map((entry) => entry.tool).slice(3)).toEqual(["run_steps", "click"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});

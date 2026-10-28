@@ -13,7 +13,7 @@ import {
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
 import { keptCell, plainCell, sloppyProbe } from "./ScreenCellScope.ts";
-import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
+import { MAX_BATCH_CALLS, screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
 import { screenTargetNote } from "./ScreenTargetNotes.ts";
 import { screenTargetPrelude } from "./ScreenTargetPrelude.ts";
 
@@ -129,8 +129,21 @@ export async function runScreenChild(
   let linesOut: string[] = [];
   let truncated: string[] = [];
   const pending = new Map<number, ReturnType<typeof vm.newPromise>>();
-  /** The batch group the prelude is sending; its members after the first take no pending place. */
-  let group: { readonly first: number; readonly size: number } | undefined;
+  /**
+   * Pending places: a call takes one, and a batch group the prelude admitted with __hostGroup one
+   * for all its calls, given back when its last call settles.
+   */
+  let pendingPlaces = 0;
+  const groupOfCall = new Map<number, { remaining: number }>();
+  /** The admitted group whose calls the prelude is sending now, in order. */
+  let group:
+    | { readonly first: number; readonly size: number; readonly place: { remaining: number } }
+    | undefined;
+  const settlePlace = (callId: number) => {
+    const place = groupOfCall.get(callId);
+    groupOfCall.delete(callId);
+    if (place === undefined || --place.remaining === 0) pendingPlaces--;
+  };
   const boundedMessage = (value: string) => {
     const bytes = new TextEncoder().encode(value);
     return bytes.length <= 1024 ? value : new TextDecoder().decode(bytes.slice(0, 1021));
@@ -156,18 +169,12 @@ export async function runScreenChild(
         group !== undefined &&
         batch?.size === group.size &&
         typeof batch.index === "number" &&
-        batch.index > 0 &&
         group.first + batch.index === nextCallId + 1;
-      // A group starts only when all of it fits the cell's calls, so none of it waits on a call
-      // that is refused here and never reaches the host.
-      const opens = batch?.index === 0 && typeof batch.size === "number";
-      const fits = !opens || callCount + Number(batch.size) <= currentLimits.callsPerCell;
       if (
         !admitted ||
-        !fits ||
         !methods.includes(method as (typeof methods)[number]) ||
         ++callCount > currentLimits.callsPerCell ||
-        (!member && pending.size >= currentLimits.pendingCalls) ||
+        (!member && pendingPlaces >= currentLimits.pendingCalls) ||
         screenBytes(argsJson) > currentLimits.argBytes
       ) {
         const error = vm.newString("screen call refused");
@@ -176,7 +183,11 @@ export async function runScreenChild(
         return promise.handle;
       }
       const callId = ++nextCallId;
-      if (!member) group = opens ? { first: callId, size: Number(batch?.size) } : undefined;
+      if (member && group !== undefined) groupOfCall.set(callId, group.place);
+      else {
+        group = undefined;
+        pendingPlaces++;
+      }
       const targetRef =
         typeof firstArg === "object" && firstArg !== null && "targetRef" in firstArg
           ? (firstArg.targetRef as ScreenHostCall["targetRef"])
@@ -197,6 +208,36 @@ export async function runScreenChild(
       return promise.handle;
     });
     vm.setProp(vm.global, "__host", host);
+    // Admits a batch group whole, before any of it goes out: its calls then pass __host in order
+    // and share one pending place, or none of them is sent and the host waits on none.
+    const hostGroup = vm.newFunction("__hostGroup", (listHandle) => {
+      let list: unknown;
+      try {
+        list = JSON.parse(vm.getString(listHandle));
+      } catch {
+        list = undefined;
+      }
+      const calls: ReadonlyArray<unknown> = Array.isArray(list) ? list : [];
+      const fits =
+        admitted &&
+        calls.length >= 2 &&
+        calls.length <= MAX_BATCH_CALLS &&
+        callCount + calls.length <= currentLimits.callsPerCell &&
+        pendingPlaces < currentLimits.pendingCalls &&
+        calls.every(
+          (entry) =>
+            Array.isArray(entry) &&
+            methods.includes(entry[0] as (typeof methods)[number]) &&
+            typeof entry[1] === "string" &&
+            screenBytes(entry[1]) <= currentLimits.argBytes,
+        );
+      if (!fits) return vm.false;
+      group = { first: nextCallId + 1, size: calls.length, place: { remaining: calls.length } };
+      pendingPlaces++;
+      return vm.true;
+    });
+    vm.setProp(vm.global, "__hostGroup", hostGroup);
+    hostGroup.dispose();
     host.dispose();
     const log = vm.newFunction("__log", (valueHandle) => {
       const line = vm.getString(valueHandle);
@@ -261,6 +302,9 @@ export async function runScreenChild(
     dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
+    groupOfCall.clear();
+    pendingPlaces = 0;
+    group = undefined;
     vm.dispose();
     runtime.dispose();
     runtime = module.newRuntime();
@@ -352,6 +396,9 @@ export async function runScreenChild(
     dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
+    groupOfCall.clear();
+    pendingPlaces = 0;
+    group = undefined;
     emit(result);
     cellId = "";
   };
@@ -367,6 +414,7 @@ export async function runScreenChild(
         const promise = pending.get(reply.callId);
         if (!promise) continue;
         pending.delete(reply.callId);
+        settlePlace(reply.callId);
         const value = vm.newString(
           JSON.stringify(
             reply.outcome === "ok" ? { v: reply.value, c: reply.category } : reply.error,

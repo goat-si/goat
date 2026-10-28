@@ -509,7 +509,9 @@ export class ScreenHostBridge {
       if (slot === undefined || slot.index === 0) effect = gate.withPermits(1)(guardedDispatch);
       if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
     }
-    state.pending++;
+    // A batch group holds one pending place, its first call's, until that call settles.
+    const holdsPlace = slot === undefined || slot.index === 0;
+    if (holdsPlace) state.pending++;
     const cutoff = Effect.callback<never, ScreenRunError>((resume) => {
       const onAbort = () => resume(Effect.fail(failure("stopped", call.callId)));
       if (state.cutoff.signal.aborted) onAbort();
@@ -521,7 +523,7 @@ export class ScreenHostBridge {
       Effect.ensuring(
         Effect.sync(() => {
           leave();
-          state.pending--;
+          if (holdsPlace) state.pending--;
         }),
       ),
     );

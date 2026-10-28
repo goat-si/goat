@@ -8,9 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
-
-/** The most calls the prelude sends as one group; the driver allows 64 steps. */
-const MAX_BATCH_CALLS = 16;
+import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 
 type Outcome = Exit.Exit<ScreenHostDispatchResult, ScreenRunError>;
 type NotRun = (callId: number, failedCallId: number) => ScreenRunError;
