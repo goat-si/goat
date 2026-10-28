@@ -30,9 +30,10 @@ export interface AgentSurfaceEntry {
   readonly signatures?: ReadonlyArray<string>;
   /**
    * "core" lists the tool in the core listing and marks it to load up front in every listing.
-   * Everything else is found with goat_describe and called by name or through goat_call.
+   * "core_eval" loads it up front only under the opt-in core_eval listing; full lists it like any
+   * tool. Everything else is found with goat_describe and called by name or through goat_call.
    */
-  readonly listing?: "core";
+  readonly listing?: "core" | "core_eval";
   readonly effect: AgentSurfaceEffect;
   readonly hostRoutable: boolean;
   readonly requires: "thread" | "client" | "either";

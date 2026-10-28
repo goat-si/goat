@@ -10,13 +10,13 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 | Measure                                                | Value            |
 | ------------------------------------------------------ | ---------------- |
-| MCP tools mounted on /mcp                              | 221              |
+| MCP tools mounted on /mcp                              | 222              |
 | Toolkits                                               | 27               |
-| Mutating tools, by enforced handler access             | 143              |
-| Mutating tools that accept clientRequestId             | 48               |
+| Mutating tools, by enforced handler access             | 144              |
+| Mutating tools that accept clientRequestId             | 49               |
 | Mutating tools whose clientRequestId GOAT deduplicates | 35               |
-| Input parameters with a description                    | 124 of 845 (15%) |
-| Tool descriptions with an example                      | 4 of 221         |
+| Input parameters with a description                    | 129 of 850 (15%) |
+| Tool descriptions with an example                      | 5 of 222         |
 | CLI commands, listed / unlisted                        | 62 / 19          |
 | CLI commands with usage examples                       | 0 of 81          |
 | Listed CLI leaf commands with --json                   | 11 of 47         |
@@ -27,7 +27,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | `orchestrator`         | 30    | 22       | 11              | 3         | return        | 1          | apps/server/src/mcp/toolkits/orchestrator/tools.ts         |
 | `device`               | 4     | 2        | 1               | 0         | error         | 8          | apps/server/src/mcp/toolkits/device/tools.ts               |
 | `attachment`           | 4     | 3        | 2               | 0         | return        | 1          | apps/server/src/mcp/toolkits/attachment/tools.ts           |
-| `agentSurface`         | 5     | 2        | 0               | 1         | error         | 2          | apps/server/src/mcp/toolkits/agentSurface/tools.ts         |
+| `agentSurface`         | 6     | 3        | 1               | 1         | error         | 2          | apps/server/src/mcp/toolkits/agentSurface/tools.ts         |
 | `provider`             | 20    | 13       | 9               | 1         | return        | 1          | apps/server/src/mcp/toolkits/provider/tools.ts             |
 | `ssh`                  | 17    | 12       | 5               | 2         | return        | 2          | apps/server/src/mcp/toolkits/ssh/tools.ts                  |
 | `computerUse`          | 2     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/computerUse/tools.ts          |
@@ -57,11 +57,11 @@ Shipped toolkit names follow three shapes. The canonical listed name is derived 
 
 | Shape                | Count | Examples                                                                                                                                                                     |
 | -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resource_verb`      | 32    | `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, and 26 more                                  |
+| `resource_verb`      | 33    | `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, and 27 more                                  |
 | `verb_resource`      | 38    | `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, and 32 more                            |
 | `goat_resource_verb` | 151   | `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_background_wait`, `goat_cloud_holders`, `goat_cloud_launch`, and 145 more |
 
-The `goat_` prefix marks only some tools, and the catalog test pins exactly that set (apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names`). `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, `preview_back`, `preview_click`, and 30 more put the verb first, and `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, and 24 more put an unprefixed resource first. Pull requests use `link_pull_request` and `watch_pull_request` where threads use `goat_thread_watch`; scheduled tasks are `schedule_task`, `list_scheduled_tasks`, and `run_scheduled_task_now`.
+The `goat_` prefix marks only some tools, and the catalog test pins exactly that set (apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names`). `create_threads`, `delegate_task`, `delete_scheduled_task`, `link_pull_request`, `list_scheduled_tasks`, `list_thread_pull_requests`, `preview_back`, `preview_click`, and 30 more put the verb first, and `channel_bot_home`, `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, and 25 more put an unprefixed resource first. Pull requests use `link_pull_request` and `watch_pull_request` where threads use `goat_thread_watch`; scheduled tasks are `schedule_task`, `list_scheduled_tasks`, and `run_scheduled_task_now`.
 
 Toolkits do not match the resource in the name, which matters once docs or permissions are grouped by toolkit:
 
@@ -157,10 +157,10 @@ One intent is spelled several ways (tool counts in parentheses):
 
 ## Schemas and envelopes
 
-- **Undeclared arguments.** 201 of 221 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
-- **Two failure modes.** Tools split 201 `return` and 20 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts `declaredFailure`), so an agent parses text to branch on an error.
-- **7 error families.** 175 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 3 tools fail with `OperationError`; 29 tools fail with 20 tagged errors; 1 tools fail with `OrchestratorMcpFailure` or `SshThreadHandoffFailure`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 16 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcpFailure.ts `OrchestratorMcpFailureCode`). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
-- **Idempotency.** 49 tools accept `clientRequestId`: `channel_bot_home_claim`, `channel_ingest`, `create_threads`, `delegate_task`, `device_open`, `goat_attachment_prepare_upload`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_decision_request`, `goat_goal_apply`, and 39 more. The other 95 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_fallback_chain_set`, `goat_goal_delete`, and 28 more.
+- **Undeclared arguments.** 202 of 222 published input schemas say `"additionalProperties": true`, but every registration refuses undeclared arguments at call time ((not found)). A client that validates against the schema cannot learn the real contract.
+- **Two failure modes.** Tools split 201 `return` and 21 `error`. Both reach the client as `isError` with JSON in a text block and no `structuredContent` (apps/server/src/mcp/toolkits/core.test.ts `declaredFailure`), so an agent parses text to branch on an error.
+- **7 error families.** 176 tools fail with `OrchestratorMcpFailure`; 4 tools fail with 8 tagged errors; 3 tools fail with `OperationError`; 29 tools fail with 20 tagged errors; 1 tools fail with `OrchestratorMcpFailure` or `SshThreadHandoffFailure`; 2 tools fail with `OrchestratorMcpFailure` or `WorktreeMcpFailure`; 7 tools fail with 16 tagged errors. Only `OrchestratorMcpFailure` carries a machine `code` (packages/contracts/src/orchestratorMcpFailure.ts `OrchestratorMcpFailureCode`). Preview, device, worktree, and pull request failures are told apart by `_tag` alone, and every preview tool advertises all of its toolkit's tags whether or not it can raise them.
+- **Idempotency.** 50 tools accept `clientRequestId`: `channel_bot_home_claim`, `channel_ingest`, `create_threads`, `delegate_task`, `device_open`, `goat_attachment_prepare_upload`, `goat_cloud_launch`, `goat_cloud_machine_create`, `goat_decision_request`, `goat_eval`, and 40 more. The other 95 mutating tools have no retry key, including the destructive `delete_scheduled_task`, `device_close`, `goat_attachment_discard`, `goat_call`, `goat_cloud_run_forget`, `goat_connection_remove`, `goat_decision_answer`, `goat_environment_preferences_update`, `goat_fallback_chain_set`, `goat_goal_delete`, and 28 more.
 - **Pagination.** 12 tools use `cursor/nextCursor` (`channel_task_export`, `channel_task_list`, `goat_cloud_run_list`, `goat_goal_list`, and 8 more); 10 tools use `limit only` (`goat_decision_list`, `goat_describe`, `goat_preview_read`, `goat_ssh_browse`, and 6 more); 1 tool uses `afterSequence/hasMore` (`goat_origin_reports_wait`); 1 tool uses `limit/hasMore` (`goat_thread_read`). List tools with no page control: `device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`.
 - **Hints that disagree with enforcement.** The handler's `McpToolAccess` declaration is what the server enforces; the MCP `readOnlyHint` is what clients see. They disagree for no tools. Reads declared `actsAsCaller` without a read-only hint: `task_status`.
 - **Image results.** `device_screenshot`, `goat_screen_run`, `html_preview`, `preview_snapshot` are registered directly to return image content (apps/server/src/mcp/McpHttpServer.ts `imageToolRegistration`).
@@ -169,7 +169,7 @@ One intent is spelled several ways (tool counts in parentheses):
 
 Only 15% of input parameters carry a description. 159 tools describe none of their parameters, for example `channel_bot_home_claim`, `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `create_threads`, `delete_scheduled_task`, and 149 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
-4 of 221 tool descriptions include an example. 113 tools have no `Tool.Title`. Description length is uneven; the longest are:
+5 of 222 tool descriptions include an example. 114 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
 | Tool                     | Characters | Declared at                                             |
 | ------------------------ | ---------- | ------------------------------------------------------- |
@@ -177,8 +177,8 @@ Only 15% of input parameters carry a description. 159 tools describe none of the
 | `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts     |
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
 | `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
+| `goat_eval`              | 392        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
 | `goat_worktree_handoff`  | 390        | packages/contracts/src/agentSurface/entries/worktree.ts |
-| `schedule_task`          | 383        | packages/contracts/src/agentSurface/entries/schedule.ts |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -226,14 +226,13 @@ Names that look like tools but are not in the registry:
 | Name           | Where                                                                                                          |
 | -------------- | -------------------------------------------------------------------------------------------------------------- |
 | `list_changed` | docs/internals/agent-surface.md                                                                                |
-| `goat_eval`    | docs/internals/agent-surface.md, structure/mcp-toolkits.md                                                     |
 | `run_steps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md, structure/decisions/ADR-0023-goat-computer-use-app.md |
 | `run_script`   | structure/decisions/ADR-0022-cua-driver-computer-use.md, structure/decisions/ADR-0023-goat-computer-use-app.md |
 | `list_apps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md                                                        |
 
 Every `goat ...` invocation in the docs names a real command and flags it accepts; flag values are not checked.
 
-104 of 221 tools are never named in any Markdown doc, and 100 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_html_list`, `goat_hub_child_connection`, `goat_hub_child_status`, and 76 more. Agents can discover these with `goat_describe`.
+104 of 222 tools are never named in any Markdown doc, and 100 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_html_list`, `goat_hub_child_connection`, `goat_hub_child_status`, and 76 more. Agents can discover these with `goat_describe`.
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat triage`.
 
@@ -241,16 +240,16 @@ The server's `/llms.txt` lists every registry path with its summary. `goat_descr
 
 ## Fixes ranked by agent impact
 
-1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (201 `return`, 20 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
+1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (201 `return`, 21 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Complete the on-demand tool reference.** 100 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools. Add examples and related paths there without committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 721 of 845 parameters have no description, and 159 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
-5. **Publish the real argument contract.** 201 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
+4. **Describe every parameter.** 721 of 850 parameters have no description, and 159 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
+5. **Publish the real argument contract.** 202 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 95 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 7. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 8. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 9. **`--json` on every listed leaf command.** Only 11 of 47 offer it; agents parse human tables otherwise.
-10. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 4 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
+10. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 5 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 11. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
 12. **Move routing policy out of tool descriptions.** The longest description is 1688 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 13. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.

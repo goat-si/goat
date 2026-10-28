@@ -1,10 +1,11 @@
 import * as Schema from "effect/Schema";
 
 /**
- * What tools/list shows: "core", the entries whose registry listing is "core", or "full", every
- * tool the caller can use. Either way every tool stays callable by name and through goat_call.
+ * What tools/list shows: "core", the entries whose registry listing is "core"; "core_eval", core
+ * plus goat_eval, opt-in until its campaign passes (D8); or "full", every tool the caller can use.
+ * Every tool stays callable by name and through goat_call.
  */
-export const AgentToolListing = Schema.Literals(["core", "full"]);
+export const AgentToolListing = Schema.Literals(["core", "full", "core_eval"]);
 export type AgentToolListing = typeof AgentToolListing.Type;
 
 /**

@@ -146,6 +146,12 @@ const TOOL_LISTING_CHOICES: ReadonlyArray<{
     label: "All tools",
     description: "Every tool up front. Can make each agent's first prompt much larger.",
   },
+  {
+    listing: "core_eval",
+    label: "Core + goat_eval",
+    description:
+      "Core, plus goat_eval to run several GOAT calls as one program. Opt-in while measured.",
+  },
 ];
 
 export function SettingsEnvironmentNewThreadsRouteScreen() {

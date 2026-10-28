@@ -125,8 +125,9 @@ pass its `--json` output to the report with `--budget`.
 ### Composition campaigns
 
 A campaign with `"gate": "eval"` decides whether `goat_eval` joins the core listing. The
-baseline arm is the default core listing and the candidate is core plus `goat_eval`, switched
-through the same server setting that makes `goat_eval` opt-in, on a provider without code
+baseline arm is the default core listing and the candidate is core plus `goat_eval`,
+`{ "mode": "core_eval", "resident": ["goat_eval"] }`. That is the `agentToolListing` value that makes
+`goat_eval` opt-in, so the runner switches it per run as for a listing campaign, on a provider without code
 mode (Claude is the reference population). The prompt still names no tool.
 
 The candidate passes when every one of these holds on one paired campaign (composition rule,
@@ -249,8 +250,7 @@ out of committed replay data. Changing a case or grading rule raises `REPLAY_VER
 
 ## Not yet possible
 
-- The composition campaign needs a server where `goat_eval` is mounted and its opt-in setting
-  can change per run. This runner does not validate `goat_screen_run`; record screen-run
+- This runner does not validate `goat_screen_run`; record screen-run
   evidence separately until a screen-task campaign is designed.
 - The report's `eval` verdict does not apply the [composition rule](#composition-campaigns)
   yet: it requires every reduces task, manual ones included; it ignores result bytes; it lets

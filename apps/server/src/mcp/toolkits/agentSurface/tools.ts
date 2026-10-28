@@ -1,6 +1,7 @@
 import { OrchestratorMcpFailure, OrchestratorMcpHost } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
+import { EvalInput, EvalResult } from "@goat/contracts/agentSurface/eval";
 import { listedDescription } from "@goat/contracts/agentSurface/signature";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
@@ -198,9 +199,23 @@ const CallTool = Tool.make(agentSurfaceRegistry["surface.call"].name, {
   dependencies: [McpInvocationContext.McpInvocationContext, McpSchema.McpServerClient],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["surface.call"]));
 
+const EvalTool = Tool.make(agentSurfaceRegistry["surface.eval"].name, {
+  description: listedDescription(agentSurfaceRegistry["surface.eval"]),
+  parameters: EvalInput,
+  success: EvalResult,
+  failure: OrchestratorMcpFailure,
+  // Each step runs as goat_call does, with the request's own client; plans read the caller's thread.
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    McpSchema.McpServerClient,
+    ThreadManagementService.ThreadManagementService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["surface.eval"]));
+
 export const AgentSurfaceToolkit = Toolkit.make(
   DescribeTool,
   CallTool,
+  EvalTool,
   OperationReadTool,
   OperationWaitTool,
   OperationCancelTool,

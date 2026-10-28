@@ -31,6 +31,7 @@ import {
 const TOOL_LISTING_LABELS: Readonly<Record<AgentToolListing, string>> = {
   core: "Core",
   full: "All tools",
+  core_eval: "Core + goat_eval",
 };
 
 export function AgentToolsSettings() {
@@ -194,7 +195,7 @@ export function AgentToolListingSetting() {
       serverScoped
       settingKeys={["agentToolListing"]}
       {...searchableSetting("agent-tool-listing")}
-      description="Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which can make each agent's first prompt much larger."
+      description="Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which can make each agent's first prompt much larger. Core + goat_eval also lists goat_eval, which runs several GOAT calls as one program; it is opt-in while it is measured."
       resetAction={
         mixed || settings.agentToolListing !== shippedDefault ? (
           <SettingResetButton

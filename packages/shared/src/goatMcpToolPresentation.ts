@@ -513,6 +513,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_describe: tool(["Describe", "Describing", "Described", "GOAT capabilities"], "capabilities"),
   goat_call: tool(["Call", "Calling", "Called", "a GOAT capability"], "environment-update"),
+  goat_eval: tool(["Run", "Running", "Ran", "a GOAT program"], "environment-update"),
   goat_operation_read: tool(["Read", "Reading", "Read", "an operation"], "host-status"),
   goat_operation_wait: tool(
     ["Wait for", "Waiting for", "Waited for", "an operation"],

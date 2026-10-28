@@ -1,3 +1,4 @@
+import { EVAL_GUIDE } from "./eval.ts";
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./types.ts";
 
 type Named = Pick<AgentSurfaceEntry, "resource" | "verb" | "name">;
@@ -17,6 +18,38 @@ export const listedToolName = (entry: Named) =>
  */
 export const legacyToolNames = (entry: Named): ReadonlyArray<string> =>
   listedToolName(entry) === entry.name ? [] : [entry.name];
+
+/**
+ * Common paths goat_call lists with their arguments, so a first call needs no lookup. goat_eval is
+ * only ever listed beside goat_call, and its programs call the same forms.
+ */
+const CORE_SIGNATURES = [
+  "(thread.read :threadId :host? ...)",
+  "(thread.send :threadId :host? :message ...)",
+  "(thread.status :threadId :host?)",
+  "(thread.list :projectId? :host? ...)",
+  "(thread.search :query :host? ...)",
+  "(thread.wait :threadId :host? ...)",
+  "(thread.unwatch :threadId :host? ...)",
+  "(thread.launch :projectId? :title :modelSelection?{:model ...} :workspaceStrategy?{:type=root|existing_worktree|worktree ...} :message? ...)",
+  "(thread.report_result :outcome=succeeded|failed|blocked|cancelled :summary? ...)",
+  "(task.create :task :target?{:providerInstanceId? :model? :options? ...} :isolation?=shared|worktree ...)",
+  "(task.read :taskId)",
+  "(task.cancel :taskId ...)",
+  "(origin.report :status=progress|completed|failed|needs_input :summary ...)",
+  "(pull_request.link :threadId? :url? ...)",
+  "(pull_request.watch :threadId? :url? ...)",
+  "(pull_request.unwatch :threadId? :url? ...)",
+  "(pull_request.list :threadId?)",
+  "(review_findings.record :taskId :entries[] ...)",
+  "(host.status :host? :placement?{...} ...)",
+  "(provider.list :search?)",
+  "(ssh.thread_launch :host :cwd :title :message? ...)",
+  "(schedule.create :prompt :schedule{:type=interval|fixed_time|webhook ...} ...)",
+  "(computer_use.request :purpose :apps?[] ...)",
+  "(decision.request :title :context :options[] :requiredProfile ...)",
+  "(handoff.create :label :reason ...)",
+];
 
 /** The meta tools that reach every other path, kept beside the registry like notes.ts. */
 export const metaSurfaceEntries = {
@@ -49,33 +82,7 @@ export const metaSurfaceEntries = {
       'Call one GOAT capability by path or tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff a person must finish, so do not retry. Example: goat_call {path:"thread.read", args:{threadId:"t1"}}',
     guide:
       "A path may be a canonical or legacy tool name. A needs_human handoff's state says what the person must do. Error codes: invalid_request, unauthenticated, permission_denied, not_found, conflict, unavailable, timeout, expired, cancelled, internal; each carries reason, message and retryable. goat_call cannot call itself or goat_eval. Find paths with goat_describe. An invalid_request for an argument the path does not take, or one that does not decode, carries details.expectedSignature, the path's arguments on one line.",
-    signatures: [
-      "(thread.read :threadId :host? ...)",
-      "(thread.send :threadId :host? :message ...)",
-      "(thread.status :threadId :host?)",
-      "(thread.list :projectId? :host? ...)",
-      "(thread.search :query :host? ...)",
-      "(thread.wait :threadId :host? ...)",
-      "(thread.unwatch :threadId :host? ...)",
-      "(thread.launch :projectId? :title :modelSelection?{:model ...} :workspaceStrategy?{:type=root|existing_worktree|worktree ...} :message? ...)",
-      "(thread.report_result :outcome=succeeded|failed|blocked|cancelled :summary? ...)",
-      "(task.create :task :target?{:providerInstanceId? :model? :options? ...} :isolation?=shared|worktree ...)",
-      "(task.read :taskId)",
-      "(task.cancel :taskId ...)",
-      "(origin.report :status=progress|completed|failed|needs_input :summary ...)",
-      "(pull_request.link :threadId? :url? ...)",
-      "(pull_request.watch :threadId? :url? ...)",
-      "(pull_request.unwatch :threadId? :url? ...)",
-      "(pull_request.list :threadId?)",
-      "(review_findings.record :taskId :entries[] ...)",
-      "(host.status :host? :placement?{...} ...)",
-      "(provider.list :search?)",
-      "(ssh.thread_launch :host :cwd :title :message? ...)",
-      "(schedule.create :prompt :schedule{:type=interval|fixed_time|webhook ...} ...)",
-      "(computer_use.request :purpose :apps?[] ...)",
-      "(decision.request :title :context :options[] :requiredProfile ...)",
-      "(handoff.create :label :reason ...)",
-    ],
+    signatures: CORE_SIGNATURES,
     // Destructive so clients that prompt for destructive tools still prompt here; each call keeps its target's checks.
     effect: "destructive",
     capability: "none",
@@ -83,6 +90,26 @@ export const metaSurfaceEntries = {
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  },
+  eval: {
+    resource: "surface",
+    verb: "eval",
+    name: "goat_eval",
+    toolkit: "agentSurface",
+    // Opt-in until its campaign passes (D8): listed only under the core_eval listing.
+    listing: "core_eval",
+    summary: "Run several GOAT calls as one program and keep only what it returns",
+    description:
+      'Run several GOAT calls as one S-expression program; only its value comes back, so intermediate results stay on the server. Calls use goat_call\'s listed forms, such as (thread.read :threadId "t1"), with the same checks. Retry with the same clientRequestId to resume. goat_describe {path:"goat_eval"} has the language. Example: goat_eval {program:"(pick (thread.read :threadId \\"t1\\") :title)"}',
+    guide: EVAL_GUIDE,
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Runs other tools, and each one checks its own capability for this caller.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "supported",
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: false },
   },

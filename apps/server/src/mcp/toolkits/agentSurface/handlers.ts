@@ -8,12 +8,14 @@ import * as Effect from "effect/Effect";
 
 import { makeHostConditions } from "../../hostConditions.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as ToolAdmission from "../../ToolAdmission.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { makeHandoffReader } from "../../operations/handoffReads.ts";
 import { makeOperationTokens } from "../../operations/OperationTokens.ts";
 import { ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope, envelopeError } from "./dispatchEnvelope.ts";
+import { makeEvalRunner } from "./evalRunner.ts";
 import { makeOperations } from "./operations.ts";
 import { makeDescribe } from "./describe.ts";
 import { makeHostDescribe } from "./hostDescribe.ts";
@@ -26,14 +28,12 @@ export const layer = McpToolAccess.toLayer(
   AgentSurfaceToolkit,
   Effect.gen(function* () {
     const dispatch = yield* ToolDispatch;
-    const operations = makeOperations(
-      dispatch,
-      yield* makeOperationTokens,
-      makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
-    );
+    const readHandoff = makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs));
+    const operations = makeOperations(dispatch, yield* makeOperationTokens, readHandoff);
 
     const permissions = yield* Profiles.PermissionProfiles;
-    const describe = makeDescribe(dispatch, permissions, yield* makeHostConditions);
+    const hostConditions = yield* makeHostConditions;
+    const describe = makeDescribe(dispatch, permissions, hostConditions);
     const describeOnHost = makeHostDescribe(dispatch, permissions);
 
     const call = Effect.fn("AgentSurface.call")(function* (input: {
@@ -77,6 +77,17 @@ export const layer = McpToolAccess.toLayer(
         : { ...finished, meta: { ...finished.meta, deprecated: entry.path } };
     });
 
+    // Each step is the call goat_call makes, so a program adds no authority (D8).
+    const evaluate = makeEvalRunner({
+      invoke: (path, args) => call({ path, args }),
+      dispatch,
+      permissions,
+      admission: yield* ToolAdmission.makeEvalAdmission(),
+      readHandoff,
+      hostConditions,
+      withOperation: operations.withOperation,
+    });
+
     return {
       // Another machine is reached with this machine's credentials, under the host-reading gate.
       goat_describe: McpToolAccess.readsOrReachesHost(
@@ -89,6 +100,7 @@ export const layer = McpToolAccess.toLayer(
       ),
       // Destructive so clients that prompt on destructive tools still prompt for the targets that are.
       goat_call: McpToolAccess.destructive(McpToolAccess.dispatches(call)),
+      goat_eval: McpToolAccess.destructive(McpToolAccess.dispatches(evaluate.run)),
       goat_operation_read: McpToolAccess.reads(operations.read),
       goat_operation_wait: McpToolAccess.reads(operations.wait),
       // The kind's own cancel tool holds the checks, as goat_call's targets do.

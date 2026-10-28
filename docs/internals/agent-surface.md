@@ -552,10 +552,10 @@ toolkit registers, whichever name the caller used, so each tool keeps one series
 
 ## Composition: `goat_eval`
 
-**Now, not yet mounted.** [evalRunner.ts](../../apps/server/src/mcp/toolkits/agentSurface/evalRunner.ts)
+**Now.** [evalRunner.ts](../../apps/server/src/mcp/toolkits/agentSurface/evalRunner.ts)
 runs a small program of GOAT calls in one tool call and returns only what the program keeps.
-**Proposed:** `surface.eval` exposes it as `goat_eval`; until that registration lands, no MCP
-client reaches it. It is for two cases that code-mode harnesses do not cover
+`surface.eval` exposes it as `goat_eval`, with each step passed to `goat_call`'s own function
+([handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts)). It is for two cases that code-mode harnesses do not cover
 (D8). In Claude Code, ACP agents, Pi and Cursor, a call whose arguments depend on an earlier
 result costs another model turn, and every intermediate result lands in the transcript;
 independent calls can share one response, so the turn saving is a hypothesis the
@@ -632,8 +632,9 @@ A halted run answers `{status, evalRunId, haltedAt, completedSteps, operations}`
 `error` or `handoff`. Completed runs expire after 24 hours. Halted runs expire after 7 days
 unless a step's outcome is unknown; those stay, as unknown reservations do.
 
-**Rollout.** `goat_eval` starts opt-in: the default core listing does not change, and a server
-setting adds it for the composition campaign and for users who want it. Whether it joins the
+**Rollout.** `goat_eval` starts opt-in: the default core listing does not change. The
+`agentToolListing` value `core_eval` lists it beside the core tools, loaded up front, for the
+composition campaign and for users who want it; `full` lists it like any other tool. Whether it joins the
 core listing is decided by that campaign and lands as its own change.
 
 ## Screen composition: `goat_screen_run`
@@ -971,7 +972,7 @@ Each PR shipped on its own and left `tools/list` unchanged until the flip (row 1
 | 9   | Registry-generated CLI commands and credentials                               | Shipped: credentials ([#935](https://github.com/goat-si/goat/pull/935)); generated commands ([#938](https://github.com/goat-si/goat/pull/938))                                                                            |
 | 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
 | 11  | `goat_screen_run`                                                             | Implemented on this branch; runtime proof pending                                                                                                                                                                         |
-| 12  | `goat_eval` runner and step journal; opt-in mount                             | Started: runner, journal and contract implemented on this branch; registration and the opt-in setting pending                                                                                                             |
+| 12  | `goat_eval` runner and step journal; opt-in mount                             | Runner, journal and contract; mounted as `goat_eval` behind the `core_eval` listing; campaign not run                                                                                                                     |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
 draining instead of sleeps, and one real-client pass for cards.

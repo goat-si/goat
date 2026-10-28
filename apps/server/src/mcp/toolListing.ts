@@ -44,7 +44,8 @@ const callerListing = (
   requested: string | undefined,
 ): AgentToolListing => {
   if (scope.thread !== undefined) return setting;
-  return requested?.trim().toLowerCase() === "core" ? "core" : "full";
+  const asked = requested?.trim().toLowerCase();
+  return asked === "core" || asked === "core_eval" ? asked : "full";
 };
 
 /** The listing this caller is shown, and the one agents GOAT runs get, which tools/list names. */
@@ -56,25 +57,28 @@ interface Listing {
 }
 
 /**
- * The tools a caller is listed: none it cannot use, and in the core listing only entries the
- * registry lists as core. Core entries carry the always-load marker in both listings, so harnesses
- * that defer tools (Claude Code, Pi) keep them resident. Unlisted tools stay callable by name.
+ * The tools a caller is listed: none it cannot use, in the core listing only entries the registry
+ * lists as core, and goat_eval also under core_eval. Those entries carry the always-load marker in
+ * every listing, so harnesses that defer tools (Claude Code, Pi) keep them resident. Unlisted
+ * tools stay callable by name.
  */
 const listedTools = (
   tools: ReadonlyArray<unknown>,
   scope: McpInvocationContext.McpInvocationScope,
-  listing: AgentToolListing,
+  listing: Listing,
   profile: CallerProfile | undefined,
-  host: HostConditions,
 ): ReadonlyArray<unknown> =>
   tools.flatMap((tool) => {
     if (!isRecord(tool) || typeof tool.name !== "string") return [tool];
     const entry = resolveAgentSurfaceEntry(tool.name);
     if (entry === undefined) return [tool];
-    if (!availability(entry, scope, true, profile, host).now) return [];
-    const core = "listing" in entry && entry.listing === "core";
-    if (listing === "core" && !core) return [];
-    if (!core) return [tool];
+    if (!availability(entry, scope, true, profile, listing.host ?? {}).now) return [];
+    const tier = "listing" in entry ? entry.listing : undefined;
+    // goat_eval loads up front only where agents get core_eval, so a client sees which they get.
+    const resident =
+      tier === "core" ||
+      (tier === "core_eval" && (listing.listed === "core_eval" || listing.agents === "core_eval"));
+    if (!resident) return listing.listed === "full" ? [tool] : [];
     const meta = isRecord(tool._meta) ? tool._meta : {};
     return [{ ...tool, _meta: { ...meta, [ALWAYS_LOAD_META_KEY]: true } }];
   });
@@ -97,7 +101,7 @@ const filterMessage = (
     ...message,
     result: {
       ...message.result,
-      tools: listedTools(message.result.tools, scope, listing.listed, profile, listing.host ?? {}),
+      tools: listedTools(message.result.tools, scope, listing, profile),
       _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing.agents },
     },
   });
