@@ -13,6 +13,9 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 import * as SqlitePersistence from "./Sqlite.ts";
 
@@ -86,6 +89,78 @@ it.effect("runs file database opening and migration SQL away from the server thr
 );
 
 import * as NodeWorkerThreads from "node:worker_threads";
+
+it.effect("publishes one fatal notification after a lost COMMIT without replaying it", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-fatal-writer-" });
+    const filename = path.join(directory, "state.sqlite");
+    const workers: Array<NodeWorkerThreads.Worker> = [];
+    let commitId: number | undefined;
+    let notifications = 0;
+    const original = NodeWorkerThreads.Worker.prototype.postMessage;
+    using _capture = vi
+      .spyOn(NodeWorkerThreads.Worker.prototype, "postMessage")
+      .mockImplementation(function (this: NodeWorkerThreads.Worker, message, ...rest) {
+        if (!workers.includes(this)) workers.push(this);
+        if (typeof message?.sql === "string" && /^\s*COMMIT\b/i.test(message.sql))
+          commitId = message.id;
+        return original.call(this, message, ...rest);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE fatal_probe(value INTEGER)`;
+      assert.equal((yield* sql`SELECT missing_function()`.pipe(Effect.flip))._tag, "SqlError");
+      assert.equal(notifications, 0, "an ordinary SQL error is not fatal");
+      const writer = workers[0]!;
+      const committed = yield* Deferred.make<void>();
+      const emit = writer.emit.bind(writer);
+      using _loseReply = vi.spyOn(writer, "emit").mockImplementation((event, ...args) => {
+        if (event === "message" && args[0]?.id === commitId && commitId !== undefined) {
+          Deferred.doneUnsafe(committed, Effect.void);
+          return true;
+        }
+        return emit(event, ...args);
+      });
+      const transaction = yield* sql
+        .withTransaction(sql`INSERT INTO fatal_probe VALUES (1)`)
+        .pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(committed);
+      yield* Effect.promise(() => writer.terminate());
+      assert.equal((yield* Fiber.join(transaction))._tag, "Failure");
+      assert.equal(
+        (yield* sql`INSERT INTO fatal_probe VALUES (2)`.pipe(Effect.exit))._tag,
+        "Failure",
+      );
+      const independent = new NodeSqlite.DatabaseSync(filename, { readOnly: true });
+      try {
+        assert.equal(
+          independent.prepare("SELECT COUNT(*) AS count FROM fatal_probe").get()?.count,
+          1,
+        );
+      } finally {
+        independent.close();
+      }
+      assert.equal(workers.length, 1, "a failed writer must never be replaced in place");
+      assert.equal(notifications, 1, "permanent writer failure must reach its lifetime owner");
+      writer.emit("error", new Error("duplicate writer error"));
+      assert.equal(notifications, 1, "error and exit belong to one fatal epoch");
+    }).pipe(
+      Effect.provide(
+        NodeSqliteClient.layer({
+          filename,
+          writerWorker: true,
+          ...{
+            onFatalPersistence: () => {
+              notifications++;
+            },
+          },
+        }),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("does not receipt a failed worker migration and reopens safely", () =>
   Effect.gen(function* () {
