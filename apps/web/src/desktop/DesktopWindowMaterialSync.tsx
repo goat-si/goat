@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { useClientSettings } from "../hooks/useSettings";
 import { useDesktopWindowMaterial } from "./useDesktopWindowMaterial";
+import {
+  canRelaunchForWindowMaterial,
+  WindowMaterialRestartPrompt,
+} from "./WindowMaterialRestartPrompt";
 
 export function DesktopWindowMaterialSync() {
   const { available, state } = useDesktopWindowMaterial();
@@ -40,5 +44,6 @@ export function DesktopWindowMaterialSync() {
     };
   }, [available, state, glassOpacity]);
 
-  return null;
+  if (!available || !canRelaunchForWindowMaterial()) return null;
+  return <WindowMaterialRestartPrompt reason={state?.reason ?? null} />;
 }

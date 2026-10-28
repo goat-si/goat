@@ -187,3 +187,13 @@ it("keeps an inactive material reason visible while Liquid Glass forces the swit
   await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeDisabled();
   await expect.element(screen.getByText("Restart GOAT to use Liquid Glass.")).toBeVisible();
 });
+
+it("offers Restart after Later so the pending glass change can still be applied", async () => {
+  using fixture = materialBridge(materialState({ applied: "none", reason: "off" }));
+  await using screen = await render(<Setting />);
+  await expect.element(screen.getByRole("button", { name: "Restart" })).not.toBeInTheDocument();
+  await act(() => fixture.push(materialState({ revision: 2, applied: "none", reason: "restart" })));
+  await screen.getByRole("button", { name: "Restart" }).click();
+  await screen.getByRole("button", { name: "Restart now" }).click();
+  expect(fixture.bridge.relaunchForWindowMaterial).toHaveBeenCalledTimes(1);
+});
