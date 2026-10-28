@@ -46,7 +46,7 @@ function fixture(gate?: {
     get: (id) =>
       Effect.suspend(() =>
         tunnels.has(id)
-          ? Effect.succeed({ id, name: tunnels.get(id) })
+          ? Effect.succeed({ id, name: tunnels.get(id) ?? null })
           : Effect.fail(
               new Provider.ManagedEndpointTunnelClientError({
                 operation: "get",

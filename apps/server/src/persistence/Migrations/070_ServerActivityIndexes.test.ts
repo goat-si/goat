@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { migrationManifest, runMigrations } from "../Migrations.ts";
@@ -97,8 +98,11 @@ it.effect(
           assert.equal(rows[0]?.count, 0, `${table} must stay empty during migration`);
         }
       }).pipe(
-        Effect.provide(ProjectionStore.layer),
-        Effect.provide(NodeSqliteClient.layer({ filename: dbPath })),
+        Effect.provide(
+          ProjectionStore.layer.pipe(
+            Layer.provideMerge(NodeSqliteClient.layer({ filename: dbPath })),
+          ),
+        ),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

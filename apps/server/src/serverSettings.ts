@@ -1993,6 +1993,7 @@ const make = Effect.gen(function* () {
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
     return fileWatchResync(directory).pipe(
+      Stream.provideService(FileSystem.FileSystem, fs),
       Stream.filter(
         (event) =>
           event === undefined ||

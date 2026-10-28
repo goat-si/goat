@@ -788,7 +788,10 @@ it.effect("sends a guest's files as the guest's message and keeps them the guest
     }
     assert.isFalse((yield* waitingMessages).some((next) => next.id === message!.id));
     assert.equal((yield* guestShares.attachment(session, copied.id)).attachment.id, copied.id);
-  }).pipe(Effect.scoped, Effect.provide(AttachmentFileLeases.layer), Effect.provide(layerTest)),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(AttachmentFileLeases.layer.pipe(Layer.provideMerge(layerTest))),
+  ),
 );
 
 it.effect("serves the shared thread's files to its guest, never another thread's", () =>

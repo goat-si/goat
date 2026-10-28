@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { RelayDeviceRegistrationRequest, RelayDpopAccessTokenRequest } from "./relay.ts";
 
 const decodeDevice = Schema.decodeUnknownExit(RelayDeviceRegistrationRequest);
+const decodeDpopRequest = Schema.decodeUnknownExit(RelayDpopAccessTokenRequest);
 const device = {
   deviceId: "device",
   label: "Phone",
@@ -68,8 +69,6 @@ describe("relay token exchange form", () => {
     { readmitClientKey: "yes" },
     { readmitClientKey: "0" },
   ])("rejects unsupported policy or malformed readmission %j", (invalid) => {
-    expect(
-      Schema.decodeUnknownExit(RelayDpopAccessTokenRequest)({ ...fields, ...invalid })._tag,
-    ).toBe("Failure");
+    expect(decodeDpopRequest({ ...fields, ...invalid })._tag).toBe("Failure");
   });
 });

@@ -141,13 +141,13 @@ it.effect.each(["credential-failure", "pending-delete"] as const)(
       assert.equal(values.size, 0);
     }).pipe(
       Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { GOAT_RELAY_URL: "https://relay.example.test" } }),
-        ),
-      ),
-      Effect.provide(
-        ServerConfig.layerTest("/", { prefix: "goat-connect-logout-test-" }).pipe(
-          Layer.provideMerge(NodeServices.layer),
+        Layer.mergeAll(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { GOAT_RELAY_URL: "https://relay.example.test" } }),
+          ),
+          ServerConfig.layerTest("/", { prefix: "goat-connect-logout-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
         ),
       ),
       Effect.scoped,

@@ -930,6 +930,16 @@ export const layerClientApi = HttpApiBuilder.group(
             };
           },
           Effect.tapError(appendCloudflareRetryAfter),
+          // Same answer as unlinkEnvironment; the endpoint declares no deprovisioning error.
+          Effect.catchTags({
+            ManagedEndpointDeprovisioningFailed: (error) =>
+              Effect.logWarning("Failed to clean up a managed endpoint while linking", {
+                userId: error.userId,
+                environmentId: error.environmentId,
+                stage: error.stage,
+                cause: error.cause,
+              }).pipe(Effect.andThen(relayInternalErrorResponse("upstream_unavailable"))),
+          }),
           mapErrorTags({
             EnvironmentLinkProofExpired: (_error, traceId) =>
               new RelayEnvironmentLinkProofExpiredError({

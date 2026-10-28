@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The marker is a plain SHA-256 of the signed executable bytes.
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

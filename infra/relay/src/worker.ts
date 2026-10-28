@@ -274,83 +274,88 @@ export const layer = Api.make(
       }),
     });
 
-    const layerRuntime = Layer.empty.pipe(
-      Layer.provideMerge(MobileRegistrations.layer),
-      Layer.provideMerge(AgentActivityPublisher.layer),
-      Layer.provideMerge(EnvironmentConnector.layer),
-      Layer.provideMerge(EnvironmentLinker.layer),
-      Layer.provideMerge(ConnectLinkReservations.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          EnvironmentPublishSignatures.layer,
-          ManagedEndpointReaper.layer,
-          HeldHooks.layer,
-        ),
-      ),
-      Layer.provideMerge(
-        ManagedEndpointProvider.layerCloudflareBindings(
-          managedEndpointTunnelBinding,
-          managedEndpointDnsBinding,
-          alchemyRuntimeContext,
-        ),
-      ),
-      Layer.provideMerge(DpopProofs.layer),
-      Layer.provideMerge(ApnsDeliveries.layer),
-      Layer.provideMerge(
-        FcmDeliveries.layer.pipe(
-          Layer.provide(
-            Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
-              send: Effect.fn("FcmDeliveryQueueSender.send")(
-                function* (body) {
-                  return yield* fcmDeliveryQueueSender.send(body);
-                },
-                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-              ),
-            }),
+    const layerRuntime = Layer.empty
+      .pipe(
+        Layer.provideMerge(MobileRegistrations.layer),
+        Layer.provideMerge(AgentActivityPublisher.layer),
+        Layer.provideMerge(EnvironmentConnector.layer),
+        Layer.provideMerge(EnvironmentLinker.layer),
+        Layer.provideMerge(ConnectLinkReservations.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            EnvironmentPublishSignatures.layer,
+            ManagedEndpointReaper.layer,
+            HeldHooks.layer,
           ),
-          Layer.provideMerge(
-            FcmClient.layer.pipe(
-              Layer.provide(FcmAssertionSigner.layer),
-              Layer.provide(
-                Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+        ),
+        Layer.provideMerge(
+          ManagedEndpointProvider.layerCloudflareBindings(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(DpopProofs.layer),
+        Layer.provideMerge(ApnsDeliveries.layer),
+      )
+      .pipe(
+        Layer.provideMerge(
+          FcmDeliveries.layer.pipe(
+            Layer.provide(
+              Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
+                send: Effect.fn("FcmDeliveryQueueSender.send")(
+                  function* (body) {
+                    return yield* fcmDeliveryQueueSender.send(body);
+                  },
+                  Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                ),
+              }),
+            ),
+            Layer.provideMerge(
+              FcmClient.layer.pipe(
+                Layer.provide(FcmAssertionSigner.layer),
+                Layer.provide(
+                  Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+                ),
               ),
             ),
           ),
         ),
-      ),
-      Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
-      Layer.provideMerge(
-        ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
-      ),
-      Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
-      Layer.provideMerge(EnvironmentCredentials.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          ConnectTokenExchange.layer.pipe(Layer.provide(ConnectAuthentication.layer)),
-          CloudflareApiPause.layer,
-          EnvironmentLinks.layer,
-          ManagedEndpointAllocations.layer,
-          ManagedTunnelLimits.layer,
+        Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
+        Layer.provideMerge(
+          ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
         ),
-      ),
-      Layer.provideMerge(LiveActivities.layer),
-      Layer.provideMerge(DeliveryAttempts.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          RelayTokens.layer,
-          ClientKeys.layer,
-          CliLinkApprovals.layer.pipe(Layer.provide(DpopProofs.layer)),
+        Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
+        Layer.provideMerge(EnvironmentCredentials.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            ConnectTokenExchange.layer.pipe(Layer.provide(ConnectAuthentication.layer)),
+            CloudflareApiPause.layer,
+            EnvironmentLinks.layer,
+            ManagedEndpointAllocations.layer,
+            ManagedTunnelLimits.layer,
+          ),
         ),
-      ),
-      Layer.provideMerge(
-        Layer.mergeAll(ConnectAccounts.layer, RelayDb.RelayTransactions.layer).pipe(
-          Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+        Layer.provideMerge(LiveActivities.layer),
+        Layer.provideMerge(DeliveryAttempts.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            RelayTokens.layer,
+            ClientKeys.layer,
+            CliLinkApprovals.layer.pipe(Layer.provide(DpopProofs.layer)),
+          ),
         ),
-      ),
-      Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
-      Layer.provideMerge(layerWebcrypto),
-      Layer.provideMerge(Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle })),
-    );
+        Layer.provideMerge(
+          Layer.mergeAll(ConnectAccounts.layer, RelayDb.RelayTransactions.layer).pipe(
+            Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+          ),
+        ),
+        Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
+        Layer.provideMerge(layerWebcrypto),
+        Layer.provideMerge(
+          Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+        ),
+      );
 
     // Fails open: a limiter outage must not drop webhooks the environment would accept.
     const allowWith =

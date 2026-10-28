@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Recomputes the marker's SHA-256 independently.
 import * as NodeCrypto from "node:crypto";
 import { it } from "@effect/vitest";
 import { assert } from "vite-plus/test";
