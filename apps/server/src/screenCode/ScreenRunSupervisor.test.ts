@@ -162,6 +162,15 @@ it.live(
           false,
         );
         expect(strictBlock.status).toBe("failed");
+        // A line opening with != still compares with the directive, so the cell stays sloppy.
+        expect(yield* cell("compare", '"use strict"\n!= ""; looser = 1; return looser;')).toBe(1);
+        yield* cell("constant", "const fixed = 1; return fixed;");
+        expect(
+          yield* cell(
+            "reassign",
+            "try { fixed = 2; return 'assigned'; } catch (error) { return error instanceof TypeError; }",
+          ),
+        ).toBe(true);
       }),
     ),
 );

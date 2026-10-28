@@ -275,7 +275,10 @@ export async function runScreenChild(
               return;
             }
             Object.defineProperty(globalThis, name, {
-              get: read, ...(write ? { set: write } : {}), configurable: true, enumerable: true,
+              get: read,
+              set: write ?? (() => { throw new TypeError('Assignment to constant variable.'); }),
+              configurable: true,
+              enumerable: true,
             });
           },
         });

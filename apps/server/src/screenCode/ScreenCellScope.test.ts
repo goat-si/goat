@@ -25,6 +25,11 @@ describe("top-level bindings a cell carries into the next cell", () => {
       ["s", "r", "t", "last"],
     ],
     [
+      "a slash after an object is division, after a block or an if header a regex",
+      'const first = {} / 2; let after = 42\nif (true) /}/.test("}"); const last = 1\n{ } /{/.test("{"); const end = 2',
+      ["first", "after", "last", "end"],
+    ],
+    [
       "lines without semicolons",
       "const tab = await screen.tab({ tabId: 'x' })\nlet count = tab.items.length\nreturn count",
       ["tab", "count"],

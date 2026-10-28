@@ -9,6 +9,10 @@ interface Token {
   readonly value: string;
   readonly depth: number;
   readonly lineBreakBefore: boolean;
+  /** Offset in the source, so adjacent punctuation can be read as one operator. */
+  readonly start: number;
+  /** On a `)` or `}`: whether a `/` after it starts a regex (a block, or an if/while/for header). */
+  readonly regexAfter?: boolean;
 }
 
 const RESERVED = new Set(
@@ -22,6 +26,7 @@ const RESERVED = new Set(
 const REGEX_AFTER_WORDS = new Set(
   "return typeof instanceof in of new delete void throw case do else await yield".split(" "),
 );
+const CONTROL_HEADERS = new Set(["if", "while", "for", "with"]);
 const NAME = /^[A-Za-z_$][\w$]*$/;
 const MAX_NAMES = 256;
 const isWordChar = (c: string) => /[\w$]/.test(c) || (c !== "" && c.charCodeAt(0) > 127);
@@ -32,9 +37,19 @@ function tokenize(source: string): Token[] {
   let depth = 0;
   let lineBreak = false;
   let i = 0;
+  let from = 0;
+  /** For each open bracket, whether a `/` after its close starts a regex. */
+  const openers: boolean[] = [];
   const at = (index: number) => source.charAt(index);
-  const push = (kind: Token["kind"], value: string) => {
-    tokens.push({ kind, value, depth, lineBreakBefore: lineBreak });
+  const push = (kind: Token["kind"], value: string, regexAfter?: boolean) => {
+    tokens.push({
+      kind,
+      value,
+      depth,
+      lineBreakBefore: lineBreak,
+      start: from,
+      ...(regexAfter === undefined ? {} : { regexAfter }),
+    });
     lineBreak = false;
   };
   const regexAllowed = () => {
@@ -42,7 +57,32 @@ function tokenize(source: string): Token[] {
     if (previous === undefined) return true;
     if (previous.kind === "word") return REGEX_AFTER_WORDS.has(previous.value);
     if (previous.kind === "value") return false;
-    return previous.value !== ")" && previous.value !== "]";
+    if (previous.value === ")" || previous.value === "}") return previous.regexAfter === true;
+    return previous.value !== "]";
+  };
+  // A brace after an operator or an expression keyword opens an object; otherwise it opens a block.
+  const braceOpensBlock = () => {
+    const previous = tokens.at(-1);
+    if (previous === undefined) return true;
+    if (previous.kind === "word")
+      return (
+        !REGEX_AFTER_WORDS.has(previous.value) ||
+        previous.value === "do" ||
+        previous.value === "else"
+      );
+    if (previous.kind === "value") return true;
+    if (
+      previous.value === ">" &&
+      tokens.at(-2)?.value === "=" &&
+      tokens.at(-2)?.start === previous.start - 1
+    )
+      return true;
+    return (
+      previous.value === ")" ||
+      previous.value === "}" ||
+      previous.value === ";" ||
+      previous.value === "{"
+    );
   };
   // Template text up to its end, or up to a `${` whose expression the main loop then reads.
   const templateText = () => {
@@ -63,6 +103,7 @@ function tokenize(source: string): Token[] {
   };
   while (i < source.length) {
     const c = at(i);
+    from = i;
     if (c === "\n" || c === "\r" || c === "\u2028" || c === "\u2029") {
       lineBreak = true;
       i++;
@@ -106,6 +147,12 @@ function tokenize(source: string): Token[] {
       while (i < source.length && /[\w.]/.test(at(i))) i++;
       push("value", "0");
     } else if (c === "{" || c === "(" || c === "[") {
+      const previous = tokens.at(-1);
+      openers.push(
+        c === "{"
+          ? braceOpensBlock()
+          : c === "(" && previous?.kind === "word" && CONTROL_HEADERS.has(previous.value),
+      );
       push("punct", c);
       depth++;
       i++;
@@ -116,7 +163,7 @@ function tokenize(source: string): Token[] {
       templateText();
     } else if (c === "}" || c === ")" || c === "]") {
       depth = Math.max(0, depth - 1);
-      push("punct", c);
+      push("punct", c, openers.pop() ?? false);
       i++;
     } else if (source.startsWith("...", i)) {
       push("punct", "...");
@@ -249,9 +296,13 @@ const continuesExpression = (tokens: ReadonlyArray<Token>, index: number) => {
   const token = tokens[index];
   if (token === undefined) return false;
   if (token.kind === "word") return token.value === "in" || token.value === "instanceof";
-  // A prefix ++ or -- may not continue the line before it.
-  if ((token.value === "+" || token.value === "-") && tokens[index + 1]?.value === token.value)
+  const next = tokens[index + 1];
+  const joined = next !== undefined && next.start === token.start + 1;
+  // A prefix ++ or -- may not continue the line before it; + + and - - are binary.
+  if ((token.value === "+" || token.value === "-") && joined && next.value === token.value)
     return false;
+  // != and !== compare with the line before; a lone ! starts a new statement.
+  if (token.value === "!") return joined && next.value === "=";
   return CONTINUES_EXPRESSION.has(token.value);
 };
 
