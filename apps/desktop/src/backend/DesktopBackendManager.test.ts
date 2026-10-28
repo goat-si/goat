@@ -716,3 +716,65 @@ describe("DesktopBackendManager", () => {
     ),
   );
 });
+
+it.effect("retires only its captured backend on a confirmed silent-main verdict", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const frames = yield* Queue.unbounded<Uint8Array>();
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const signals = yield* Ref.make<ReadonlyArray<string>>([]);
+      const spawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              ...makeProcess({
+                exitCode: Deferred.await(exit),
+                getOutputFd: (fd) => (fd === 8 ? Stream.fromQueue(frames) : Stream.empty),
+                kill: (signal) => Ref.update(signals, (xs) => [...xs, signal ?? "SIGTERM"]),
+              }),
+              isRunning: Effect.succeed(true),
+            }),
+          ),
+        ),
+      );
+      const options = {
+        ...baseConfig,
+        bootstrap: {
+          ...baseConfig.bootstrap,
+          backendWatchdog: { protocol: 1 as const, generation: "run-one", healthFd: 8 },
+        },
+        watchdog: { generation: "run-one", protocol: 1 as const, healthFd: 8 },
+        desktopTelemetryStream: Stream.empty,
+        onDesktopTelemetryControl: () => Effect.void,
+        onReady: () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      };
+      yield* Effect.addFinalizer(() => Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)));
+      const fiber = yield* DesktopBackendManager.runBackendProcess(options).pipe(
+        Effect.provide(spawner),
+        Effect.provide(layerHealthyHttpClient),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(ready);
+      yield* TestClock.adjust("45 seconds");
+      assert.deepEqual(yield* Ref.get(signals), []);
+      const verdict = JSON.stringify({
+        version: 1,
+        type: "backendHealth",
+        generation: "run-one",
+        observerSequence: 2,
+        mainSequence: 1,
+        phase: "ready",
+        verdict: "main-silent",
+      });
+      yield* Queue.offer(frames, new TextEncoder().encode(`${verdict}\n`));
+      yield* TestClock.adjust("0 millis");
+      const signalled = yield* Ref.get(signals);
+      yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(80));
+      const result = yield* Fiber.join(fiber);
+      assert.deepEqual(signalled, ["SIGTERM"]);
+      assert.deepEqual(result.code, Option.some(80));
+    }),
+  ),
+);
