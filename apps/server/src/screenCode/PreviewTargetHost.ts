@@ -554,6 +554,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
       const selector = stringField(arg, "selector");
+      // A ref acts only through the binding that observed it, which holds its document and gate.
+      if (
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly targetId?: unknown }).targetId !== bound.ref.id,
+        )
+      )
+        return yield* Effect.fail(
+          fail("stale_reference", "That element belongs to another tab target; observe this one."),
+        );
       const locator =
         arg.ref && typeof arg.ref === "object"
           ? observations.index.resolveElement(
