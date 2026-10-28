@@ -33,7 +33,7 @@ import {
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
-import { dragBetween, wheelAt } from "./pointerInput.ts";
+import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -307,17 +307,8 @@ const locatePoint = async (
   } finally {
     void target.dispose().catch(constVoid);
   }
-  // Scrolling waits a frame even when nothing moves, so a target already in view is not scrolled.
-  const viewport = page.viewportSize();
   let box = await locator.boundingBox({ timeout: remaining(deadline) });
-  const inView =
-    box !== null &&
-    viewport !== null &&
-    box.x >= 0 &&
-    box.y >= 0 &&
-    box.x + box.width <= viewport.width &&
-    box.y + box.height <= viewport.height;
-  if (!inView) {
+  if (!inViewport(box, page.viewportSize())) {
     await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
     box = await locator.boundingBox({ timeout: remaining(deadline) });
   }

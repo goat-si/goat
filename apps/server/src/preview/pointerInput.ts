@@ -25,3 +25,14 @@ export const wheelAt = async (page: Page, at: Point, delta: readonly [number, nu
   await page.mouse.move(at.x, at.y);
   await page.mouse.wheel(delta[0], delta[1]);
 };
+
+type Box = Point & { readonly width: number; readonly height: number };
+
+/** Whether a box lies wholly in view; scrolling waits a frame even when nothing moves. */
+export const inViewport = (box: Box | null, viewport: { width: number; height: number } | null) =>
+  box !== null &&
+  viewport !== null &&
+  box.x >= 0 &&
+  box.y >= 0 &&
+  box.x + box.width <= viewport.width &&
+  box.y + box.height <= viewport.height;
