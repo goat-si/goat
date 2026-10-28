@@ -19,7 +19,7 @@ const authority = {
 };
 
 /** A bound channel on the TestClock at 0, whose cell ends at cellDeadline. */
-const bound = Effect.fn("PrimitiveChannelCapsTest.bound")(function* () {
+const bound = Effect.fn("PrimitiveChannelCapsTest.bound")(function* (ready = true) {
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     currentControl: () => Effect.succeedSome({ controlId }),
@@ -36,15 +36,16 @@ const bound = Effect.fn("PrimitiveChannelCapsTest.bound")(function* () {
     kind: "thread",
   });
   if (registered.status !== "registered") throw new Error("expected registration");
-  assert.isTrue(
-    yield* channel.reportControlReady({
-      ...authority,
-      registrationId: registered.registrationId,
-      controlId,
-      connectionId: "driver:1",
-      driverGeneration: 1,
-    }),
-  );
+  if (ready)
+    assert.isTrue(
+      yield* channel.reportControlReady({
+        ...authority,
+        registrationId: registered.registrationId,
+        controlId,
+        connectionId: "driver:1",
+        driverGeneration: 1,
+      }),
+    );
   const call = (tool: string, args: ComputerUsePrimitiveRequest["args"], cellDeadline = 30_000) =>
     channel
       .request({
@@ -131,5 +132,25 @@ describe("ComputerUsePrimitiveChannel caps each driver call", () => {
       assert.isFalse(result.failure.effectStarted);
       assert.include(result.failure.nextStep, "new cell");
     }),
+  );
+
+  it.effect(
+    "waiting for a driver to bind counts against the call's cap and the cell's reserve",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* bound(false);
+        const capped = yield* f.call("list_apps", {});
+        const short = yield* f.call("click", {}, 1_800);
+        // The short cell keeps its 1.5 s reserve: the call gives up waiting at 300 ms.
+        yield* TestClock.adjust(300);
+        const early = yield* Fiber.join(short);
+        assert.equal(early._tag, "Failure");
+        yield* TestClock.adjust(1_700);
+        const result = yield* Fiber.join(capped);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure.reason, "desktop_not_ready");
+        assert.isFalse(result.failure.effectStarted);
+      }),
   );
 });

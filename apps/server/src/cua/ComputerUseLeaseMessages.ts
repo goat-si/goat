@@ -124,8 +124,8 @@ export const targetClosedInterruption = (reason: "private" | "takeover"): Interr
   detail: "helper_restarted",
   message:
     reason === "private"
-      ? "A window GOAT was using became private, so GOAT restarted its driver and nothing was sent. Observe again before acting."
-      : "A person took over a window GOAT was using, so GOAT restarted its driver and nothing was sent. Observe again before acting.",
+      ? "A window GOAT was using became private, so GOAT restarted its driver. Observe again before acting."
+      : "A person took over a window GOAT was using, so GOAT restarted its driver. Observe again before acting.",
 });
 
 /**

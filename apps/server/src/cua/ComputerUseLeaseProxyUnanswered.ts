@@ -6,6 +6,7 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import type * as Semaphore from "effect/Semaphore";
 
@@ -56,61 +57,73 @@ export const makeUnansweredWatch = <E>(
   // same chain waits for that outcome instead of queueing behind a child that may be stuck.
   const overdue = new Map<string, string>();
   let settled = Deferred.makeUnsafe<void>();
-  const settle = (key: string) => {
-    if (!overdue.delete(key)) return;
+  const wake = () => {
     Deferred.doneUnsafe(settled, Effect.void);
     settled = Deferred.makeUnsafe<void>();
   };
-  const replace = Effect.fn("ComputerUseLeaseProxy.replaceUnanswered")(function* (key: string) {
-    if (replied.delete(key)) return;
-    const call = proxy.outstanding.get(key);
-    if (call === undefined || proxy.lifecycle.current?.connectionId !== call.connectionId) return;
-    if (!act.active()) return;
-    const token = yield* act.interrupt(DRIVER_UNANSWERED);
-    if (act.active()) yield* act.start(token);
-  });
-  const closeTarget = Effect.fn("ComputerUseLeaseProxy.closeTarget")(function* (
-    reason: "private" | "takeover",
-    connectionId: string,
-  ) {
-    // An overtaking restart already replaced the chain this hide was meant for.
-    if (!act.active() || proxy.lifecycle.current?.connectionId !== connectionId) {
-      if (fenced === connectionId) fenced = undefined;
-      return;
-    }
-    const token = yield* act.interrupt(targetClosedInterruption(reason));
-    fenced = undefined;
-    if (act.active()) yield* act.start(token);
-  });
+  const settle = (key: string) => {
+    if (overdue.delete(key)) wake();
+  };
+  /** The old chain is gone: calls held for it wake now, before a new driver is acquired. */
+  const cut = (connectionId: string) => {
+    for (const [key, chain] of overdue) if (chain === connectionId) overdue.delete(key);
+    if (fenced === connectionId) fenced = undefined;
+    wake();
+  };
+  // Only the cutoff holds the lifecycle lock. Acquiring the new driver runs outside it, so a start
+  // that never completes cannot hold a pause or end back; its revision token keeps a superseded
+  // acquisition from publishing (ComputerUseLeaseProxyLifecycle.ts).
+  const replaceUnder = (cause: Interruption, connectionId: string) =>
+    proxy.lock
+      .withPermits(1)(
+        Effect.suspend(() =>
+          !act.active() || proxy.lifecycle.current?.connectionId !== connectionId
+            ? Effect.succeedNone
+            : act.interrupt(cause).pipe(Effect.asSome),
+        ).pipe(Effect.ensuring(Effect.sync(() => cut(connectionId))), Effect.uninterruptible),
+      )
+      .pipe(
+        Effect.flatMap((token) =>
+          Option.isSome(token) && act.active() ? act.start(token.value) : Effect.void,
+        ),
+        Effect.catchCause(() => act.end("lost")),
+      );
+  const replace = (key: string) =>
+    Effect.suspend(() => {
+      const call = proxy.outstanding.get(key);
+      return replied.delete(key) || call === undefined
+        ? Effect.void
+        : replaceUnder(DRIVER_UNANSWERED, call.connectionId);
+    });
   return {
-    /** Whether calls to this chain are held back while it is being replaced. */
-    blocks: (connectionId: string) => fenced === connectionId,
+    /** Whether a call may not go to this chain now: it is closing, or has an overdue call. */
+    blocks: (connectionId: string) =>
+      fenced === connectionId || [...overdue.values()].includes(connectionId),
     fenceTarget: (reason: "private" | "takeover", connectionId: string) => {
       fenced = connectionId;
       act.fenced(targetClosedInterruption(reason));
     },
     closeTarget: (reason: "private" | "takeover", connectionId: string) =>
-      proxy.lock
-        .withPermits(1)(closeTarget(reason, connectionId).pipe(Effect.uninterruptible))
-        .pipe(Effect.catchCause(() => act.end("lost"))),
+      replaceUnder(targetClosedInterruption(reason), connectionId),
     /**
-     * Waits while this chain has an overdue call: its late reply sends the waiting call on to the
-     * same child, while a replacement, failure or end leaves it to be refused, nothing sent.
+     * Waits while the current chain has an overdue call, and says whether the call may still go
+     * to that same child: its late reply lets it, while a replacement, failure, end or the call's
+     * own deadline leaves it to be refused, nothing sent.
      */
-    hold: Effect.fn("ComputerUseLeaseProxy.holdForOverdue")(function* (
-      connectionId: string,
-      untilMillis: number,
-    ) {
-      while ([...overdue.values()].includes(connectionId)) {
+    hold: Effect.fn("ComputerUseLeaseProxy.holdForOverdue")(function* (untilMillis: number) {
+      const chain = proxy.lifecycle.current;
+      if (chain === undefined) return true;
+      while ([...overdue.values()].includes(chain.connectionId)) {
         const now = yield* Clock.currentTimeMillis;
-        if (now >= untilMillis) return;
-        const wake = Deferred.await(settled);
+        if (now >= untilMillis) return false;
+        const woken = Deferred.await(settled);
         yield* Number.isFinite(untilMillis)
-          ? wake.pipe(
+          ? woken.pipe(
               Effect.timeoutOrElse({ duration: untilMillis - now, orElse: () => Effect.void }),
             )
-          : wake;
+          : woken;
       }
+      return proxy.lifecycle.current === chain;
     }),
     /** Every line the driver writes, as it arrives. */
     received: (line: string) =>
@@ -130,8 +143,7 @@ export const makeUnansweredWatch = <E>(
           }),
         ),
         Effect.andThen(Effect.sleep(UNANSWERED_GRACE_MS)),
-        Effect.andThen(proxy.lock.withPermits(1)(replace(key).pipe(Effect.uninterruptible))),
-        Effect.catchCause(() => act.end("lost")),
+        Effect.andThen(replace(key)),
         Effect.ensuring(Effect.sync(() => settle(key))),
         Effect.forkIn(proxy.scope),
         Effect.asVoid,

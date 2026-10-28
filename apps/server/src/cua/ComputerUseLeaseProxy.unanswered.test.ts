@@ -1,9 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ComputerUsePrimitiveReply } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
-import { active, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  call,
+  CONTROL,
+  harness,
+  type ToolAnswer,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 const listApps = (requestId: string, connectionGeneration: string, deadlineMillis: number) => ({
   state: "primitive-request" as const,
@@ -84,6 +91,85 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       const reply = yield* h.primitiveReply;
       assert.equal(reply.requestId, "request:next");
       assert.equal(reply.status, "not_started");
+      assert.equal(sentListApps(h.log), 1);
+    }),
+  );
+
+  it.effect(
+    "a call that passed the hold before an earlier call fell overdue is refused, never sent",
+    () =>
+      Effect.gen(function* () {
+        const reserving = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        let reserves = 0;
+        const h = yield* harness({
+          reservation: (request) =>
+            request.action === "reserve" && ++reserves === 2
+              ? Deferred.succeed(reserving, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.as({ status: "admitted" as const, reservationId: "ticket:second" }),
+                )
+              : Effect.succeed(
+                  request.action === "reserve"
+                    ? { status: "admitted" as const, reservationId: `ticket:${request.callId}` }
+                    : request.action === "validate"
+                      ? {
+                          status: "admitted" as const,
+                          reservationId: request.reservationId,
+                          permissions: { validUntilMillis: 1_800_000 },
+                        }
+                      : { status: "released" as const },
+                ),
+        });
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+        yield* h.nextToDriver;
+        yield* h.sendPrimitive(listApps("request:next", first.connectionId, 60_000));
+        yield* Deferred.await(reserving);
+        yield* TestClock.adjust(2_000);
+        yield* Deferred.succeed(gate, undefined);
+        const reply = yield* h.primitiveReply;
+        assert.equal(reply.requestId, "request:next");
+        assert.equal(reply.status, "not_started");
+        assert.equal(sentListApps(h.log), 1);
+      }),
+  );
+
+  it.effect("a provider call held across a replacement is refused, not sent to the new child", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      const first = yield* h.driverStarted;
+      yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+      yield* h.nextToDriver;
+      yield* TestClock.adjust(2_000);
+      yield* h.send(call(7, "list_apps"));
+      yield* TestClock.adjust(1_000);
+      yield* h.driverStarted;
+      const answer = (yield* h.nextToProvider) as unknown as ToolAnswer;
+      assert.equal(answer.id, 7);
+      assert.isTrue(answer.result.isError);
+      assert.equal(sentListApps(h.log), 1);
+    }),
+  );
+
+  it.effect("a new driver that never starts holds back neither a held call nor a pause", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        acquire: (index) => (index === 0 ? Effect.void : Effect.never),
+      });
+      yield* h.push(active());
+      yield* h.applied;
+      const first = yield* h.driverStarted;
+      yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+      yield* h.nextToDriver;
+      yield* TestClock.adjust(2_000);
+      yield* h.send(call(7, "list_apps"));
+      yield* TestClock.adjust(1_000);
+      assert.equal(((yield* h.nextToProvider) as unknown as ToolAnswer).id, 7);
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+      assert.equal(yield* h.applied, "paused");
       assert.equal(sentListApps(h.log), 1);
     }),
   );

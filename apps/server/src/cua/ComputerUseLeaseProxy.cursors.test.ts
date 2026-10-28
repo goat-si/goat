@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   type AgentCursorEvent,
+  type ComputerUsePrimitiveReply,
   type ComputerUseOverlayCommand,
   type ComputerUseOverlayHideReason,
   EnvironmentId,
@@ -177,24 +178,69 @@ describe("ComputerUseLeaseProxy and a window that turns private or is taken over
     "a private hide for a chain another replacement already closed leaves the new one",
     () =>
       Effect.gen(function* () {
-        const hideGate = yield* Deferred.make<void>();
-        const { h, first, cursor, drawn } = yield* cursorHarness({ hideGate });
-        yield* cursor(show(1));
-        yield* drawn(1);
+        const lockGate = yield* Deferred.make<void>();
+        const { h, first, cursor, drawn, holding } = yield* cursorHarness({ lockGate });
         yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 30_000));
         assert.equal((yield* h.nextDispatch).index, 0);
+        yield* h.push(active());
+        yield* holding;
+        // The stuck call's replacement queues for the lock first, then the hide's.
+        yield* TestClock.adjust("31 seconds");
+        yield* cursor(show(1));
         yield* cursor(hide(2, "private"));
         yield* drawn(2);
-        // The stuck call's own replacement overtakes the hide's.
-        yield* TestClock.adjust("31 seconds");
+        yield* Deferred.succeed(lockGate, undefined);
         assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
         const second = yield* h.driverStarted;
-        yield* Deferred.succeed(hideGate, undefined);
         yield* cursor(show(3, 2), second.connectionId);
         yield* drawn(3);
         assert.equal(h.drivers.length, 2);
         yield* h.sendPrimitive(listApps("request:new", second.connectionId));
         assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+      }),
+  );
+
+  it.effect("a hide whose draw never finishes still closes the old chain", () =>
+    Effect.gen(function* () {
+      const hideGate = yield* Deferred.make<void>();
+      const { h, first, cursor } = yield* cursorHarness({ hideGate });
+      yield* cursor(show(1));
+      yield* cursor(hide(2, "private"));
+      assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+      assert.notEqual((yield* h.driverStarted).connectionId, first.connectionId);
+    }),
+  );
+
+  it.effect(
+    "a call the old chain already had may have acted, while one refused at the fence was not sent",
+    () =>
+      Effect.gen(function* () {
+        const lockGate = yield* Deferred.make<void>();
+        const { h, first, cursor, drawn, holding } = yield* cursorHarness({ lockGate });
+        yield* h.sendPrimitive({
+          ...listApps("request:click", first.connectionId),
+          tool: "click",
+          args: { pid: 4, window_id: 9, x: 1, y: 1 },
+        });
+        assert.equal((yield* h.nextDispatch).index, 0);
+        yield* h.push(active());
+        yield* holding;
+        yield* cursor(show(1));
+        yield* cursor(hide(2, "private"));
+        yield* drawn(2);
+        yield* h.sendPrimitive(listApps("request:fenced", first.connectionId));
+        yield* Deferred.succeed(lockGate, undefined);
+        const replies = new Map<string, ComputerUsePrimitiveReply>();
+        for (const _ of [1, 2]) {
+          const reply = yield* h.primitiveReply;
+          replies.set(reply.requestId, reply);
+        }
+        const said = (requestId: string) => JSON.stringify(replies.get(requestId)?.result);
+        assert.equal(replies.get("request:fenced")?.status, "not_started");
+        assert.include(said("request:fenced"), "Nothing was sent");
+        assert.equal(replies.get("request:click")?.status, "unknown_outcome");
+        assert.include(said("request:click"), "may already have acted");
+        assert.notInclude(said("request:click"), "Nothing was sent");
       }),
   );
 });

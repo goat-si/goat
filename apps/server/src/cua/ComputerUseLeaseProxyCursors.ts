@@ -45,15 +45,14 @@ export const forwardProxyCursors = (input: {
           const reason = closingReason(update.event);
           const closes = reason !== undefined && input.overlay.accepts(update.event);
           if (closes) input.targetClose().fenceTarget(reason, update.connectionGeneration);
-          return input.overlay
-            .draw({ type: "cursor", event: update.event })
-            .pipe(
-              Effect.andThen(
-                closes
-                  ? input.targetClose().closeTarget(reason, update.connectionGeneration)
-                  : Effect.void,
-              ),
-            );
+          const draw = input.overlay.draw({ type: "cursor", event: update.event });
+          // A draw the helper never finishes cannot keep the closed chain watching the window.
+          return closes
+            ? Effect.all(
+                [draw, input.targetClose().closeTarget(reason, update.connectionGeneration)],
+                { concurrency: "unbounded", discard: true },
+              )
+            : draw;
         }),
         Effect.forkScoped,
         Effect.asVoid,

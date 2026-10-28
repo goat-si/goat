@@ -305,6 +305,7 @@ export const make = Effect.gen(function* () {
     record: Control,
     binding: NonNullable<Control["binding"]>,
     now: number,
+    deadlineMillis: number,
   ) {
     if (
       input.expectedConnectionGeneration !== undefined &&
@@ -314,14 +315,6 @@ export const make = Effect.gen(function* () {
         code: "stale_reference" as const,
         effectStarted: false,
         nextStep: "Bind the desktop app again after the driver reconnects.",
-      });
-    // The proxy waits on this deadline too, so a driver that never answers is replaced after it.
-    const deadlineMillis = driverCallDeadline(input.tool, input.args, input.deadlineMillis, now);
-    if (deadlineMillis - now < MIN_CALL_MS)
-      return yield* Effect.fail({
-        code: "deadline" as const,
-        effectStarted: false,
-        nextStep: "This cell has too little time left for this call; run it in a new cell.",
       });
     const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
     const request: ComputerUsePrimitiveRequest = {
@@ -347,7 +340,7 @@ export const make = Effect.gen(function* () {
     }
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
-        duration: deadlineMillis - now,
+        duration: Math.max(0, deadlineMillis - now),
         orElse: () =>
           Effect.fail({
             code: "deadline" as const,
@@ -553,7 +546,15 @@ export const make = Effect.gen(function* () {
     ),
     request: Effect.fn("ComputerUsePrimitiveChannel.request")(function* (input) {
       const started = yield* Clock.currentTimeMillis;
-      const waitUntil = Math.min(input.deadlineMillis, started + DRIVER_BIND_WAIT_MS);
+      // One deadline from the start covers waiting for a driver too; the proxy waits on it as
+      // well, so a driver that never answers is replaced after it.
+      const deadlineMillis = driverCallDeadline(
+        input.tool,
+        input.args,
+        input.deadlineMillis,
+        started,
+      );
+      const waitUntil = Math.min(deadlineMillis, started + DRIVER_BIND_WAIT_MS);
       let now = started;
       // The call belongs to the control it began under; a successor never inherits it.
       let began: string | undefined;
@@ -569,8 +570,23 @@ export const make = Effect.gen(function* () {
         const registered = value?.registration;
         const record = registered?.controls.get(current.controlId);
         const binding = record?.binding;
-        if (registered !== undefined && record !== undefined && binding !== undefined)
-          return yield* send(input, current.controlId, registered, record, binding, now);
+        if (registered !== undefined && record !== undefined && binding !== undefined) {
+          if (deadlineMillis - now < MIN_CALL_MS)
+            return yield* Effect.fail({
+              code: "deadline" as const,
+              effectStarted: false,
+              nextStep: "This cell has too little time left for this call; run it in a new cell.",
+            });
+          return yield* send(
+            input,
+            current.controlId,
+            registered,
+            record,
+            binding,
+            now,
+            deadlineMillis,
+          );
+        }
         // Only a registered proxy starts drivers; without one nothing will bind.
         if (
           value === undefined ||
