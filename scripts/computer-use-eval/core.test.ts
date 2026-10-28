@@ -9,6 +9,7 @@ import {
   type Task,
   TaskSetError,
   codexTranscript,
+  goatShellCommand,
   goatTranscript,
   judge,
   keepObservations,
@@ -757,5 +758,27 @@ describe("evidence sources", () => {
         'EVAL_JSON {"status":"failed","customerName":null,"telephone":null,"email":null,"size":null,"comments":null}',
     };
     expect(scoreRun(task("web-form"), arm("goat-screen-run"), form).violations).toEqual([]);
+  });
+});
+
+describe("GOAT shell commands", () => {
+  it("reads the quoted command and leaves its output out of the contamination check", () => {
+    expect(goatShellCommand("$ /bin/zsh -lc 'cat notes.md'\nuse aside repl here")).toBe(
+      "cat notes.md",
+    );
+    expect(goatShellCommand("$ /bin/zsh -lc 'echo '\\''hi'\\'''\nhi")).toBe("echo 'hi'");
+    expect(goatShellCommand('$ /bin/zsh -lc "cd /tmp\naside repl \\"x\\""\nout')).toBe(
+      'cd /tmp\naside repl "x"',
+    );
+    expect(goatShellCommand("$ Preparing workspace")).toBeNull();
+    const steps = goatTranscript([
+      {
+        itemId: "c",
+        type: "command_execution",
+        status: "completed",
+        text: "$ /bin/zsh -lc 'cat notes.md'\nuse aside repl here",
+      },
+    ]).steps;
+    expect(metricsOf(steps, arm("goat-screen-run")).contamination).toEqual([]);
   });
 });

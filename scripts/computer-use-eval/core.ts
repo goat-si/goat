@@ -355,6 +355,33 @@ const GOAT_TOOL_TYPES = new Set([
 const GOAT_BOUNDARY_TYPES = new Set(["assistant_message", "reasoning", "proposed_plan"]);
 
 /** A GOAT run's activity items. The activity view renders a tool call as JSON with toolName. */
+/**
+ * The command of a GOAT shell item. Its activity text is "$ /bin/zsh -lc '<command>'" followed by
+ * the output; the quoted argument is read exactly. Null when it is not in that form.
+ */
+export const goatShellCommand = (text: string): string | null => {
+  const head = /^\$\s*\/bin\/(?:zsh|bash) -lc /u.exec(text);
+  if (head === null) return null;
+  const rest = text.slice(head[0].length);
+  const quote = rest[0];
+  if (quote !== "'" && quote !== '"') return null;
+  let command = "";
+  for (let index = 1; index < rest.length; index += 1) {
+    const char = rest[index];
+    if (quote === "'" && rest.startsWith("'\\''", index)) {
+      command += "'";
+      index += 3;
+    } else if (quote === '"' && char === "\\" && index + 1 < rest.length) {
+      command += rest[index + 1];
+      index += 1;
+    } else if (char === quote) {
+      const after = rest[index + 1];
+      return after === undefined || after === "\n" ? command : null;
+    } else command += char;
+  }
+  return null;
+};
+
 export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript => {
   const steps: Array<Step> = [];
   let finalText: string | null = null;
@@ -364,13 +391,13 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
     if (item.complete === false) incomplete = true;
     const text = item.text ?? "";
     if (item.type === "command_execution") {
-      // The activity text joins a command and its output with no boundary a multi-line command
-      // keeps, so all of it is input and none of it can serve as evidence.
+      // The output is never evidence; the command is read exactly when it has the harness's form,
+      // and otherwise all of the text is checked as input.
       steps.push({
         kind: "tool",
         name: "shell",
         failed: item.status === "failed",
-        input: text.replace(/^\$\s*/u, ""),
+        input: goatShellCommand(text) ?? text.replace(/^\$\s*/u, ""),
         output: "",
       });
     } else if (GOAT_TOOL_TYPES.has(item.type)) {
