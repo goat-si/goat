@@ -5,7 +5,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   EventId,
-  ProviderInstanceId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -42,6 +41,11 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
+import {
+  appThread,
+  settledEvent,
+  settlementAdmissionTests,
+} from "./ThreadSettlementService.admission-test-cases.ts";
 import { settlementSweepCacheTests } from "./ThreadSettlementService.cache-test-cases.ts";
 
 import {
@@ -1222,43 +1226,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
 });
 
 describe("ThreadSettlementServiceV2 terminals", () => {
-  const appThread = (
-    id: string,
-    settledOverride: OrchestrationV2AppThread["settledOverride"],
-    worktreePath: string | null = null,
-  ): OrchestrationV2AppThread => {
-    const threadId = ThreadId.make(id);
-    return {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: PROJECT_ID,
-      title: id,
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath,
-      activeProviderThreadId: null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-      forkedFrom: null,
-      createdAt: DateTime.makeUnsafe(NOW),
-      updatedAt: DateTime.makeUnsafe(NOW),
-      archivedAt: null,
-      settledOverride,
-      settledAt: settledOverride === "settled" ? DateTime.makeUnsafe(NOW) : null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-  };
-  const settledEvent = (thread: OrchestrationV2AppThread): OrchestrationV2DomainEvent => ({
-    type: "thread.settled",
-    id: EventId.make(`event:settled:${thread.id}`),
-    threadId: thread.id,
-    occurredAt: DateTime.makeUnsafe(NOW),
-    payload: thread,
-  });
+  settlementAdmissionTests({ makeHarness, makeThread, makeSnapshot, startHarness });
 
   it.effect("keeps the terminals of a thread re-engaged before the event ran", () =>
     Effect.scoped(
