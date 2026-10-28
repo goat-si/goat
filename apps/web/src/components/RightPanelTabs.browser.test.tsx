@@ -225,7 +225,42 @@ it("preserves the scrolled span on middle and rightmost close and releases it on
   await expect
     .element(screen.getByRole("tab", { name: "Long descriptive document 5.md" }))
     .toHaveFocus();
+  await vi.waitFor(() => {
+    const focused = document.activeElement!.getBoundingClientRect();
+    const visible = scroller.getBoundingClientRect();
+    expect(focused.left).toBeGreaterThanOrEqual(visible.left);
+    expect(focused.right).toBeLessThanOrEqual(visible.right);
+  });
   expect(scroller.scrollWidth).toBeLessThan(8 * (width + 4));
+});
+
+it("retains an existing close layout while the next close waits for confirmation", async () => {
+  let complete: (() => void) | undefined;
+  let requests = 0;
+  await using screen = await render(
+    <Fixture
+      initial={files(4)}
+      close={(_surface, finish) => {
+        requests++;
+        if (requests === 1) finish();
+        else complete = finish;
+      }}
+    />,
+  );
+  const width = tabs(screen.container)[0]!.getBoundingClientRect().width;
+  await userEvent.hover(screen.getByRole("tab", { name: "Long descriptive document 1.md" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Close Long descriptive document 1.md" }),
+  );
+  await userEvent.hover(screen.getByRole("tab", { name: "Long descriptive document 2.md" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Close Long descriptive document 2.md" }),
+  );
+  expect(tabs(screen.container)).toHaveLength(3);
+  expect(tabs(screen.container)[0]!.getBoundingClientRect().width).toBeCloseTo(width, 1);
+  await act(() => complete?.());
+  await vi.waitFor(() => expect(tabs(screen.container)).toHaveLength(2));
+  expect(tabs(screen.container)[0]!.getBoundingClientRect().width).toBeCloseTo(width, 1);
 });
 
 it("waits for a delayed removal and leaves no visible freeze after a cancelled close", async () => {

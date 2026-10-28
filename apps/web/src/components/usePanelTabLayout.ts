@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { observeResize } from "~/lib/observeResize";
 
@@ -18,6 +18,7 @@ interface CloseLayout {
   afterActive: string | null;
   width: number;
   span: number;
+  holdWhilePending: boolean;
 }
 
 export function usePanelTabLayout(input: {
@@ -37,6 +38,7 @@ export function usePanelTabLayout(input: {
   const idsKey = JSON.stringify(input.ids);
   const pending = closing?.beforeIds === idsKey && closing.beforeActive === input.activeId;
   const frozen = closing?.afterIds === idsKey && closing.afterActive === input.activeId;
+  const holding = frozen || (pending && closing.holdWhilePending);
   if (closing && (!input.open || (!pending && !frozen))) setClosing(null);
 
   const release = useStableCallback(() => setClosing(null));
@@ -48,9 +50,9 @@ export function usePanelTabLayout(input: {
         Math.max(1, input.ids.length),
     ),
   );
-  const tabWidth = frozen ? closing.width : naturalWidth;
+  const tabWidth = holding ? closing.width : naturalWidth;
   const tabsWidth = input.ids.length * tabWidth + Math.max(0, input.ids.length - 1) * GAP;
-  const retainedWidth = frozen ? Math.max(tabsWidth, closing.span) : tabsWidth;
+  const retainedWidth = holding ? Math.max(tabsWidth, closing.span) : tabsWidth;
 
   const prepareClose = useStableCallback((id: string) => {
     const viewport = viewportOf(rootRef.current);
@@ -70,6 +72,7 @@ export function usePanelTabLayout(input: {
         input.activeId === id ? (remaining[index] ?? remaining[index - 1] ?? null) : input.activeId,
       width,
       span: retainedWidth,
+      holdWhilePending: holding,
     });
   });
 
@@ -139,13 +142,17 @@ export function usePanelTabLayout(input: {
   });
 
   const activeId = input.activeId;
-  // oxlint-disable-next-line goat/react-effect-budget -- Synchronizes the browser scroll position with active tab selection.
-  useEffect(() => {
-    if (frozen || !input.open || !scrollState.hasOverflow || !activeId) return;
+  const revealActiveTab = useEffectEvent(() => {
+    if (holding) return;
     rootRef.current
       ?.querySelector<HTMLElement>("[data-active-tab='true']")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeId, input.open, scrollState.hasOverflow, frozen]);
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- Synchronizes browser scroll with selection and newly overflowing tabs.
+  useEffect(() => {
+    if (!input.open || !scrollState.hasOverflow || !activeId) return;
+    revealActiveTab();
+  }, [activeId, input.open, scrollState.hasOverflow]);
 
   return { attachTabList, scrollState, scrollTabs, tabWidth, retainedWidth, prepareClose, release };
 }
