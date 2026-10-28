@@ -8,6 +8,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
+import { PersistenceRecoveryOwner } from "./PersistenceRecoveryOwner.ts";
 
 const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
@@ -44,6 +45,7 @@ const layerSetup = Layer.effectDiscard(
 export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const owner = yield* PersistenceRecoveryOwner;
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
@@ -52,6 +54,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
       filename: dbPath,
       readerWorker: true,
       writerWorker: true,
+      onFatalPersistence: owner?.report,
       // The owned writer performs checkpoint work on its connection.
       checkpointWorker: true,
       spanAttributes: {

@@ -17,6 +17,12 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
+import * as Context from "effect/Context";
+import * as Exit from "effect/Exit";
+import * as Runtime from "effect/Runtime";
+import { makeCommandGate } from "../serverRuntimeStartup.ts";
+import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
+
 import * as SqlitePersistence from "./Sqlite.ts";
 
 it.effect("drops planner statistics a database already has", () => {
@@ -127,6 +133,8 @@ it.effect("publishes one fatal notification after a lost COMMIT without replayin
         .withTransaction(sql`INSERT INTO fatal_probe VALUES (1)`)
         .pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(committed);
+      writer.emit("error", new Error("writer failed after COMMIT"));
+      writer.emit("error", new Error("duplicate writer error"));
       yield* Effect.promise(() => writer.terminate());
       assert.equal((yield* Fiber.join(transaction))._tag, "Failure");
       assert.equal(
@@ -144,22 +152,202 @@ it.effect("publishes one fatal notification after a lost COMMIT without replayin
       }
       assert.equal(workers.length, 1, "a failed writer must never be replaced in place");
       assert.equal(notifications, 1, "permanent writer failure must reach its lifetime owner");
-      writer.emit("error", new Error("duplicate writer error"));
       assert.equal(notifications, 1, "error and exit belong to one fatal epoch");
     }).pipe(
       Effect.provide(
         NodeSqliteClient.layer({
           filename,
           writerWorker: true,
-          ...{
-            onFatalPersistence: () => {
-              notifications++;
-            },
+          onFatalPersistence: () => {
+            notifications++;
           },
         }),
       ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([false, true])(
+  "fatal persistence rejects queued and future work (ready=%s)",
+  (ready) =>
+    Effect.gen(function* () {
+      const captured =
+        yield* Deferred.make<
+          NonNullable<Context.Service.Shape<typeof PersistenceOwner.PersistenceRecoveryOwner>>
+        >();
+      const exits: Array<number> = [];
+      let alarms = 0;
+      let mutations = 0;
+      const lifetime = yield* PersistenceOwner.run(
+        Effect.gen(function* () {
+          const owner = yield* PersistenceOwner.PersistenceRecoveryOwner;
+          assert.isDefined(owner);
+          yield* Deferred.succeed(captured, owner!);
+          return yield* Effect.never;
+        }),
+        {
+          armHardExit: () => {
+            alarms++;
+          },
+          exit: (code) => {
+            exits.push(code);
+          },
+        },
+      ).pipe(Effect.exit, Effect.forkChild);
+      const owner = yield* Deferred.await(captured);
+      const gate = yield* makeCommandGate.pipe(
+        Effect.provideService(PersistenceOwner.PersistenceRecoveryOwner, owner),
+      );
+      if (ready) yield* gate.signalCommandReady;
+      const queued = ready
+        ? undefined
+        : yield* gate
+            .enqueueCommand(
+              Effect.sync(() => {
+                mutations++;
+              }),
+            )
+            .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
+      owner.report(new Error("writer lost"));
+      owner.report(new Error("duplicate exit"));
+      yield* gate.signalCommandReady;
+      if (queued !== undefined) assert.isTrue(Exit.isFailure(yield* Fiber.join(queued)));
+      assert.isTrue(
+        Exit.isFailure(
+          yield* Effect.exit(
+            gate.enqueueCommand(
+              Effect.sync(() => {
+                mutations++;
+              }),
+            ),
+          ),
+        ),
+      );
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(gate.awaitCommandReady)));
+      assert.equal(mutations, 0);
+      const result = yield* Fiber.join(lifetime);
+      const codes: Array<number> = [];
+      Runtime.defaultTeardown(result, (code) => codes.push(code));
+      assert.deepEqual(codes, [80]);
+      assert.deepEqual(exits, [80]);
+      assert.equal(alarms, 1);
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "intentional writer retirement and ordinary startup refusal leave the owner healthy",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-owner-close-" });
+      const exits: Array<number> = [];
+      let alarms = 0;
+      const boundary = {
+        armHardExit: () => {
+          alarms++;
+        },
+        exit: (code: number) => {
+          exits.push(code);
+        },
+      };
+      yield* PersistenceOwner.run(
+        Effect.gen(function* () {
+          yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`SELECT 1`;
+          }).pipe(
+            Effect.provide(SqlitePersistence.layerFromPath(path.join(directory, "state.sqlite"))),
+          );
+          const owner = yield* PersistenceOwner.PersistenceRecoveryOwner;
+          yield* owner!.check;
+        }),
+        boundary,
+      );
+      const refused = yield* PersistenceOwner.run(
+        Layer.build(SqlitePersistence.layerFromPath(directory)),
+        boundary,
+      ).pipe(Effect.scoped, Effect.exit);
+      assert.isTrue(Exit.isFailure(refused));
+      assert.equal(alarms, 0);
+      assert.deepEqual(exits, []);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("writer failure during SQLite layer construction reaches the server lifetime owner", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-owner-build-" });
+    let alarms = 0;
+    let injected = false;
+    const exits: Array<number> = [];
+    const original = NodeWorkerThreads.Worker.prototype.postMessage;
+    using _inject = vi
+      .spyOn(NodeWorkerThreads.Worker.prototype, "postMessage")
+      .mockImplementation(function (this: NodeWorkerThreads.Worker, message, ...rest) {
+        if (!injected && typeof message?.sql === "string" && message.sql.includes("busy_timeout")) {
+          injected = true;
+          this.emit("error", new Error("writer failed before migrations"));
+          return;
+        }
+        return original.call(this, message, ...rest);
+      });
+    const result = yield* PersistenceOwner.run(
+      Layer.build(SqlitePersistence.layerFromPath(path.join(directory, "state.sqlite"))),
+      {
+        armHardExit: () => {
+          alarms++;
+        },
+        exit: (code) => {
+          exits.push(code);
+        },
+      },
+    ).pipe(Effect.scoped, Effect.exit);
+    assert.isTrue(injected);
+    assert.isTrue(Exit.isFailure(result));
+    assert.equal(alarms, 1);
+    assert.deepEqual(exits, [80]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("fatal construction arms an exit independent of stuck application finalizers", () =>
+  Effect.gen(function* () {
+    const finalizing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let expire: (() => void) | undefined;
+    let constructions = 0;
+    const exits: Array<number> = [];
+    const lifetime = yield* PersistenceOwner.run(
+      Effect.gen(function* () {
+        constructions++;
+        const owner = yield* PersistenceOwner.PersistenceRecoveryOwner;
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(finalizing, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        );
+        owner!.report(new Error("writer failed during construction"));
+        return yield* Effect.never;
+      }),
+      {
+        armHardExit: (alarm) => {
+          expire = alarm;
+        },
+        exit: (code) => {
+          exits.push(code);
+        },
+      },
+    ).pipe(Effect.exit, Effect.forkChild);
+    yield* Deferred.await(finalizing);
+    assert.isUndefined(lifetime.pollUnsafe());
+    assert.deepEqual(exits, []);
+    assert.isDefined(expire);
+    expire!();
+    assert.deepEqual(exits, [80]);
+    yield* Deferred.succeed(release, undefined);
+    assert.isTrue(Exit.isFailure(yield* Fiber.join(lifetime)));
+    assert.equal(constructions, 1);
+    assert.deepEqual(exits, [80, 80]);
+  }).pipe(Effect.scoped),
 );
 
 it.effect("does not receipt a failed worker migration and reopens safely", () =>

@@ -106,6 +106,15 @@ Start with `goat service status` on the host. It prints the log path and, on Lin
 checks whether the installed service is running, enabled, and allowed to survive
 logout.
 
+If the database writer fails permanently, GOAT disables commands and exits with
+code 80. The desktop app or installed service can restart it; a server started
+with `goat` or `goat serve` needs to be started again. Connected clients reconnect
+after the restart. GOAT does not replay an operation whose commit result is
+unknown or repair database corruption automatically. If the failure repeats,
+read the server logs before restarting again and check disk space and access to
+the data directory. This recovery requires a responsive server process; it does
+not detect a frozen process.
+
 If it stops when your SSH session closes, check for `linger-disabled`. An
 administrator can enable lingering with:
 
