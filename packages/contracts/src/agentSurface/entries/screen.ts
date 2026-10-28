@@ -9,8 +9,8 @@ export const screenEntries = {
     toolkit: "screen",
     summary: "Run one bounded JavaScript cell against available screen targets.",
     description:
-      "Run one bounded JavaScript cell against available GOAT browser tabs or admitted desktop apps. Input: code, optional reset and lowering-only limits. Returns receipts and availability; images are separate content blocks.",
-    guide: `Call with {code:string, reset?:boolean, limits?:Partial<ScreenRunLimits>}. A mention is only a binding hint, never permission; browser and desktop admission are checked separately for each effect. If a dispatched input has an unknown outcome, re-observe before deciding whether to act again; do not replay the cell blindly.
+      "Run one bounded JavaScript cell against available GOAT browser tabs or admitted desktop apps. Input: code, an optional one-line title for the timeline row, optional reset and lowering-only limits. Returns receipts and availability; images are separate content blocks.",
+    guide: `Call with {code:string, title?:string, reset?:boolean, limits?:Partial<ScreenRunLimits>}. title is one line (≤80 chars) saying what the cell does, such as "Terminal: run the tests"; it titles the cell's timeline row, so never put typed text, passwords or secrets in it. A mention is only a binding hint, never permission; browser and desktop admission are checked separately for each effect. If a dispatched input has an unknown outcome, re-observe before deciding whether to act again; do not replay the cell blindly.
 
 ${SCREEN_TARGET_API}`,
     listing: "core",

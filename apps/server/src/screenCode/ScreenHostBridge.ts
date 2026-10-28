@@ -24,6 +24,7 @@ import {
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
+import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
@@ -118,6 +119,20 @@ const WAIT_REPLY_RESERVE_MS = 100;
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
 
+/** The target a bind_app reply (a ref) or a tab reply ({targetRef}) hands back. */
+const replyTargetId = (value: unknown): string | undefined => {
+  const reply = typeof value === "object" && value !== null ? value : undefined;
+  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
+  return typeof ref === "object" &&
+    ref !== null &&
+    "id" in ref &&
+    typeof ref.id === "string" &&
+    "kind" in ref &&
+    (ref.kind === "app" || ref.kind === "tab")
+    ? ref.id
+    : undefined;
+};
+
 /** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
 export const observationReplyBudget = (
   call: ScreenHostCall,
@@ -144,8 +159,14 @@ export class ScreenHostBridge {
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
-  /** Each cell's targets in first-use order, kept past a cut until the cell's result takes them. */
-  private readonly cellTargetOrder = new Map<string, string[]>();
+  /**
+   * Each cell's targets in first-use order and the shortcut labels of its key presses, kept past a
+   * cut until the cell's result takes them, for its timeline row.
+   */
+  private readonly cellFacts = new Map<
+    string,
+    { readonly targets: string[]; readonly keys: Map<number, string> }
+  >();
   private readonly closedCells = new Map<string, Set<string>>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
@@ -335,9 +356,11 @@ export class ScreenHostBridge {
       let cellTargets = this.cellTargets.get(cellId);
       if (!cellTargets) this.cellTargets.set(cellId, (cellTargets = new Set()));
       cellTargets.add(call.targetRef.id);
-      const order = this.cellTargetOrder.get(cellId) ?? [];
-      if (!order.includes(call.targetRef.id) && order.length < 64) order.push(call.targetRef.id);
-      this.cellTargetOrder.set(cellId, order);
+      this.noteCellTarget(context, call.targetRef.id);
+    }
+    if (call.method === "press_key") {
+      const label = shortcutLabel(Array.isArray(call.args) ? call.args[0] : undefined);
+      if (label !== undefined) this.factsOf(context).keys.set(call.callId, label);
     }
     if (
       call.targetRef &&
@@ -593,6 +616,9 @@ export class ScreenHostBridge {
       return refused(call, { ...result.failure, safety, callId: call.callId });
     }
     let value = result.success.value;
+    // A bind or an opened tab names its target only in the reply.
+    const boundRef = replyTargetId(value);
+    if (boundRef !== undefined) this.noteCellTarget(context, boundRef);
     const image = result.success.image;
     const metadata = result.success.imageMetadata;
     if (image && metadata) {
@@ -708,12 +734,27 @@ export class ScreenHostBridge {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
   }
 
-  /** The targets a finished cell acted on, in first-use order, even when its cell was cut. */
-  takeCellTargets(runId: string, turnId: string, cellId: string): readonly string[] {
+  private factsOf(context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">) {
+    const id = key(context.runId, context.turnId, context.cellId);
+    let facts = this.cellFacts.get(id);
+    if (!facts) this.cellFacts.set(id, (facts = { targets: [], keys: new Map() }));
+    return facts;
+  }
+
+  private noteCellTarget(
+    context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">,
+    targetId: string,
+  ) {
+    const { targets } = this.factsOf(context);
+    if (!targets.includes(targetId) && targets.length < 64) targets.push(targetId);
+  }
+
+  /** What a finished cell acted on, in first-use order, and its key labels, even after a cut. */
+  takeCellFacts(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
-    const order = this.cellTargetOrder.get(id) ?? [];
-    this.cellTargetOrder.delete(id);
-    return order;
+    const facts = this.cellFacts.get(id) ?? { targets: [], keys: new Map<number, string>() };
+    this.cellFacts.delete(id);
+    return facts;
   }
 
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
@@ -841,8 +882,8 @@ export class ScreenHostBridge {
     this.cursorPhases?.finishTurn(runId, turnId);
     for (const cellId of this.cellTargets.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
-    for (const cellId of this.cellTargetOrder.keys())
-      if (cellId.startsWith(`${turn}\u0000`)) this.cellTargetOrder.delete(cellId);
+    for (const cellId of this.cellFacts.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.cellFacts.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
     this.fencedTurns.delete(turn);

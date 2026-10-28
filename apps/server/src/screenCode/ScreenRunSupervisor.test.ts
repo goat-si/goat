@@ -919,7 +919,7 @@ it.live("a cell's wall limit includes the time its fresh child takes to start", 
 );
 
 it.live.each([false, true])(
-  "rejects an oversized screen frame before newline or child EOF (effect dispatched: %s)",
+  "rejects an oversized screen frame before newline or child EOF, keeping what ended it for the row (effect dispatched: %s)",
   (effectDispatched) =>
     Effect.gen(function* () {
       const child = NodeChildProcess.spawn(
@@ -981,6 +981,9 @@ it.live.each([false, true])(
           expect(result.failure.code).toBe(effectDispatched ? "unknown_outcome" : "output_limit");
           expect(result.failure.effectStarted).toBe(effectDispatched);
           expect(result.failure.receipts).toHaveLength(effectDispatched ? 1 : 0);
+          // The agent hears unknown_outcome; the cell's timeline row still knows the frame ended it.
+          expect(result.failure.endedBy).toBe("output_limit");
+          expect(result.failure.journal).toEqual(result.failure.receipts);
         }
         expect(closedBeforeEof).toBe(true);
         expect(dispatched).toBe(effectDispatched ? 1 : 0);

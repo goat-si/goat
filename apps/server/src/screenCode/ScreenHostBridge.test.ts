@@ -213,6 +213,47 @@ it.effect("discard and finishTurn release cell and target state", () =>
   }),
 );
 
+it.effect("a cell's targets and key labels outlive its taken state until its row takes them", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (each) =>
+        Effect.succeed(
+          each.method === "select_tab"
+            ? { value: { targetRef: { ...tab, id: "opened" } }, category: "confirmed" as const }
+            : { category: "confirmed" as const, evidence: ["test"] },
+        ),
+    });
+    const live = context(() => Effect.void);
+    const press = (callId: number, args: unknown): ScreenHostCall => ({
+      ...call(callId),
+      method: "press_key",
+      args: [args] as ScreenHostCall["args"],
+    });
+    const { targetRef: _targetRef, ...untargeted } = call(1);
+    yield* bridge.handle(
+      { ...untargeted, method: "select_tab", args: [{ tabId: "x" }] },
+      context(),
+    );
+    yield* bridge.handle(press(2, { key: "Enter" }), live);
+    yield* bridge.handle(press(3, { key: "a" }), live);
+    yield* bridge.handle(press(4, { key: "a", modifiers: ["Meta"] }), live);
+    bridge.takeCellImagesNow("r", "t", "c");
+    bridge.discardCellNow("r", "t", "c");
+    const facts = bridge.takeCellFacts("r", "t", "c");
+    expect(facts.targets).toEqual(["opened", "target"]);
+    expect([...facts.keys]).toEqual([
+      [2, "Enter"],
+      [4, "cmd+a"],
+    ]);
+    expect(bridge.takeCellFacts("r", "t", "c").targets).toEqual([]);
+    yield* bridge.handle(press(5, { key: "Tab" }), { ...live, cellId: "d" });
+    yield* bridge.finishTurn("r", "t");
+    expect(bridge.takeCellFacts("r", "t", "d").targets).toEqual([]);
+  }),
+);
+
 it.effect("trusted host call phases end when the cell is cut", () =>
   Effect.gen(function* () {
     const events: string[] = [];

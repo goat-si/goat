@@ -186,7 +186,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       generation: 0,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
-    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url });
+    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url }, context);
     return ref;
   };
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -227,7 +227,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
-    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url });
+    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url }, context);
     if (originOf(current.url) !== bound.origin) {
       observations.evictTarget(bound.ref.id);
       if (!readOnly)
@@ -821,7 +821,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const reached =
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
       if (typeof reached === "string")
-        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
+        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached }, context);
       // The agent moved its own tab, so the handle follows to the page it reached; the old
       // document's refs and points were retired above.
       if (

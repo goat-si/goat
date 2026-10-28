@@ -130,6 +130,7 @@ export const fixture = (
   override: Partial<Record<string, unknown>> = {},
   connection = { id: "driver:1" },
   observations?: ScreenObservations,
+  labelTarget?: Parameters<typeof createDesktopTargetHost>[0]["labelTarget"],
 ) => {
   const sent: Array<{
     tool: string;
@@ -203,6 +204,7 @@ export const fixture = (
       primitiveChannel: channel,
       leases,
       ...(observations ? { observations } : {}),
+      ...(labelTarget ? { labelTarget } : {}),
     }),
     sent,
   };

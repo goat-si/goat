@@ -328,6 +328,8 @@ export const ScreenRunError = Schema.Struct({
   ...refusalFields,
   callId: Schema.optionalKey(natural),
   targetId: Schema.optionalKey(id),
+  /** The cell that failed, as a result names its cell. */
+  cellId: Schema.optionalKey(id),
   effectStarted: Schema.Boolean,
   lastObservationId: Schema.optionalKey(id),
   limit: Schema.optionalKey(Schema.Struct({ name: text(80), maximum: natural })),

@@ -21,7 +21,7 @@ import {
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import type { ScreenTargetLabel } from "../cua/ComputerUseCallApps.ts";
+import type { ScreenCellRef, ScreenTargetLabel } from "../cua/ComputerUseCallApps.ts";
 import type {
   ScreenHostContext,
   ScreenHostDispatcher,
@@ -219,7 +219,7 @@ export const createDesktopTargetHost = (deps: {
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
   /** Names the app a target id was bound to, for the cell's timeline row. */
-  readonly labelTarget?: (targetId: string, label: ScreenTargetLabel) => void;
+  readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const targets = new Map<string, BoundWindow>();
@@ -400,11 +400,18 @@ export const createDesktopTargetHost = (deps: {
         ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
       };
       targets.set(ref.id, bound);
-      deps.labelTarget?.(ref.id, {
-        kind: "app",
-        bundleId: string(app?.bundle_id) ?? bundleId,
-        name: string(app?.name) ?? name,
-      });
+      // Only what the driver reported names the app on its row. The call's bundle id found the
+      // window, so it may pick the icon, but the driver's app filter also matches names, so never text.
+      deps.labelTarget?.(
+        ref.id,
+        {
+          kind: "app",
+          bundleId: string(app?.bundle_id),
+          name: string(app?.name) ?? string(named[0]?.app_name),
+          iconBundleId: bundleId,
+        },
+        context,
+      );
       return { value: ref, category: "unverifiable" };
     },
   );
