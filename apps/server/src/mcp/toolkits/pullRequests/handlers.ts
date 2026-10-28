@@ -318,16 +318,28 @@ const make = Effect.gen(function* () {
       .listShells()
       .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
     const callerProject = known.find((project) => project.id === callerThread?.projectId);
-    // A pull request named by host and repository builds its URL through the project that holds
-    // it, which need not be the caller's.
-    const urlProject = (input: PullRequestTargetInput) =>
-      input.url === undefined && input.host !== undefined && input.repository !== undefined
-        ? (projectForPullRequest(
-            known,
-            { host: input.host, repository: input.repository },
-            callerProject,
-          ) ?? callerProject)
-        : callerProject;
+    // A pull request named by repository builds its URL through the project that holds it, which
+    // need not be the caller's. Without a host, that is the one project whose remote matches.
+    const holderOf = (repository: string, host: string | null) =>
+      host === null ? undefined : projectForPullRequest(known, { host, repository }, undefined);
+    const urlProject = (input: PullRequestTargetInput) => {
+      if (input.url !== undefined || input.repository === undefined) return callerProject;
+      const { repository } = input;
+      if (input.host !== undefined)
+        return (
+          projectForPullRequest(known, { host: input.host, repository }, callerProject) ??
+          callerProject
+        );
+      const holders = known.filter(
+        (project) => holderOf(repository, projectHostAndProvider(project).host) === project,
+      );
+      const [only] = holders;
+      return callerProject !== undefined && holders.includes(callerProject)
+        ? callerProject
+        : holders.length === 1
+          ? only
+          : callerProject;
+    };
     return yield* Effect.forEach(targets, (input) =>
       resolveTarget(input, urlProject(input)).pipe(
         Effect.map((target) => ({
@@ -335,9 +347,16 @@ const make = Effect.gen(function* () {
           target,
           project: projectForPullRequest(known, target, callerProject),
           failure: null,
+          error: null,
         })),
         Effect.catch((error) =>
-          Effect.succeed({ input, target: null, project: undefined, failure: error.message }),
+          Effect.succeed({
+            input,
+            target: null,
+            project: undefined,
+            failure: error.message,
+            error,
+          }),
         ),
       ),
     );
@@ -365,8 +384,9 @@ const make = Effect.gen(function* () {
     input: Omit<PullRequestTargetInput, "threadId">,
   ) {
     const [entry] = yield* locateAll([input]);
-    if (entry !== undefined && entry.target === null)
-      return yield* new PullRequestReadFailedError({ detail: entry.failure ?? "" });
+    // An unreadable target is the caller's input, so its own refusal comes back unchanged.
+    if (entry !== undefined && entry.target === null && entry.error !== null)
+      return yield* entry.error;
     if (entry === undefined || entry.target === null || entry.project === undefined)
       return yield* new PullRequestProjectNotFoundError({
         repository: entry?.target.repository ?? input.repository ?? "",
@@ -565,7 +585,10 @@ const make = Effect.gen(function* () {
     goat_pull_request_read: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
-        const pullRequest = yield* pullRequests.detail(ref).pipe(Effect.mapError(readFailure));
+        // Fresh like the pull request view, not the held copy a list row may show.
+        const pullRequest = yield* pullRequests
+          .detail({ ...ref, allowStale: false })
+          .pipe(Effect.mapError(readFailure));
         return { ...identityOf(target), pullRequest };
       }),
     ),

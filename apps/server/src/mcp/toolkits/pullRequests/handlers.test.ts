@@ -199,6 +199,12 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         ),
     }),
     Layer.mock(PullRequestService.PullRequestService)({
+      detail: (input) =>
+        Ref.update(reads, (recorded) => [...recorded, input]).pipe(
+          Effect.andThen(
+            Effect.fail(new PullRequestOperationError({ operation: "detail", detail: "offline" })),
+          ),
+        ),
       checks: (input) =>
         Ref.update(reads, (recorded) => [...recorded, input]).pipe(
           Effect.andThen(options.checks?.(input) ?? Effect.succeed(null)),
@@ -761,6 +767,28 @@ describe("pull request reads", () => {
           [PROJECT_ID, 12],
           [PROJECT_ID, 13],
         ]);
+      }),
+  );
+  it.effect(
+    "reads detail fresh, returns input mistakes as the caller's, and finds the host from the one project holding the repository",
+    () =>
+      Effect.gen(function* () {
+        // No calling project, as for a client outside any thread.
+        const harness = yield* makeHarness({ thread: null });
+        expect(
+          yield* harness
+            .call("goat_pull_request_read", { repository: "sample-tools/goat", number: 4 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestReadFailedError", detail: "offline" });
+        expect(yield* Ref.get(harness.reads)).toMatchObject([
+          { projectId: PROJECT_ID, host: "github.com", number: 4, allowStale: false },
+        ]);
+        expect(yield* harness.call("goat_pull_request_read", {}).pipe(Effect.flip)).toMatchObject({
+          _tag: "PullRequestTargetIncompleteError",
+        });
+        expect(
+          yield* harness.call("goat_pull_request_checks", { url: "not-a-url" }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestUrlInvalidError" });
       }),
   );
 });
