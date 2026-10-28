@@ -61,7 +61,8 @@ interface BoundTarget {
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
 export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(function* (
-  broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">,
+  broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> &
+    Partial<Pick<PreviewAutomationBroker["Service"], "canOpenTab">>,
 ) {
   const observations = new ScreenObservations();
   const callApps = yield* ComputerUseCallApps;
@@ -785,15 +786,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const availability: ScreenHostDispatcher["availability"] = Effect.fn(
     "PreviewTargetHost.availability",
   )(function* (context) {
-    const available = yield* list(context).pipe(Effect.option);
+    const listed = yield* list(context).pipe(Effect.option);
+    // With no tab yet the surface still works when this server's browser can open one.
+    const available =
+      Option.isSome(listed) &&
+      (listed.value.length > 0 ||
+        (yield* broker.canOpenTab?.(context.invocation) ?? Effect.succeed(false)));
     return [
-      {
-        kind: "tab" as const,
-        available: Option.isSome(available) && available.value.length > 0,
-        ...(Option.isSome(available) && available.value.length > 0
-          ? {}
-          : { reason: "no_host" as const }),
-      },
+      { kind: "tab" as const, available, ...(available ? {} : { reason: "no_host" as const }) },
     ];
   });
   const finishTurn = Effect.fn("PreviewTargetHost.finishTurn")(function* (
