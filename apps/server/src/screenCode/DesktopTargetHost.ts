@@ -39,6 +39,15 @@ import {
   POINT_KEYS,
 } from "./DesktopDriverReplies.ts";
 import { ScreenObservations, type ScreenElementDetail } from "./ScreenObservations.ts";
+import {
+  actionName,
+  cleanActionText,
+  idsFromTree,
+  labelsFromTree,
+  namesFromTree,
+  pairTreeText,
+  parseTree,
+} from "./DesktopTreeText.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -147,9 +156,9 @@ const WINDOW_ROLES: ReadonlySet<string> = new Set([
 /** The driver's state and geometry for one element, in the observation's own names. */
 const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
   const frame = object(entry.frame);
-  const actions = array(entry.actions).filter(
-    (action): action is string => typeof action === "string",
-  );
+  const actions = array(entry.actions)
+    .filter((action): action is string => typeof action === "string")
+    .map(actionName);
   const parent = natural(entry.parent_index);
   return {
     ...(actions.length > 0 ? { actions } : {}),
@@ -472,17 +481,36 @@ export const createDesktopTargetHost = (deps: {
       const elements = array(state.elements)
         .map(object)
         .filter((entry) => entry !== undefined);
+      const markdown = typeof state.tree_markdown === "string" ? state.tree_markdown : "";
+      const lines = parseTree(markdown);
+      const [names, labels, ids] = [
+        namesFromTree(lines),
+        labelsFromTree(lines),
+        idsFromTree(lines),
+      ];
       const rows = elements.flatMap((entry) => {
         const token = string(entry.element_token);
         if (!token) return [];
         const index = natural(entry.element_index);
+        const label = string(entry.label) ?? "";
+        // A value element's label line, or the text under an unnamed row or cell, names it.
+        const named =
+          index === undefined
+            ? label
+            : label === ""
+              ? (names.get(index) ?? "")
+              : label === entry.value
+                ? (labels.get(index) ?? label)
+                : label;
+        const id = index === undefined ? undefined : ids.get(index);
         return [
           {
             role: string(entry.role) ?? "unknown",
-            name: string(entry.label) ?? "",
+            name: named,
             ...(typeof entry.value === "string" ? { text: entry.value } : {}),
             ...(index === undefined ? {} : { index }),
             ...elementDetail(entry),
+            ...(id === undefined ? {} : { id }),
             driverToken: token,
           },
         ];
@@ -521,7 +549,7 @@ export const createDesktopTargetHost = (deps: {
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText: typeof state.tree_markdown === "string" ? state.tree_markdown : "",
+              indexedText: cleanActionText(pairTreeText(markdown)),
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,

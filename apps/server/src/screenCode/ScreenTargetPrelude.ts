@@ -140,6 +140,14 @@ const __target = (binding, note, owner) => {
       if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe again.', true);
       return found;
     }
+    // An accessibility id is exact and the same in every language.
+    if (typeof target === 'object' && target !== null && target.id !== undefined) {
+      const byId = observation.elements.filter((item) => item.id === String(target.id));
+      if (byId.length !== 1)
+        throw new ScreenError(byId.length ? 'target_ambiguous' : 'target_missing',
+          (byId.length ? byId.length + ' elements have ' : 'Nothing has ') + 'id ' + JSON.stringify(target.id) + '; use a number from observe.', true);
+      return byId[0];
+    }
     const name = typeof target === 'string' ? target : target.name;
     const role = typeof target === 'string' ? undefined : target.role;
     const fits = (item) => role === undefined || item.role.toLowerCase().includes(String(role).toLowerCase());

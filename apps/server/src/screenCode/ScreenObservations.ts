@@ -114,7 +114,7 @@ const tabTreeElement = (
 /** State and geometry a driver reports for an element; carried to the agent unchanged. */
 export type ScreenElementDetail = Pick<
   ScreenObservation["elements"][number],
-  "actions" | "enabled" | "selected" | "frame" | "range" | "parent"
+  "actions" | "enabled" | "selected" | "frame" | "range" | "parent" | "id"
 >;
 
 export interface ScreenObservationDraft {
@@ -465,7 +465,7 @@ export class ScreenObservations {
       const id = NodeCrypto.randomUUID();
       tokens.set(id, element.driverToken);
       if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
-      const { actions, enabled, selected: isSelected, frame, range, parent } = element;
+      const { actions, enabled, selected: isSelected, frame, range, parent, id: axId } = element;
       return {
         index: element.index ?? position,
         role: element.role.slice(0, 200),
@@ -479,6 +479,7 @@ export class ScreenObservations {
         ...(frame === undefined ? {} : { frame }),
         ...(range === undefined ? {} : { range }),
         ...(parent === undefined ? {} : { parent }),
+        ...(axId === undefined ? {} : { id: axId.slice(0, 400) }),
         ref: {
           id,
           targetId: draft.targetRef.id,
