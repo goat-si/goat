@@ -1,5 +1,7 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -22,6 +24,7 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
 const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
@@ -55,6 +58,14 @@ export interface ScreenHostDispatcher {
     call: ScreenHostCall,
     context: ScreenHostContext,
   ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+  /**
+   * Calls of one batch group, in order, as one trip where the host can. It returns an outcome for
+   * each call from the first that ran; calls past the end of the list did not run.
+   */
+  readonly dispatchBatch?: (
+    calls: ReadonlyArray<ScreenHostCall>,
+    context: ScreenHostContext,
+  ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
 }
 
 interface CellState {
@@ -73,6 +84,7 @@ interface CellState {
   effectsStarted: number;
   /** The first call that failed; the cell's later calls do not run. */
   haltedBy?: number;
+  readonly batches: BatchGroups;
 }
 
 const failure = (code: ScreenRunError["code"], callId?: number): ScreenRunError => ({
@@ -90,7 +102,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked stop the rest of the cell, as errors do. */
-const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
+export const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
   "refused",
@@ -171,6 +183,7 @@ export class ScreenHostBridge {
         truncated: [],
         retainedBytes: 0,
         effectsStarted: 0,
+        batches: new BatchGroups(),
       };
       this.cells.set(id, state);
     }
@@ -187,6 +200,11 @@ export class ScreenHostBridge {
     const call = decoded.value;
     const turn = `${context.runId}\u0000${context.turnId}`;
     const state = this.cell(context);
+    // A member of a batch group; any other call closes the cell's open group.
+    const slot = state.batches.join(call);
+    const leave = () => {
+      if (slot !== undefined) state.batches.withdraw(slot, notRun);
+    };
     const record = (
       category: ScreenJournalEntry["receipt"]["category"],
       journalState: ScreenJournalEntry["receipt"]["journalState"],
@@ -231,6 +249,7 @@ export class ScreenHostBridge {
         ? { outcome: { dispatch, effect: "unknown" as const } }
         : {};
     const deny = (error: ScreenRunError) => {
+      leave();
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
       record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
@@ -256,7 +275,8 @@ export class ScreenHostBridge {
         ...failure("call_limit", call.callId),
         limit: { name: "callsPerCell", maximum: context.limits.callsPerCell },
       });
-    if (state.pending >= context.limits.pendingCalls)
+    // A batch group takes one pending place, its first call's.
+    if (state.pending >= context.limits.pendingCalls && !(slot !== undefined && slot.index > 0))
       return deny({
         ...failure("pending_limit", call.callId),
         limit: { name: "pendingCalls", maximum: context.limits.pendingCalls },
@@ -395,16 +415,41 @@ export class ScreenHostBridge {
       if (state.haltedBy !== undefined && !isScreenRead(call.method))
         return yield* Effect.fail(notRun(call.callId, state.haltedBy));
       if (!bridge.dispatcher) return yield* Effect.fail(failure("unavailable", call.callId));
-      callDispatched = true;
-      state.effectsStarted++;
-      settle(
-        "unknown_outcome",
-        "dispatched",
-        true,
-        [],
-        screenActionSafety(call, "indeterminate", true),
-      );
-      const outcome = yield* bridge.dispatcher.dispatch(call, context);
+      const dispatcher = bridge.dispatcher;
+      const markDispatched = () => {
+        callDispatched = true;
+        state.effectsStarted++;
+        settle(
+          "unknown_outcome",
+          "dispatched",
+          true,
+          [],
+          screenActionSafety(call, "indeterminate", true),
+        );
+      };
+      if (slot !== undefined) {
+        state.batches.ready(slot, markDispatched);
+        if (slot.index === 0)
+          yield* state.batches.run(slot, {
+            blocked: (callId) =>
+              state.closed || state.cutoff.signal.aborted
+                ? failure("stopped", callId)
+                : state.haltedBy === undefined
+                  ? undefined
+                  : notRun(callId, state.haltedBy),
+            dispatch: (calls) =>
+              dispatcher.dispatchBatch?.(calls, context) ??
+              dispatchInTurn(
+                calls,
+                (each) => dispatcher.dispatch(each, context),
+                FAILED_CATEGORIES,
+              ),
+            notRun,
+          });
+      } else markDispatched();
+      const outcome = yield* slot === undefined
+        ? dispatcher.dispatch(call, context)
+        : Deferred.await(slot.outcome);
       const unverified = outcome.category === "confirmed" && !outcome.evidence?.length;
       const category = unverified ? "unverifiable" : outcome.category;
       const safety = unverified
@@ -459,7 +504,8 @@ export class ScreenHostBridge {
         gate = Semaphore.makeUnsafe(1);
         this.targetGates.set(call.targetRef.id, gate);
       }
-      effect = gate.withPermits(1)(guardedDispatch);
+      // A group's first call holds the gate for all of it; its other members wait on that call.
+      if (slot === undefined || slot.index === 0) effect = gate.withPermits(1)(guardedDispatch);
       if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
     }
     state.pending++;
@@ -473,6 +519,7 @@ export class ScreenHostBridge {
       Effect.result,
       Effect.ensuring(
         Effect.sync(() => {
+          leave();
           state.pending--;
         }),
       ),

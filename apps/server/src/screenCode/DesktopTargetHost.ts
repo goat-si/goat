@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type {
@@ -21,7 +22,8 @@ import type {
   ScreenHostDispatcher,
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
-import { observationReplyBudget } from "./ScreenHostBridge.ts";
+import { FAILED_CATEGORIES, observationReplyBudget } from "./ScreenHostBridge.ts";
+import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import { ScreenObservations, type ScreenElementDetail } from "./ScreenObservations.ts";
 
 const isJson = Schema.is(Schema.Json);
@@ -32,9 +34,14 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-// The guest names its target in every call; the driver refuses arguments it does not know.
+// The guest names its target (and a batch group) in every call; the driver refuses arguments it
+// does not know.
 const callArgs = (args: ScreenHostCall["args"]): Record<string, unknown> => {
-  const { targetRef: _targetRef, ...rest } = object(Array.isArray(args) ? args[0] : args) ?? {};
+  const {
+    targetRef: _targetRef,
+    batch: _batch,
+    ...rest
+  } = object(Array.isArray(args) ? args[0] : args) ?? {};
   return rest;
 };
 const array = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
@@ -149,11 +156,60 @@ const driverResult = (tool: string, reply: ComputerUsePrimitiveReply): ScreenHos
   };
 };
 
+/** Element input run_steps takes as steps: the driver's own tools, aimed by element token. */
+const BATCH_METHODS: ReadonlySet<string> = new Set([
+  "click",
+  "right_click",
+  "type_text",
+  "set_value",
+]);
+const POINT_KEYS = ["x", "y", "from_x", "from_y", "to_x", "to_y"];
+
+/**
+ * Each step's outcome from a run_steps reply, read as the same call alone would be: its own
+ * effect and code, never better than the driver said. Steps past the reply's list did not run.
+ * A reply that does not account for its steps leaves every step possibly run.
+ */
+const batchOutcomes = (reply: ComputerUsePrimitiveReply, tools: ReadonlyArray<string>) => {
+  const structured = object(object(reply.result)?.structuredContent);
+  const steps = array(structured?.steps).map(object);
+  if (
+    reply.status !== "settled" ||
+    structured?.total !== tools.length ||
+    steps.length > tools.length ||
+    steps.some((step, index) => step?.index !== index)
+  ) {
+    const safety = driverOutcomeSafety("run_steps", reply);
+    const error = { ...(driverError(reply) ?? fail("downstream_failure")), safety };
+    const failed = Exit.fail({ ...error, effectStarted: safety.possibleCommit });
+    return safety.possibleCommit ? tools.map(() => failed) : [failed];
+  }
+  return steps.map((step, index) => {
+    const tool = tools[index] ?? "run_steps";
+    const stepReply = {
+      ...reply,
+      result: { ...(step?.ok === false ? { isError: true } : {}), structuredContent: step },
+    } as ComputerUsePrimitiveReply;
+    const safety = driverOutcomeSafety(tool, stepReply);
+    const error = driverError(stepReply);
+    if (error) return Exit.fail({ ...error, safety, effectStarted: safety.possibleCommit });
+    const result = driverResult(tool, stepReply);
+    // The driver acted on the element found again by role and name after the token went stale.
+    return Exit.succeed(
+      step?.refound === undefined
+        ? result
+        : { ...result, evidence: [...(result.evidence ?? []), "driver:refound"] },
+    );
+  });
+};
+
 interface BoundWindow {
   readonly ref: ScreenTargetRef;
   readonly pid: number;
   readonly windowId: number;
   readonly appId: string;
+  /** The bundle id list_apps gave the app; a run_steps app_scope names the app by it. */
+  readonly bundleId?: string;
   readonly controlId: string;
   readonly epoch: number;
   readonly connectionGeneration: string;
@@ -185,6 +241,7 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
   readonly controlIdForTarget: (targetId: string) => string | undefined;
   readonly finishTurn: (runId: string, turnId: string) => void;
+  readonly dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]>;
 }
 
 export const createDesktopTargetHost = (deps: {
@@ -230,6 +287,22 @@ export const createDesktopTargetHost = (deps: {
       ref.turnId === context.turnId &&
       ref.generation === bound.epoch
       ? bound
+      : undefined;
+  };
+  /** The driver token of an element ref from the window's latest read; undefined once stale. */
+  const tokenOf = (bound: BoundWindow, element: Record<string, unknown>) => {
+    const ref = {
+      id: string(element.id) ?? "",
+      targetId: string(element.targetId) ?? "",
+      observationId: string(element.observationId) ?? "",
+      surfaceGeneration: element.surfaceGeneration,
+    };
+    return ref.targetId === bound.ref.id &&
+      ref.observationId === bound.observationId &&
+      ref.surfaceGeneration === bound.epoch
+      ? observations.index.resolveElement(
+          ref as Parameters<typeof observations.index.resolveElement>[0],
+        )
       : undefined;
   };
   const discover: DesktopTargetHost["discover"] = Effect.fn("DesktopTargetHost.discover")(
@@ -293,6 +366,7 @@ export const createDesktopTargetHost = (deps: {
       if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
       if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
       const app = matches.find((candidate) => candidate.pid === pid);
+      const listedBundle = string(app?.bundle_id);
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
@@ -319,7 +393,8 @@ export const createDesktopTargetHost = (deps: {
         ref,
         pid,
         windowId: requestedWindow,
-        appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
+        appId: listedBundle ?? string(app?.name) ?? appId,
+        ...(listedBundle === undefined ? {} : { bundleId: listedBundle }),
         epoch,
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
@@ -609,25 +684,8 @@ export const createDesktopTargetHost = (deps: {
       const element = object(args.elementRef);
       if (call.method === "set_value" && !element)
         return yield* Effect.fail(fail("invalid_argument"));
-      let elementToken: string | undefined;
-      if (element) {
-        const ref = {
-          id: string(element.id) ?? "",
-          targetId: string(element.targetId) ?? "",
-          observationId: string(element.observationId) ?? "",
-          surfaceGeneration: element.surfaceGeneration,
-        };
-        if (
-          ref.targetId !== bound.ref.id ||
-          ref.observationId !== bound.observationId ||
-          ref.surfaceGeneration !== bound.epoch
-        )
-          return yield* Effect.fail(fail("stale_reference"));
-        elementToken = observations.index.resolveElement(
-          ref as Parameters<typeof observations.index.resolveElement>[0],
-        );
-        if (!elementToken) return yield* Effect.fail(fail("stale_reference"));
-      }
+      const elementToken = element && tokenOf(bound, element);
+      if (element && !elementToken) return yield* Effect.fail(fail("stale_reference"));
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
       const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
       delete forwarded.elementRef;
@@ -662,11 +720,110 @@ export const createDesktopTargetHost = (deps: {
       return driverResult(tool, reply);
     },
   );
+  const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
+    call.method === "tab_status" || call.method === "read_page"
+      ? Effect.fail(fail("unsupported"))
+      : call.method === "bind_app"
+        ? bindApp(call, context)
+        : call.method === "list_apps" || call.method === "list_windows"
+          ? discover(call, context)
+          : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
+                call.method,
+              )
+            ? observe(call, context)
+            : invoke(call, context);
+  /** Driver connections whose run_steps takes no app_scope; their groups go one call at a time. */
+  const unscoped = new Set<string>();
+  /** A group's element input as run_steps steps, or undefined when any of it must go alone. */
+  const batchSteps = (calls: ReadonlyArray<ScreenHostCall>, context: ScreenHostContext) => {
+    const bound = calls[0] && resolve(calls[0], context);
+    const bundleId = bound?.bundleId;
+    if (!bound || !bundleId || unscoped.has(bound.connectionGeneration) || calls.length < 2)
+      return undefined;
+    const steps: Array<{ readonly tool: string; readonly args: Record<string, unknown> }> = [];
+    for (const call of calls) {
+      const args = callArgs(call.args);
+      const element = object(args.elementRef);
+      const token = element && tokenOf(bound, element);
+      if (
+        resolve(call, context) !== bound ||
+        !BATCH_METHODS.has(call.method) ||
+        !token ||
+        POINT_KEYS.some((key) => key in args)
+      )
+        return undefined;
+      const {
+        elementRef: _ref,
+        element_token: _token,
+        pid: _pid,
+        window_id: _window,
+        ...rest
+      } = args;
+      const { target: _target, ...own } = rest;
+      steps.push({
+        tool: call.method,
+        args: {
+          ...own,
+          pid: bound.pid,
+          window_id: bound.windowId,
+          element_token: token,
+          delivery_mode: "background",
+        },
+      });
+    }
+    return { bound, bundleId, steps };
+  };
+  // One run_steps for a group's element input, scoped to its window's app in the background;
+  // anything else, or a driver that refuses the batch before it runs, goes one call at a time.
+  const dispatchBatch: DesktopTargetHost["dispatchBatch"] = Effect.fn(
+    "DesktopTargetHost.dispatchBatch",
+  )(function* (calls, context) {
+    const inTurn = dispatchInTurn(calls, (call) => dispatch(call, context), FAILED_CATEGORIES);
+    const planned = batchSteps(calls, context);
+    const first = calls[0];
+    if (planned === undefined || first === undefined) return yield* inTurn;
+    const { bound, bundleId, steps } = planned;
+    const args = {
+      pid: bound.pid,
+      window_id: bound.windowId,
+      verify: "checkpoint",
+      app_scope: { apps: [bundleId], delivery: "background" },
+      steps,
+    };
+    if (!isJson(args)) return yield* inTurn;
+    bound.pointsStale = true;
+    const sent = yield* deps.primitiveChannel
+      .request({
+        threadId: context.invocation.thread.threadId,
+        runId: context.runId,
+        turnId: context.turnId,
+        callId: first.callId,
+        deadlineMillis: Math.min(...calls.map((call) => call.deadlineMillis)),
+        tool: "run_steps",
+        args,
+        expectedConnectionGeneration: bound.connectionGeneration,
+      })
+      .pipe(Effect.result);
+    if (sent._tag === "Failure") {
+      const error = sent.failure;
+      return error.effectStarted ? calls.map(() => Exit.fail(error)) : [Exit.fail(error)];
+    }
+    if (sent.success.status === "not_started") {
+      const refused = object(object(sent.success.result)?.structuredContent);
+      if (refused?.detail === "outside_manifest") unscoped.add(bound.connectionGeneration);
+      return yield* inTurn;
+    }
+    return batchOutcomes(
+      sent.success,
+      steps.map((step) => step.tool),
+    );
+  });
   return {
     discover,
     bindApp,
     observe,
     invoke,
+    dispatchBatch,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);
@@ -704,17 +861,6 @@ export const createDesktopTargetHost = (deps: {
           : ("no_lease" as const);
       return [{ kind: "app" as const, available: false, reason }];
     }),
-    dispatch: (call, context) =>
-      call.method === "tab_status" || call.method === "read_page"
-        ? Effect.fail(fail("unsupported"))
-        : call.method === "bind_app"
-          ? bindApp(call, context)
-          : call.method === "list_apps" || call.method === "list_windows"
-            ? discover(call, context)
-            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                  call.method,
-                )
-              ? observe(call, context)
-              : invoke(call, context),
+    dispatch,
   };
 };

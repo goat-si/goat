@@ -203,6 +203,29 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       });
     },
     pending: (key: string) => cancels.has(key),
+    /**
+     * The driver's tool list: the one a child gave, or else asked of the current child once. A
+     * thread proxy's later controls never see the provider list its tools.
+     */
+    tools: Effect.fn("ComputerUseLeaseProxy.driverTools")(function* (
+      send: ((line: string) => Effect.Effect<void>) | undefined,
+    ) {
+      if (answers.has("tools/list") || send === undefined) return answers.get("tools/list");
+      const id = options.ownId("tools");
+      const answered = yield* Deferred.make<Envelope | undefined>();
+      options.ownAnswers.set(id, answered);
+      yield* send(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: {} }));
+      const answer = yield* Effect.raceFirst(
+        Deferred.await(answered),
+        Deferred.await(options.ended).pipe(Effect.as(undefined)),
+      ).pipe(Effect.timeoutOption(ANSWER_WITHIN), Effect.map(Option.getOrUndefined));
+      options.ownAnswers.delete(id);
+      if (answer?.result !== undefined && !answers.has("tools/list")) {
+        answers.set("tools/list", answer.result);
+        listings++;
+      }
+      return answers.get("tools/list");
+    }),
     cancel: (key: string) => {
       const cancelled = cancels.get(key);
       if (cancelled !== undefined) Deferred.doneUnsafe(cancelled, Exit.void);

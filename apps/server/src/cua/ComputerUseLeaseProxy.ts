@@ -38,6 +38,7 @@ import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import { scopeProxyBatch } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -104,6 +105,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: ComputerUsePauseReason | undefined;
   let idle = false;
   let apps: ReadonlySet<string> | undefined;
+  let grantApps: ReadonlyArray<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
   let shared = false;
@@ -448,6 +450,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
+    grantApps = update.apps;
     shared = update.shared === true;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
@@ -643,10 +646,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     primitive?: ComputerUsePrimitiveRequest,
   ) {
     const keyCall = resolveKeyCall(incoming);
-    const line = "line" in keyCall ? keyCall.line : incoming;
+    let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
-    const message = decoded.message;
+    let message = decoded.message;
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -737,6 +740,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
+      const tools = handshakeAnswers.tools;
+      const send = lifecycle.current?.driver.send;
+      const batch = yield* scopeProxyBatch({
+        id,
+        line,
+        message,
+        grantApps,
+        send,
+        tools,
+        notSent: () => notSent(id),
+      });
+      if ("refused" in batch) return yield* sink.answer(batch.refused);
+      ({ line, message } = batch);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !DISPLAY_PROOF_FREE.has(tool));
@@ -781,7 +797,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Paused: no driver until control comes back. The handshake is still answered (#1604), in
     // the background so a cancel or Stop on the input reaches it; tool calls hear the pause.
     if (lifecycle.current === undefined) {
-      if (!isRequest) return;
+      if (!isRequest || message.method === undefined) return;
       const refuse = sink.answer(
         refusal(id, message.method, "waiting_for_human", PAUSE_MESSAGES[paused ?? "human_input"]),
       );

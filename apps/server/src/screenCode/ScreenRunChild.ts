@@ -129,6 +129,8 @@ export async function runScreenChild(
   let linesOut: string[] = [];
   let truncated: string[] = [];
   const pending = new Map<number, ReturnType<typeof vm.newPromise>>();
+  /** The batch group the prelude is sending; its members after the first take no pending place. */
+  let group: { readonly first: number; readonly size: number } | undefined;
   const boundedMessage = (value: string) => {
     const bytes = new TextEncoder().encode(value);
     return bytes.length <= 1024 ? value : new TextDecoder().decode(bytes.slice(0, 1021));
@@ -139,11 +141,28 @@ export async function runScreenChild(
       const promise = vm.newPromise();
       const method = vm.getString(methodHandle);
       const argsJson = vm.getString(argsHandle);
+      let args: unknown;
+      try {
+        args = JSON.parse(argsJson);
+      } catch {
+        args = null;
+      }
+      const firstArg = Array.isArray(args) ? (args[0] as unknown) : undefined;
+      const batch =
+        typeof firstArg === "object" && firstArg !== null && "batch" in firstArg
+          ? (firstArg.batch as { index?: unknown; size?: unknown } | null)
+          : undefined;
+      const member =
+        group !== undefined &&
+        batch?.size === group.size &&
+        typeof batch.index === "number" &&
+        batch.index > 0 &&
+        group.first + batch.index === nextCallId + 1;
       if (
         !admitted ||
         !methods.includes(method as (typeof methods)[number]) ||
         ++callCount > currentLimits.callsPerCell ||
-        pending.size >= currentLimits.pendingCalls ||
+        (!member && pending.size >= currentLimits.pendingCalls) ||
         screenBytes(argsJson) > currentLimits.argBytes
       ) {
         const error = vm.newString("screen call refused");
@@ -152,13 +171,11 @@ export async function runScreenChild(
         return promise.handle;
       }
       const callId = ++nextCallId;
-      let args: unknown;
-      try {
-        args = JSON.parse(argsJson);
-      } catch {
-        args = null;
-      }
-      const firstArg = Array.isArray(args) ? (args[0] as unknown) : undefined;
+      if (!member)
+        group =
+          batch?.index === 0 && typeof batch.size === "number"
+            ? { first: callId, size: batch.size }
+            : undefined;
       const targetRef =
         typeof firstArg === "object" && firstArg !== null && "targetRef" in firstArg
           ? (firstArg.targetRef as ScreenHostCall["targetRef"])

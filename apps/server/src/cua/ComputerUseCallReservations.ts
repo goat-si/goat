@@ -6,6 +6,7 @@ import type {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import { batchAppScope, batchWindow, isBatchTool } from "./ComputerUseBatchScope.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
 const READS = new Set([
@@ -71,8 +72,8 @@ export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
   // Overlay moves ignore delivery mode; only the driver's desktop form moves the real pointer.
   call.name === "move_cursor"
     ? movesPointer(call.args)
-    : call.name === "run_steps" ||
-      call.name === "run_script" ||
+    : // The driver keeps a background-scoped batch out of the foreground itself.
+      (isBatchTool(call.name) && batchAppScope(call.name, call.args)?.delivery !== "background") ||
       call.name === "bring_to_front" ||
       call.name === "launch_app" ||
       foreground(call.args);
@@ -80,6 +81,10 @@ export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
   const desktop = requiresForeground(call);
+  if (isBatchTool(call.name)) {
+    const scoped = !desktop && batchAppScope(call.name, call.args) !== undefined;
+    return (scoped ? batchWindow(call.name, call.args) : undefined) ?? "desktop";
+  }
   if (!WINDOW_MUTATIONS.has(call.name))
     return !desktop && READS.has(call.name) ? "read" : "desktop";
   const args = record(call.args);
