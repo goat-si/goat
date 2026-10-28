@@ -247,12 +247,12 @@ export const elementOf = async (locator: Locator, timeout: number) => {
 };
 
 /** Playwright's actionability waits, without the mouse move its trial runs make. */
-const settled = async (locator: Locator, timeout: number, enabled = true) => {
-  const handle = await elementOf(locator, timeout);
+const settled = async (locator: Locator, deadline: number, enabled = true) => {
+  const handle = await elementOf(locator, remaining(deadline));
   try {
-    await handle.waitForElementState("visible", { timeout });
-    if (enabled) await handle.waitForElementState("enabled", { timeout });
-    await handle.waitForElementState("stable", { timeout });
+    await handle.waitForElementState("visible", { timeout: remaining(deadline) });
+    if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
+    await handle.waitForElementState("stable", { timeout: remaining(deadline) });
   } finally {
     void handle.dispose().catch(constVoid);
   }
@@ -694,7 +694,7 @@ export const click = async (
   const point = await targetPoint(page, locator, input, deadline);
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, remaining(deadline));
+  if (locator !== null) await settled(locator, deadline);
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -703,7 +703,13 @@ export const click = async (
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
+    // A later press after the deadline is refused too, but the first one may already have landed.
     if (count === 1) remaining(deadline);
+    else if (performance.now() >= deadline)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTimeoutError",
+        "The click's deadline passed after its first press; the later presses were not sent.",
+      );
     gate();
     if (count === 1)
       return locator === null
@@ -825,11 +831,12 @@ export const hover = async (
   const locator = targetLocator(page, input);
   await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
+    remaining(deadline);
     gate();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await settled(locator, remaining(deadline), false);
+  await settled(locator, deadline, false);
   remaining(deadline);
   gate();
   await locator.hover(dispatched);
@@ -926,8 +933,8 @@ export const drag = async (
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, deadline), "move");
-  await settled(source, remaining(deadline), false);
-  await settled(target, remaining(deadline), false);
+  await settled(source, deadline, false);
+  await settled(target, deadline, false);
   const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   remaining(deadline);

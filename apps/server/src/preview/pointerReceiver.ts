@@ -4,14 +4,14 @@
  * class hint, never page text. It starts in the top document, so a cover over a frame is named.
  */
 import type { ElementHandle, Frame, Locator, Page } from "playwright-core";
+import { redactCookieValues } from "./cookieValues.ts";
+import { tabCookies } from "./pageSecrets.ts";
 
 const MAX_FRAME_DEPTH = 5;
 /** Identifiers only; long runs of letters and digits look like tokens and are left out. */
 const IDENTIFIER = /^[A-Za-z][\w-]{0,39}$/;
 const TOKEN_LIKE = /[A-Za-z0-9_-]{24,}|\d{6,}/;
 const ROLE = /^[a-z]{1,20}$/;
-
-const usable = (token: string) => IDENTIFIER.test(token) && !TOKEN_LIKE.test(token);
 
 /** The topmost element at a point, inside open shadow roots too. */
 const HIT_AT = `([x, y]) => {
@@ -41,29 +41,76 @@ const within = async <A>(work: Promise<A>, deadline: number): Promise<A | undefi
   }
 };
 
+/** Tag, role and identifiers; one that holds a password field's value in its document is dropped. */
 const describe = (element: ElementHandle) =>
   element.evaluate((node) => {
     const target = node as unknown as {
       readonly tagName: string;
       readonly id: string;
       readonly classList: Iterable<string>;
+      readonly ownerDocument: { querySelectorAll(selector: string): Iterable<{ value: string }> };
       getAttribute(name: string): string | null;
     };
+    const hidden = Array.from(target.ownerDocument.querySelectorAll("input[type=password]"))
+      .map((input) => input.value)
+      .filter((value) => value.length >= 3);
+    const clean = (token: string) => !hidden.some((value) => token.includes(value));
     return {
       tag: target.tagName.toLowerCase(),
       role: (target.getAttribute("role") ?? "").toLowerCase(),
-      id: target.id,
-      classes: Array.from(target.classList).slice(0, 3),
+      identifiers: [
+        target.id,
+        ...Array.from(target.classList)
+          .slice(0, 3)
+          .map((name) => `.${name}`),
+      ].filter((token) => token !== "" && clean(token.replace(/^\./, ""))),
+      hasId: target.id !== "" && clean(target.id),
     };
   });
 
+/**
+ * A point in a frame's own viewport: inside its border and padding. Returns undefined for a
+ * transformed or scaled frame, whose mapping this does not attempt.
+ */
+const intoFrame = (frameElement: ElementHandle, x: number, y: number) =>
+  frameElement.evaluate(
+    (node, [px, py]) => {
+      const frame = node as unknown as {
+        getBoundingClientRect(): { left: number; top: number; width: number; height: number };
+        readonly offsetWidth: number;
+        readonly offsetHeight: number;
+        readonly clientLeft: number;
+        readonly clientTop: number;
+      };
+      const style = (
+        globalThis as unknown as {
+          getComputedStyle(element: unknown): {
+            transform: string;
+            paddingLeft: string;
+            paddingTop: string;
+          };
+        }
+      ).getComputedStyle(node);
+      const rect = frame.getBoundingClientRect();
+      if (
+        style.transform !== "none" ||
+        Math.abs(rect.width - frame.offsetWidth) > 0.5 ||
+        Math.abs(rect.height - frame.offsetHeight) > 0.5
+      )
+        return null;
+      return {
+        x: px - rect.left - frame.clientLeft - Number.parseFloat(style.paddingLeft),
+        y: py - rect.top - frame.clientTop - Number.parseFloat(style.paddingTop),
+      };
+    },
+    [x, y] as const,
+  );
+
 const receiverAt = async (page: Page, x: number, y: number) => {
   let frame: Frame = page.mainFrame();
-  let origin = { x: 0, y: 0 };
-  for (let depth = 0; depth < MAX_FRAME_DEPTH; depth++) {
-    const hit = await frame.evaluateHandle(
-      `(${HIT_AT})(${JSON.stringify([x - origin.x, y - origin.y])})`,
-    );
+  let point: { x: number; y: number } | null = { x, y };
+  for (let depth = 0; depth < MAX_FRAME_DEPTH && point !== null; depth++) {
+    const hit = await frame.evaluateHandle(`(${HIT_AT})(${JSON.stringify([point.x, point.y])})`);
     const element = hit.asElement();
     if (element === null) {
       void hit.dispose().catch(() => undefined);
@@ -72,10 +119,7 @@ const receiverAt = async (page: Page, x: number, y: number) => {
     try {
       const inner = await element.contentFrame();
       if (inner === null) return await describe(element);
-      // Frame boxes are in top-document coordinates, so the point maps straight into the frame.
-      const box = await element.boundingBox();
-      if (box === null) return undefined;
-      origin = { x: box.x, y: box.y };
+      point = await intoFrame(element, point.x, point.y);
       frame = inner;
     } finally {
       void element.dispose().catch(() => undefined);
@@ -94,12 +138,18 @@ export const describeReceiver = async (page: Page, target: Locator, deadline: nu
       deadline,
     );
     if (!found) return undefined;
-    const hint = usable(found.id)
-      ? ` #${found.id}`
-      : found.classes
-          .filter(usable)
-          .map((name) => `.${name}`)
-          .join("");
+    // Identifiers stay only when the tab's cookie values were checked against them in time.
+    const cookies = await within(tabCookies(page, [page.url()]), deadline);
+    const usable = (token: string) =>
+      cookies !== undefined &&
+      IDENTIFIER.test(token.replace(/^[.#]/, "")) &&
+      !TOKEN_LIKE.test(token) &&
+      redactCookieValues(token, cookies) === token;
+    const id = found.hasId ? found.identifiers[0] : undefined;
+    const hint =
+      id !== undefined && usable(id)
+        ? ` #${id}`
+        : found.identifiers.filter((token) => token.startsWith(".") && usable(token)).join("");
     const role = ROLE.test(found.role) ? ` (${found.role})` : "";
     const tag = /^[a-z][a-z0-9-]{0,30}$/.test(found.tag) ? found.tag : "element";
     return `<${tag}>${role}${hint ? ` ${hint.trim()}` : ""}`;

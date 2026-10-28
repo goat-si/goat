@@ -98,3 +98,43 @@ it("names what covers a click target, in its own document or a parent one, witho
     await browser.close();
   }
 });
+
+it("maps into a bordered, padded frame and leaves out an identifier that is a cookie value", async () => {
+  expect(chromiumInstalled).toBe(true);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    await context.addCookies([
+      { name: "sid", value: "AbCdEfGhIjKlMnOp", url: "https://cover.test" },
+    ]);
+    const page = await context.newPage();
+    const child =
+      '<body style="margin:0"><button style="position:absolute;left:0;top:0;width:60px;height:30px">Inner</button><div id="inner-cover" style="position:absolute;left:0;top:0;width:60px;height:30px"></div></body>';
+    await page.route("https://cover.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<body style="margin:0"><iframe style="border:20px solid #000;padding:15px" srcdoc='${child}'></iframe><button id="b" style="position:absolute;left:400px;top:300px">Save</button><div id="AbCdEfGhIjKlMnOp" role="dialog" style="position:fixed;left:0;top:200px;right:0;bottom:0"></div></body>`,
+      }),
+    );
+    await page.goto("https://cover.test/");
+    await page.setViewportSize({ width: 800, height: 400 });
+    await page.frameLocator("iframe").getByRole("button").waitFor();
+    await expect(
+      ServerBrowserPage.click(page, {
+        locator: "iframe >> internal:control=enter-frame >> button",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toMatchObject({
+      detail: { interceptedBy: expect.stringContaining("Now at the target: <div> #inner-cover.") },
+    });
+    const covered = await ServerBrowserPage.click(page, { locator: "#b", timeoutMs: 5_000 }).then(
+      () => undefined,
+      (error: unknown) =>
+        (error as { readonly detail?: { readonly interceptedBy?: string } }).detail,
+    );
+    expect(covered?.interceptedBy).toContain("Now at the target: <div> (dialog).");
+    expect(JSON.stringify(covered)).not.toContain("AbCdEf");
+  } finally {
+    await browser.close();
+  }
+});
