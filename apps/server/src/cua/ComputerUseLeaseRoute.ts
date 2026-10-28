@@ -223,7 +223,8 @@ export const reportLayer = HttpRouter.add(
         ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
         : yield* leases.setTarget(threadId, value.controlId, value);
     return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
-  }),
+    // Untraced like its request (http.ts): a pointer streaming moves reports many times a second.
+  }).pipe(Effect.withTracerEnabled(false)),
 );
 
 const streamLayer = HttpRouter.add(

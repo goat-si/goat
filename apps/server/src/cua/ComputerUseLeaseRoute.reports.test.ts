@@ -3,8 +3,10 @@ import { assert, describe, it } from "@effect/vitest";
 import { COMPUTER_USE_LEASE_ROUTE, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { HttpRouter } from "effect/http";
+import * as Tracer from "effect/Tracer";
+import { HttpMiddleware, HttpRouter } from "effect/http";
 
+import { untracedRequest } from "../http.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import { reportLayer } from "./ComputerUseLeaseRoute.ts";
@@ -141,6 +143,45 @@ describe("ComputerUseLeaseRoute reports", () => {
           400,
         );
       }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+    }),
+  );
+
+  it.effect("a person's input reports, sent many times a second, open no trace spans", () =>
+    Effect.gen(function* () {
+      const spans: Array<string> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          spans.push(options.name);
+          return new Tracer.NativeSpan(options);
+        },
+      });
+      const services = Context.make(McpSessionRegistry.McpSessionRegistry, {
+        resolve: () =>
+          Effect.succeed({ thread: { threadId } }).pipe(
+            Effect.withSpan("McpSessionRegistry.resolve"),
+          ),
+      } as unknown as McpSessionRegistry.McpSessionRegistry["Service"]).pipe(
+        Context.add(ComputerUseLeases.ComputerUseLeases, {
+          humanInput: () =>
+            Effect.succeed("agents" as const).pipe(Effect.withSpan("ComputerUseLeases.humanInput")),
+        } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]),
+        Context.add(Tracer.Tracer, tracer),
+        Context.add(HttpMiddleware.TracerDisabledWhen, untracedRequest),
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
+      const status = yield* Effect.promise(async () => {
+        const response = await handler(
+          new Request("http://127.0.0.1" + COMPUTER_USE_LEASE_ROUTE, {
+            method: "POST",
+            headers: { authorization: "Bearer good" },
+            body: JSON.stringify({ controlId: "one", humanInput: { source: "pointer", at: 0 } }),
+          }),
+          services,
+        );
+        return response.status;
+      }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+      assert.equal(status, 202);
+      assert.deepEqual(spans, []);
     }),
   );
 

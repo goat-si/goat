@@ -6,6 +6,7 @@ import * as Mime from "effect/http/Mime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  COMPUTER_USE_LEASE_ROUTE,
   GOAT_RUNTIME_DRAIN_PATH,
   GOAT_RUNTIME_CONTROL_HEADER,
   RuntimeDrainRequest,
@@ -538,12 +539,19 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
 const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
 
 // HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
-const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
+export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) => {
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
   // Webhook URLs carry their secret token in the path, so they never reach a trace.
-  return UNTRACED_REQUEST_PATHS.has(path) || path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`);
-});
+  // Computer use proxies POST a person's input many times a second; tracing it rotates the log.
+  return (
+    UNTRACED_REQUEST_PATHS.has(path) ||
+    path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
+    (request.method === "POST" && path === COMPUTER_USE_LEASE_ROUTE)
+  );
+};
+
+const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(untracedRequest);
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 

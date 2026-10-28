@@ -74,6 +74,25 @@ const POSSIBLE_COMMIT_DRIVER_CODES: ReadonlySet<unknown> = new Set([
   "tool_call_timeout",
 ]);
 
+const readTool = (tool: unknown) => typeof tool === "string" && READ_ONLY_TOOLS.has(tool);
+
+/**
+ * Whether a run_script reply's call log shows it sent no input: every driver call it lists is a
+ * read. A call cut off by the script's wall time ("timeout") or a log that left calls out may
+ * have sent some, and a reply without a log says nothing.
+ */
+const scriptSentNothing = (structured: Record<string, unknown>): boolean =>
+  Array.isArray(structured.calls) &&
+  structured.calls.every(
+    (call: unknown) =>
+      isRecord(call) &&
+      call.code !== "timeout" &&
+      call.driver_calls_omitted == null &&
+      (call.tool == null || readTool(call.tool)) &&
+      Array.isArray(call.driver_calls) &&
+      call.driver_calls.every((each: unknown) => isRecord(each) && readTool(each.tool)),
+  );
+
 export function driverOutcomeSafety(
   tool: string | undefined,
   message: unknown,
@@ -91,7 +110,8 @@ export function driverOutcomeSafety(
   // The lease proxy's rule: an explicit effect outranks a refused status.
   const { status: _status, ...withoutStatus } = raw;
   const structured = raw.effect !== undefined && raw.status === "refused" ? withoutStatus : raw;
-  const effect = tool !== undefined && READ_ONLY_TOOLS.has(tool) ? "read" : "write";
+  const effect =
+    readTool(tool) || (tool === "run_script" && scriptSentNothing(structured)) ? "read" : "write";
   // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
   if (
     isRefusalDetail(structured.detail) &&

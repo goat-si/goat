@@ -724,7 +724,6 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           process.stdout.write(guide(listed, context) + "\n");
         }),
       answersCursorTools: drawsOverlay,
-      verifyInputByTreeDiff: platform === "darwin",
       ...(platform === "linux" ? { executableOf: linuxExecutable } : {}),
       ...(automationHolder === undefined ? {} : { automationHolder }),
       startDriver: startDriver(drawsOverlay),

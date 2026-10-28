@@ -292,8 +292,6 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */
   readonly answersCursorTools?: boolean;
-  /** Re-read a window as a tree diff after input the driver could not verify. */
-  readonly verifyInputByTreeDiff?: boolean;
   /** The executable a pid runs, where list_apps gives none (Linux reads /proc); see learnApps. */
   readonly executableOf?: (pid: number) => string | undefined;
   /** On macOS, the app macOS asks for Automation consent: the helper, or GOAT in development. */

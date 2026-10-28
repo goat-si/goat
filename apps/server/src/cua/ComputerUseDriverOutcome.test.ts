@@ -238,6 +238,45 @@ describe("every driver answer maps onto the shared outcome contract", () => {
   });
 });
 
+describe("a script is marked may-have-acted only when its call log shows input", () => {
+  const read = (tool: string) => ({
+    tool,
+    ok: true,
+    effect: null,
+    code: null,
+    driver_calls: [{ tool, ok: true, effect: null }],
+  });
+  const script = (calls: ReadonlyArray<unknown>, isError = false) =>
+    reply({ ok: !isError, driver_calls: calls.length, calls }, isError);
+  const safety = (line: string) =>
+    parsed(markUnverified("run_script", line)).result.structuredContent.safety;
+
+  it("a script that made no driver call, or only reads, sent nothing", () => {
+    for (const calls of [[], [read("list_windows"), read("get_window_state")]]) {
+      assert.deepInclude(safety(script(calls)), { possibleCommit: false });
+      assert.deepInclude(safety(script(calls, true)), { possibleCommit: false });
+    }
+  });
+
+  it("an input call, a cut-off call or a log with omitted driver calls may have acted", () => {
+    const click = {
+      tool: "click",
+      ok: true,
+      effect: "unverifiable",
+      driver_calls: [{ tool: "get_window_state" }, { tool: "click", effect: "unverifiable" }],
+    };
+    const timedOut = { op: "click", ok: false, code: "timeout", driver_calls: [] };
+    const omitted = { ...read("get_window_state"), driver_calls_omitted: 3 };
+    for (const calls of [[read("list_windows"), click], [timedOut], [omitted]])
+      assert.deepInclude(safety(script(calls)), {
+        possibleCommit: true,
+        writeStatus: "may_have_applied",
+      });
+    // Without a call log GOAT cannot tell what ran.
+    assert.deepInclude(safety(reply({ ok: true }, false)), { possibleCommit: true });
+  });
+});
+
 describe("a stalled native capture is read from the driver's error, never from window text", () => {
   const stall =
     "capture_backend_stalled: 2 earlier native captures never completed, so native capture is off for this driver process; restart the driver";
