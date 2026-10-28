@@ -76,7 +76,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { DiffPanelLoadingState } from "../DiffPanelShell";
+import { DIFF_SURFACE_TOOLBAR_CLASS, DiffPanelLoadingState } from "../DiffPanelShell";
 import { useDiffWorkerPool } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree } from "../diffs/DiffFileTree";
@@ -987,10 +987,7 @@ function PullRequestCodeTab({
     setSelectedLines(null);
   };
   const toolbar = (
-    <div
-      data-glass-layer
-      className="@container flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 text-xs text-muted-foreground"
-    >
+    <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {orderedCommits.length > 0 ? (
           <DropdownMenu>
