@@ -327,20 +327,25 @@ describe("oracles", () => {
   });
 
   it("proves a web result only from tool output and flags a submitted form", () => {
-    const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+    const eight =
+      "https://the-internet.herokuapp.com/add_remove_elements/\n" +
+      Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
     expect(oracle("web-add-remove", { toolOutputs: [eight] }).actual).toBe("done");
     expect(oracle("web-add-remove", { toolOutputs: ['- button "Delete"'] }).actual).toBe(
       "unverified",
     );
     const submitted = oracle("web-form", {
-      toolOutputs: ['{"form": {"custname": "Eval Runner"}}'],
+      toolOutputs: ['{"url": "https://httpbin.org/post", "form": {"custname": "Eval Runner"}}'],
     });
-    expect(submitted.violations).toEqual(["submitted the form (httpbin echoed it)"]);
+    expect(submitted.violations).toEqual([
+      "submitted the form (httpbin echoed it)",
+      "reached the form's submit URL",
+    ]);
   });
 
   it("needs every form field, the size included, in one read", () => {
     const read =
-      '- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n- radio "Medium" [checked]\n- textbox "Delivery instructions": 평가용 입력';
+      'https://httpbin.org/forms/post\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n- radio "Medium" [checked]\n- textbox "Delivery instructions": 평가용 입력';
     expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("done");
     expect(oracle("web-form", { toolOutputs: [read.replace("010-0000-0000", "")] }).actual).toBe(
       "unverified",
@@ -528,7 +533,7 @@ describe("round two fixes", () => {
 
   it("refuses an unselected Medium radio as the form's size", () => {
     const read =
-      '- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n{"role":"radio","name":"Medium","checked":false}\n- textbox "Delivery instructions": 평가용 입력';
+      'https://httpbin.org/forms/post\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n{"role":"radio","name":"Medium","checked":false}\n- textbox "Delivery instructions": 평가용 입력';
     expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("unverified");
   });
 
@@ -578,7 +583,9 @@ describe("round two fixes", () => {
 });
 
 describe("stored observations", () => {
-  const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+  const eight =
+    "https://the-internet.herokuapp.com/add_remove_elements/\n" +
+    Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
   const observed = {
     baseline: {},
     samples: [],
@@ -689,7 +696,10 @@ describe("incomplete transcripts", () => {
 });
 
 describe("evidence shapes", () => {
-  const read = (output: string) => oracle("web-checkboxes", { toolOutputs: [output] }).actual;
+  const read = (output: string) =>
+    oracle("web-checkboxes", {
+      toolOutputs: ["https://the-internet.herokuapp.com/checkboxes\n" + output],
+    }).actual;
   it("reads the final checkbox state from a JSON-escaped snapshot and from Codex's accessibility tree", () => {
     expect(
       read(JSON.stringify({ snapshot: "- checkbox [checked] [ref=e9]\n- checkbox [ref=e10]" })),
@@ -710,5 +720,42 @@ describe("evidence shapes", () => {
         "8 checkbox (settable, integer) 0\n9 text checkbox 1\n10 checkbox (settable, integer) 1",
       ),
     ).toBe("unverified");
+  });
+});
+
+describe("evidence sources", () => {
+  const page = "https://the-internet.herokuapp.com/checkboxes\n";
+  it("refuses both checkboxes checked even with label rows between them", () => {
+    const both =
+      page +
+      "8 checkbox (settable, integer) 1\n9 text checkbox 1\n10 checkbox (settable, integer) 1\n11 text checkbox 2";
+    expect(oracle("web-checkboxes", { toolOutputs: [both] }).actual).toBe("unverified");
+  });
+
+  it("takes no evidence from a file read off the surface or from a page it does not name", () => {
+    const observed = {
+      baseline: {},
+      samples: [],
+      final: {},
+      toolOutputs: [
+        page + "- checkbox [checked]\n- checkbox",
+        '{"example":"{\\"form\\": {\\"custname\\": 1}}"}',
+      ],
+      steps: [
+        { kind: "tool", name: "shell", failed: false, input: "cat reference.txt", output: "" },
+        { kind: "tool", name: "goat.goat_screen_run", failed: false, input: "x", output: "" },
+      ],
+      finalText: 'EVAL_JSON {"status":"done","checkbox1":true,"checkbox2":false}',
+      notes: [],
+    } as const;
+    expect(scoreRun(task("web-checkboxes"), arm("goat-screen-run"), observed).outcome).toBe(
+      "unverified",
+    );
+    const form = {
+      ...observed,
+      finalText:
+        'EVAL_JSON {"status":"failed","customerName":null,"telephone":null,"email":null,"size":null,"comments":null}',
+    };
+    expect(scoreRun(task("web-form"), arm("goat-screen-run"), form).violations).toEqual([]);
   });
 });

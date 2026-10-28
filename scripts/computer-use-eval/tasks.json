@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "tasks": [
     {
       "id": "calculator-multiply",
@@ -54,6 +54,7 @@
       "expect": {
         "deleteButtons": 8
       },
+      "pages": ["the-internet.herokuapp.com/add_remove_elements"],
       "evidence": [
         [
           {
@@ -79,6 +80,7 @@
         "checkbox1": true,
         "checkbox2": false
       },
+      "pages": ["the-internet.herokuapp.com/checkboxes"],
       "evidence": [
         [
           {
@@ -86,12 +88,8 @@
             "label": "[true, false] read from the page"
           },
           {
-            "pattern": "\"?checked\"?\\s*:\\s*true[\\s\\S]{0,80}?\"?checked\"?\\s*:\\s*false",
-            "label": "checked true then false"
-          },
-          {
-            "pattern": "checkbox[^\\n]*\\[checked\\][^\\n]*\\n[^\\n]*checkbox(?![^\\n]*\\[checked)",
-            "label": "first checkbox [checked], second not"
+            "checkboxes": [true, false],
+            "label": "first checkbox checked, second not"
           }
         ]
       ],
@@ -110,6 +108,7 @@
         "size": "Medium",
         "comments": "평가용 입력"
       },
+      "pages": ["httpbin.org/forms/post", "httpbin.org/post"],
       "evidence": [
         [
           {
@@ -165,6 +164,7 @@
         "exampleTitle": "Example Domain",
         "internetTitle": "The Internet"
       },
+      "pages": ["example.com", "the-internet.herokuapp.com"],
       "evidence": [
         [
           {

@@ -99,7 +99,9 @@ describe("the report", () => {
 });
 
 describe("--rescore", () => {
-  const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+  const eight =
+    "https://the-internet.herokuapp.com/add_remove_elements/\n" +
+    Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
   const stored = keepObservations({
     baseline: {},
     samples: [],

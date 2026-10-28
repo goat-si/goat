@@ -11,7 +11,10 @@ export type Status = "done" | "failed" | "skipped";
 export type Actual = Status | "unverified";
 
 export interface Evidence {
+  /** A regular expression, or, with checkboxes, unused. */
   readonly pattern: string;
+  /** The page's checkbox states in order, read from checkbox rows only. */
+  readonly checkboxes?: ReadonlyArray<boolean>;
   /** When set, one tool result must hold exactly this many matches. */
   readonly count?: number;
   readonly label?: string;
@@ -30,6 +33,8 @@ export interface Task {
   readonly evidence: ReadonlyArray<ReadonlyArray<Evidence>>;
   /** Every evidence group must hold in one tool result, so the values come from one read. */
   readonly sameResult: boolean;
+  /** Evidence counts only from a surface result that names one of these pages. */
+  readonly pages: ReadonlyArray<string>;
   /** Any match in a tool result is a violation, named by its label. */
   readonly forbidEvidence: ReadonlyArray<Evidence>;
   readonly deadlineMs: number;
@@ -48,6 +53,15 @@ const isText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 
 const evidenceOf = (value: unknown, where: string): Evidence => {
+  if (isObject(value) && Array.isArray(value["checkboxes"])) {
+    if (!value["checkboxes"].every((state: unknown) => typeof state === "boolean"))
+      throw new TaskSetError(where + ": checkboxes lists booleans");
+    return {
+      pattern: "",
+      checkboxes: value["checkboxes"] as ReadonlyArray<boolean>,
+      ...(isText(value["label"]) ? { label: value["label"] } : {}),
+    };
+  }
   if (!isObject(value) || !isText(value["pattern"]))
     throw new TaskSetError(where + " needs a pattern");
   try {
@@ -104,6 +118,13 @@ export const validateTaskSet = (
     if (!Array.isArray(forbid)) throw new TaskSetError(id + ": forbidEvidence is a list");
     if (surface === "web" && groups.length === 0)
       throw new TaskSetError(id + ": a web task needs evidence, since no observer sees its page");
+    const pages = value["pages"] ?? [];
+    if (!Array.isArray(pages) || !pages.every(isText))
+      throw new TaskSetError(id + ": pages lists page addresses");
+    if (surface === "web" && pages.length === 0)
+      throw new TaskSetError(
+        id + ": a web task names its pages, so evidence comes from reads of them",
+      );
     const sameResult = value["sameResult"] ?? false;
     if (typeof sameResult !== "boolean") throw new TaskSetError(id + ": sameResult is a boolean");
     const deadlineMs = value["deadlineMs"];
@@ -122,6 +143,7 @@ export const validateTaskSet = (
         group.map((entry, e) => evidenceOf(entry, id + " evidence " + g + "." + e)),
       ),
       sameResult,
+      pages,
       forbidEvidence: forbid.map((entry: unknown, e) => {
         const parsed = evidenceOf(entry, id + " forbidEvidence " + e);
         if (parsed.label === undefined)
@@ -477,13 +499,26 @@ const RECENTS = new Set(["recents", "최근 항목"]);
  */
 export const canonicalEvidence = (output: string) =>
   output
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/gu, "")
     .replace(/\\n/gu, "\n")
     .replace(/\\"/gu, '"')
     .replace(/checkbox \(settable, integer\) 1\b/gu, "checkbox [checked]")
-    .replace(/checkbox \(settable, integer\) 0\b/gu, "checkbox");
+    .replace(/checkbox \(settable, integer\) 0\b/gu, "checkbox")
+    // A REPL prints the agent's own code back after its prompt; that is input, not a page read.
+    .split("\n")
+    .filter((line) => !/^\s*repl\s*>/u.test(line))
+    .join("\n");
 
 const evidenceIn = (entry: Evidence, raw: string) => {
   const output = canonicalEvidence(raw);
+  if (entry.checkboxes !== undefined) {
+    // Checkbox rows only: "- checkbox [checked]" or "8 checkbox", never a label such as "9 text checkbox 1".
+    const states = output
+      .split("\n")
+      .filter((line) => /(?:^|["':])\s*(?:-\s+|\d+\s+)checkbox\b/iu.test(line))
+      .map((line) => /\[checked\]/iu.test(line));
+    return JSON.stringify(states) === JSON.stringify(entry.checkboxes);
+  }
   const regex = new RegExp(entry.pattern, "giu");
   return entry.count === undefined
     ? regex.test(output)
@@ -654,7 +689,10 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     };
   },
 
-  webEvidence: ({ task, toolOutputs }) => {
+  webEvidence: ({ task, toolOutputs: all }) => {
+    const toolOutputs = all.filter((output) =>
+      task.pages.some((page) => canonicalEvidence(output).includes(page)),
+    );
     const missing = task.sameResult
       ? toolOutputs.some((output) => task.evidence.every((group) => groupHolds(group, output)))
         ? []
@@ -777,6 +815,15 @@ export const keepObservations = (observed: Observations): Observations => ({
     observed.steps.some((step) => step.input.length > INPUT_LIMIT),
 });
 
+/** Results of the arm's own surface calls; documentation and files read elsewhere are not evidence. */
+const surfaceOutputs = (arm: ArmSpec, observed: Observations) => {
+  const calls = observed.steps.filter((step) => step.kind === "tool");
+  return observed.toolOutputs.filter((_, index) => {
+    const step = calls[index];
+    return step !== undefined && arm.surfaceTool.test(labelOf(step));
+  });
+};
+
 /**
  * What observations score to under the current task set and rules. Live runs and --rescore both
  * call it, so a rule fixed later can be applied to stored runs without running them again.
@@ -790,7 +837,7 @@ export const scoreRun = (task: Task, arm: ArmSpec, observed: Observations) => {
     baseline: observed.baseline,
     samples: observed.samples,
     final: observed.final,
-    toolOutputs: observed.toolOutputs,
+    toolOutputs: surfaceOutputs(arm, observed),
   });
   const verdict = judge(task, answer.ok ? answer.value : null, oracle);
   // A cut copy may have lost a violation or another surface's call, so it can never pass clean.
