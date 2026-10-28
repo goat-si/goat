@@ -58,10 +58,20 @@ it.each([
   }),
 );
 
-it("refuses chained getBy code at once, with the forms it takes", () =>
+it.each([
+  "getByRole('button').first()",
+  "getByRole('checkbox', { name: 'Subscribe', checked: true })",
+  "getByRole('button', { name: computedName })",
+  "getByText('\\u0041', { exact: true })",
+  "getByText(`${label}`)",
+])("refuses getBy code it cannot read exactly before any input (%s)", (locator) =>
   fixture(async (page) => {
-    await page.setContent("<button>Save</button>");
-    await expect(
-      ServerBrowserPage.click(page, { locator: "getByRole('button').first()" }),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationInvalidSelectorError" });
-  }));
+    await page.setContent(
+      `<button onclick="this.textContent='hit'">u0041</button><input type="checkbox" aria-label="Subscribe">`,
+    );
+    await expect(ServerBrowserPage.click(page, { locator })).rejects.toMatchObject({
+      tag: "PreviewAutomationInvalidSelectorError",
+    });
+    expect(await page.locator("button").textContent()).toBe("u0041");
+  }),
+);

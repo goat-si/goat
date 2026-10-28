@@ -833,14 +833,28 @@ export class PreviewAutomationUnsupportedClientError extends Schema.TaggedError<
   }
 }
 
+/** The tab a caller named was a popup that closed: where its opener is, so the caller can go back. */
+export const PreviewAutomationClosedPopup = Schema.Struct({
+  openerTabId: TrimmedNonEmptyString,
+  openerOpen: Schema.Boolean,
+});
+export type PreviewAutomationClosedPopup = typeof PreviewAutomationClosedPopup.Type;
+
+export const closedPopupMessage = (tabId: string, popup: PreviewAutomationClosedPopup) =>
+  popup.openerOpen
+    ? `Tab ${tabId}, a popup, has closed. Its opener ${popup.openerTabId} is still open: pass tabId ${popup.openerTabId} to continue there.`
+    : `Tab ${tabId}, a popup, has closed and its opener ${popup.openerTabId} is gone too. Choose a tab from goat_preview_status.`;
+
 export class PreviewAutomationTabNotFoundError extends Schema.TaggedError<PreviewAutomationTabNotFoundError>()(
   "PreviewAutomationTabNotFoundError",
   {
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
+    closedPopup: Schema.optional(PreviewAutomationClosedPopup),
   },
 ) {
   override get message(): string {
+    if (this.tabId && this.closedPopup) return closedPopupMessage(this.tabId, this.closedPopup);
     return this.tabId
       ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_call {path:"preview.open"}.`
       : `No active preview tab was found for ${this.operation}. Call goat_call {path:"preview.open"} first.`;

@@ -1,6 +1,7 @@
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
   PreviewAutomationClientDisconnectedError,
+  PreviewAutomationClosedPopup,
   PreviewAutomationControlInterruptedError,
   PreviewAutomationControlReason,
   PreviewAutomationExecutionError,
@@ -179,6 +180,7 @@ const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope)
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
+const decodeClosedPopup = Schema.decodeUnknownOption(PreviewAutomationClosedPopup);
 
 const readResultTabId = (result: unknown): PreviewTabId | null | undefined => {
   if (typeof result !== "object" || result === null || !("tabId" in result)) return undefined;
@@ -294,11 +296,19 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
       });
-    case "PreviewAutomationTabNotFoundError":
+    case "PreviewAutomationTabNotFoundError": {
+      const detail = error.detail;
+      const closedPopup = decodeClosedPopup(
+        typeof detail === "object" && detail !== null && "closedPopup" in detail
+          ? detail.closedPopup
+          : undefined,
+      );
       return new PreviewAutomationTabNotFoundError({
         ...context,
         ...remoteDiagnostics,
+        ...(Option.isSome(closedPopup) ? { closedPopup: closedPopup.value } : {}),
       });
+    }
     case "PreviewAutomationTimeoutError": {
       const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
       const interceptedBy =

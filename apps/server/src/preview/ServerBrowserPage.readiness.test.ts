@@ -105,6 +105,18 @@ it("sends no input once the request's deadline has passed, even to a ready field
     expect(await page.inputValue("#f")).toBe("");
   }));
 
+it("never clicks a moving target after its deadline, even once it settles", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide .6s linear}</style><button onclick="window.clicks=(window.clicks??0)+1">Go</button>`,
+    );
+    await expect(
+      ServerBrowserPage.click(page, { locator: "button", timeoutMs: 150 }),
+    ).rejects.toBeDefined();
+    await page.waitForFunction("document.getAnimations().length === 0");
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
+  }));
+
 it("types into the field that had focus, even when the page moves focus while it waits", () =>
   fixture(async (page) => {
     await page.setContent('<input id="a" readonly><input id="b">');

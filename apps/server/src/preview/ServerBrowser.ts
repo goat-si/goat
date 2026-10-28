@@ -1626,13 +1626,7 @@ const make = Effect.gen(function* () {
         : await runPromise(
             findTab(request.threadId, request.tabId).pipe(Effect.orElseSucceed(constVoid)),
           );
-    if (!tab) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationTabNotFoundError",
-        (request.tabId && closedPopups.note(request.threadId, request.tabId, tabs)) ||
-          'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
-      );
-    }
+    if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted(
@@ -1855,12 +1849,14 @@ const make = Effect.gen(function* () {
           );
         const generation = tab.control.generation;
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
-        if (tab.agentOperating) tab.lastAgentInput = { agentId: agentSessionId, at: Date.now() };
+        if (tab.agentOperating)
+          tab.lastAgentInput = { agentId: agentSessionId, at: Date.now(), generation };
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(tab, request, deadlineMs, signal);
         } finally {
-          if (tab.agentOperating) tab.lastAgentInput = { agentId: agentSessionId, at: Date.now() };
+          if (tab.agentOperating)
+            tab.lastAgentInput = { agentId: agentSessionId, at: Date.now(), generation };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);

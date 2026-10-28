@@ -9,30 +9,46 @@ import {
 } from "./agentTabState.ts";
 
 it("gives a popup to the agent whose input on an unowned tab opened it", () => {
-  const input = { agentId: "agent-a", at: 1_000 };
+  const input = { agentId: "agent-a", at: 1_000, generation: 0 };
   expect(
     popupOwner(
-      { control: { agentId: "owner" }, agentOperating: false, lastAgentInput: input },
+      {
+        control: { agentId: "owner", generation: 0 },
+        agentOperating: false,
+        lastAgentInput: input,
+      },
       1_000,
     ),
   ).toBe("owner");
   expect(
-    popupOwner({ control: { agentId: null }, agentOperating: true, lastAgentInput: input }, 99_000),
+    popupOwner(
+      { control: { agentId: null, generation: 0 }, agentOperating: true, lastAgentInput: input },
+      99_000,
+    ),
   ).toBe("agent-a");
   expect(
     popupOwner(
-      { control: { agentId: null }, agentOperating: false, lastAgentInput: input },
+      { control: { agentId: null, generation: 0 }, agentOperating: false, lastAgentInput: input },
       1_000 + 500,
     ),
   ).toBe("agent-a");
   // A person's click long after the agent's last input opens a person's popup.
   expect(
     popupOwner(
-      { control: { agentId: null }, agentOperating: false, lastAgentInput: input },
+      { control: { agentId: null, generation: 0 }, agentOperating: false, lastAgentInput: input },
       1_000 + POPUP_ATTRIBUTION_MS,
     ),
   ).toBeNull();
-  expect(popupOwner({ control: { agentId: null }, agentOperating: false }, 1_000)).toBeNull();
+  expect(
+    popupOwner({ control: { agentId: null, generation: 0 }, agentOperating: false }, 1_000),
+  ).toBeNull();
+  // A person who took the tab since the agent's input opens a person's popup, however soon.
+  expect(
+    popupOwner(
+      { control: { agentId: null, generation: 1 }, agentOperating: false, lastAgentInput: input },
+      1_000 + 100,
+    ),
+  ).toBeNull();
 });
 
 it("measures a desktop page's real size and says why fill kept it", async () => {
@@ -60,13 +76,15 @@ it("names the tabs to choose from instead of switching to a popup", () => {
 it("points a closed popup's caller back to its opener, without choosing it for them", () => {
   const closed = new ClosedPopups(2);
   closed.record("thread", "tab_b", "tab_a");
-  expect(closed.note("thread", "tab_b", new Set(["thread\u0000tab_a"]))).toBe(
-    "Tab tab_b, a popup, has closed. Its opener tab_a is still open: pass tabId tab_a to continue there.",
-  );
-  expect(closed.note("thread", "tab_b", new Set())).toBe(
-    "Tab tab_b, a popup, has closed and its opener tab_a is gone too. Choose a tab from goat_preview_status.",
-  );
+  expect(closed.notFound("thread", "tab_b", new Set(["thread\u0000tab_a"]))).toMatchObject({
+    message:
+      "Tab tab_b, a popup, has closed. Its opener tab_a is still open: pass tabId tab_a to continue there.",
+    detail: { closedPopup: { openerTabId: "tab_a", openerOpen: true } },
+  });
+  expect(closed.notFound("thread", "tab_b", new Set()).detail).toEqual({
+    closedPopup: { openerTabId: "tab_a", openerOpen: false },
+  });
   closed.record("thread", "tab_c", "tab_a");
   closed.record("thread", "tab_d", "tab_a");
-  expect(closed.note("thread", "tab_b", new Set(["thread\u0000tab_a"]))).toBeUndefined();
+  expect(closed.notFound("thread", "tab_b", new Set(["thread\u0000tab_a"])).detail).toBeUndefined();
 });

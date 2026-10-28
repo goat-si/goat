@@ -237,7 +237,7 @@ export interface DispatchGate {
 }
 const open: DispatchGate = () => {};
 
-/** How long an action that passed its gate may still wait for Playwright's own checks. */
+/** How long an action that passed its gate may wait for Playwright's checks, within the deadline. */
 const DISPATCH_TIMEOUT_MS = 1_000;
 
 const targetChanged = () =>
@@ -281,8 +281,8 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
   }
 };
 
-/** After the gate: Playwright's own last checks, briefly, and no wait for a navigation. */
-const dispatched = { timeout: DISPATCH_TIMEOUT_MS, noWaitAfter: true } as const;
+const dispatched = (deadline: number) =>
+  ({ timeout: Math.min(DISPATCH_TIMEOUT_MS, remaining(deadline)), noWaitAfter: true }) as const;
 
 const targetPoint = (
   page: Page,
@@ -767,7 +767,7 @@ export const click = async (
     if (count === 1)
       return locator === null
         ? page.mouse.click(point.x, point.y, { button })
-        : locator.click({ button, ...dispatched });
+        : locator.click({ button, ...dispatched(deadline) });
     return page.mouse
       .down({ button, clickCount: count })
       .then(() => page.mouse.up({ button, clickCount: count }));
@@ -897,7 +897,7 @@ export const hover = async (
   await settled(locator, deadline, false);
   remaining(deadline);
   gate();
-  await locator.hover(dispatched);
+  await locator.hover(dispatched(deadline));
 };
 
 export const select = async (
@@ -1005,7 +1005,7 @@ export const drag = async (
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   remaining(deadline);
   gate();
-  await source.dragTo(target, dispatched);
+  await source.dragTo(target, dispatched(deadline));
 };
 
 export const press = async (

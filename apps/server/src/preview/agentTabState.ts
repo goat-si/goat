@@ -4,8 +4,9 @@
  *
  * @module agentTabState
  */
-import type { PreviewViewportSetting } from "@goat/contracts";
+import { closedPopupMessage, type PreviewViewportSetting } from "@goat/contracts";
 import type { CDPSession } from "playwright-core";
+import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 /** How long after an agent's input a popup still counts as opened by it. */
 export const POPUP_ATTRIBUTION_MS = 2_000;
@@ -13,15 +14,18 @@ export const POPUP_ATTRIBUTION_MS = 2_000;
 export interface AgentInput {
   readonly agentId: string;
   readonly at: number;
+  /** The tab's control generation then; a person taking the tab since moves it on. */
+  readonly generation: number;
 }
 
 /**
  * The agent a popup opens for: the opener's owner, else the agent whose input is running on the
- * opener or ended moments ago, so it can use and close what its click opened.
+ * opener or ended moments ago, so it can use and close what its click opened. Once a person has
+ * taken the tab since, the popup is theirs.
  */
 export const popupOwner = (
   opener: {
-    readonly control: { readonly agentId: string | null };
+    readonly control: { readonly agentId: string | null; readonly generation: number };
     readonly agentOperating: boolean;
     readonly lastAgentInput?: AgentInput | undefined;
   },
@@ -29,7 +33,9 @@ export const popupOwner = (
 ): string | null => {
   if (opener.control.agentId !== null) return opener.control.agentId;
   const recent = opener.lastAgentInput;
-  return recent && (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
+  return recent &&
+    recent.generation === opener.control.generation &&
+    (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
     ? recent.agentId
     : null;
 };
@@ -97,11 +103,19 @@ export class ClosedPopups {
     this.openers.set(keyOf(threadId, tabId), openerTabId);
     if (this.openers.size > this.limit) this.openers.delete(this.openers.keys().next().value ?? "");
   }
-  note(threadId: string, tabId: string, live: { has(key: string): boolean }) {
-    const opener = this.openers.get(keyOf(threadId, tabId));
-    if (opener === undefined) return undefined;
-    return live.has(keyOf(threadId, opener))
-      ? `Tab ${tabId}, a popup, has closed. Its opener ${opener} is still open: pass tabId ${opener} to continue there.`
-      : `Tab ${tabId}, a popup, has closed and its opener ${opener} is gone too. Choose a tab from goat_preview_status.`;
+  /** Why a call found no tab: a closed popup names its opener, in a field the broker carries. */
+  notFound(threadId: string, tabId: string | undefined, live: { has(key: string): boolean }) {
+    const opener = tabId === undefined ? undefined : this.openers.get(keyOf(threadId, tabId));
+    if (tabId === undefined || opener === undefined)
+      return new ServerBrowserOperationError(
+        "PreviewAutomationTabNotFoundError",
+        'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
+      );
+    const closedPopup = { openerTabId: opener, openerOpen: live.has(keyOf(threadId, opener)) };
+    return new ServerBrowserOperationError(
+      "PreviewAutomationTabNotFoundError",
+      closedPopupMessage(tabId, closedPopup),
+      { closedPopup },
+    );
   }
 }
