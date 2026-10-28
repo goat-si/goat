@@ -18,10 +18,6 @@
 // change is one the graph cannot place. A file it cannot place runs everything.
 //
 // ci:server adds the full server suite and ci:memory the memory growth suite to either kind of run.
-//
-// apps/server runs one test file at a time, so a quick run keeps its server tests in test-changed
-// only while they fit one related shard. More move to the related server shards, or the full suite
-// when they carry half of its time: 248 server files in one job hit the 60-minute limit (#1928).
 
 const fs = require("node:fs");
 const path = require("node:path");

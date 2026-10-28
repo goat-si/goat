@@ -26,6 +26,7 @@ describe("goatclaw role templates", () => {
 
   it("states the merge policy and the close-the-issue rule where merges happen", () => {
     const merge = goatclawRoleTemplate("merge-manager").preamble;
+    expect(merge).toContain("node scripts/merge-pr.ts <pr>");
     expect(merge).toContain("gh pr merge <pr> --admin --squash --match-head-commit <head-sha>");
     expect(merge).toContain("goat-ci-result is SUCCESS on its exact current head");
     expect(merge).toContain("Do not rebase or update the branch because dev moved");

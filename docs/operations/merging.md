@@ -14,21 +14,26 @@ pull request as `CONFLICTING`, or when its CI can pass only with a fix that exis
 Squash-merge as soon as `goat-ci-result` is `SUCCESS` on the exact head commit:
 
 ```sh
-gh pr merge <pr> --admin --squash --match-head-commit <head-sha>
+node scripts/merge-pr.ts <pr>
 ```
 
-`mergeStateStatus` `CLEAN` or `UNSTABLE` (behind `dev`) is fine. `--match-head-commit` makes the
-merge fail if someone pushed after you read the checks. Read `goat-ci-result` only; it is the one
-check that covers every selected task ([CI](../../structure/ci.md#when-goat-ci-runs)).
+The script reads the newest `goat-ci-result` on the pull request's head and runs
+`gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` only when it succeeded. `--admin`
+skips branch protection, so a bare `gh pr merge` lands a head whose CI failed or is still running:
+#2046 broke typecheck on `dev` that way. `--match-head-commit` makes the merge fail if someone
+pushed after the check was read. `mergeStateStatus` `CLEAN` or `UNSTABLE` (behind `dev`) is fine.
+Read `goat-ci-result` only; it is the one check that covers every selected task
+([CI](../../structure/ci.md#when-goat-ci-runs)).
 
 A pull request's run is quick by default: check, typecheck and the tests beside its changes. Add
 the `ci:full` label, or run `gh workflow run goat-ci.yml --ref <branch>`, before merging a change
 whose risk reaches past the files it touches, such as a shared contract, a dependency bump or a
 workflow change. The full pass on `dev` below catches the rest.
 
-A failure that also happens identically on `dev` does not block the merge. Record it in the pull
-request with a link to the matching `dev` run, then merge. Re-run jobs that failed from a flake or a
-cancellation (`gh run rerun <run-id> --failed`) instead of rebasing.
+A failure that also happens identically on `dev` does not block the merge. Once the run has
+finished, `node scripts/merge-pr.ts <pr> --known-failure "<reason and dev run link>"` comments the
+reason on the pull request and merges. Re-run jobs that failed from a flake or a cancellation
+(`gh run rerun <run-id> --failed`) instead of rebasing.
 
 Upstream chase merges are the exception. They land with a merge commit or a fast-forward so the
 merge base with upstream moves forward ([chase rules](../../devlog/_chase/README.md)).
