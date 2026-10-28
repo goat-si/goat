@@ -9,6 +9,8 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import { makeWriter } from "./nodeSqliteWriter.ts";
 import * as Exit from "effect/Exit";
 import { recentSlowSql } from "./slowSqlOperations.ts";
 import * as Result from "effect/Result";
@@ -22,6 +24,9 @@ import {
   initialCheckpointPrelude,
   holdInitialCheckpoint,
   awaitWorkerExit,
+  maintenancePrelude,
+  holdMaintenance,
+  captureWriterNotices,
 } from "./nodeSqliteWriter.testFixtures.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
@@ -603,44 +608,51 @@ it.effect("retries writer opening for WAL_RECOVERY on the parent clock", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect(
-  "releases failed startup at its deadline while native checkpoint observation is held",
-  () =>
-    Effect.gen(function* () {
-      setup();
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-startup-held-" });
-      const filename = path.join(directory, "state.sqlite");
-      const seed = new NodeSqlite.DatabaseSync(filename);
-      seed.exec("PRAGMA journal_mode = WAL");
-      seed.close();
-      nativeFixture.prelude = initialCheckpointPrelude;
-      const workerStarted = yield* Deferred.make<void>();
-      let held: ReturnType<typeof holdInitialCheckpoint> | undefined;
-      nativeFixture.onStart = (worker) => {
-        held = holdInitialCheckpoint(worker);
-        Deferred.doneUnsafe(workerStarted, Effect.void);
-      };
-      yield* Effect.addFinalizer(() => Effect.sync(() => held?.[Symbol.dispose]()));
-      const starting = yield* Layer.build(
-        SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true }),
-      ).pipe(Effect.scoped, Effect.exit, Effect.forkChild);
-      yield* Deferred.await(workerStarted);
-      yield* Deferred.await(held!.arrived);
-      yield* TestClock.adjust("10 seconds");
-      const deadlineResult = starting.pollUnsafe();
-      const aliveAtDeadline = startedWorkers[0]!.threadId !== -1;
-      const retirement = held!.retirement;
-      held!.release();
-      assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
-      if (retirement) yield* Effect.promise(() => retirement);
-      assert.isTrue(aliveAtDeadline, "the native wait must outlive the startup deadline");
-      assert.isDefined(retirement, "startup failure must retire its owned worker");
-      assert.isDefined(deadlineResult, "startup must return before native termination completes");
-      assert.equal(startedWorkers.length, 1);
-      assert.equal(startedWorkers[0]!.threadId, -1);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+it.effect("returns startup failure promptly but scope close awaits native retirement", () =>
+  Effect.gen(function* () {
+    setup();
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-startup-held-" });
+    const filename = path.join(directory, "state.sqlite");
+    const seed = new NodeSqlite.DatabaseSync(filename);
+    seed.exec("PRAGMA journal_mode = WAL");
+    seed.close();
+    nativeFixture.prelude = initialCheckpointPrelude;
+    const workerStarted = yield* Deferred.make<void>();
+    let held: ReturnType<typeof holdInitialCheckpoint> | undefined;
+    nativeFixture.onStart = (worker) => {
+      held = holdInitialCheckpoint(worker);
+      Deferred.doneUnsafe(workerStarted, Effect.void);
+    };
+    yield* Effect.addFinalizer(() => Effect.sync(() => held?.[Symbol.dispose]()));
+    const scope = yield* Scope.make();
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+    const starting = yield* makeWriter(
+      { filename, writerWorker: true, checkpointWorker: true },
+      (effect) => effect,
+      () => new Error("unsupported stream"),
+      () => undefined,
+    ).pipe(Scope.provide(scope), Effect.exit, Effect.forkChild);
+    yield* Deferred.await(workerStarted);
+    yield* Deferred.await(held!.arrived);
+    yield* TestClock.adjust("10 seconds");
+    const deadlineResult = starting.pollUnsafe();
+    const aliveAtDeadline = startedWorkers[0]!.threadId !== -1;
+    assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
+    const closing = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    const returnedBeforeRetirement = closing.pollUnsafe() !== undefined;
+    held!.release();
+    yield* Fiber.join(closing);
+    assert.isTrue(aliveAtDeadline, "the native wait must outlive the startup deadline");
+    assert.isDefined(held!.retirement, "startup failure must retire its owned worker");
+    assert.isDefined(deadlineResult, "startup must return before native termination completes");
+    assert.isFalse(returnedBeforeRetirement, "scope close must await its retiring worker");
+    assert.equal(startedWorkers.length, 1);
+    assert.equal(startedWorkers[0]!.threadId, -1);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect(
@@ -679,34 +691,62 @@ it.effect(
 );
 
 it.effect(
-  "refuses the first transaction when an existing WAL is pinned above the frame ceiling",
-  () =>
-    Effect.gen(function* () {
-      setup();
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-existing-wal-" });
-      const filename = path.join(directory, "state.sqlite");
-      const open = (readonly = false) =>
-        Effect.acquireRelease(
-          Effect.sync(() => new NodeSqlite.DatabaseSync(filename, { readOnly: readonly })),
-          (db) => Effect.sync(() => db.close()),
-        );
-      const seed = yield* open();
-      seed.exec(
-        "PRAGMA page_size = 4096; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0",
+  "reports a held post-ready checkpoint once and recovers when its request completes",
+  () => {
+    const notices = captureWriterNotices();
+    return withWriterClient(
+      (sql) =>
+        Effect.gen(function* () {
+          yield* sql`CREATE TABLE held_maintenance(value BLOB)`;
+          using held = holdMaintenance(startedWorkers[0]!);
+          yield* sql`INSERT INTO held_maintenance VALUES (zeroblob(8 * 1024 * 1024))`;
+          yield* Deferred.await(held.arrived);
+          const transaction = yield* sql.withTransaction(sql`SELECT 1`).pipe(Effect.forkChild);
+          yield* Deferred.await(held.requested);
+          yield* TestClock.adjust("60 seconds");
+          const warningsWhileHeld = notices.warnings.length;
+          held.release();
+          yield* Fiber.join(transaction);
+          assert.equal(warningsWhileHeld, 1, "a held request must report degradation once");
+          assert.equal(notices.warnings.length, 1);
+          assert.equal(notices.recoveries.length, 1);
+        }),
+      { checkpointWorker: true },
+      maintenancePrelude,
+    ).pipe(Effect.provide(notices.layer));
+  },
+);
+
+it.effect("reports sustained pinned-reader admission pressure with frame counts and recovery", () =>
+  Effect.gen(function* () {
+    setup();
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-existing-wal-" });
+    const filename = path.join(directory, "state.sqlite");
+    const open = (readonly = false) =>
+      Effect.acquireRelease(
+        Effect.sync(() => new NodeSqlite.DatabaseSync(filename, { readOnly: readonly })),
+        (db) => Effect.sync(() => db.close()),
       );
-      seed.exec(
-        "CREATE TABLE existing_wal(value BLOB); INSERT INTO existing_wal VALUES ('initial')",
-      );
-      const reader = yield* open(true);
-      reader.exec("BEGIN");
-      reader.prepare("SELECT value FROM existing_wal").all();
-      seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
-      assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
-      const startupCheckpoints: Array<string> = [];
-      let ready = false;
-      nativeFixture.prelude = `
+    const seed = yield* open();
+    seed.exec("PRAGMA page_size = 4096; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+    seed.exec("CREATE TABLE existing_wal(value BLOB); INSERT INTO existing_wal VALUES ('initial')");
+    const reader = yield* open(true);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT value FROM existing_wal").all();
+    seed.exec("INSERT INTO existing_wal VALUES (zeroblob(42 * 1024 * 1024))");
+    assert.isAtLeast(Number(seed.prepare("PRAGMA wal_checkpoint(NOOP)").get()?.log), 10000);
+    const notices = captureWriterNotices();
+    const refusals = [
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>(),
+    ];
+    let refusalCount = 0;
+    const startupCheckpoints: Array<string> = [];
+    let ready = false;
+    nativeFixture.prelude = `
 (() => {
   const { parentPort } = require("node:worker_threads");
   const sqlite = require("node:sqlite");
@@ -718,44 +758,57 @@ it.effect(
   };
 })();
 `;
-      nativeFixture.onStart = (worker) =>
-        worker.on("message", (reply) => {
-          if (reply?.type === "ready") ready = true;
-          if (reply?.type === "checkpoint-observed" && !ready) startupCheckpoints.push(reply.sql);
-        });
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        assert.deepEqual(startupCheckpoints, [], "startup must only observe WAL pressure");
-        const firstReply = yield* Deferred.make<{ backpressure?: boolean }>();
-        const worker = startedWorkers[0]!;
-        const listener = (reply: { id?: number; backpressure?: boolean }) => {
-          if (reply.id !== undefined) {
-            worker.off("message", listener);
-            Deferred.doneUnsafe(firstReply, Effect.succeed(reply));
-          }
-        };
-        worker.on("message", listener);
-        yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
-        const transaction = yield* sql
-          .withTransaction(sql`INSERT INTO existing_wal VALUES ('after pressure')`)
-          .pipe(Effect.forkChild);
-        assert.isTrue(
-          (yield* Deferred.await(firstReply)).backpressure,
-          "the first BEGIN must be refused before it executes",
-        );
-        assert.isUndefined(transaction.pollUnsafe());
-        assert.equal(seed.prepare("SELECT COUNT(*) AS count FROM existing_wal").get()?.count, 2);
-        reader.exec("ROLLBACK");
-        yield* TestClock.adjust("100 millis");
-        yield* Fiber.join(transaction);
-        assert.equal((yield* sql`SELECT COUNT(*) AS count FROM existing_wal`)[0]?.count, 3);
-        assert.equal(startedWorkers.length, 1);
-      }).pipe(
-        Effect.provide(
-          SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true }),
-        ),
+    nativeFixture.onStart = (worker) =>
+      worker.on("message", (reply) => {
+        if (reply?.backpressure) Deferred.doneUnsafe(refusals[refusalCount++]!, Effect.void);
+        if (reply?.type === "ready") ready = true;
+        if (reply?.type === "checkpoint-observed" && !ready) startupCheckpoints.push(reply.sql);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(startupCheckpoints, [], "startup must only observe WAL pressure");
+      const firstReply = yield* Deferred.make<{ backpressure?: boolean }>();
+      const worker = startedWorkers[0]!;
+      const listener = (reply: { id?: number; backpressure?: boolean }) => {
+        if (reply.id !== undefined) {
+          worker.off("message", listener);
+          Deferred.doneUnsafe(firstReply, Effect.succeed(reply));
+        }
+      };
+      worker.on("message", listener);
+      yield* Effect.addFinalizer(() => Effect.sync(() => worker.off("message", listener)));
+      const transaction = yield* sql
+        .withTransaction(sql`INSERT INTO existing_wal VALUES ('after pressure')`)
+        .pipe(Effect.forkChild);
+      assert.isTrue(
+        (yield* Deferred.await(firstReply)).backpressure,
+        "the first BEGIN must be refused before it executes",
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      assert.isUndefined(transaction.pollUnsafe());
+      assert.equal(seed.prepare("SELECT COUNT(*) AS count FROM existing_wal").get()?.count, 2);
+      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.await(refusals[1]!);
+      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.await(refusals[2]!);
+      const warningsUnderPressure = notices.warnings.slice();
+      reader.exec("ROLLBACK");
+      yield* TestClock.adjust("100 millis");
+      yield* Fiber.join(transaction);
+      assert.equal(
+        warningsUnderPressure.length,
+        1,
+        "persistent refusals must report degradation once",
+      );
+      assert.match(String(warningsUnderPressure[0]), /walFrames.*10[0-9]{3}/);
+      assert.match(String(warningsUnderPressure[0]), /checkpointedFrames/);
+      assert.equal(notices.recoveries.length, 1);
+      assert.equal((yield* sql`SELECT COUNT(*) AS count FROM existing_wal`)[0]?.count, 3);
+      assert.equal(startedWorkers.length, 1);
+    }).pipe(
+      Effect.provide(SqliteClient.layer({ filename, writerWorker: true, checkpointWorker: true })),
+      Effect.provide(notices.layer),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect.each(["frames", "journal-size"] as const)(
