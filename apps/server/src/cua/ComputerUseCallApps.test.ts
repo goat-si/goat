@@ -41,7 +41,7 @@ const calculator = {
 describe("ComputerUseCallApps", () => {
   it("presents a pid-only call as the app its proxy labelled, in every provider's call shape", () => {
     const apps = makeCallApps();
-    apps.remember(
+    apps.admitted(
       { pid: 42, window_id: 3 },
       { bundleId: "com.apple.calculator", name: "Calculator" },
     );
@@ -51,13 +51,21 @@ describe("ComputerUseCallApps", () => {
       driverCall("mcp__cua-driver__get_window_state", {
         target: { kind: "window", pid: 42, window_id: 3 },
       }),
-      // ACP children keep the call in its {server, tool, arguments} envelope.
-      driverCall("tools/call", { server: "cua-driver", tool: "zoom", arguments: { pid: 42 } }),
+      // ACP children name the call cua-driver.<tool> and keep it in a {server, tool, arguments} envelope.
+      driverCall("cua-driver.zoom", { server: "cua-driver", tool: "zoom", arguments: { pid: 42 } }),
     ]) {
       const presented = decodeTurnItem(apps.present(item));
       expect(presented.toolSource).toEqual(calculator);
       expect(presented.toolIcon).toEqual(calculator.icon);
     }
+  });
+
+  it("forgets a pid whose next admitted call came unlabelled, so a reused pid never shows the old app", () => {
+    const apps = makeCallApps();
+    apps.admitted({ pid: 42 }, { bundleId: "com.apple.calculator", name: "Calculator" });
+    apps.admitted({ pid: 42, window_id: 9 }, undefined);
+    const reused = driverCall("cua-driver.click", { pid: 42, window_id: 9 });
+    expect(apps.present(reused)).toBe(reused);
   });
 
   it("names an app the call itself names, and leaves an unknown pid generic", () => {
@@ -75,6 +83,19 @@ describe("ComputerUseCallApps", () => {
       output: { bundle_id: "com.apple.calculator", name: "Calculator", pid: 42 },
     });
     expect(byId.toolSource).toEqual(calculator);
+    // OpenCode keeps a call's answer as JSON text.
+    const asText = apps.present({
+      ...driverCall("cua-driver.launch_app", { bundle_id: "com.apple.calculator" }),
+      output: JSON.stringify({ bundle_id: "com.apple.calculator", name: "Calculator", pid: 42 }),
+    });
+    expect(asText.toolSource).toEqual(calculator);
+
+    // A bundle id stands in for a missing name only within the name's 160-character limit.
+    const id160 = `com.${"a".repeat(156)}`;
+    const named = apps.present(driverCall("cua-driver.launch_app", { bundle_id: id160 }));
+    expect(decodeTurnItem(named).toolSource?.name).toBe(id160);
+    const long = driverCall("cua-driver.launch_app", { bundle_id: `${id160}b` });
+    expect(apps.present(long)).toBe(long);
 
     const unknown = driverCall("cua-driver.click", { pid: 7, window_id: 1 });
     expect(apps.present(unknown)).toBe(unknown);
@@ -82,8 +103,8 @@ describe("ComputerUseCallApps", () => {
 
   it("names an app with no bundle id by its display name, without an icon for a path", () => {
     const apps = makeCallApps();
-    apps.remember({ pid: 9 }, { name: "gedit" });
-    apps.remember({ pid: 10 }, { name: "/usr/bin/xterm" });
+    apps.admitted({ pid: 9 }, { name: "gedit" });
+    apps.admitted({ pid: 10 }, { name: "/usr/bin/xterm" });
 
     expect(
       decodeTurnItem(apps.present(driverCall("cua-driver.click", { pid: 9 }))).toolSource,

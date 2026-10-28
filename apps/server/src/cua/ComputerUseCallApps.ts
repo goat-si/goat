@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- Reads two display fields from a driver answer.
 /**
  * Which app each pid on this host runs, as lease proxies labelled it when reserving a call, so a
  * call that names only a pid shows its app's name and icon in the timeline. A pid names one
@@ -16,6 +17,7 @@ import * as Context from "effect/Context";
 import { targetPid } from "./ComputerUseScope.ts";
 
 const MAX_APPS = 512;
+const MAX_ANSWER_CHARS = 65_536;
 const APP_ID = /^[A-Za-z0-9._-]+$/u;
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
@@ -32,11 +34,33 @@ const text = (value: unknown, max: number) =>
 function driverCall(item: OrchestrationV2TurnItem) {
   if (item.type !== "dynamic_tool") return undefined;
   const input = record(item.input);
+  const envelope = input?.server === "cua-driver" && typeof input.tool === "string";
   const tool = cuaDriverToolName(item.toolName);
-  if (tool !== undefined) return { tool, args: input };
-  return input?.server === "cua-driver" && typeof input.tool === "string"
-    ? { tool: input.tool, args: record(input.arguments) }
-    : undefined;
+  if (envelope) return { tool: tool ?? String(input.tool), args: record(input.arguments) };
+  return tool === undefined ? undefined : { tool, args: input };
+}
+
+/** A driver answer's fields: structured content, or the JSON text a provider kept as a string. */
+function answerFields(output: unknown, depth = 0): Readonly<Record<string, unknown>> | undefined {
+  if (typeof output === "string") {
+    if (output.length > MAX_ANSWER_CHARS || !output.trimStart().startsWith("{")) return undefined;
+    try {
+      return record(JSON.parse(output));
+    } catch {
+      return undefined;
+    }
+  }
+  const object = record(output);
+  const structured = record(object?.structuredContent);
+  if (structured !== undefined) return structured;
+  const blocks = Array.isArray(output) ? output : object?.content;
+  if (!Array.isArray(blocks) || depth > 0) return object;
+  for (const block of blocks.slice(0, 8)) {
+    const fields =
+      record(block)?.type === "text" ? answerFields(record(block)?.text, 1) : undefined;
+    if (fields !== undefined) return fields;
+  }
+  return object;
 }
 
 export const makeCallApps = () => {
@@ -49,7 +73,7 @@ export const makeCallApps = () => {
     if (tool === "launch_app") {
       const bundleId = text(args?.bundle_id, 255);
       // A launch by bundle id learns the app's name from its own answer.
-      const launched = record(record(output)?.structuredContent) ?? record(output);
+      const launched = answerFields(output);
       const name =
         text(args?.name, 160) ??
         (bundleId !== undefined && text(launched?.bundle_id, 255) === bundleId
@@ -65,11 +89,15 @@ export const makeCallApps = () => {
     return pid === undefined ? undefined : byPid.get(pid);
   };
   return {
-    /** Keeps the app a reserved call's pid runs, as its proxy labelled it. */
-    remember: (args: unknown, label: ComputerUseCallAppLabel) => {
+    /**
+     * Keeps the app an admitted call's pid runs, as its proxy labelled it. A call whose proxy
+     * could not label its pid forgets it, so a pid reused by another app never shows the old one.
+     */
+    admitted: (args: unknown, label: ComputerUseCallAppLabel | undefined) => {
       const pid = targetPid(record(args));
       if (pid === undefined) return;
       byPid.delete(pid);
+      if (label === undefined) return;
       byPid.set(pid, label);
       const oldest = byPid.keys().next();
       if (byPid.size > MAX_APPS && oldest.done !== true) byPid.delete(oldest.value);
@@ -94,7 +122,8 @@ export const makeCallApps = () => {
       );
       const appId =
         label?.bundleId !== undefined && APP_ID.test(label.bundleId) ? label.bundleId : undefined;
-      const name = label?.name ?? appId;
+      // A bundle id stands in for a missing name only within the name's length limit.
+      const name = label?.name ?? (appId !== undefined && appId.length <= 160 ? appId : undefined);
       if (name === undefined) return item;
       const app: ToolActivityNativeAppReference | undefined =
         appId !== undefined
