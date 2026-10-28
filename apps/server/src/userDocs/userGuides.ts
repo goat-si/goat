@@ -5,7 +5,7 @@
 import GithubSlugger from "github-slugger";
 
 /** Where the public site serves a guide; anchors match its headings (apps/marketing). */
-export const USER_GUIDES_BASE_URL = "https://trygoat.ai/docs/user/";
+const USER_GUIDES_BASE_URL = "https://trygoat.ai/docs/user/";
 
 export interface UserGuideSection {
   readonly heading: string;
@@ -26,7 +26,7 @@ export interface UserGuidePage {
 }
 
 /** The heading text a reader sees: inline code, emphasis and links reduced to their words. */
-export function headingText(raw: string): string {
+function headingText(raw: string): string {
   return raw
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/<[^>]+>/g, "")
@@ -117,7 +117,7 @@ const STOP_WORDS = new Set([
 ]);
 
 /** Query words worth matching: lowercase, without punctuation and filler words. */
-export function queryWords(query: string): ReadonlyArray<string> {
+function queryWords(query: string): ReadonlyArray<string> {
   const words = query.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu) ?? [];
   return [...new Set(words.filter((word) => !STOP_WORDS.has(word)))];
 }
