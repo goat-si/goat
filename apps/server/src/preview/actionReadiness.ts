@@ -14,16 +14,21 @@ export interface Readiness {
 
 const isTimeout = (cause: unknown) => cause instanceof Error && cause.name === "TimeoutError";
 
+/** Every refusal here comes before input, which the broker reports as not dispatched. */
+const beforeInput = { beforeInput: true } as const;
+
 const targetChanged = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationExecutionError",
     "The target changed or was disabled before the input landed. Take a fresh snapshot and try again.",
+    beforeInput,
   );
 
 const expired = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationTimeoutError",
     "The target was not ready before the deadline, so no input was sent.",
+    beforeInput,
   );
 
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
@@ -52,33 +57,37 @@ const neverWritable = (cause: unknown) =>
       )
     : cause;
 
-/** Waits for a typing target to be visible and writable, then brings it into view. */
+/**
+ * Waits for a typing target to be visible and writable, then brings it into view. The caller
+ * keeps the same element afterwards, so a focus or render change cannot swap the target.
+ */
 export const waitUntilWritable = async (
-  target: Locator,
+  handle: ElementHandle,
   deadline: number,
   readiness: Readiness,
 ) => {
+  const ready = async () =>
+    (await handle.isVisible()) &&
+    (await handle.isEditable().catch((cause: unknown) => {
+      throw neverWritable(cause);
+    }));
+  if (!(await ready())) {
+    readiness.onWaiting?.();
+    await handle.waitForElementState("visible", { timeout: remaining(deadline) });
+    await handle
+      .waitForElementState("editable", { timeout: remaining(deadline) })
+      .catch((cause: unknown) => {
+        throw isTimeout(cause) ? notWritable() : cause;
+      });
+  }
+  await handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+};
+
+/** The element a locator names now, held for the rest of the action. */
+export const pinTarget = async (target: Locator, deadline: number) => {
   const handle = await target.elementHandle({ timeout: remaining(deadline) });
   if (handle === null) throw targetChanged();
-  try {
-    const ready = async () =>
-      (await handle.isVisible()) &&
-      (await handle.isEditable().catch((cause: unknown) => {
-        throw neverWritable(cause);
-      }));
-    if (!(await ready())) {
-      readiness.onWaiting?.();
-      await handle.waitForElementState("visible", { timeout: remaining(deadline) });
-      await handle
-        .waitForElementState("editable", { timeout: remaining(deadline) })
-        .catch((cause: unknown) => {
-          throw isTimeout(cause) ? notWritable() : cause;
-        });
-    }
-    await handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
-  } finally {
-    void handle.dispose().catch(() => undefined);
-  }
+  return handle;
 };
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */

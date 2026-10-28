@@ -23,6 +23,7 @@ import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwrigh
 import { pointerInterception } from "./pointerInterception.ts";
 import {
   actionDeadline,
+  pinTarget,
   remaining,
   waitUntilSelectable,
   waitUntilWritable,
@@ -708,11 +709,12 @@ export const type = async (
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const present = locator !== null || (await target.count()) > 0;
-  if (present) await waitUntilWritable(target, deadline, readiness);
-  const focused =
-    present &&
-    (await target.evaluate(
-      (element, clear) => {
+  const handle = present ? await pinTarget(target, deadline) : null;
+  try {
+    if (handle) await waitUntilWritable(handle, deadline, readiness);
+    const focused =
+      handle !== null &&
+      (await handle.evaluate((element, clear) => {
         // Like the desktop host: an enabled text control or contenteditable
         // that actually takes focus. Anything else would swallow the text or
         // send it to whichever field had focus before.
@@ -758,25 +760,25 @@ export const type = async (
               ?.selectAllChildren(element);
         }
         return owned;
-      },
-      input.clear === true,
-      { timeout: remaining(deadline) },
-    ));
-  if (focused !== true) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationTargetNotEditableError",
-      "The target is not an enabled text field, so no text was typed.",
-    );
+      }, input.clear === true));
+    if (focused !== true) {
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTargetNotEditableError",
+        "The target is not an enabled text field, so no text was typed.",
+      );
+    }
+    remaining(deadline);
+    gate();
+    // One input after the gate: a key press is held off by the input fence; inserted text is a
+    // single call with nothing to wait for.
+    if (input.text === "") {
+      if (input.clear) await page.keyboard.press("Delete");
+      return;
+    }
+    await page.keyboard.insertText(input.text);
+  } finally {
+    void handle?.dispose().catch(constVoid);
   }
-  remaining(deadline);
-  gate();
-  // One input after the gate: a key press is held off by the input fence; inserted text is a
-  // single call with nothing to wait for.
-  if (input.text === "") {
-    if (input.clear) await page.keyboard.press("Delete");
-    return;
-  }
-  await page.keyboard.insertText(input.text);
 };
 
 export const hover = async (
@@ -830,6 +832,7 @@ export const select = async (
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         "This <select> stayed disabled until the deadline, so nothing was selected.",
+        { beforeInput: true },
       );
     if (found.disabled) throw targetChanged();
     const values = input.values.map(
@@ -846,6 +849,7 @@ export const select = async (
         missing !== -1
           ? `This <select> ${ready ? "has" : "still has"} no option "${input.values[missing]}"${ready ? "" : " after waiting for it"}.`
           : "This <select> takes one option.",
+        { beforeInput: true },
       );
     remaining(deadline);
     gate();

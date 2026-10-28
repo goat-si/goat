@@ -92,11 +92,29 @@ it("sends no input once the request's deadline has passed, even to a ready field
     const expiredGate = Object.assign(() => {}, { deadline: 0 });
     await expect(
       ServerBrowserPage.type(page, { locator: "#f", text: "late" }, expiredGate),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { beforeInput: true },
+    });
     await expect(
       ServerBrowserPage.select(page, { locator: "#f", values: [] }, expiredGate),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { beforeInput: true },
+    });
     expect(await page.inputValue("#f")).toBe("");
+  }));
+
+it("types into the field that had focus, even when the page moves focus while it waits", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="a" readonly><input id="b">');
+    await page.focus("#a");
+    const { readiness, reached } = barrier();
+    const typing = ServerBrowserPage.type(page, { text: "hello" }, undefined, readiness);
+    expect(await reached(typing)).toBe("waiting");
+    await page.evaluate("b.focus(); a.readOnly = false");
+    await typing;
+    expect(await page.evaluate("[a.value, b.value]")).toEqual(["hello", ""]);
   }));
 
 it("types nothing when Stop arrives while it waits for the field", () =>

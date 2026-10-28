@@ -603,6 +603,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           input = { url: arg.url };
           break;
       }
+      // Typing and selecting wait for their target; nothing may land after the cell stopped waiting.
+      if (call.method === "select" || call.method === "set_value" || call.method === "type_text") {
+        const now = yield* Clock.currentTimeMillis;
+        input = { ...input, timeoutMs: Math.max(1, Math.min(15_000, call.deadlineMillis - now)) };
+      }
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
         const waited = yield* broker

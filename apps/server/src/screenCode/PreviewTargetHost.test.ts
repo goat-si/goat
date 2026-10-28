@@ -17,6 +17,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -208,6 +209,26 @@ it.effect("actions retire refs while preserving the last complete tree for a dif
       category: "unverifiable",
       dispatched: true,
       evidence: ["dispatched; observe to confirm"],
+    });
+  }),
+);
+
+it.effect("typing and selecting from a cell wait no longer than the cell has left", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    yield* fixture.dispatch("type_text", { ref: first.elements[0]!.ref, text: "x" });
+    expect(fixture.requests.find((entry) => entry.operation === "type")?.input).toMatchObject({
+      text: "x",
+      timeoutMs: 1000,
+    });
+    yield* TestClock.adjust("400 millis");
+    const second = yield* fixture.observe();
+    yield* fixture.dispatch("select", { ref: second.elements[0]!.ref, values: ["a"] });
+    expect(fixture.requests.find((entry) => entry.operation === "select")?.input).toMatchObject({
+      values: ["a"],
+      timeoutMs: 600,
     });
   }),
 );
