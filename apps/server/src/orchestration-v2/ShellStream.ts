@@ -74,8 +74,8 @@ export function buildActiveShellSnapshot(input: {
 
 /**
  * Idle subagent children have no sidebar row, so clients that opt in read them from their thread
- * family instead. A child stays while it is live, the parent of another child, or the launcher of
- * a kept thread, so request, working and launch walks over shell rows never meet a gap.
+ * family instead. A child stays while it is live or the parent of another child, so the request
+ * and working walks over shell rows never meet a gap in a nested chain.
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
@@ -86,14 +86,11 @@ export function omitIdleSubagentShells(
       parentIds.add(thread.lineage.parentThreadId);
     }
   }
-  return keepLocalLaunchers(
-    threads,
-    threads.filter(
-      (thread) =>
-        thread.lineage.relationshipToParent !== "subagent" ||
-        isLiveSubagentShell(thread) ||
-        parentIds.has(thread.id),
-    ),
+  return threads.filter(
+    (thread) =>
+      thread.lineage.relationshipToParent !== "subagent" ||
+      isLiveSubagentShell(thread) ||
+      parentIds.has(thread.id),
   );
 }
 
@@ -123,8 +120,7 @@ const NEWEST_SETTLED_KEPT = 25;
 /**
  * Opted-in snapshots keep the 25 newest settled top-level threads (and ties) and count the rest per
  * project in `olderSettled`; clients page them with `getOlderSettledThreads`. Older rows stay while
- * pinned, snoozed, live, above a kept subagent, or the launcher of a kept thread, so walks over
- * shell rows still find them.
+ * pinned, snoozed, live, or above a kept subagent, so walks over shell rows still find them.
  */
 export function omitOlderSettledShells(input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
@@ -164,7 +160,7 @@ export function omitOlderSettledShells(input: {
     );
   });
   return {
-    threads: keepLocalLaunchers(input.threads, threads),
+    threads,
     olderSettled: {
       before: DateTime.formatIso(DateTime.makeUnsafe(beforeMs)),
       asOfSequence: input.snapshotSequence,
@@ -175,7 +171,8 @@ export function omitOlderSettledShells(input: {
 
 /**
  * The snapshot a shell subscriber gets for its opt-ins, and the subagent ids whose transcript
- * events its stream drops (from every row, so an omitted child that wakes keeps that filter).
+ * events its stream drops (from every row, so an omitted child that wakes keeps that filter). The
+ * launchers of the rows that stay come back last, so a launch never folds over a gap.
  */
 export function shellSnapshotForSubscriber(
   base: OrchestrationV2ShellSnapshot,
@@ -191,7 +188,7 @@ export function shellSnapshotForSubscriber(
   const rows = activeShellRowsForSubscriber(base.threads, options.omitIdleSubagents);
   if (!options.omitOlderSettled) {
     return {
-      snapshot: { ...base, threads: rows.threads },
+      snapshot: { ...base, threads: keepLocalLaunchers(base.threads, rows.threads) },
       subagentThreadIds: rows.subagentThreadIds,
     };
   }
@@ -201,7 +198,11 @@ export function shellSnapshotForSubscriber(
     now: options.now,
   });
   return {
-    snapshot: { ...base, threads: older.threads, olderSettled: older.olderSettled },
+    snapshot: {
+      ...base,
+      threads: keepLocalLaunchers(base.threads, older.threads),
+      olderSettled: older.olderSettled,
+    },
     subagentThreadIds: rows.subagentThreadIds,
   };
 }

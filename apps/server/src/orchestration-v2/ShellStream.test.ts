@@ -844,4 +844,18 @@ describe("launch relations in omitted shells", () => {
       ]).slice(25),
     ).toEqual(["first", "launcher", "launched"]);
   });
+
+  it("drops a launcher again when the thread it launched is left out as older settled", () => {
+    const newest = Array.from({ length: 25 }, (_, index) =>
+      row(`new-${index}`, { settledDaysAgo: index / 10 }),
+    );
+    expect(
+      coldConnect([
+        ...newest,
+        row("parent", { settledDaysAgo: 30 }),
+        row("lane", { parent: "parent", root: "parent" }),
+        row("launched", { settledDaysAgo: 30, launcher: { id: "lane" } }),
+      ]).slice(25),
+    ).toEqual([]);
+  });
 });
