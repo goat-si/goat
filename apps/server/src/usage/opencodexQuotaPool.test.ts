@@ -439,12 +439,28 @@ it.effect.each([
     homeRoute: true,
     routed: true,
   },
+  {
+    scenario: "keeps a Bedrock instance native despite a leftover loopback URL",
+    env: LOCAL_CLAUDE,
+    bedrock: "1",
+    routed: false,
+  },
+  {
+    scenario: "lets a settings file that turns Bedrock off keep the route",
+    env: LOCAL_CLAUDE,
+    bedrock: "1",
+    settingsEnv: { CLAUDE_CODE_USE_BEDROCK: "0" },
+    routed: true,
+  },
 ] as const)("Claude $scenario", (input) => {
   const f = fixture({
     files: {
       ...("files" in input ? input.files : {}),
       ...("settings" in input
         ? { [CLAUDE_SETTINGS]: JSON.stringify({ env: { ANTHROPIC_BASE_URL: input.settings } }) }
+        : {}),
+      ...("settingsEnv" in input
+        ? { [CLAUDE_SETTINGS]: JSON.stringify({ env: input.settingsEnv }) }
         : {}),
     },
   });
@@ -457,6 +473,9 @@ it.effect.each([
         : []),
       ...("configDir" in input
         ? [{ name: "CLAUDE_CONFIG_DIR", value: input.configDir, sensitive: false }]
+        : []),
+      ...("bedrock" in input
+        ? [{ name: "CLAUDE_CODE_USE_BEDROCK", value: input.bedrock, sensitive: false }]
         : []),
     ];
     const provider = native(

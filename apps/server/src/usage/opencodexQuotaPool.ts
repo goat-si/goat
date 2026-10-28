@@ -32,13 +32,29 @@ const decodePool = Schema.decodeUnknownEffect(QuotaPool);
 const decodeHealth = Schema.decodeUnknownEffect(Schema.Struct({ version: TrimmedNonEmptyString }));
 const decodeClaude = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeDriver = Schema.decodeUnknownOption(ProviderDriverKind);
-const decodeClaudeEndpoint = Schema.decodeUnknownEffect(
+// The endpoint and the backend switches that send Claude Code somewhere else entirely.
+const CLAUDE_ROUTING_ENV = [
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+] as const;
+const decodeClaudeRouting = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
-      env: Schema.optional(Schema.Struct({ ANTHROPIC_BASE_URL: Schema.optional(Schema.String) })),
+      env: Schema.optional(
+        Schema.Struct({
+          ANTHROPIC_BASE_URL: Schema.optional(Schema.String),
+          CLAUDE_CODE_USE_BEDROCK: Schema.optional(Schema.String),
+          CLAUDE_CODE_USE_VERTEX: Schema.optional(Schema.String),
+          CLAUDE_CODE_USE_FOUNDRY: Schema.optional(Schema.String),
+        }),
+      ),
     }),
   ),
 );
+const enabledFlag = (value: string | undefined) =>
+  value !== undefined && !["", "0", "false", "no", "off"].includes(value.trim().toLowerCase());
 
 /** An OpenCodex that is installed here: its pool, or why GOAT could not read it. */
 export type QuotaPoolSnapshot =
@@ -205,18 +221,28 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
     const env = yield* mergeProviderInstanceEnvironment(instance.environment, environment);
     const config = decodeClaude(instance.config ?? {});
     // Claude Code applies settings-file env over its process environment.
-    const fromSettings = Option.isNone(config)
-      ? undefined
-      : yield* fs
-          .readFileString(
-            path.join(yield* resolveClaudeHomePath(config.value, env), "settings.json"),
-          )
-          .pipe(
-            Effect.flatMap(decodeClaudeEndpoint),
-            Effect.map((settings) => settings.env?.ANTHROPIC_BASE_URL),
-            Effect.orElseSucceed(() => undefined),
-          );
-    return matchesOpenCodex(fromSettings ?? env.ANTHROPIC_BASE_URL, origin, ORIGIN_PATHS)
+    const fromSettings: Partial<Record<(typeof CLAUDE_ROUTING_ENV)[number], string | undefined>> =
+      Option.isNone(config)
+        ? {}
+        : yield* fs
+            .readFileString(
+              path.join(yield* resolveClaudeHomePath(config.value, env), "settings.json"),
+            )
+            .pipe(
+              Effect.flatMap(decodeClaudeRouting),
+              Effect.map((settings) => settings.env ?? {}),
+              Effect.orElseSucceed(() => ({})),
+            );
+    const effective = Object.fromEntries(
+      CLAUDE_ROUTING_ENV.map((name) => [name, fromSettings[name] ?? env[name]]),
+    );
+    if (
+      enabledFlag(effective.CLAUDE_CODE_USE_BEDROCK) ||
+      enabledFlag(effective.CLAUDE_CODE_USE_VERTEX) ||
+      enabledFlag(effective.CLAUDE_CODE_USE_FOUNDRY)
+    )
+      return undefined;
+    return matchesOpenCodex(effective.ANTHROPIC_BASE_URL, origin, ORIGIN_PATHS)
       ? verified
       : undefined;
   });
