@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(246);
+  expect(entries).toHaveLength(248);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -369,6 +369,9 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "pending_request.list": { scope: "launched", hosts: ["box"] },
   "provider.host_matrix": { localOnly: false },
   "host.status": { local: null },
+  // A sampled patch names no setting, which is refused before access matters.
+  "environment.settings_read": {},
+  "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
   // A sampled cursor without its query is refused before access matters.
   "surface.describe": { query: "thread" },
 };
@@ -418,6 +421,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "environment.settings_update": { reason: "grantChecked", fullClient: "denied" },
   "hub.child_prepare": {
     reason: "childSetupOnly",
     thread: "denied",

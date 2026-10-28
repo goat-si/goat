@@ -40,6 +40,8 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_connection_remove",
   "goat_environment_preferences_update",
   "goat_environment_read",
+  "goat_environment_settings_read",
+  "goat_environment_settings_update",
   "goat_environment_usage",
   "goat_fallback_chain_get",
   "goat_fallback_chain_set",

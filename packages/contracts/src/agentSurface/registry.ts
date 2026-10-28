@@ -96,3 +96,10 @@ export const agentSurfaceRegistry = {
 
 export type AgentSurfacePath = keyof typeof agentSurfaceRegistry;
 export type AgentSurfaceRegistryEntry = (typeof agentSurfaceRegistry)[AgentSurfacePath];
+
+export {
+  SETTINGS_ACCESS,
+  SETTINGS_WRITE_EXCEPTIONS,
+  type SettingsAccess,
+  type SettingsKey,
+} from "./settingsAccess.ts";
