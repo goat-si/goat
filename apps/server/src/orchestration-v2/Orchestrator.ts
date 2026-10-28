@@ -176,6 +176,8 @@ import {
   type ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
+import type { ProjectionLaunchEdge } from "./ProjectionLaunchEdges.ts";
+import { delegatedTaskRevision, sameDelegatedTaskRevision } from "./DelegatedTaskRevision.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
@@ -451,6 +453,11 @@ export interface OrchestratorV2Shape {
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
   readonly listActiveSubagentThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
+    OrchestratorV2Error
+  >;
+  /** Each active thread's parent and launcher, for walking launched threads cheaply. */
+  readonly listLaunchEdges: () => Effect.Effect<
+    ReadonlyArray<ProjectionLaunchEdge>,
     OrchestratorV2Error
   >;
   readonly listOlderSettledThreads: (
@@ -2367,7 +2374,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const projection = yield* projectionStore
       .getThreadRecords(
         command.parentThreadId,
-        ["subagents", "runs", "messages", "nodes", "attempts", "turnItems"],
+        ["subagents", "runs", "messages", "nodes", "attempts", "turnItems", "contextTransfers"],
         { turnItemTypes: [], messageRoles: ["user"] },
       )
       .pipe(
@@ -2402,7 +2409,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (
       task.completionDelivery?.state === state ||
       (command.type === "delegated_task.completion-delivery.acknowledge" &&
-        task.completionDelivery?.state === "disposed") ||
+        (task.completionDelivery?.state === "disposed" ||
+          (command.expectedRevision !== undefined &&
+            !sameDelegatedTaskRevision(
+              command.expectedRevision,
+              delegatedTaskRevision(command.parentThreadId, projection.contextTransfers, task),
+            )))) ||
       // A task_cancel that read the task before it was promoted must not
       // discard the promotion notice the parent is still owed.
       (command.type === "delegated_task.completion-delivery.dispose" &&
@@ -13451,6 +13463,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .pipe(Effect.mapError(shellProjectionError));
       },
     ),
+    listLaunchEdges: Effect.fn("OrchestratorV2.listLaunchEdges")(function () {
+      return projectionStore.listLaunchEdges().pipe(Effect.mapError(shellProjectionError));
+    }),
     listOlderSettledThreads: Effect.fn("OrchestratorV2.listOlderSettledThreads")(function (query) {
       return projectionStore
         .listOlderSettledThreads(query)

@@ -1,4 +1,5 @@
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
+import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { makeShellThreadRows, type ShellThreadRow } from "./ProjectionShellThreadRows.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
@@ -439,6 +440,8 @@ export interface ProjectionTimelinePageOptions {
   readonly itemId?: TurnItemId;
   readonly view?: "messages" | "activity";
   readonly limit: number;
+  /** Take the last limit items instead of the first; nothing follows them. */
+  readonly tail?: boolean;
 }
 export interface ProjectionTimelinePage {
   readonly items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
@@ -535,6 +538,10 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>;
   readonly listActiveSubagentThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
+  readonly listLaunchEdges: () => Effect.Effect<
+    ReadonlyArray<LaunchEdges.ProjectionLaunchEdge>,
     ProjectionStoreV2Error
   >;
   /** Older settled thread ids below a cursor, newest settle first, and per-project counts. */
@@ -6191,7 +6198,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       ))
                   : row.sourceItemId === options.itemId,
               );
-            const page = matching.slice(0, options.limit);
+            const page =
+              options.tail === true
+                ? matching.slice(Math.max(0, matching.length - options.limit))
+                : matching.slice(0, options.limit);
             const items = yield* Effect.forEach(page, (row) =>
               Effect.gen(function* () {
                 if (row.synthetic !== undefined)
@@ -6227,7 +6237,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             return {
               items,
               totalItems: index.visible.length,
-              hasMore: matching.length > page.length,
+              hasMore: options.tail !== true && matching.length > page.length,
             };
           }),
         )
@@ -7130,6 +7140,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getReviewLedgerEntries,
       getShellSnapshot: readOnReader(getShellSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
+      listLaunchEdges: readOnReader(() =>
+        LaunchEdges.selectLaunchEdges(sql).pipe(Effect.mapError(shellSnapshotReadError)),
+      ),
       readShellSnapshot: readOnReader(readShellSnapshot),
       listOlderSettledThreads: readOnReader(listOlderSettledThreads),
       getThreadShell: readOnReader(getThreadShell),
@@ -7431,6 +7444,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .map(({ thread }) => thread.id);
         },
       ),
+      listLaunchEdges: Effect.fn("ProjectionStore.listLaunchEdges")(function* () {
+        return [...(yield* Ref.get(replayState)).projections.values()]
+          .filter(({ thread }) => thread.deletedAt === null && thread.archivedAt === null)
+          .map(({ thread }) => LaunchEdges.launchEdgeOfThread(thread));
+      }),
       listOlderSettledThreads: Effect.fn("ProjectionStore.listOlderSettledThreads")(function* ({
         before,
         projectIds,
@@ -8321,10 +8339,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                     ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
                 : row.sourceItemId === options.itemId,
             );
+            const start = options.tail === true ? Math.max(0, matching.length - options.limit) : 0;
             return {
-              items: matching.slice(0, options.limit),
+              items: matching.slice(start, start + options.limit),
               totalItems: projection.visibleTurnItems.length,
-              hasMore: matching.length > options.limit,
+              hasMore: start + options.limit < matching.length,
             };
           }),
         ),

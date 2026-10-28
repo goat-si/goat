@@ -41,6 +41,7 @@ import * as Option from "effect/Option";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { hostFailure } from "./hostFailure.ts";
+import * as View from "./threadListView.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
 import { replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
@@ -419,7 +420,9 @@ const make = Effect.gen(function* () {
     host: string,
     input: OrchestratorMcpThreadListInput,
   ) {
-    const args = withoutHost(input);
+    const lineage = View.resolveLineageFilter(input, scope.thread?.threadId);
+    if (lineage === null) return yield* failure("invalid_request", View.SELF_NEEDS_THREAD);
+    const args = { ...withoutHost(input), ...lineage };
     const everyProject = args.projectId === undefined;
     const result = yield* onHost(
       scope,
@@ -473,6 +476,7 @@ const make = Effect.gen(function* () {
       settled: input.settled,
       snoozed: input.snoozed,
       includeSubagents: input.includeSubagents,
+      ...View.lineageInput(input),
       limit,
     };
     const hosts = yield* dispatch.connectedHosts;
@@ -538,6 +542,9 @@ const make = Effect.gen(function* () {
               decodeRead,
             );
       const result: OrchestratorMcpThreadReadResult = yield* read;
+      // Only after every read above: acknowledging cancels the child's completion wake.
+      if (input.view === "summary" || input.tail !== undefined)
+        yield* local.acknowledgeChildRead(scope, input, result.thread);
       return watch === null ? result : { ...result, replicaStatus: replicaStatus(watch) };
     });
 
