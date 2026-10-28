@@ -160,7 +160,7 @@ describe("selectTasks", () => {
 
   it("wires the mobile matrix task to both mobile projects without a fixed file list", () => {
     assert.deepEqual(matrixFor(["test-mobile"]).include, [
-      { task: "test-mobile", title: "test-mobile" },
+      { task: "test-mobile", title: "test-mobile", runner: "hosted" },
     ]);
     const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
     const step = workflow.match(/- name: Test mobile\n([\s\S]*?)(?=\n\s*- name:)/)?.[1];
@@ -342,11 +342,15 @@ describe("reachesMemoryGrowth", () => {
 describe("matrixFor", () => {
   it("expands the full server suite into four titled shards in task order", () => {
     assert.deepEqual(matrixFor(["test-server", "check"]).include, [
-      { task: "check", title: "check" },
-      { task: "test-server", title: "test-server 1/4", shard: 1, shard_count: 4, related: false },
-      { task: "test-server", title: "test-server 2/4", shard: 2, shard_count: 4, related: false },
-      { task: "test-server", title: "test-server 3/4", shard: 3, shard_count: 4, related: false },
-      { task: "test-server", title: "test-server 4/4", shard: 4, shard_count: 4, related: false },
+      { task: "check", title: "check", runner: "hosted" },
+      ...[1, 2, 3, 4].map((shard) => ({
+        task: "test-server",
+        title: `test-server ${shard}/4`,
+        shard,
+        shard_count: 4,
+        related: false,
+        runner: "epyc",
+      })),
     ]);
   });
 
@@ -358,6 +362,7 @@ describe("matrixFor", () => {
         shard: 1,
         shard_count: 2,
         related: true,
+        runner: "epyc",
       },
       {
         task: "test-server",
@@ -365,6 +370,7 @@ describe("matrixFor", () => {
         shard: 2,
         shard_count: 2,
         related: true,
+        runner: "epyc",
       },
     ]);
   });
@@ -375,10 +381,18 @@ describe("matrixFor", () => {
 
   it("runs the changed tests as one job after typecheck", () => {
     assert.deepEqual(matrixFor(["test-changed", "typecheck", "check"]).include, [
-      { task: "check", title: "check" },
-      { task: "typecheck", title: "typecheck" },
-      { task: "test-changed", title: "test-changed" },
+      { task: "check", title: "check", runner: "hosted" },
+      { task: "typecheck", title: "typecheck", runner: "hosted" },
+      { task: "test-changed", title: "test-changed", runner: "epyc" },
     ]);
+  });
+
+  it("keeps the browser, native, ssh and server work on EPYC and sends the rest to hosted runners", () => {
+    const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
+    assert.deepEqual(
+      Object.keys(pools).filter((task) => pools[task] === "epyc"),
+      ["test", "test-ssh", "test-desktop", "test-memory-growth", "build", "test-server"],
+    );
   });
 });
 

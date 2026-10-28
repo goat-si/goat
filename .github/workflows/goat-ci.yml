@@ -3,10 +3,12 @@ name: goat-ci
 # goat fork CI; every upstream workflow is disabled. Trusted runs (a manual run, or a pull request
 # from a branch of this repository) run on the EPYC self-hosted runners, which hosted concurrency on
 # the free plan cannot match. A pull request from a fork runs on GitHub-hosted ubuntu-24.04, so fork
-# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. The ci
-# matrix takes the epyc runners. goat-scope, goat-screenshot-gate and goat-ci-result take the two
+# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. Each ci
+# matrix entry names its pool: the heavy tasks take the epyc runners, and the short Node-only tasks
+# (HOSTED_TASKS in goat-ci-scope.cjs) take ubuntu-24.04 so they never queue behind server shards.
+# goat-scope, goat-screenshot-gate and goat-ci-result take the two
 # runners labelled epyc-light instead, which carry no epyc label, so a busy matrix never makes a
-# short gate job wait for a runner. The pre-push guard pins both expressions. EPYC runners persist
+# short gate job wait for a runner. The pre-push guard pins these expressions. EPYC runners persist
 # between jobs, so no step may change the machine: a step that needs sudo or a throwaway VM runs on
 # hosted runners only.
 #
@@ -110,7 +112,7 @@ jobs:
   ci:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner == 'epyc' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || 60 }}
     strategy:
       fail-fast: false
@@ -357,7 +359,8 @@ jobs:
         working-directory: scripts
         run: >-
           vp test run build-desktop-artifact.test.ts check-release-version.test.ts
-          resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
+          resolve-nightly-release.test.ts goat-workflow-guard.test.ts goat-workflow-guard-matrix.test.ts
+          lib/release-notices.test.ts
           lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
           pr-assets.test.ts
           lib/desktop-launch-fixture.test.ts
