@@ -151,14 +151,14 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     [
       {
         t: "boot",
-        runId: "smoke",
-        turnId: "smoke",
         limits: DEFAULT_SCREEN_RUN_LIMITS,
         wasmPath,
         wasmSha256: wasmResult.success,
       },
       {
         t: "cell",
+        runId: "smoke",
+        turnId: "smoke",
         cellId: "smoke",
         source: "return 7;",
         resetValues: false,
