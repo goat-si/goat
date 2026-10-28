@@ -151,12 +151,14 @@ export function settlementAdmissionTests({
                 yield* Queue.offer(entered, undefined);
                 yield* Deferred.await(releaseTargets);
               }
-              if (input.branch === "shared" && !options?.refresh) {
+              const beforeFullRead = !(yield* Deferred.isDone(releaseFull));
+              const result = branchResult(input.branch, options?.refresh && !beforeFullRead);
+              if (input.branch === "shared" && beforeFullRead) {
                 const call = yield* Ref.updateAndGet(sharedCalls, (count) => count + 1);
                 yield* Queue.offer(sharedEntered, undefined);
                 if (call === 2) yield* Deferred.await(releaseRepeat);
               }
-              return branchResult(input.branch, options?.refresh);
+              return result;
             },
           ),
         });
@@ -266,7 +268,7 @@ export function settlementAdmissionTests({
               ],
             }),
           );
-          const overflow = { ...threads[256]!, pendingBackgroundTasks: [] };
+          const overflow = makeThread("hint-capacity-256", { branch: "branch-256" });
           const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
           const fixture = yield* makeHarness({
             snapshot: makeSnapshot([overflow]),
