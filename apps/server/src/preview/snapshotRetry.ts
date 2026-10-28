@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off globalTimers:off - Playwright snapshots run outside the Effect runtime.
 import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { SECRETS_PAGE_CHANGED } from "./pageSecrets.ts";
 
 const PAGE_CHANGED = "The page changed while capturing its snapshot. Take another snapshot.";
 const TOO_BUSY =
@@ -15,7 +16,7 @@ export const tooBusy = () =>
 /** A capture the page interrupted, which another try can get past; every other failure stands. */
 export const transientCapture = (cause: unknown) =>
   cause instanceof ServerBrowserOperationError &&
-  (cause.message === PAGE_CHANGED || cause.message === TOO_BUSY);
+  [PAGE_CHANGED, TOO_BUSY, SECRETS_PAGE_CHANGED].includes(cause.message);
 
 /** How a snapshot recovers from a capture the page interrupted, kept free of Playwright so it can be tested. */
 export interface SnapshotRetryInput<A> {

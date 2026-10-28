@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { SECRETS_PAGE_CHANGED } from "./pageSecrets.ts";
 import { readFailure } from "./pageScope.ts";
 import {
   pageChanged,
@@ -99,4 +101,12 @@ it("only an interrupted capture is retried; a scope that matches two elements fa
   });
   await expect(failing).rejects.toBe(ambiguous);
   expect(captures).toBe(1);
+});
+
+it("a page change the secret readers saw is retried like one the capture saw", () => {
+  expect(
+    transientCapture(
+      new ServerBrowserOperationError("PreviewAutomationExecutionError", SECRETS_PAGE_CHANGED),
+    ),
+  ).toBe(true);
 });
