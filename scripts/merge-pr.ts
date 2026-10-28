@@ -5,8 +5,8 @@
 //
 //   node scripts/merge-pr.ts <pr> [--known-failure <reason>] [--dry-run] [--repo <owner/name>]
 //
-// --known-failure merges a finished, unsuccessful run and records the reason on the pull
-// request first, such as a failure that also happens on dev (docs/operations/merging.md).
+// --known-failure merges finished, unsuccessful runs and records the reason on the pull request
+// first, such as a failure that also happens on dev (docs/operations/merging.md).
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -22,59 +22,75 @@ export interface Run {
   readonly name?: string | undefined;
   readonly event?: string | undefined;
   readonly display_title?: string | undefined;
+  readonly created_at?: string | undefined;
+  readonly run_attempt?: number | undefined;
   readonly status: string;
   readonly conclusion: string | null;
   readonly html_url: string;
 }
 
 export type MergeVerdict =
-  | { readonly merge: true; readonly run: Run; readonly knownFailure?: string }
+  | {
+      readonly merge: true;
+      readonly governing: ReadonlyArray<Run>;
+      readonly results: ReadonlyArray<Run>;
+      readonly knownFailure?: string;
+    }
   | { readonly merge: false; readonly reason: string };
 
+const byCreation = (a: Run, b: Run) =>
+  Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? "") || b.id - a.id;
+
 /**
- * Evidence is the newest real pull request run on the head, or a manual lane=all run, read
- * through its own goat-ci-result at its latest attempt. Ignored-event runs only repeat an older
- * verdict and partial lanes test less. Titles come from run-name in goat-ci.yml.
+ * The newest real pull request run and the newest manual lane=all run on the head. Ignored-event
+ * runs only repeat an older verdict and partial lanes test less, so neither governs; a failed full
+ * run stays in force until a later full run passes. Titles come from run-name in goat-ci.yml.
  */
+export function governingRuns(runs: ReadonlyArray<Run>, pr: number): ReadonlyArray<Run> {
+  const real = (run: Run) =>
+    run.event === "pull_request" && run.display_title?.endsWith(` (#${pr})`) === true;
+  const full = (run: Run) =>
+    run.event === "workflow_dispatch" && run.display_title?.startsWith("goat-ci all on ") === true;
+  return [real, full].flatMap((kind) => runs.filter(kind).toSorted(byCreation).slice(0, 1));
+}
+
+/** Each governing run must have finished, at its latest attempt, with its own goat-ci-result. */
 export function mergeVerdict(
-  runs: ReadonlyArray<Run>,
+  governing: ReadonlyArray<Run>,
   jobsOf: (run: Run) => ReadonlyArray<Run>,
-  pr: number,
   head: string,
   knownFailure?: string,
 ): MergeVerdict {
-  const counts = (run: Run) =>
-    (run.event === "pull_request" && run.display_title?.endsWith(` (#${pr})`) === true) ||
-    (run.event === "workflow_dispatch" &&
-      run.display_title?.startsWith("goat-ci all on ") === true);
-  const newest = runs
-    .filter(counts)
-    .reduce<Run | undefined>(
-      (latest, candidate) =>
-        latest === undefined || candidate.id > latest.id ? candidate : latest,
-      undefined,
-    );
-  if (newest === undefined) return { merge: false, reason: `no goat-ci run on ${head} yet` };
-  if (newest.status !== "completed") {
-    return {
-      merge: false,
-      reason: `the newest goat-ci run on ${head} is ${newest.status}: ${newest.html_url}`,
-    };
+  if (governing.length === 0) return { merge: false, reason: `no goat-ci run on ${head} yet` };
+  const results: Array<Run> = [];
+  for (const run of governing) {
+    if (run.status !== "completed") {
+      return { merge: false, reason: `goat-ci run on ${head} is ${run.status}: ${run.html_url}` };
+    }
+    const result = jobsOf(run).find((job) => job.name === RESULT_CHECK);
+    if (result === undefined || result.status !== "completed") {
+      return {
+        merge: false,
+        reason: `goat-ci run on ${head} ended ${run.conclusion} without ${RESULT_CHECK}; re-run it: ${run.html_url}`,
+      };
+    }
+    results.push(result);
   }
-  const run = jobsOf(newest).find((job) => job.name === RESULT_CHECK);
-  if (run === undefined || run.status !== "completed") {
-    return {
-      merge: false,
-      reason: `the newest goat-ci run on ${head} ended ${newest.conclusion} without ${RESULT_CHECK}; re-run it: ${newest.html_url}`,
-    };
-  }
-  if (run.conclusion === "success") return { merge: true, run };
+  const failed = results.filter((result) => result.conclusion !== "success");
+  if (failed.length === 0) return { merge: true, governing, results };
   const reason = knownFailure?.trim();
-  if (reason) return { merge: true, run, knownFailure: reason };
+  if (reason) return { merge: true, governing, results, knownFailure: reason };
   return {
     merge: false,
-    reason: `${RESULT_CHECK} on ${head} is ${run.conclusion}: ${run.html_url}. Fix it, re-run it, or pass --known-failure with the reason and a link to the matching dev run.`,
+    reason: `${RESULT_CHECK} on ${head} is ${failed.map((result) => `${result.conclusion}: ${result.html_url}`).join(", ")}. Fix it, re-run it, or pass --known-failure with the reason and a link to the matching dev run.`,
   };
+}
+
+/** The same runs, at the same attempt and status, still govern. */
+export function sameEvidence(before: ReadonlyArray<Run>, after: ReadonlyArray<Run>): boolean {
+  const key = (runs: ReadonlyArray<Run>) =>
+    runs.map((run) => `${run.id}/${run.run_attempt}/${run.status}`).join(" ");
+  return key(before) === key(after);
 }
 
 function gh(args: ReadonlyArray<string>): string {
@@ -110,31 +126,44 @@ function main(argv: ReadonlyArray<string>): number {
     return 1;
   }
   const head = view.headRefOid;
-  const runs = JSON.parse(
-    gh([
-      "api",
-      `repos/${repo}/actions/workflows/goat-ci.yml/runs?head_sha=${head}&per_page=100`,
-      "--jq",
-      ".workflow_runs",
-    ]),
-  ) as ReadonlyArray<Run>;
+  const governing = () =>
+    governingRuns(
+      JSON.parse(
+        gh([
+          "api",
+          `repos/${repo}/actions/workflows/goat-ci.yml/runs?head_sha=${head}&per_page=100`,
+          "--jq",
+          ".workflow_runs",
+        ]),
+      ) as ReadonlyArray<Run>,
+      Number(pr),
+    );
   const jobsOf = (run: Run) =>
     JSON.parse(
       gh(["api", `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "--jq", ".jobs"]),
     ) as ReadonlyArray<Run>;
-  const verdict = mergeVerdict(runs, jobsOf, Number(pr), head, values["known-failure"]);
+  const runs = governing();
+  const verdict = mergeVerdict(runs, jobsOf, head, values["known-failure"]);
   if (!verdict.merge) {
     console.error(`not merging ${view.url}: ${verdict.reason}`);
     return 1;
   }
-  console.log(`${RESULT_CHECK} ${verdict.run.conclusion} on ${head}: ${verdict.run.html_url}`);
+  // A run that started or re-ran while the jobs were read would decide instead.
+  if (!sameEvidence(runs, governing())) {
+    console.error(
+      `not merging ${view.url}: goat-ci changed on ${head} while it was read; try again`,
+    );
+    return 1;
+  }
+  for (const result of verdict.results)
+    console.log(`${RESULT_CHECK} ${result.conclusion} on ${head}: ${result.html_url}`);
   if (values["dry-run"]) return 0;
   if (verdict.knownFailure !== undefined) {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-merge-"));
     const body = NodePath.join(dir, "body.md");
     NodeFS.writeFileSync(
       body,
-      `Merging with ${RESULT_CHECK} ${verdict.run.conclusion} on ${head} (${verdict.run.html_url}): ${verdict.knownFailure}\n`,
+      `Merging with ${RESULT_CHECK} on ${head} at ${verdict.results.map((result) => `${result.conclusion} (${result.html_url})`).join(", ")}: ${verdict.knownFailure}\n`,
     );
     try {
       gh(["pr", "comment", pr, "-R", repo, "--body-file", body]);

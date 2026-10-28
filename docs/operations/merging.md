@@ -17,9 +17,12 @@ Squash-merge as soon as `goat-ci-result` is `SUCCESS` on the exact head commit:
 node scripts/merge-pr.ts <pr>
 ```
 
-The script reads the newest `goat-ci-result` on the pull request's head and runs
-`gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` only when it succeeded. `--admin`
-skips branch protection, so a bare `gh pr merge` lands a head whose CI failed or is still running:
+The script reads `goat-ci-result` from the newest pull request run on the head and from the newest
+manual `lane=all` run, if any, and runs `gh pr merge <pr> --admin --squash --match-head-commit
+<head-sha>` only when both finished and succeeded, rechecking the runs just before it merges. A
+failed full run blocks until a later full run passes; ignored-event runs and partial manual lanes do
+not count. `--admin` skips branch protection, so a bare `gh pr merge` lands a head whose CI failed
+or is still running:
 #2046 broke typecheck on `dev` that way. `--match-head-commit` makes the merge fail if someone
 pushed after the check was read. `mergeStateStatus` `CLEAN` or `UNSTABLE` (behind `dev`) is fine.
 Read `goat-ci-result` only; it is the one check that covers every selected task

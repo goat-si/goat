@@ -162,7 +162,7 @@ For authorized mobile verification, a missing or outdated native client is an in
 ## Merging
 
 - Do not rebase or update-branch because `dev` moved. Rebase only on `CONFLICTING`, or when CI needs a fix that exists only on `dev`.
-- Merge with `node scripts/merge-pr.ts <pr>`. It squash-merges with `gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` only when the newest `goat-ci-result` on that exact head is `SUCCESS`; `--admin` skips branch protection, so a bare `gh pr merge` can land a red or unfinished head. `CLEAN` and `UNSTABLE` (behind `dev`) are both fine.
+- Merge with `node scripts/merge-pr.ts <pr>`. It squash-merges with `gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` only when `goat-ci-result` is `SUCCESS` on that exact head, in the newest pull request run and in the newest manual full run if there is one; `--admin` skips branch protection, so a bare `gh pr merge` can land a red or unfinished head. `CLEAN` and `UNSTABLE` (behind `dev`) are both fine.
 - A failure that reproduces identically on `dev` does not block: once the run has finished, `node scripts/merge-pr.ts <pr> --known-failure "<reason and dev run link>"` comments the reason on the PR and merges. Re-run flaky or cancelled jobs instead of rebasing.
 - Stacks, batch merging, and the `dev` full-run cadence: [Merging pull requests](docs/operations/merging.md).
 - `dev` is the only long-lived branch. Nightly builds green `dev` commits; stable rebuilds a nightly's commit once it has been out for 24 hours, unless an open issue is labeled `release-blocker` or `GOAT_STABLE_HOLD` is `true`. A hotfix merges to `dev` and is promoted by a manual stable run naming its nightly. See [Release channels](docs/internals/release-channels.md#stable-promotion).
