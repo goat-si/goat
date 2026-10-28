@@ -6,12 +6,21 @@ import {
   REMOTE_MESSAGE_CHARS,
   remoteWorkerMessage,
   skillsNamedIn,
+  turnInstruction,
+  workerInstruction,
 } from "./channelWorkerBrief.ts";
 
 const task = {
   taskId: ChannelTaskId.make("channel-task:1"),
   generation: 2,
   instruction: "Ship the release using the deploy-staging skill.",
+};
+const files = {
+  dir: "/bot",
+  notes: "/bot/memory.md",
+  skills: "/bot/skills",
+  scratch: "/bot/scratch",
+  artifacts: "/bot/artifacts",
 };
 
 describe("channel worker brief", () => {
@@ -94,5 +103,23 @@ describe("channel worker brief", () => {
     );
     assert.deepStrictEqual(skillsNamedIn("Compute a+b now", ["a+b"]), ["a+b"]);
     assert.lengthOf(skillsNamedIn("one two three four", ["one", "two", "three", "four"]), 3);
+  });
+
+  it.each([false, true])(
+    "tells a bot turn its final message is the whole answer, not a short summary (supervisor: %s)",
+    (supervisor) => {
+      const brief = turnInstruction(task, files, supervisor);
+      assert.include(brief, "Your final message is your answer to the person");
+      assert.include(brief, "as long as the content needs");
+      assert.notInclude(brief, "short summary");
+      assert.notInclude(brief, "short and outcome first");
+      // GOAT drops lines with these prefixes before delivery, so verification must be prose.
+      assert.include(brief, "never start a line with NOT RUN:");
+      assert.notInclude(brief, "NOT RUN line");
+    },
+  );
+
+  it("keeps asking coding workers for a short summary for their card", () => {
+    assert.include(workerInstruction(task, files), "a short summary");
   });
 });

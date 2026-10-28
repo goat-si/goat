@@ -97,11 +97,13 @@ Acceptance:
 - The reply to a message that starts work is committed in the same transaction as the work item.
 - A reply to a work request names what is being done first.
 
-## 3. Answer first, short, warm
+## 3. Answer first, natural length, warm
 
-- Replies MUST lead with the answer or outcome; detail follows only if it helps.
-- Replies SHOULD be one to three sentences in chat channels. Longer content is summarized with an
-  offer to show more.
+- Replies MUST lead with the answer or outcome.
+- A reply that starts or passes on work (a bot turn, a coding task, a follow-up) MUST be one line
+  that names the concrete first step.
+- Direct answers and results SHOULD be conversational and as long as their content needs. There is
+  no sentence limit: a multi-part answer keeps its parts.
 - Replies MUST be in the person's language.
 - Replies MUST NOT pad with filler ("Great question", "I hope this helps"), restate the question,
   or narrate internal steps.
@@ -111,6 +113,8 @@ Acceptance:
 
 - For a question the facts answer, the first sentence contains the answer.
 - A Korean message gets a Korean reply.
+- The reply to a message that starts work is one line.
+- An answer with several findings is not cut to a fixed number of sentences.
 
 ## 4. Progress and final delivery
 
@@ -123,7 +127,16 @@ Acceptance:
     recorded leaves the outcome unknown. On recovery the bot MUST send it again, marked as possibly
     repeated ("Resending in case this didn't arrive"), rather than leave the person without it.
   - A crash before the send started is simply retried with no mark.
-- Results from workers MUST be summarized by the bot for the person, not pasted raw.
+- A successful bot turn's final message is its answer, and it MUST reach the person without
+  rewording or shortening, even when the turn's result report carries a shorter summary. The report
+  summary stands in only when the turn left no text of its own. Channel presentation still applies:
+  lines that start with the agent report prefixes `NOT RUN:`, `Reported tests:` or `GOAT check:` are
+  dropped wherever they appear, so turns state verification in plain sentences; in Slack and
+  iMessage a result may gain one verification sentence from GOAT's checks; Slack splits a long reply
+  into several messages, and one that would need more than ten is cut to nine plus a note that the
+  rest was too long for Slack; iMessage sends it as one message.
+- A coding task's result is its card in the GOAT app. In Slack and iMessage the bot words it for
+  the person, keeping its substance (outcome, findings, what needs them) instead of pasting it raw.
 
 Acceptance:
 
@@ -135,7 +148,9 @@ Acceptance:
   repeated after restart.
 - A crash before a Slack send began produces one unmarked send after restart.
 - Redelivering the same inbound message never produces a second reply or a second work item.
-- A worker's 2,000-line output becomes a short summary in the reply.
+- Within those channel limits, a bot turn's long final answer reaches the person whole even when
+  its report summary is shorter, and a concise final answer is delivered over a longer report summary.
+- A coding worker's 2,000-line output becomes a summary in Slack and iMessage.
 
 ## 5. Parallel background workers
 

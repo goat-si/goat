@@ -48,6 +48,10 @@ const ASK_FIRST =
   "Before anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing), ask first: show the draft or plan in ";
 const REPORT_RESULT = `Before you end, call ${goatCallText("thread.report_result")} with your outcome (succeeded, failed, blocked or cancelled) and a short summary; GOAT settles the task from that report.`;
 const FINISH = "When you finish, end with a short summary of the result.";
+/** A turn's final message is delivered to the person as written, so it carries the whole answer. */
+const TURN_REPORT_RESULT = `Before you end, call ${goatCallText("thread.report_result")} with your outcome (succeeded, failed, blocked or cancelled); GOAT settles the task from that report. On success the person reads your final message, not the report's summary; when you fail or are blocked, the summary is the reason or your question.`;
+const TURN_FINISH =
+  "End with your full answer as your final message: outcome first, then the detail the content needs, conversational and without padding. Say what you verified and what you did not in plain sentences; never start a line with NOT RUN:, Reported tests: or GOAT check:, because GOAT drops those lines before the person reads your answer.";
 
 /** The opening every worker gets: the instruction, then which task it belongs to. */
 const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instruction">) => [
@@ -63,16 +67,20 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
 
 /**
  * The rules every channel worker follows. A worker on this machine reports with
- * channel_task_report; one on another machine reports to its origin with goat_origin_report.
+ * channel_task_report; one on another machine reports to its origin with goat_origin_report. A
+ * GOAT Bot turn, which runs here, ends with its answer instead of a short summary.
  */
-export const channelWorkerRules = (reporting: "local" | "remote") =>
+export const channelWorkerRules = (
+  reporting: "local" | "remote",
+  kind: "work" | "turn" = "work",
+) =>
   reporting === "local"
     ? [
         `For progress on long work, call ${goatCallText("channel.task_report")} with status "running" and milestone true at meaningful milestones.`,
         ASK_FIRST + "a waiting_input question.",
         `If you need a decision from the person who asked, call ${goatCallText("channel.task_report")} with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.`,
-        REPORT_RESULT,
-        FINISH,
+        kind === "turn" ? TURN_REPORT_RESULT : REPORT_RESULT,
+        kind === "turn" ? TURN_FINISH : FINISH,
       ]
     : [
         `For progress on long work, call ${goatCallText("origin.report")} with status progress at meaningful milestones.`,
@@ -111,11 +119,11 @@ export const GOAT_BOT_SUPERVISOR_RULE = [
   "goatclaw is on, so you front the goatclaw supervisor. The read-only rule still holds: plan the work and hand every change to a manager.",
   GOATCLAW_SUPERVISOR_DELEGATION,
   GOATCLAW_SUPERVISOR_ASKS,
-  "Fold each manager's report into your answer with its exact heads, check totals, and NOT RUN line.",
+  "Fold each manager's report into your answer with its exact heads and check totals, and say in plain words which checks did not run.",
 ].join(" ");
 
 /** What the worker thread is told besides the instruction itself. */
-export const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
+export const workerInstruction = (task: BriefTask, files: ChannelBotFiles) =>
   [
     ...workerHeader(task),
     "Standing notes from the person are in " +
@@ -132,10 +140,10 @@ export const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
   ].join("\n");
 
 /** What a GOAT Bot turn is told besides the person's request. */
-export const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: boolean) =>
+export const turnInstruction = (task: BriefTask, files: ChannelBotFiles, supervisor: boolean) =>
   [
     ...workerHeader(task),
-    "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
+    "You are GOAT Bot handling this message yourself. Your final message is your answer to the person: write it in the language of their request, not your default language, outcome first and as long as the content needs.",
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
       "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads.",
@@ -153,7 +161,7 @@ export const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, super
       : "The person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
         "). This is the one change you may make yourself: edit the notes file only to make that change.",
-    ...channelWorkerRules("local"),
+    ...channelWorkerRules("local", "turn"),
   ].join("\n");
 
 /**

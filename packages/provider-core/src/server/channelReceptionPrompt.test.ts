@@ -296,6 +296,49 @@ describe("channel reception language", () => {
   });
 });
 
+describe("channel reception reply length", () => {
+  const input = {
+    mode: "input",
+    conversationId: ChannelConversationId.make("conversation:1"),
+    originKind: "goat",
+    inputText: "Why is the disk full?",
+    tail: [],
+    tasks: [],
+    allowedTargets: [],
+    requester: {
+      ownerId: "owner",
+      principalId: "owner",
+      displayName: "Owner",
+      originKind: "goat",
+      runtimeModeCeiling: "full-access",
+      grantedScopes: [],
+    },
+  } satisfies ChannelReceptionInput;
+
+  it("lets answers run as long as their content needs while work acknowledgements stay one line", () => {
+    const prompt = buildChannelReceptionPrompt(input).prompt;
+    expect(prompt).not.toContain("one to three");
+    expect(prompt).toContain("as long as their content needs");
+    expect(prompt).toContain(
+      "Replies that start or pass on work (run_turn, create_task, follow_up) are one line naming the concrete first step.",
+    );
+  });
+
+  it("keeps a task update's substance instead of shrinking it", () => {
+    const prompt = buildChannelReceptionPrompt({
+      ...input,
+      mode: "task_event",
+      inputText: undefined,
+      taskEvent: {
+        taskId: ChannelTaskId.make("task:1"),
+        type: "task.completed",
+        summary: "Fixed the login redirect and added a regression test.",
+      },
+    }).prompt;
+    expect(prompt).toContain("Say only what the update says happened. Keep its substance");
+  });
+});
+
 describe("channel reception turns", () => {
   it("turns run_turn into a turn with its title, instruction and quoted note change", () => {
     const result = convert({
