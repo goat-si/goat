@@ -209,8 +209,9 @@ describe("every driver answer maps onto the shared outcome contract", () => {
     assert.isFalse(
       answer({ status: "refused", refusal: { code: "stale_element_token" } }).possibleCommit,
     );
+    // Each of these follows sent input, so it may have landed until an observation says otherwise.
     for (const effect of ["suspected_noop", "no_drop", "not_applied"])
-      assert.deepInclude(answer({ effect }), { possibleCommit: false, retryClass: "fix_input" });
+      assert.deepInclude(answer({ effect }), { possibleCommit: true, retryClass: "never" });
   });
 
   it("the driver's word that nothing went out and GOAT's tree-diff verification classify as said", () => {
