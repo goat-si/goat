@@ -66,14 +66,11 @@ export interface TestTempSandbox {
   readonly close: () => ReadonlyArray<string>;
 }
 
-/** The error code when the directory could not be removed. Windows can hold a closed handle briefly. */
-const removeQuietly = (path: string): string | undefined => {
+const removeQuietly = (path: string) => {
   try {
-    NodeFS.rmSync(path, { recursive: true, force: true, maxRetries: 10 });
-    return undefined;
-  } catch (error) {
+    NodeFS.rmSync(path, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
     // Best effort: a process exiting must not throw over a temp directory.
-    return (error as NodeJS.ErrnoException).code ?? String(error);
   }
 };
 
@@ -105,7 +102,7 @@ export const enterTestTempSandbox = (
     process.env[key] = directory;
   }
 
-  const onExit = () => void removeQuietly(directory);
+  const onExit = () => removeQuietly(directory);
   const onSignal = (signal: NodeJS.Signals) => {
     removeQuietly(directory);
     // Our listener suppresses the default exit. Re-raise only when nobody else handles it.
@@ -137,14 +134,7 @@ export const enterTestTempSandbox = (
       } catch {
         // A test that deleted the sandbox itself leaked nothing into it.
       }
-      const failed = removeQuietly(directory);
-      if (failed !== undefined) {
-        // Try once more as the worker exits, and say so: CI fails on a sandbox left behind.
-        process.on("exit", onExit);
-        process.stderr.write(
-          `Could not remove the test temp sandbox ${directory} (${failed}); retrying at exit.\n`,
-        );
-      }
+      removeQuietly(directory);
       return leaked.sort();
     },
   };

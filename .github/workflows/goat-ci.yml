@@ -430,6 +430,11 @@ jobs:
         shell: bash
         run: |
           dir="$GOAT_CI_TMPDIR"
+          # Windows ends Vitest workers without running exit handlers, and a file whose tests are
+          # all skipped never runs afterAll, so its sandbox stays. An empty sandbox leaked nothing.
+          if [ "$RUNNER_OS" = Windows ]; then
+            find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-test-*' -type d -empty -delete
+          fi
           leaked=$({ find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-*'; find "$dir" -mindepth 2 -maxdepth 2 -path "$dir/goat-test-*/goat-*"; } | sed "s#^$dir/##" | sort)
           rm -rf "$GOAT_CI_TMPDIR"
           if [ -z "$leaked" ]; then
