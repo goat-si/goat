@@ -650,6 +650,7 @@ const runOnce = async (
     failures: [],
     // The arm never ran, so this run says nothing about it.
     contamination: [why],
+    unknownOutcome: null,
     metrics: null,
     wallMs: null,
     at: new Date().toISOString(),
@@ -700,6 +701,7 @@ const runOnce = async (
     failures: [],
     // A harness or transport error says nothing about the arm, so it is listed, not counted.
     contamination: ["runner: " + String(error)],
+    unknownOutcome: null,
     metrics: null,
     wallMs: null,
     at: new Date().toISOString(),
@@ -737,6 +739,7 @@ const runOnce = async (
       failures,
       contamination: metrics.violations,
       metrics,
+      unknownOutcome: metrics.unknownOutcome,
       wallMs: Number.isFinite(completedAt - startedAt) ? completedAt - startedAt : null,
       at: new Date().toISOString(),
       followupRuns: counted.length - 1,
@@ -828,6 +831,7 @@ const main = async () => {
         ok: false,
         failures: [],
         contamination: ["runner: " + String(error)],
+        unknownOutcome: null,
         metrics: null,
         wallMs: null,
         at: new Date().toISOString(),

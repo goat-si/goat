@@ -199,7 +199,12 @@ describe("summarizeTask", () => {
   const task = { id: "t", claim: "reduces" } as Task;
   const arms = { baselineArm: "call-only", candidateArm: "eval" };
   const metrics = (min: number, max: number) =>
-    ({ modelTurns: { min, max }, toolCalls: max - 1, failedToolCalls: 0 }) as RunMetrics;
+    ({
+      modelTurns: { min, max },
+      resultBytes: min <= 4 ? 600 : 900,
+      toolCalls: max - 1,
+      failedToolCalls: 0,
+    }) as RunMetrics;
   const row = (
     arm: string,
     pair: number,
@@ -217,6 +222,7 @@ describe("summarizeTask", () => {
     pair,
     slot: pair % 2 === (arm === "eval" ? 1 : 0) ? 0 : 1,
     threadId: null,
+    unknownOutcome: false,
     ok: true,
     failures: [],
     contamination: [],
@@ -279,8 +285,8 @@ describe("summarizeTask", () => {
       [...runs("call-only", [2, 2]), ...runs("eval", [2, 2])],
       arms,
     );
-    expect(gate([reduces, moved])).toEqual({ pass: false, notPassed: ["t: suspect"] });
-    expect(gate([reduces, flat]).pass).toBe(true);
+    expect(gate([reduces, moved], "listing")).toEqual({ pass: false, notPassed: ["t: suspect"] });
+    expect(gate([reduces, flat], "listing").pass).toBe(true);
   });
 
   it("fails the gate when the control's runs failed, even with no turns to compare", () => {
@@ -340,6 +346,170 @@ describe("summarizeTask", () => {
       ];
       expect(compare(oneFailed).reasons).toEqual(["the candidate failed more often"]);
     });
+  });
+});
+
+describe("composition rule v1", () => {
+  const taskSet = validateTaskSet(readJson("./tasks.json"), { fixtures: anyName, checks: anyName });
+  const campaign = { baselineArm: "baseline", candidateArm: "candidate", gate: "eval" as const };
+  const rowsFor = (
+    id: string,
+    turns: [number, number],
+    bytes: number,
+    extra: Partial<RunRow> = {},
+  ) =>
+    ["baseline", "candidate"].flatMap((arm) =>
+      Array.from({ length: 10 }, (_, pair): RunRow => ({
+        kind: "run",
+        campaignId: "composition",
+        taskSetVersion: taskSet.version,
+        task: id,
+        arm,
+        providerInstanceId: "claudeAgent",
+        model: "claude",
+        listing: null,
+        pair,
+        slot: (pair % 2 === 0) === (arm === "baseline") ? 0 : 1,
+        threadId: null,
+        unknownOutcome: false,
+        ok: true,
+        failures: [],
+        contamination: [],
+        wallMs: null,
+        at: "",
+        metrics: {
+          ...runMetrics([], callOnly),
+          modelTurns: arm === "baseline" ? { min: 9, max: 12 } : { min: turns[0], max: turns[1] },
+          resultBytes: arm === "baseline" ? 900 : bytes,
+        },
+        ...(arm === "candidate" ? extra : {}),
+      })),
+    );
+  const control = () => rowsFor("read-control", [9, 12], 900);
+  const reductions = () => [
+    ...rowsFor("wait-running", [4, 6], 600),
+    ...rowsFor("fan-out-review", [4, 6], 600),
+  ];
+  const judge = (rows: ReadonlyArray<RunRow>) =>
+    gate(taskSet.tasks.map((task) => summarizeTask(task, rows, campaign)));
+
+  it("needs two automatic reductions, ignores unrun manual tasks, and checks every failure rate", () => {
+    const rows = [...control(), ...reductions(), ...rowsFor("launch-and-wait", [9, 12], 900)];
+    expect(judge(rows).pass).toBe(true);
+    expect(
+      judge([
+        ...control(),
+        ...rowsFor("wait-running", [4, 6], 600),
+        ...rowsFor("fan-out-review", [9, 12], 900),
+        ...rowsFor("launch-and-wait", [9, 12], 900),
+      ]).pass,
+    ).toBe(false);
+    const failed = rows.map((row) =>
+      row.task === "launch-and-wait" && row.arm === "candidate" && row.pair === 0
+        ? { ...row, ok: false, failures: ["oracle"] }
+        : row,
+    );
+    expect(judge(failed).pass).toBe(false);
+  });
+
+  it("requires a third fewer result bytes on the same two reducing tasks", () => {
+    const rows = [...control(), ...reductions(), ...rowsFor("launch-and-wait", [4, 6], 600)];
+    const summaries = taskSet.tasks
+      .filter((task) => !task.manual)
+      .map((task) =>
+        summarizeTask(
+          task,
+          rows.map((row) =>
+            row.arm === "candidate" && row.task !== "read-control"
+              ? { ...row, metrics: { ...row.metrics!, resultBytes: 601 } }
+              : row,
+          ),
+          campaign,
+        ),
+      );
+    expect(gate(summaries).pass).toBe(false);
+  });
+
+  it("bounds control growth at both ends as well as rejecting control gains", () => {
+    const rows = [...reductions(), ...rowsFor("launch-and-wait", [4, 6], 600)];
+    for (const turns of [
+      [11, 12],
+      [9, 14],
+      [4, 6],
+    ] as const) {
+      const summaries = taskSet.tasks
+        .filter((task) => !task.manual)
+        .map((task) =>
+          summarizeTask(task, [...rows, ...rowsFor("read-control", [...turns], 900)], campaign),
+        );
+      expect(gate(summaries).pass).toBe(false);
+    }
+  });
+
+  it("records unknown_outcome eval halts from results and rejects even contaminated candidate runs", () => {
+    const halted = { status: "error", error: { code: "unknown_outcome" }, haltedAt: "body.0" };
+    const metrics = runMetrics(
+      [
+        item(
+          "dynamic_tool",
+          JSON.stringify({
+            toolName: "mcp__goat__goat_eval",
+            input: {},
+            output: {
+              content: [{ type: "text", text: JSON.stringify(halted) }],
+              structuredContent: halted,
+            },
+          }),
+        ),
+      ],
+      { ...callOnly, forbidTools: [] },
+    );
+    expect(metrics).toMatchObject({ unknownOutcome: true });
+    expect(sumMetrics([runMetrics([], callOnly), metrics])).toMatchObject({ unknownOutcome: true });
+    const rows = [...control(), ...reductions(), ...rowsFor("launch-and-wait", [4, 6], 600)];
+    expect(judge(rows).pass).toBe(true);
+    expect(
+      judge([
+        ...rows,
+        {
+          ...rows[0]!,
+          task: "launch-and-wait",
+          arm: "candidate",
+          pair: 10,
+          contamination: ["command_execution"],
+          unknownOutcome: true,
+        },
+      ]).pass,
+    ).toBe(false);
+    expect(
+      runMetrics(
+        [
+          item(
+            "dynamic_tool",
+            JSON.stringify({
+              toolName: "goat.goat_eval",
+              output: { content: [{ type: "text", text: JSON.stringify(halted) }] },
+            }),
+          ),
+        ],
+        callOnly,
+      ).unknownOutcome,
+    ).toBe(true);
+    expect(
+      runMetrics(
+        [
+          item(
+            "dynamic_tool",
+            JSON.stringify({
+              toolName: "goat.goat_eval",
+              input: halted,
+              output: { status: "ok", value: halted },
+            }),
+          ),
+        ],
+        callOnly,
+      ).unknownOutcome,
+    ).toBe(false);
   });
 });
 
