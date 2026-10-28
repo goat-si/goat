@@ -157,6 +157,22 @@ it("leaves out an identifier that is a password in a shadow root, an unknown rol
     );
     expect(masked?.interceptedBy).toContain("Now at the target: <div>.");
     expect(JSON.stringify(masked)).not.toMatch(/QuietPass1|quietsecret/);
+    // A visually masked textarea or editable region counts as a password field too.
+    for (const field of [
+      '<textarea style="-webkit-text-security:disc">MaskedNote7</textarea>',
+      '<div contenteditable="true" style="-webkit-text-security:disc">MaskedNote7</div>',
+    ]) {
+      await page.setContent(
+        `${field}<button id="b">Save</button><div id="MaskedNote7" style="position:fixed;inset:0"></div>`,
+      );
+      const hidden = await ServerBrowserPage.click(page, { locator: "#b", timeoutMs: 5_000 }).then(
+        () => undefined,
+        (error: unknown) =>
+          (error as { readonly detail?: { readonly interceptedBy?: string } }).detail,
+      );
+      expect(hidden?.interceptedBy).toContain("Now at the target: <div>.");
+      expect(JSON.stringify(hidden)).not.toContain("MaskedNote7");
+    }
     // A rotated wrapper makes the frame's mapping unknown, so only the tag and role are reported.
     const child =
       '<button>Inner</button><div style="position:fixed;inset:0" id="inner-cover"></div>';

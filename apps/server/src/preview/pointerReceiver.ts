@@ -55,6 +55,9 @@ type PageNode = {
   readonly tagName?: string;
   readonly type?: string;
   readonly value?: unknown;
+  readonly defaultValue?: unknown;
+  readonly textContent?: string | null;
+  readonly isContentEditable?: boolean;
   readonly children?: ArrayLike<PageNode>;
   readonly shadowRoot?: PageNode | null;
   readonly parentElement?: PageNode | null;
@@ -79,23 +82,43 @@ const describe = (element: ElementHandle) =>
     };
     const secrets: Array<string> = [];
     const stack: Array<PageNode> = [target.ownerDocument.documentElement];
-    for (let budget = 20_000; stack.length > 0 && budget > 0; budget--) {
+    // Bounds what is visited and what is queued, so a wide page cannot make this walk long.
+    let budget = 20_000;
+    let complete = true;
+    walk: while (stack.length > 0) {
       const current = stack.pop();
       if (current === undefined) break;
-      if (
-        current.tagName === "INPUT" &&
-        typeof current.value === "string" &&
-        current.value.length >= 3
-      ) {
-        const security = view.getComputedStyle(current).getPropertyValue("-webkit-text-security");
-        if (current.type === "password" || (security !== "" && security !== "none"))
-          secrets.push(current.value);
+      const field = current.tagName === "INPUT" || current.tagName === "TEXTAREA";
+      if (field || current.isContentEditable === true) {
+        const dots = view.getComputedStyle(current).getPropertyValue("-webkit-text-security");
+        if (current.type === "password" || (dots !== "" && dots !== "none"))
+          for (const value of field
+            ? [current.value, current.defaultValue]
+            : [current.textContent ?? ""])
+            if (typeof value === "string")
+              secrets.push(
+                value,
+                value
+                  .replace(/[\u200b\u00ad]/g, "")
+                  .trim()
+                  .replace(/\s+/g, " "),
+              );
       }
+      const childCount = current.children?.length ?? 0;
+      const queued = (current.shadowRoot ? 1 : 0) + childCount;
+      if (queued > budget) {
+        complete = false;
+        break walk;
+      }
+      budget -= queued;
       if (current.shadowRoot) stack.push(current.shadowRoot);
-      for (const child of Array.from(current.children ?? [])) stack.push(child);
+      for (let index = 0; index < childCount; index++) {
+        const child = current.children?.[index];
+        if (child !== undefined) stack.push(child);
+      }
     }
-    const complete = stack.length === 0;
-    const clean = (token: string) => complete && !secrets.some((value) => token.includes(value));
+    const kept = secrets.filter((value) => value.length >= 3);
+    const clean = (token: string) => complete && !kept.some((value) => token.includes(value));
     return {
       tag: target.tagName.toLowerCase(),
       role: (target.getAttribute("role") ?? "").toLowerCase(),
