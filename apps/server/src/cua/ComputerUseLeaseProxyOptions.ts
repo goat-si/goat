@@ -55,6 +55,8 @@ export interface OutstandingCall {
   readonly reservationId?: string;
   readonly connectionId: string;
   readonly cancelled?: boolean;
+  /** The driver's reply line arrived; GOAT may still be checking it. */
+  readonly answered?: boolean;
   readonly sink: ReplySink;
 }
 
@@ -138,6 +140,8 @@ export const primitiveReplySink = (
               message: "Driver reply exceeded the primitive channel limit.",
               ...(Number.isFinite(bytes) ? { bytes } : {}),
               maxBytes,
+              // A driver failure stays one when only its size is lost.
+              ...(record(value)?.isError === true ? { isError: true } : {}),
             };
       };
       const result = imageError

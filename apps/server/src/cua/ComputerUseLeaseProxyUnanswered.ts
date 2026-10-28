@@ -24,7 +24,10 @@ export const makeUnansweredWatch = <E>(
   proxy: {
     readonly lock: Semaphore.Semaphore;
     readonly scope: Scope.Scope;
-    readonly outstanding: ReadonlyMap<string, { readonly connectionId: string }>;
+    readonly outstanding: ReadonlyMap<
+      string,
+      { readonly connectionId: string; readonly answered?: boolean }
+    >;
     readonly lifecycle: { readonly current: { readonly connectionId: string } | undefined };
   },
   act: {
@@ -36,7 +39,8 @@ export const makeUnansweredWatch = <E>(
 ) => {
   const replace = Effect.fn("ComputerUseLeaseProxy.replaceUnanswered")(function* (key: string) {
     const call = proxy.outstanding.get(key);
-    if (call === undefined || proxy.lifecycle.current?.connectionId !== call.connectionId) return;
+    if (call === undefined || call.answered === true) return;
+    if (proxy.lifecycle.current?.connectionId !== call.connectionId) return;
     if (!act.active()) return;
     const token = yield* act.interrupt(DRIVER_UNANSWERED);
     if (act.active()) yield* act.start(token);

@@ -148,6 +148,12 @@ layer("ComputerUsePrimitiveChannel while a driver starts", (it) => {
         yield* TestClock.adjust(PrimitiveChannel.DRIVER_BIND_WAIT_MS);
         const failed = yield* Fiber.join(unbound);
         assert.isTrue(failed._tag === "Failure" && failed.failure.reason === "desktop_not_ready");
+        // Its proxy going away while a call waits ends the wait at once.
+        const orphaned = yield* Effect.flip(channel.request({ ...call, callId: 3 })).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* channel.closeStream({ threadId, registrationId: registered.registrationId });
+        assert.equal((yield* Fiber.join(orphaned)).reason, "desktop_not_ready");
       }),
     ),
   );

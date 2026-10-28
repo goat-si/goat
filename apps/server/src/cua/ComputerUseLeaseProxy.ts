@@ -271,6 +271,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        outstanding.set(key, { ...request, answered: true });
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
           finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
