@@ -491,6 +491,7 @@ describe("WorktreeInventoryService", () => {
         Effect.forEach([path, alias], (key) =>
           tryWithWorkspaceLease(key, Effect.void).pipe(
             Effect.map((acquired) => leased.push(Option.isNone(acquired))),
+            Effect.orDie,
           ),
         ),
       );

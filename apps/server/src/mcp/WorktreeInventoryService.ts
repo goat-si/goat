@@ -16,6 +16,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
@@ -25,7 +26,11 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import {
+  isWorkspaceLeaseUnavailableError,
+  tryWithWorkspaceSubtree,
+  withWorkspaceLease,
+} from "../workspace/workspaceLease.ts";
 import {
   isFilesystemRoot,
   makeIsManagedWorktreePath,
@@ -57,10 +62,10 @@ export class WorktreeInventoryService extends Context.Service<
     /** Every worktree of every project repository, with its head and project overlap. */
     readonly facts: Effect.Effect<ReadonlyArray<AbandonedWorktreeFacts>, OrchestratorMcpFailure>;
     /**
-     * Removes a checkout no live thread uses, for the storage cleanup a person confirmed.
-     * Stricter than remove: nothing uncommitted, every commit on a remote, no bound thread that is
-     * not archived, and still the branch and commit the person reviewed. It never prunes other
-     * registrations. `verify` runs last under the leases, for checks this service cannot make.
+     * Removes a checkout no live thread uses, for storage cleanup a person confirmed: nothing
+     * uncommitted, every commit on a remote, no unarchived bound thread, the reviewed branch and
+     * commit. Never prunes other registrations; `verify` runs last under the leases. The caller
+     * holds the folder whole (tryWithWorkspaceSubtree), as Storage reclaim does.
      */
     readonly removeAbandoned: (input: {
       readonly path: string;
@@ -589,8 +594,16 @@ const make = Effect.gen(function* () {
   const withLeases = <A, E, R>(
     keys: ReadonlyArray<string>,
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
-    keys.reduceRight((inner, key) => withWorkspaceLease(key, inner), effect);
+  ): Effect.Effect<A, E | OrchestratorMcpFailure, R> =>
+    keys.reduceRight<Effect.Effect<A, E | OrchestratorMcpFailure, R>>(
+      (inner, key) =>
+        withWorkspaceLease(key, inner).pipe(
+          Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) =>
+            Effect.fail(failure("orchestration_error", error.message)),
+          ),
+        ),
+      effect,
+    );
 
   /** A thread bound to the worktree at `key` that is busy now, read fresh. */
   const busyNow = (key: string) =>
@@ -614,7 +627,8 @@ const make = Effect.gen(function* () {
     },
   ) {
     const key = yield* real(target.entry.path);
-    return yield* withLeases(
+    // Holding the worktree whole keeps out threads bound inside it, here and in other GOAT servers.
+    const removal = withLeases(
       target.leaseKeys,
       Effect.gen(function* () {
         const facts = yield* reread(target.entry.repository, key);
@@ -710,6 +724,20 @@ const make = Effect.gen(function* () {
         return { path: facts.entry.path, branch, branchDeleted, notes, saved: work.saved };
       }),
     );
+    const held = yield* tryWithWorkspaceSubtree(key, removal).pipe(
+      Effect.catchTags({
+        WorkspaceLeaseUnavailableError: (error) =>
+          Effect.fail(failure("orchestration_error", error.message)),
+      }),
+    );
+    if (Option.isNone(held))
+      return yield* failure(
+        "invalid_request",
+        "Refused to remove " +
+          target.entry.path +
+          ": a turn, terminal or another removal is using it. Try again when it finishes.",
+      );
+    return held.value;
   });
 
   const remove: WorktreeInventoryService["Service"]["remove"] = Effect.fn(

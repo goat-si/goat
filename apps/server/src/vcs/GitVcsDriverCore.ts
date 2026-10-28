@@ -55,6 +55,8 @@ import { resolveAvailableWorktreesDirectory } from "../worktreesDirectory.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
+import { unquoteGitPath } from "./gitQuotedPath.ts";
+import { tryWithForeignWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
   missingWindowsCheckoutSettings,
@@ -322,42 +324,6 @@ export function existingBranchConflictDetail(input: {
       ? `To continue it, run git worktree add "${input.suggestedPath}" ${input.branch}, then ${relaunch}.`
       : `To continue in that worktree, ${relaunch}.`;
   return `Branch ${input.branch} already exists and ${input.problem}, so GOAT will not reuse or reset it. ${resume} To start fresh, launch with a different branch name.`;
-}
-
-const C_QUOTE_ESCAPES: Record<string, number> = {
-  a: 7,
-  b: 8,
-  t: 9,
-  n: 10,
-  v: 11,
-  f: 12,
-  r: 13,
-  '"': 34,
-  "\\": 92,
-};
-
-/** Reads git's C-style quoting (`"a\tb\303\251"`), whose octal escapes are UTF-8 bytes. */
-function unquoteGitPath(quoted: string): string {
-  const bytes: number[] = [];
-  const encoder = new TextEncoder();
-  for (let index = 1; index < quoted.length - 1; index += 1) {
-    const char = String.fromCodePoint(quoted.codePointAt(index)!);
-    if (char !== "\\") {
-      bytes.push(...encoder.encode(char));
-      index += char.length - 1;
-      continue;
-    }
-    const next = quoted[index + 1] ?? "";
-    const octal = /^[0-7]{3}/u.exec(quoted.slice(index + 1, index + 4))?.[0];
-    if (octal !== undefined) {
-      bytes.push(Number.parseInt(octal, 8));
-      index += 3;
-    } else {
-      bytes.push(C_QUOTE_ESCAPES[next] ?? next.charCodeAt(0));
-      index += 1;
-    }
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
 /**
@@ -4146,27 +4112,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         (yield* readBranchTip(input.cwd, newBranch)) !== null;
       const realTarget = yield* fileSystem.realPath(targetPath).pipe(Effect.option);
       if (!branchCreated && Option.isNone(realTarget)) return;
-      const claimed = (yield* readWorktreeRecords(
-        "GitVcsDriver.createWorktree.rollbackList",
-        input.cwd,
-      )).some(
-        (record) =>
-          isSameWorktreePath(record.path, targetPath, hostPlatform) ||
-          (Option.isSome(realTarget) &&
-            isSameWorktreePath(record.path, realTarget.value, hostPlatform)),
+      // Turn start may lease this folder while recreating it; keep other GOAT servers out.
+      const removed = yield* tryWithForeignWorkspaceSubtree(
+        targetPath,
+        Effect.gen(function* () {
+          const claimed = (yield* readWorktreeRecords(
+            "GitVcsDriver.createWorktree.rollbackList",
+            input.cwd,
+          )).some(
+            (record) =>
+              isSameWorktreePath(record.path, targetPath, hostPlatform) ||
+              (Option.isSome(realTarget) &&
+                isSameWorktreePath(record.path, realTarget.value, hostPlatform)),
+          );
+          if (claimed) {
+            // Git locks a worktree while adding it; a second --force removes a locked one.
+            yield* runGit("GitVcsDriver.createWorktree.rollbackWorktree", input.cwd, [
+              "worktree",
+              "remove",
+              "--force",
+              "--force",
+              "--",
+              targetPath,
+            ]);
+          }
+          yield* fileSystem.remove(targetPath, { recursive: true }).pipe(Effect.ignore);
+        }),
       );
-      if (claimed) {
-        // Git locks a worktree while adding it; a second --force removes a locked one.
-        yield* runGit("GitVcsDriver.createWorktree.rollbackWorktree", input.cwd, [
-          "worktree",
-          "remove",
-          "--force",
-          "--force",
-          "--",
-          targetPath,
-        ]);
-      }
-      yield* fileSystem.remove(targetPath, { recursive: true }).pipe(Effect.ignore);
+      if (Option.isNone(removed))
+        return yield* Effect.logWarning("worktree add rollback kept a folder that is in use", {
+          worktreePath: targetPath,
+        });
       if (branchCreated) {
         yield* runGit("GitVcsDriver.createWorktree.rollbackBranch", input.cwd, [
           "branch",

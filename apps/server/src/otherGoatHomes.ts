@@ -78,6 +78,19 @@ export interface OtherHomeBindings {
   readonly unreadable: ReadonlyArray<string>;
 }
 
+/** Why another home keeps the worktree at realPath: it binds it or a folder inside it. */
+export const otherHomeReason = (
+  path: Path.Path,
+  bindings: OtherHomeBindings,
+  realPath: string,
+): string | null => {
+  if (bindings.unreadable.length > 0)
+    return "another GOAT app's data on this machine could not be checked";
+  for (const bound of bindings.worktreePaths)
+    if (inside(path, realPath, bound)) return "another GOAT app on this machine uses this worktree";
+  return null;
+};
+
 const readWorktreePaths = Effect.fn("otherGoatHomes.readWorktreePaths")(function* (file: string) {
   const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
   return yield* reader.read({ kind: "worktrees", file }).pipe(

@@ -351,6 +351,7 @@ describe("StorageReclaim", () => {
             Effect.map((entered) => {
               resumed = entered;
             }),
+            Effect.orDie,
           ),
         };
         const result = yield* reclaim.clean({
