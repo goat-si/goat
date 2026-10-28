@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off globalTimers:off - Playwright snapshots run outside the Effect runtime.
 import type { Page } from "playwright-core";
 
 /** How a snapshot recovers from a capture the page interrupted, kept free of Playwright so it can be tested. */

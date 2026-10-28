@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type PreviewAutomationError,
+  type ScreenElementRef,
   type ScreenHostCall,
   type ScreenTargetRef,
 } from "@goat/contracts";
@@ -367,7 +368,7 @@ it.effect("a ref from an incomplete tree is refused after the page changes, befo
     const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
     const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
     yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
-    type Read = { elements: Array<{ ref: unknown }>; complete: boolean };
+    type Read = { elements: Array<{ ref: ScreenElementRef }>; complete: boolean };
     const read = (callId: number) =>
       host
         .dispatch(call("observe", callId, {}, ref), context)
