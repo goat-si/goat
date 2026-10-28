@@ -30,7 +30,9 @@ const CAMERA_ENTITLEMENT = "com.apple.security.device.camera";
 const ELECTRON_HELPER_APP =
   /\.app[\\/]Contents[\\/]Frameworks[\\/][^\\/]+ Helper(?: \([^)\\/]+\))?\.app$/;
 
-const readPlistDict = (xml: string | undefined): Record<string, unknown> | string => {
+const readPlistDict = (
+  xml: string | undefined,
+): Record<string, unknown> | "unreadable" | "invalid" => {
   if (!xml?.trim()) return "unreadable";
   try {
     const parsed: unknown = Plist.parse(xml);
