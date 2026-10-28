@@ -69,7 +69,7 @@ dispatch set it), `launchOrReuseRemoteServer` asks `probeAppServer`
 (`packages/ssh/src/appServer.ts`) first. The probe reads `server-runtime.json` in each directory
 from `desktopAppServerStateDirs` (`packages/shared/src/desktopAppServer.ts`): nightly, then stable.
 The first live record wins, so with both apps running hubs reach the nightly app; the probe logs
-`ssh.appServer.otherLive` naming the app it passed over, and host status reports the attached
+`ssh.appServer.otherLive` naming any other app home whose record names a live process, and host status reports the attached
 server's `serverVersion`, whose suffix names its channel. A development build's state
 (`~/.goat/dev`, `~/.t3/dev`) is never attached: a server run from source is not the host's
 server. The probe requires a live PID, a loopback
@@ -101,6 +101,7 @@ lists its threads as **Headless server** (`apps/desktop/src/backend/DesktopHeadl
 When the app quits, its forward fails and the next ensure starts or reuses the managed server.
 
 > Decision record: [ADR-0024](decisions/ADR-0024-one-host-server.md)
+> Decision record: [ADR-0025](decisions/ADR-0025-packaged-app-server-only.md)
 
 ### Shared runtime
 

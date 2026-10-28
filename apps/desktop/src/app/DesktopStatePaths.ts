@@ -11,7 +11,7 @@ import {
   STABLE_DESKTOP_HOME_DIR_NAME,
 } from "@goat/shared/desktopAppServer";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
-import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
+import { usesNightlyDesktopState } from "../updates/updateChannels.ts";
 
 export type JoinPath = (first: string, ...segments: string[]) => string;
 
@@ -75,7 +75,7 @@ export function resolveDesktopBaseDir(input: {
       return input.joinPath(
         input.homeDirectory,
         GOAT_HOME_DIR_NAME,
-        isNightlyDesktopVersion(input.appVersion)
+        usesNightlyDesktopState(input.appVersion)
           ? NIGHTLY_DESKTOP_HOME_DIR_NAME
           : STABLE_DESKTOP_HOME_DIR_NAME,
       );

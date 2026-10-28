@@ -40,6 +40,3 @@
   - Work a hub starts on the app server stops when the person quits the app.
   - An older app without `runtimeSessions`, a host without `curl`, and Windows hosts keep the
     managed server.
-  - Only packaged apps count. With nightly and stable both running, the nightly app is the host's
-    server and the stable app's threads stay out of hubs' view; the probe logs the one it passed
-    over (#1842). A desktop build run from source is never attached (#1841).

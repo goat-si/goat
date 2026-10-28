@@ -351,7 +351,7 @@ describe("GOAT app server attachment", () => {
         });
         const beside = `${both.home}/.goat/desktop/userdata`;
         yield* fs.makeDirectory(beside, { recursive: true });
-        yield* fs.writeFileString(`${beside}/runtime-control.token`, `${TOKEN}\n`);
+        yield* fs.writeFileString(`${beside}/runtime-control.token`, "stable-control-secret\n");
         yield* fs.writeFileString(
           `${beside}/server-runtime.json`,
           JSON.stringify({
@@ -376,6 +376,16 @@ describe("GOAT app server attachment", () => {
           stateDir: ".goat/desktop-nightly/userdata",
           otherLive: [".goat/desktop/userdata"],
         });
+        // Credentials still come from the attached nightly server, with its own token.
+        yield* issueRemoteMcpClientSession(
+          uploadTarget,
+          { label: "hub", ttl: "12h", runtimeModeCeiling: "approval-required" },
+          {},
+          ARCHIVE,
+          preferred.selectedRuntime,
+        ).pipe(Effect.provide(both.spawner));
+        expect(nightly.sessions.map((session) => session.header)).toEqual([TOKEN]);
+        expect(stable.sessions).toEqual([]);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
