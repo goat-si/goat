@@ -339,9 +339,11 @@ export function parseMacGrants(structuredJson: string | undefined): MacGrants | 
  */
 export function reportedMacGrants(
   helper: Option.Option<{
-    readonly readiness?: {
-      readonly grants: { readonly accessibility: string; readonly screenCapture: string };
-    };
+    readonly readiness?:
+      | {
+          readonly grants: { readonly accessibility: string; readonly screenCapture: string };
+        }
+      | undefined;
   }>,
 ): MacGrants | null {
   const grants = Option.isSome(helper) ? helper.value.readiness?.grants : undefined;
