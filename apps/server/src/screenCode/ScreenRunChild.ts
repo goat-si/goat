@@ -450,6 +450,7 @@ export async function runScreenChild(
       const results = vm.newArray();
       vm.setProp(vm.global, "__screenResults", results);
       results.dispose();
+      vm.setProp(vm.global, "__screenHalted", vm.false);
       deadline = cell.deadlineMillis;
       // Starting the child can use up a short cell's wall time; such a cell never runs.
       if (Date.now() >= deadline) {

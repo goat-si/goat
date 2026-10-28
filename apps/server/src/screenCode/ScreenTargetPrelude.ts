@@ -8,6 +8,9 @@ import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 export const screenTargetPrelude = (methods: ReadonlyArray<string>): string => String.raw`
 var __screenValues = Object.create(null);
 var __screenResults = [];
+// Set when the runtime refused a batch group: like a failed call at the host, it stops the cell's
+// later input, while reads still run. The runtime clears it for each cell.
+var __screenHalted = false;
 const __values = new Proxy(__screenValues, {
   set(target, key, value) {
     const json = JSON.stringify(value);
@@ -64,23 +67,29 @@ const __flush = () => {
     while (end < queued.length && end - start < ${MAX_BATCH_CALLS} && queued[end].arg.targetRef.id === queued[start].arg.targetRef.id) end++;
     const group = queued.slice(start, end);
     start = end;
+    if (__screenHalted) { for (const entry of group) entry.reject(__notRun()); continue; }
     let jsons;
     try {
       jsons = group.map((entry, index) =>
         JSON.stringify([group.length > 1 ? { ...entry.arg, batch: { index, size: group.length } } : entry.arg]));
     } catch (raw) { for (const entry of group) entry.reject(__error(raw)); continue; }
     if (group.length > 1 && !__hostGroup(JSON.stringify(group.map((entry, index) => [entry.method, jsons[index]])))) {
+      __screenHalted = true;
       for (const entry of group) entry.reject(new ScreenError('refused', 'screen call refused', true));
       continue;
     }
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
 };
+const __notRun = () => new ScreenError('not_run',
+  'A batch in this cell was refused before any of it went out, so this call did not run. Observe in a new cell before acting again.', true);
 const __reply = (method, args) => {
   if (__queued.length > 0) __flush();
+  if (__screenHalted && __inputs.has(method)) return Promise.reject(__notRun());
   return __send(method, args);
 };
 const __enqueue = (method, arg) => new Promise((resolve, reject) => {
+  if (__screenHalted) return reject(__notRun());
   if (__queued.length === 0) Promise.resolve().then(() => { if (__queued.length > 0) __flush(); });
   __queued.push({ method, arg, resolve, reject });
 });
