@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as PullRequestSync from "../../../orchestration-v2/PullRequestSyncReactor.ts";
 import {
   type PullRequestTestThread,
   v2PullRequestThread,
@@ -178,6 +179,7 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
       return { sequence: 1, storedEvents: [] };
     });
   const layerDependencies = Layer.mergeAll(
+    Layer.mock(PullRequestSync.PullRequestSyncReactor)({}),
     Layer.mock(ProjectService.ProjectService)({
       getShell: () => Effect.succeed(Option.fromNullishOr(project)),
       listShells: () => Effect.succeed(options.projects ?? (project ? [project] : [])),

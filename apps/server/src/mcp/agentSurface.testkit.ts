@@ -85,6 +85,7 @@ import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestSync from "../orchestration-v2/PullRequestSyncReactor.ts";
 import * as ThreadDiffMcpService from "./ThreadDiffMcpService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
@@ -172,6 +173,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),
+  Layer.mock(PullRequestSync.PullRequestSyncReactor)({}),
   Layer.mock(ThreadDiffMcpService.ThreadDiffMcpService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
   Layer.mock(StorageReclaim.StorageReclaim)({}),
@@ -282,6 +284,15 @@ const inertDependencies = Layer.mergeAll(
 const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
 const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+
+export const dependenciesWithPullRequests = (
+  service: Partial<PullRequestService.PullRequestService["Service"]>,
+) =>
+  Layer.mergeAll(
+    inertDependencies,
+    Profiles.layer,
+    Layer.mock(PullRequestService.PullRequestService)(service),
+  );
 /**
  * The calling thread's project exists and grants Agent device access, so a device handler runs
  * past its per-call access check. Merge it after `dependencies`.

@@ -133,11 +133,31 @@ const compact = (schema: Json): Json => {
 
 const notesOf = (entry: AgentSurfaceEntry | undefined) => entry?.parameters;
 
+const withRequiredKey = (entry: AgentSurfaceEntry | undefined, schema: JsonObject) => {
+  if (!entry?.keyRequired) return schema;
+  const properties = schema.properties as JsonObject;
+  const key = properties.clientRequestId as JsonObject;
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  return {
+    ...schema,
+    required: [...new Set([...required, "clientRequestId"])],
+    properties: {
+      ...properties,
+      clientRequestId: Array.isArray(key.anyOf)
+        ? { ...key, anyOf: key.anyOf.filter((branch) => !isNullSchema(branch)) }
+        : key,
+    },
+  };
+};
+
 /** What the decoded schema and then the path's registry entry say about each argument. */
 const describedInput = (name: string, schema: JsonObject, parameters?: SchemaAST.AST) =>
-  withParameterNotes(
-    notesOf(resolveAgentSurfaceEntry(name)),
-    parameters === undefined ? schema : withTypeSideDescriptions(parameters, schema),
+  withRequiredKey(
+    resolveAgentSurfaceEntry(name),
+    withParameterNotes(
+      notesOf(resolveAgentSurfaceEntry(name)),
+      parameters === undefined ? schema : withTypeSideDescriptions(parameters, schema),
+    ),
   );
 
 /**

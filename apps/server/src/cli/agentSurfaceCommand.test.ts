@@ -221,6 +221,16 @@ describe("arguments", () => {
 });
 
 describe("routing", () => {
+  it("generates PR comment help with the required key and uncertain outcome guidance", () => {
+    expect(invoke("pull-request", "comment", "--help")).toMatchObject({
+      kind: "help",
+      text: expect.stringContaining("clientRequestId is required"),
+    });
+    expect(invoke("pull-request", "review-submit", "--help")).toMatchObject({
+      kind: "help",
+      text: expect.stringContaining("approve-only verdict is not visible in activity"),
+    });
+  });
   it("leaves operator commands to the operator CLI and generates the rest", () => {
     expect(invoke("serve")).toBeUndefined();
     expect(invoke("thread", "send", "t", "hi")).toBeUndefined();

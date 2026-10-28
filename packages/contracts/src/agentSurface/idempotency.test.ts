@@ -7,9 +7,22 @@ type Entry = AgentSurfaceEntry & { readonly path: string };
 const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
 const byPath: ReadonlyMap<string, Entry> = new Map(entries.map((entry) => [entry.path, entry]));
 
-// Writes that still take no retry key and record no reason (#1029). Remove a path when its write
+// Writes that still take no retry key and record no reason. Remove a path when its write
 // declares one; this list only shrinks.
 const NOT_YET_KEYED: ReadonlySet<string> = new Set<string>([]);
+
+it("requires keys only on ToolAdmission-keyed writes", () => {
+  const required = entries.filter((entry) => entry.keyRequired);
+  expect(required.map((entry) => entry.path).sort()).toEqual([
+    "pull_request.comment",
+    "pull_request.review_submit",
+    "pull_request.thread_reply",
+  ]);
+  for (const entry of required) {
+    expect(entry.idempotency, entry.path).toBe("key");
+    expect(isKeyedWrite(entry), entry.path).toBe(true);
+  }
+});
 
 it("gives every write a retry key with a reconcile read, or a recorded reason it has none", () => {
   for (const entry of entries) {
