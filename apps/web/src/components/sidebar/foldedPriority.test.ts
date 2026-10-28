@@ -58,13 +58,14 @@ function row(
   };
 }
 const keyOf = (thread: Thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-const working = (id: string) =>
+const runtimeOf = (id: string, status: "running" | "idle") =>
   presentThreadShell(local, {
     ...makeThreadFixture().source,
     id: ThreadId.make(id),
     latestRunId: RunId.make(`run-${id}`),
-    status: "running",
+    status,
   }).runtime;
+const working = (id: string) => runtimeOf(id, "running");
 const capabilitiesOf = () => ({ threadSnooze: true, threadSettlement: true });
 
 function fold(
@@ -157,6 +158,15 @@ describe("unread threads folded under a launcher", () => {
     const result = fold([launcher, middle, leaf]);
     expect(foldedUnseenUnder(result, keyOf(launcher)).map((thread) => thread.id)).toEqual(["leaf"]);
     expect(rankOf(result, launcher)).toBe(2);
+  });
+
+  it("leave a read launcher alone when a read child is only idle", () => {
+    const launcher = row("launcher");
+    const idle = row("idle", { launchedBy: "launcher", runtime: runtimeOf("idle", "idle") });
+    const result = fold([launcher, idle]);
+    expect(result.folded.map((thread) => thread.id)).toEqual(["idle"]);
+    expect(result.unseenKeys.size).toBe(0);
+    expect(rankOf(result, launcher)).toBeNull();
   });
 
   it("count once on the activity bell through their launcher", () => {

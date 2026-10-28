@@ -4,6 +4,7 @@ import type { EnvironmentId, ThreadId } from "@goat/contracts";
 
 import {
   isSidebarPriorityMember,
+  resolveSidebarPriorityRank,
   resolveSidebarWokeAtForRow,
   type SidebarPriorityHolds,
 } from "../Sidebar.logic";
@@ -44,7 +45,10 @@ export function wakesBeforeFold<T extends PriorityMember & Keyed>(input: {
   return wakes;
 }
 
-/** Whether a thread would sit in Priority on its own row; launch folds lift its launcher if so. */
+/**
+ * Whether a thread would sit in Priority on its own row as unread (rank 2: an unseen completion or
+ * wake); launch folds lift its launcher if so. Idle and working rows lift through their own state.
+ */
 export function foldedPriorityMember<T extends PriorityMember & Keyed>(input: {
   readonly now: string;
   readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
@@ -57,15 +61,28 @@ export function foldedPriorityMember<T extends PriorityMember & Keyed>(input: {
   return (thread) => {
     const key = keyOf(thread);
     const capabilities = input.capabilitiesOf(thread.environmentId);
-    return isSidebarPriorityMember({
-      thread,
-      now: input.now,
-      localLastVisitedAt: input.localLastVisitedAtByKey[key],
-      hasChildAttention: false,
-      ...(input.wakes?.has(key) === true ? { wokeAt: input.wakes.get(key) ?? null } : {}),
-      supportsSnooze: capabilities?.threadSnooze === true,
-      supportsSettlement: capabilities?.threadSettlement === true,
-    });
+    const localLastVisitedAt = input.localLastVisitedAtByKey[key];
+    const wokeAt =
+      input.wakes?.has(key) === true
+        ? (input.wakes.get(key) ?? null)
+        : threadWokeAt(thread, { now: input.now });
+    return (
+      resolveSidebarPriorityRank({
+        thread,
+        localLastVisitedAt,
+        wokeAt,
+        hasChildAttention: false,
+      }) === 2 &&
+      isSidebarPriorityMember({
+        thread,
+        now: input.now,
+        localLastVisitedAt,
+        hasChildAttention: false,
+        wokeAt,
+        supportsSnooze: capabilities?.threadSnooze === true,
+        supportsSettlement: capabilities?.threadSettlement === true,
+      })
+    );
   };
 }
 
