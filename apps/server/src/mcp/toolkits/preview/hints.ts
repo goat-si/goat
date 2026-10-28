@@ -36,6 +36,13 @@ export const previewHints = (
     return {
       next: "Over 25 MiB, so not saved: open the URL with goat_preview_navigate to download it.",
     };
+  if (operation === "click" && "effect" in result) {
+    if (result.effect === "confirmed") return {};
+    if (result.effect === "suspected_noop")
+      return {
+        next: "Nothing changed right after the click: check with goat_preview_snapshot diff:true before retrying.",
+      };
+  }
   return actions.has(operation)
     ? { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }
     : {};

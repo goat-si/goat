@@ -42,7 +42,31 @@ export type SnapshotMetadata = {
   readonly [key: string]: unknown;
 };
 
-export const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
+const field = (entry: unknown, key: string) =>
+  typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)[key] : undefined;
+const consoleFailure = (entry: unknown) => field(entry, "level") === "error";
+const networkFailure = (entry: unknown) => {
+  const status = field(entry, "status");
+  return field(entry, "failed") === true || (typeof status === "number" && status >= 400);
+};
+
+/** A snapshot carries only failing diagnostics; goat_preview_logs reads the whole record. */
+const failuresOnly = (metadata: SnapshotMetadata) => {
+  const consoleEntries = metadata.consoleEntries.filter(consoleFailure);
+  const networkEntries = metadata.networkEntries.filter(networkFailure);
+  const quietConsole = metadata.consoleEntries.length - consoleEntries.length;
+  const quietNetwork = metadata.networkEntries.length - networkEntries.length;
+  return {
+    metadata: { ...metadata, consoleEntries, networkEntries },
+    logNote:
+      quietConsole + quietNetwork > 0
+        ? `${quietConsole} console and ${quietNetwork} network entries without errors left out; goat_preview_logs reads them.`
+        : undefined,
+  };
+};
+
+export const boundSnapshotMetadata = (full: SnapshotMetadata) => {
+  const { metadata, logNote } = failuresOnly(full);
   const omitted: Array<string> = [];
   const { accessibilityTree, ...withoutTree } = metadata;
   const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
@@ -186,7 +210,7 @@ export const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const treeCut =
     (accessibilityTree !== undefined && ariaTree === undefined) ||
     (ariaTree !== undefined && ariaTreeChars < ariaTree.length);
-  return { value: value(), text, omitted, treeCut };
+  return { value: value(), text, omitted, treeCut, logNote };
 };
 
 /**

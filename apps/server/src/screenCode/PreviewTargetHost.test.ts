@@ -82,6 +82,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     failure: undefined as PreviewAutomationError | undefined,
     snapshotFailure: undefined as PreviewAutomationError | undefined,
     navigateOnClick: false,
+    clickResult: { ok: true } as object,
   };
   const requests: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0][] = [];
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
@@ -114,7 +115,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
         return Effect.succeed({ url: state.url, title: tab.title, text: "# Workspace" } as A);
       state.clicked = true;
       if (state.navigateOnClick) state.url = "https://next.test/";
-      return Effect.succeed({ ok: true } as A);
+      return Effect.succeed(state.clickResult as A);
     },
   };
   const host = yield* makePreviewTargetHost(broker);
@@ -177,6 +178,26 @@ it.effect("a cell reads page text from an unclaimed tab within the reply budget"
   }),
 );
 
+it.effect("a click the browser saw change something is a confirmed receipt", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.clickResult = { effect: "confirmed", evidence: ["dom"] };
+    yield* fixture.dispatch("claim_tab");
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    fixture.state.clickResult = { effect: "suspected_noop", evidence: [] };
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    const receipts = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.filter((entry) => entry.receipt.method === "click")
+      .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
+    expect(receipts).toEqual([
+      ["confirmed", ["click:dom"]],
+      ["unverifiable", ["dispatched; observe to confirm"]],
+    ]);
+  }),
+);
+
 it.effect("observe passes interactive-only and scope narrowing to the snapshot", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
@@ -188,7 +209,7 @@ it.effect("observe passes interactive-only and scope narrowing to the snapshot",
   }),
 );
 
-it.effect("actions retire refs while preserving the last complete tree for a diff", () =>
+it.effect("in-page actions keep refs and the last complete tree for a diff", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
     yield* fixture.dispatch("claim_tab");
@@ -196,8 +217,9 @@ it.effect("actions retire refs while preserving the last complete tree for a dif
     const ref = first.elements[0]!.ref;
     const clicked = yield* fixture.dispatch("click", { ref });
     expect(clicked?.outcome).toBe("ok");
-    const stale = yield* fixture.dispatch("click", { ref });
-    expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    // The browser itself refuses a ref from a replaced document, before any input.
+    const again = yield* fixture.dispatch("click", { ref });
+    expect(again?.outcome).toBe("ok");
     const diff = yield* fixture.observe({ mode: "diff" });
     expect(diff.mode).toBe("diff");
     expect(diff.indexedText).toBe("+ - button Cancel [ref=e2]");

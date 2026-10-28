@@ -1966,10 +1966,10 @@ const make = Effect.gen(function* () {
         );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
-        await recordAction(tab, "click", () =>
+        const { effect, evidence } = await recordAction(tab, "click", () =>
           ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
         );
-        return undefined;
+        return { effect, evidence, url: tab.page.url() };
       }
       case "hover":
         return recordAction(tab, "hover", () =>

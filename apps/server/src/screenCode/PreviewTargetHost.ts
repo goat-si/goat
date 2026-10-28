@@ -646,8 +646,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const ownClose =
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
-      observations.index.invalidateTarget(bound.ref.id);
+      // Refs outlive completed in-page input, as computer use tokens do: the browser refuses a ref
+      // from a replaced document before any input. A failure or a new document retires them.
+      const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
+      if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       const result = yield* invoke(bound, context, operation, input, cellBudgetMs).pipe(
+        Effect.tapError(() => retire),
         Effect.ensuring(
           Effect.sync(() => {
             if (!ownClose) return;
@@ -662,10 +666,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
+      // A click the browser saw change something is confirmed; nothing seen stays unverifiable,
+      // since late effects can follow, so the cell goes on and one observation settles it.
+      const seen =
+        operation === "click" && typeof result === "object" && result !== null
+          ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
+          : undefined;
+      const confirmed = seen?.effect === "confirmed" && Array.isArray(seen.evidence);
       return {
         value: result,
-        category: "unverifiable",
-        evidence: ["dispatched; observe to confirm"],
+        category: confirmed ? "confirmed" : "unverifiable",
+        evidence: confirmed
+          ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
+          : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
       };
     },

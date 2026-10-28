@@ -32,6 +32,7 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
+import { type ClickEffect, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
   narrowTree,
@@ -713,7 +714,7 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): Promise<{ readonly x: number; readonly y: number }> => {
+): Promise<{ readonly x: number; readonly y: number } & ClickEffect> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
@@ -721,6 +722,9 @@ export const click = async (
   await pointer(point, "click");
   const button = input.button ?? "left";
   if (locator !== null) await settled(locator, deadline);
+  const watch = await watchClick(page);
+  let sent = false;
+  let dialog = false;
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -737,6 +741,7 @@ export const click = async (
         "The click's deadline passed after its first press; the later presses were not sent.",
       );
     gate();
+    sent = true;
     if (count === 1)
       return locator === null
         ? page.mouse.click(point.x, point.y, { button })
@@ -750,17 +755,20 @@ export const click = async (
       const pressed = press(count);
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
         // That press waits on the dialog, past this action; later presses are never sent.
+        dialog = true;
         gate.linger?.(pressed);
         void pressed.catch(constVoid);
         break;
       }
     }
   } catch (cause) {
+    watch.cancel();
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
-  return point;
+  if (!sent) watch.cancel();
+  return { ...point, ...(await watch.settle(dialog)) };
 };
 
 export const type = async (
