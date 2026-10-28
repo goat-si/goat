@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "calculator-multiply",
+      "surface": "desktop",
+      "prompt": "Calculator is already open on this Mac. Use its existing window and do not open another. Clear it, enter 987 × 65 = in Calculator itself and read the result from Calculator's display; do not compute it yourself. Then press Escape in Calculator so its display returns to 0, and leave Calculator open.",
+      "answerKeys": ["status", "result"],
+      "expect": {
+        "result": "64155"
+      },
+      "witness": "calculator",
+      "oracle": "calculatorMultiply",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "finder-sidebar",
+      "surface": "desktop",
+      "prompt": "Open a new Finder window; leave the Finder windows that are already open alone. In the new window's sidebar open Downloads and confirm the window shows Downloads, then open Recents in the sidebar and confirm it shows Recents. Close the window you opened. Report visited as the locations the new window showed after each sidebar click, in order, using their sidebar names.",
+      "answerKeys": ["status", "visited"],
+      "expect": {
+        "visited": ["Downloads", "Recents"]
+      },
+      "witness": "finder",
+      "oracle": "finderSidebar",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "textedit-korean-discard",
+      "surface": "desktop",
+      "prompt": "Open TextEdit, create a new blank document and type this exact sentence: 평가 장치가 한글 입력을 확인합니다. Read the document's text back to confirm it. Then close that document without saving it (choose Delete or Don't Save) and leave none of your TextEdit documents open.",
+      "answerKeys": ["status", "typedText"],
+      "expect": {
+        "typedText": "평가 장치가 한글 입력을 확인합니다."
+      },
+      "witness": "textEdit",
+      "oracle": "textEditDiscard",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "kakaotalk-tabs",
+      "surface": "desktop",
+      "prompt": "In KakaoTalk's main window, note which tab is selected in the left sidebar (Friends or Chats), switch to the other one and confirm it is selected, then switch back to the tab that was selected at first. Never open a chat room or a profile. If KakaoTalk is signed out and shows a log-in screen, do nothing in it and report status \"skipped\".",
+      "answerKeys": ["status", "startTab", "visited"],
+      "witness": "kakao",
+      "oracle": "kakaoTabs",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "web-add-remove",
+      "surface": "web",
+      "prompt": "Open https://the-internet.herokuapp.com/add_remove_elements/ in a new tab, click its Add Element button 8 times, then read the page and count the Delete buttons. Close the tab.",
+      "answerKeys": ["status", "deleteButtons"],
+      "expect": {
+        "deleteButtons": 8
+      },
+      "evidence": [
+        [
+          {
+            "pattern": "\\bDelete\\b",
+            "count": 8,
+            "label": "8 Delete buttons in one read"
+          },
+          {
+            "pattern": "(added-manually|delete)[^\\n]{0,40}\\b8\\b|\\b8\\b[^\\n]{0,40}(added-manually|delete)",
+            "label": "a count of 8 Delete buttons"
+          }
+        ]
+      ],
+      "oracle": "webEvidence",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "web-checkboxes",
+      "surface": "web",
+      "prompt": "Open https://the-internet.herokuapp.com/checkboxes in a new tab. Toggle each of its two checkboxes once, then read the page to confirm each one's checked state. Close the tab.",
+      "answerKeys": ["status", "checkbox1", "checkbox2"],
+      "expect": {
+        "checkbox1": true,
+        "checkbox2": false
+      },
+      "evidence": [
+        [
+          {
+            "pattern": "\\[\\s*true\\s*,\\s*false\\s*\\]",
+            "label": "[true, false] read from the page"
+          },
+          {
+            "pattern": "checked\\W{0,4}true[\\s\\S]{0,120}checked\\W{0,4}false",
+            "label": "checked true then false"
+          },
+          {
+            "pattern": "checkbox[^\\n]*\\bchecked\\b[^\\n]*\\n[^\\n]*checkbox(?![^\\n]*\\bchecked\\b)",
+            "label": "first checkbox checked, second not"
+          }
+        ]
+      ],
+      "oracle": "webEvidence",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "web-form",
+      "surface": "web",
+      "prompt": "Open https://httpbin.org/forms/post in a new tab. Fill in Customer name with Eval Runner, Telephone with 010-0000-0000, E-mail address with eval@example.com, choose the Medium pizza size and write 평가용 입력 in Delivery instructions. Do not submit the form. Read the field values back from the page to confirm them, then close the tab.",
+      "answerKeys": ["status", "customerName", "telephone", "email", "size", "comments"],
+      "expect": {
+        "customerName": "Eval Runner",
+        "telephone": "010-0000-0000",
+        "email": "eval@example.com",
+        "size": "Medium",
+        "comments": "평가용 입력"
+      },
+      "evidence": [
+        [
+          {
+            "pattern": "Eval Runner",
+            "label": "the customer name read back"
+          }
+        ],
+        [
+          {
+            "pattern": "eval@example\\.com",
+            "label": "the e-mail read back"
+          }
+        ],
+        [
+          {
+            "pattern": "평가용 입력",
+            "label": "the delivery instructions read back"
+          }
+        ]
+      ],
+      "forbidEvidence": [
+        {
+          "pattern": "\"form\"\\s*:\\s*\\{",
+          "label": "submitted the form (httpbin echoed it)"
+        },
+        {
+          "pattern": "httpbin\\.org/post\\b",
+          "label": "reached the form's submit URL"
+        }
+      ],
+      "oracle": "webEvidence",
+      "deadlineMs": 300000
+    },
+    {
+      "id": "web-parallel-read",
+      "surface": "web",
+      "prompt": "Read these two public pages at the same time, in parallel if your tools allow, and report each page's main heading: https://example.com and https://the-internet.herokuapp.com/ . Close any tabs you opened.",
+      "answerKeys": ["status", "exampleHeading", "internetHeading"],
+      "expect": {
+        "exampleHeading": "Example Domain",
+        "internetHeading": "Welcome to the-internet"
+      },
+      "evidence": [
+        [
+          {
+            "pattern": "Example Domain",
+            "label": "example.com's heading"
+          }
+        ],
+        [
+          {
+            "pattern": "Welcome to the-internet",
+            "label": "the-internet's heading"
+          }
+        ]
+      ],
+      "oracle": "webEvidence",
+      "deadlineMs": 300000
+    }
+  ]
+}
