@@ -3255,6 +3255,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         `${path.join(repoRoot, "apps/desktop/resources/linux/si.goat.desktop.metainfo.xml")}=/usr/share/metainfo/si.goat.desktop.metainfo.xml`,
         `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/goat/copyright`,
       ],
+      // electron-builder's own scripts plus the /usr/bin/t3code launcher that builds from before
+      // the rename relaunch after an in-app update; the t3code package's postrm removes it.
+      afterInstall: path.join(repoRoot, "apps/desktop/resources/linux/after-install.tpl"),
+      afterRemove: path.join(repoRoot, "apps/desktop/resources/linux/after-remove.tpl"),
       // Debian 13 and Ubuntu 24.04 use 64-bit-time names; retain old-name fallbacks.
       depends: [
         "libasound2t64 | libasound2",
