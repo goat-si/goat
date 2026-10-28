@@ -107,6 +107,14 @@ servers keep starting normally; connect with <a href="/goat/docs/user/remote-acc
 <p>Start with <code>goat service status</code> on the host. It prints the log path and, on Linux,
 checks whether the installed service is running, enabled, and allowed to survive
 logout.</p>
+<p>If the database writer fails permanently, GOAT disables commands and exits with
+code 80. The desktop app or installed service can restart it; a server started
+with <code>goat</code> or <code>goat serve</code> needs to be started again. Connected clients reconnect
+after the restart. GOAT does not replay an operation whose commit result is
+unknown or repair database corruption automatically. If the failure repeats,
+read the server logs before restarting again and check disk space and access to
+the data directory. This recovery requires a responsive server process; it does
+not detect a frozen process.</p>
 <p>If it stops when your SSH session closes, check for <code>linger-disabled</code>. An
 administrator can enable lingering with:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">sudo</span><span style="color:#9ECBFF"> loginctl</span><span style="color:#9ECBFF"> enable-linger</span><span style="color:#9ECBFF"> "$(</span><span style="color:#B392F0">id</span><span style="color:#79B8FF"> -un</span><span style="color:#9ECBFF">)"</span></span></code></pre>
