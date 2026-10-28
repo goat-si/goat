@@ -109,6 +109,9 @@ const __target = (binding, note, owner) => {
     let found = observation.elements.filter((item) => fits(item) && (name === undefined || item.name === name));
     if (found.length === 0 && name !== undefined)
       found = observation.elements.filter((item) => fits(item) && item.name.toLowerCase().includes(String(name).toLowerCase()));
+    // An element with no name of its own, such as a cell or a generic box, is found by its text.
+    if (found.length === 0 && name !== undefined)
+      found = observation.elements.filter((item) => fits(item) && String(item.text ?? '').toLowerCase().includes(String(name).toLowerCase()));
     if (found.length !== 1)
       throw new ScreenError(found.length ? 'target_ambiguous' : 'target_missing',
         (found.length ? found.length + ' elements match ' : 'Nothing matches ') + JSON.stringify(target) + '; use a number from observe.', true);
@@ -245,7 +248,8 @@ const __target = (binding, note, owner) => {
       shot();
       return act('drag', 'drag', { from_x: from[0], from_y: from[1], to_x: to[0], to_y: to[1] });
     },
-    waitFor: (wanted = {}, options = {}) => wait(wanted, options.timeoutMs),
+    // The timeout comes as a number, waitFor(c, 5000), or as options, waitFor(c, {timeoutMs: 5000}).
+    waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),
     verify: (wanted = {}) => wait(wanted, tab ? 250 : 0),
     rightClick: (arg = {}) => call('right_click', arg),
     selectText: (arg = {}) => call('select_text', arg),

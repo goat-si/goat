@@ -49,6 +49,11 @@ const firstArg = (call: ScreenHostCall): Record<string, unknown> => {
 };
 const stringField = (record: Record<string, unknown>, key: string) =>
   typeof record[key] === "string" ? (record[key] as string) : undefined;
+/** A wait without its own timeout gets the browser's usual one. */
+const DEFAULT_WAIT_MS = 15_000;
+// A wait ends this long before its cell, so its answer arrives and it never holds the tab's queue
+// into the next cell.
+const WAIT_ANSWER_MARGIN_MS = 500;
 
 interface BoundTarget {
   readonly ref: ScreenTargetRef;
@@ -396,7 +401,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const current = yield* status(
         bound,
         context,
-        call.method === "observe" || call.method === "tab_status" || call.method === "read_page",
+        call.method === "observe" ||
+          call.method === "tab_status" ||
+          call.method === "read_page" ||
+          call.method === "wait_for",
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
@@ -702,16 +710,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
         const requested =
-          typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : Infinity;
+          typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : DEFAULT_WAIT_MS;
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
             operation: "waitFor",
             input,
-            exact: exact(bound.tab),
+            // A wait only reads, so it watches whatever document the tab holds, on any origin.
+            exact: exact(bound.tab, false),
             timeoutMs: Math.max(
               1,
-              Math.min(requested, context.limits.cellWallMs, call.deadlineMillis - now),
+              Math.min(
+                requested,
+                context.limits.cellWallMs,
+                call.deadlineMillis - now - WAIT_ANSWER_MARGIN_MS,
+              ),
             ),
           })
           .pipe(Effect.result);
@@ -760,6 +773,17 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
       if (typeof reached === "string")
         callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
+      // The agent moved its own tab, so the handle follows to the page it reached; the old
+      // document's refs and points were retired above.
+      if (
+        ["navigate", "reload", "back", "forward"].includes(operation) &&
+        typeof reached === "string"
+      )
+        targets.set(bound.ref.id, {
+          ref: bound.ref,
+          tab: { ...bound.tab, url: reached },
+          origin: originOf(reached),
+        });
       if (call.method === "close_tab") {
         observations.evictTarget(bound.ref.id);
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));

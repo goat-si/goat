@@ -141,6 +141,72 @@ it.effect("same-tab origin changes require observation before further input", ()
   }),
 );
 
+it.effect(
+  "a tab handle survives its own navigation: later waits and input reach the new page",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      yield* fixture.observe();
+      fixture.state.navigateOnClick = true;
+      fixture.state.clickResult = { tabId: fixture.tab.tabId, url: "https://next.test/" };
+      const navigated = yield* fixture.dispatch("navigate_tab", { url: "https://next.test/" });
+      expect(navigated?.outcome).toBe("ok");
+      const waited = yield* fixture.dispatch("wait_for", { urlIncludes: "next" });
+      expect(waited).toMatchObject({ outcome: "ok", value: { status: "met" } });
+      expect((yield* fixture.dispatch("press_key", { key: "Enter" }))?.outcome).toBe("ok");
+      expect(fixture.requests.find((request) => request.operation === "press")?.exact?.origin).toBe(
+        "https://next.test",
+      );
+    }),
+);
+
+it.effect("a wait reads a page that moved to another origin by itself", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    fixture.state.navigateOnClick = true;
+    yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+    const waited = yield* fixture.dispatch("wait_for", { urlIncludes: "next" });
+    expect(waited).toMatchObject({ outcome: "ok", value: { status: "met" } });
+    // Waiting only reads, so it watches whatever document the tab holds now.
+    const request = fixture.requests.find((entry) => entry.operation === "waitFor");
+    expect(request?.exact).not.toHaveProperty("origin");
+  }),
+);
+
+it.effect(
+  "a wait answers before its cell's deadline, so it never holds the tab into the next cell",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      const wait = (
+        callId: number,
+        args: { text: string; timeoutMs?: number },
+        deadlineMillis: number,
+      ) =>
+        fixture.bridge.handle(
+          {
+            ...call("wait_for", callId, args, fixture.ref),
+            cellId: `wait-${callId}`,
+            deadlineMillis,
+          },
+          { ...context, cellId: `wait-${callId}` },
+        );
+      expect((yield* wait(80, { text: "Missing" }, 60_000))?.value).toEqual({ status: "timeout" });
+      yield* wait(81, { text: "Missing", timeoutMs: 5_000 }, 1_000);
+      yield* wait(82, { text: "Missing" }, 1_000);
+      const waits = fixture.requests.filter((request) => request.operation === "waitFor");
+      // No timeout means the browser's usual 15 s; either way it ends with time left to answer.
+      expect(waits[0]?.timeoutMs).toBe(15_000);
+      for (const late of waits.slice(1)) {
+        expect(late.timeoutMs).toBeGreaterThan(0);
+        expect(late.timeoutMs).toBeLessThan(1_000);
+      }
+    }),
+);
+
 it.effect("a cell's timeline row shows the page its tab navigated to last", () => {
   const callApps = makeCallApps();
   return Effect.gen(function* () {

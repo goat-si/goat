@@ -132,7 +132,7 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
   if (!binding || binding.outcome !== "ok") throw new Error("Expected exact tab binding");
   const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
   let callId = 1;
-  // A failed call halts its cell, so the next call starts a new cell as an agent would.
+  // A failed write can halt its cell, so after any failure the next call starts a new cell.
   let cellId = "cell";
   let cells = 0;
   const dispatch = (method: ScreenHostCall["method"], args: ScreenHostCall["args"] = {}) =>

@@ -299,3 +299,64 @@ it("a Playwright-quoted tree line keeps its role, so its textbox is editable and
   });
   expect(query.elements.map((element) => element.role)).toEqual(["textbox"]);
 });
+
+it("a tab element keeps its role, name, text and selected state in a diff as in a full read", () => {
+  const observations = new ScreenObservations();
+  const form = (name: string, size: string, bacon: string) =>
+    [
+      "- generic [ref=e1]:",
+      `  - textbox "Customer name:" [ref=e2] [box=117,16,147,22]${name}`,
+      `  - radio "Small"${size} [ref=e3]`,
+      `  - checkbox "Bacon"${bacon} [ref=e4]`,
+      `  - 'textbox "Delivery time: HH:MM" [ref=e5]'${name ? ': "11:45"' : ""}`,
+      '  - button "Submit \\"order\\"" [ref=e6] [cursor=pointer]',
+      ...Array.from(
+        { length: 24 },
+        (_, line) => `  - paragraph: Unchanged form help, line ${line}`,
+      ),
+    ].join("\n");
+  const read = (accessibilityTree: string, base?: string) =>
+    observations.renderObservation({
+      draft: observations.normalizeTabSnapshot({
+        targetRef: tabDraft("").targetRef,
+        targetGeneration: 0,
+        connectionId: "connection",
+        controlGeneration: 1,
+        snapshot: {
+          url: "https://httpbin.test/forms/post",
+          title: "Form",
+          loading: false,
+          visibleText: "",
+          interactiveElements: [],
+          accessibilityTree,
+          consoleEntries: [],
+          networkEntries: [],
+          actionTimeline: [],
+          treeComplete: true,
+          refGeneration: "1",
+        },
+      }),
+      mode: base ? "diff" : "full",
+      ...(base ? { baseObservationId: base } : {}),
+      limits: { treeBytes: 8192 },
+    });
+  const fields = (observation: ReturnType<typeof read>) =>
+    observation.elements.map(({ role, name, text, selected }) => ({ role, name, text, selected }));
+  const full = read(form("", "", ""));
+  expect(fields(full)).toEqual([
+    { role: "generic", name: "", text: undefined, selected: undefined },
+    { role: "textbox", name: "Customer name:", text: undefined, selected: undefined },
+    { role: "radio", name: "Small", text: undefined, selected: false },
+    { role: "checkbox", name: "Bacon", text: undefined, selected: false },
+    { role: "textbox", name: "Delivery time: HH:MM", text: undefined, selected: undefined },
+    { role: "button", name: 'Submit "order"', text: undefined, selected: undefined },
+  ]);
+  const diff = read(form(": 홍길동 Test", " [checked]", " [checked]"), full.observationId);
+  expect(diff.mode).toBe("diff");
+  expect(fields(diff)).toEqual([
+    { role: "textbox", name: "Customer name:", text: "홍길동 Test", selected: undefined },
+    { role: "radio", name: "Small", text: undefined, selected: true },
+    { role: "checkbox", name: "Bacon", text: undefined, selected: true },
+    { role: "textbox", name: "Delivery time: HH:MM", text: "11:45", selected: undefined },
+  ]);
+});
