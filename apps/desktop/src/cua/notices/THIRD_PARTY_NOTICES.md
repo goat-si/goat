@@ -40,7 +40,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
 ## BSD-3-Clause: hyprland-toplevel-export-v1
 
 `crates/platform-linux` generates its Hyprland window-capture bindings
@@ -88,8 +87,8 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
 https://scripts.sil.org/OFL
 
----
 
+-----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 -----------------------------------------------------------
 
@@ -134,32 +133,32 @@ a copy of the Font Software, to use, study, copy, merge, embed, modify,
 redistribute, and sell modified and unmodified copies of the Font
 Software, subject to the following conditions:
 
-1. Neither the Font Software nor any of its individual components,
-   in Original or Modified Versions, may be sold by itself.
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
 
-2. Original or Modified Versions of the Font Software may be bundled,
-   redistributed and/or sold with any software, provided that each copy
-   contains the above copyright notice and this license. These can be
-   included either as stand-alone text files, human-readable headers or
-   in the appropriate machine-readable metadata fields within text or
-   binary files as long as those fields can be easily viewed by the user.
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
 
-3. No Modified Version of the Font Software may use the Reserved Font
-   Name(s) unless explicit written permission is granted by the corresponding
-   Copyright Holder. This restriction only applies to the primary font name as
-   presented to the users.
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
 
-4. The name(s) of the Copyright Holder(s) or the Author(s) of the Font
-   Software shall not be used to promote, endorse or advertise any
-   Modified Version, except to acknowledge the contribution(s) of the
-   Copyright Holder(s) and the Author(s) or with their explicit written
-   permission.
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
 
-5. The Font Software, modified or unmodified, in part or in whole,
-   must be distributed entirely under this license, and must not be
-   distributed under any other license. The requirement for fonts to
-   remain under this license does not apply to any document created
-   using the Font Software.
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
 
 TERMINATION
 This license becomes null and void if any of the above conditions are
@@ -183,12 +182,12 @@ and are compiled into the release binaries, unmodified unless noted. Their sourc
 available at the locations below. goat/notices/check_notices.py keeps this table in step with
 the locked dependency graph.
 
-| Component                                | Version                              | In                                                   | Source                                                                                                                                                              |
-| ---------------------------------------- | ------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| uniffi                                   | 0.31.0                               | every driver binary and SDK library                  | <https://crates.io/crates/uniffi/0.31.0>, <https://github.com/mozilla/uniffi-rs>                                                                                    |
-| uniffi_core                              | 0.31.0                               | every driver binary and SDK library                  | <https://crates.io/crates/uniffi_core/0.31.0>, <https://github.com/mozilla/uniffi-rs>                                                                               |
-| uniffi_pipeline                          | 0.31.0                               | every driver binary and SDK library                  | <https://crates.io/crates/uniffi_pipeline/0.31.0>, <https://github.com/mozilla/uniffi-rs>                                                                           |
-| option-ext                               | 0.2.0                                | Linux driver binary and SDK library                  | <https://crates.io/crates/option-ext/0.2.0>, <https://github.com/soc/option-ext>                                                                                    |
+| Component | Version | In | Source |
+| --- | --- | --- | --- |
+| uniffi | 0.31.0 | every driver binary and SDK library | <https://crates.io/crates/uniffi/0.31.0>, <https://github.com/mozilla/uniffi-rs> |
+| uniffi_core | 0.31.0 | every driver binary and SDK library | <https://crates.io/crates/uniffi_core/0.31.0>, <https://github.com/mozilla/uniffi-rs> |
+| uniffi_pipeline | 0.31.0 | every driver binary and SDK library | <https://crates.io/crates/uniffi_pipeline/0.31.0>, <https://github.com/mozilla/uniffi-rs> |
+| option-ext | 0.2.0 | Linux driver binary and SDK library | <https://crates.io/crates/option-ext/0.2.0>, <https://github.com/soc/option-ext> |
 | uniffi-runtime-core, uniffi-runtime-napi | uniffi-bindgen-react-native 0.31.0-3 | `cua_driver_node_runtime.node` (modified, see below) | <https://www.npmjs.com/package/uniffi-bindgen-react-native/v/0.31.0-3> (`runtimes/core`, `runtimes/napi`), <https://github.com/jhugman/uniffi-bindgen-react-native> |
 
 `cua_driver_node_runtime.node` is built from uniffi-bindgen-react-native's N-API runtime with the
@@ -207,3 +206,4 @@ archives. It credits:
   text is above.
 - **Dillon DuPont**: the independent-seat design in `src/input_experiment.cpp` is adapted from his
   Hyprland prototype.
+
