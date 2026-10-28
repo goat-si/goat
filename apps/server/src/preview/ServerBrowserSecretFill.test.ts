@@ -33,6 +33,7 @@ const makeTab = (
   const context = {};
   const page = {
     on: () => page,
+    url: () => "https://login.test/",
     frames: () => [],
     mainFrame: () => page,
     context: () => context,
@@ -146,6 +147,18 @@ it.live("keeps the fence when the fill's reply is lost after the page may have t
     expect(field.value).toBe(PASSWORD);
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
+    );
+  });
+});
+
+it.live("keeps the pixels of a tab off after a lost fill reply, once its field lets go", () => {
+  const { tab, closeSession } = makeTab({ fillReply: true });
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record).catch(() => undefined);
+    closeSession();
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
+    await expect(fill.guard(tab, request("snapshot", { captureImage: true }))).rejects.toThrow(
+      "image snapshots and recordings of it stay off",
     );
   });
 });

@@ -37,6 +37,16 @@ describe("the sign-in stage GOAT reports", () => {
     );
   });
 
+  it("reports a submission the site refused, or an error shown without a form, as a validation error", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    expect(stage(later, { submitted: { documentGeneration: 1, at: 1, status: 401 } }, 2)).toBe(
+      "validation_error",
+    );
+    expect(stage({ ...later, validation: ["Wrong password"] }, sent, 2)).toBe("validation_error");
+    // An alert on a page nobody submitted to says nothing about a sign-in.
+    expect(stage({ ...later, validation: ["Cookies"] })).toBe("unknown");
+  });
+
   it("keeps a same-document submission whose form went away as submitted, not accepted", () => {
     expect(stage({ signIn: false, identifier: "absent", password: "absent" }, sent)).toBe(
       "submitted",

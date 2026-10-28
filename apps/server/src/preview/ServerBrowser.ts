@@ -1272,6 +1272,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         ensureTab,
+        hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
         discard: async (snapshot, tab) => {
           if (tab) return dropTab(tab, true);
           const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
@@ -1937,7 +1938,7 @@ const make = Effect.gen(function* () {
       case "logs":
         return tab.diagnostics.readMasked(decodeLogsInput(input));
       case "signInState":
-        return secretFill.signInState(tab);
+        return secretFill.signInState(tab, tab.threadId);
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
         return inPageFetch(tab.page, tab.control, {
@@ -2464,8 +2465,9 @@ const make = Effect.gen(function* () {
   // An older desktop app ignores serverRendered and hosts the tab itself, with its own sign-ins.
   yield* desktopChannel.attached.pipe(
     Stream.runForEach((key) =>
-      Effect.sync(() => {
-        const tab = tabs.get(tabKey(key.threadId, key.tabId));
+      Effect.promise(async () => {
+        const id = tabKey(key.threadId, key.tabId);
+        const tab = tabs.get(id) ?? (await pendingTabs.get(id)?.catch(() => undefined));
         if (tab && hostedTwice(tab)) dropTab(tab, true);
       }),
     ),

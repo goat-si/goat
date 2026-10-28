@@ -27,7 +27,12 @@ export interface SignInPage {
 /** What GOAT recorded on this tab. */
 export interface SignInRecord {
   /** A request from the tab carried a password GOAT filled, while this document was showing. */
-  readonly submitted?: { readonly documentGeneration: number; readonly at: number };
+  readonly submitted?: {
+    readonly documentGeneration: number;
+    readonly at: number;
+    /** The HTTP status the submission got back, once it did. */
+    readonly status?: number;
+  };
   /** When, in the same order as submitted.at, a person last handed the tab back after GOAT asked them to finish a step. */
   readonly handedBackAt?: number;
 }
@@ -59,11 +64,13 @@ const PAGE_FACTS = String.raw`function () {
     const before = candidates.filter((input) => input.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING);
     const id = candidates.find(named) || before[before.length - 1];
     if (id) identifier = id.value.trim() ? "filled" : "empty";
-    for (const el of all(scope, "[aria-invalid=true], [role=alert]")) {
-      const text = (el.getAttribute("aria-invalid") === "true" ? el.validationMessage : el.innerText) || "";
-      if (text.trim() && visible(el)) validation.push(text.trim().slice(0, 200));
-      if (validation.length >= 3) break;
-    }
+  }
+  // Errors count with or without a form: a failed sign-in often shows no form at all.
+  const scope = signIn ? current[0].form || current[0].closest("form") || document : document;
+  for (const el of all(scope, "[aria-invalid=true], [role=alert]")) {
+    const text = (el.getAttribute("aria-invalid") === "true" ? el.validationMessage : el.innerText) || "";
+    if (text.trim() && visible(el)) validation.push(text.trim().slice(0, 4000));
+    if (validation.length >= 3) break;
   }
   const frames = all(document, "iframe").map((frame) => frame.src || "");
   const captcha =
@@ -123,13 +130,18 @@ export const signInStage = (
     ...(later ? ["the page changed after it"] : []),
   ];
   if (page.humanStep) return { stage: "human_step", evidence };
+  const failed = submitted?.status !== undefined && submitted.status >= 400;
+  if (failed || (page.validation.length > 0 && (page.signIn || submitted !== undefined)))
+    return {
+      stage: "validation_error",
+      evidence: failed ? [...evidence, "the site answered " + submitted.status] : evidence,
+    };
   if (page.accountChoices >= 2)
     return {
       stage: "account_choice",
       evidence: [...evidence, "the page offers more than one account"],
     };
   if (page.signIn) {
-    if (page.validation.length > 0) return { stage: "validation_error", evidence };
     if (here) return { stage: "submitted", evidence };
     if (page.password === "filled" && page.identifier === "empty")
       return { stage: "partial", evidence };

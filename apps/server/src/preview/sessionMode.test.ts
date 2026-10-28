@@ -85,6 +85,7 @@ const scenario = async (options: {
   readonly pin?: PreviewSessionStore;
   /** The store the created tab ended up in, or a failure from creating it. */
   readonly creates: PreviewSessionStore | Error;
+  readonly hostedElsewhere?: boolean;
 }) => {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-session-"));
   const contexts = new ServerBrowserContexts({
@@ -113,6 +114,7 @@ const scenario = async (options: {
               : { mode: "profile", profileId: options.session.profileId, store: options.creates },
         };
       },
+      hostedElsewhere: async () => options.hostedElsewhere === true,
       discard: async () => {
         discarded++;
       },
@@ -179,6 +181,17 @@ describe("the sign-in store a profile is pinned to", () => {
     expect(run.pin).toBe("server");
   });
 
+  it("closes a server-rendered tab an older desktop app hosted while it was created", async () => {
+    const run = await scenario({
+      session: { mode: "isolated" },
+      desktopAvailable: true,
+      creates: "server",
+      hostedElsewhere: true,
+    });
+    expect(run.result).toEqual({ refused: "PreviewAutomationExecutionError" });
+    expect(run.discarded).toBe(1);
+  });
+
   it("pins nothing when the first open fails, and closes what it opened", async () => {
     const run = await scenario({
       session: profile,
@@ -212,6 +225,7 @@ describe("the sign-in store a profile is pinned to", () => {
           order.push("opened");
           return { session: { mode: "profile", profileId: "default", store: "server" } };
         },
+        hostedElsewhere: async () => false,
         discard: async () => {},
       },
       profile,

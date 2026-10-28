@@ -13,6 +13,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
@@ -152,9 +153,10 @@ const FILL = `function (value, origin, identifier, account) {
     return false;
   const shown = (${IDENTIFIER_OF})(this);
   if (shown !== identifier) return "account";
-  const same = (a, b) => a !== null && a.toLowerCase() === b.toLowerCase();
-  if (account !== null && !same(shown, account) &&
-    !(document.body && document.body.innerText.toLowerCase().includes(account.toLowerCase())))
+  // With an identifier field, only that field counts; page text names the account only without one.
+  const wanted = account === null ? null : account.toLowerCase();
+  if (wanted !== null && (shown !== null ? shown.toLowerCase() !== wanted :
+    !(document.body && document.body.innerText.toLowerCase().includes(wanted))))
     return "account";
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(this, value);
   this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -287,6 +289,8 @@ const originOf = (url: string) => {
   }
 };
 
+const VALIDATION_CHARS = 200;
+
 /** A sign-in request is small; a longer body is checked on its first part only. */
 const SIGN_IN_BODY_CHARS = 256 * 1024;
 
@@ -415,6 +419,8 @@ export const make = Effect.gen(function* () {
   const filledValues = new Map<ThreadId, Set<string>>();
   /** Origins a password went into per thread: their pixels may show it after its field is gone. */
   const filledOrigins = new Map<ThreadId, Set<string>>();
+  /** Tabs a password went into, a frame of theirs included: their pixels stay off for good. */
+  const filledPages = new WeakSet<Page>();
   const signIns = new WeakMap<Page, SignInRecord>();
   const watchedForSignIn = new WeakSet<Page>();
   /** Orders submissions and hand backs; only which came first matters. */
@@ -430,13 +436,19 @@ export const make = Effect.gen(function* () {
     watchedForSignIn.add(tab.page);
     tab.page.on("request", (request) => {
       if (request.method() === "GET" || request.method() === "HEAD") return;
-      const masker = maskerFor(threadId);
+      const values = filledValues.get(threadId);
       const carried =
         request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
-      if (masker === undefined || masker(carried, true) === carried) return;
-      noteSignIn(tab.page, {
-        submitted: { documentGeneration: tab.documentGeneration ?? 0, at: ++signInOrder },
-      });
+      // A whole encoded value, never a prefix the masker would also hide.
+      if (values === undefined || secretSpans(carried, compileSecretForms(values)).length === 0)
+        return;
+      const at = ++signInOrder;
+      noteSignIn(tab.page, { submitted: { documentGeneration: tab.documentGeneration ?? 0, at } });
+      void request.response().then((response) => {
+        const submitted = signIns.get(tab.page)?.submitted;
+        if (response && submitted?.at === at)
+          noteSignIn(tab.page, { submitted: { ...submitted, status: response.status() } });
+      }, constVoid);
     });
     tab.control.onHandoffChange((end) => {
       if (end === "handedBack") noteSignIn(tab.page, { handedBackAt: ++signInOrder });
@@ -518,6 +530,11 @@ export const make = Effect.gen(function* () {
             filledValues.set(request.threadId, values);
             maskers.delete(request.threadId);
             rememberSecret(tab.page, value);
+            // Before typing: a lost reply may still have typed it, and its pixels stay off.
+            const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
+            origins.add(destination);
+            filledOrigins.set(request.threadId, origins);
+            filledPages.add(tab.page);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
@@ -553,9 +570,6 @@ export const make = Effect.gen(function* () {
               kept = false;
               throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
             }
-            const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
-            origins.add(destination);
-            filledOrigins.set(request.threadId, origins);
             watchSignIn(tab, request.threadId);
             return { destination, verified: input.expectedAccount !== undefined };
           } catch (cause) {
@@ -595,7 +609,10 @@ export const make = Effect.gen(function* () {
       request.operation === "recordingStart" || (request.operation === "snapshot" && !textSnapshot);
     // Pixels of a site it filled a password on stay off after the field lets go, too.
     const visualOff = () => {
-      if (visual && filledOrigins.get(request.threadId)?.has(originOf(tab.page.url())))
+      if (!visual) return;
+      const origins = filledOrigins.get(request.threadId);
+      const shows = (url: string) => origins?.has(originOf(url)) === true;
+      if (filledPages.has(tab.page) || tab.page.frames().some((frame) => shows(frame.url())))
         throw refused(VISUAL);
     };
     const outstanding = fences.get(tab.page);
@@ -658,13 +675,17 @@ export const make = Effect.gen(function* () {
   };
 
   /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
-  const signInStateOf = async (tab: SecretFillTab) =>
-    signInState(
-      await readSignInPage(tab.cdp),
+  const signInStateOf = async (tab: SecretFillTab, threadId: ThreadId) => {
+    const page = await readSignInPage(tab.cdp);
+    // Masked before the cut, so a cut never leaves the start of a value.
+    const masked = page.validation.map((text) => maskText(threadId)(text, VALIDATION_CHARS));
+    return signInState(
+      { ...page, validation: masked.map((text) => text.slice(0, VALIDATION_CHARS)) },
       signIns.get(tab.page) ?? {},
       tab.documentGeneration ?? 0,
       tab.session,
     );
+  };
 
   return { fill, guard, mask, maskText, signInState: signInStateOf };
 });

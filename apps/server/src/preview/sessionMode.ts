@@ -135,6 +135,12 @@ const storeConflict = (name: string, pinned: PreviewSessionStore) =>
       " sign-in store by another open, so this tab was closed. Retry the open.",
   );
 
+const olderDesktop = () =>
+  refuse(
+    "PreviewAutomationExecutionError",
+    "An older GOAT desktop app opened its own copy of this tab with its own sign-ins, so GOAT closed it. Update the desktop app, then open the tab again.",
+  );
+
 const sameSession = (tab: PreviewTabSession, requested: RequestedSession) =>
   tab.mode === requested.mode &&
   (requested.mode === "isolated" || tab.profileId === requested.profileId);
@@ -189,6 +195,8 @@ export interface SessionOpenDeps<Snapshot, Tab extends { readonly session: Previ
     readonly serverRendered?: true;
   }) => Promise<Snapshot>;
   readonly ensureTab: (snapshot: Snapshot) => Promise<Tab>;
+  /** Whether a desktop app attached its own copy of the tab, as an older app ignoring serverRendered does. */
+  readonly hostedElsewhere: (snapshot: Snapshot) => Promise<boolean>;
   /** Closes a tab this open made, and its session record, before the open reports its failure. */
   readonly discard: (snapshot: Snapshot, tab?: Tab) => Promise<void>;
 }
@@ -222,6 +230,10 @@ const openTab = async <Snapshot, Tab extends { readonly session: PreviewTabSessi
     await deps.discard(snapshot);
     throw cause;
   });
+  if (serverRendered && (await deps.hostedElsewhere(snapshot))) {
+    await deps.discard(snapshot, tab);
+    throw olderDesktop();
+  }
   if (session.mode === "isolated") return tab;
   const pinned = await deps.contexts
     .pinStore(profileId, tab.session.store)

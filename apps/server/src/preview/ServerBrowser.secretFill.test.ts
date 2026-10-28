@@ -60,6 +60,25 @@ const PAGES: Record<string, string> = {
     "<script>document.getElementById('pw').addEventListener('input', (event) =>",
     "  localStorage.setItem('typed', event.target.value));</script>",
   ].join(""),
+  "https://login.test/mention": [
+    "<p>Welcome back jun@example.com</p><form>",
+    '<input id="user" autocomplete="username" value="wrong@example.com">',
+    '<input id="pw" type="password"></form>',
+  ].join(""),
+  "https://login.test/echo-error": [
+    '<form><input id="user" autocomplete="username" value="jun@example.com">',
+    '<input id="pw" type="password"><p role="alert" id="err"></p></form>',
+    "<script>document.getElementById('pw').addEventListener('input', (event) => {",
+    "  document.getElementById('err').textContent = 'x'.repeat(195) + event.target.value;",
+    "});</script>",
+  ].join(""),
+  "https://login.test/form-denied": [
+    '<form method="post" action="https://login.test/denied">',
+    '<input id="user" name="user" autocomplete="username" value="jun@example.com">',
+    '<input id="pw" name="pw" type="password"><button id="go">Sign in</button></form>',
+  ].join(""),
+  "https://login.test/denied":
+    '<title>Denied</title><p role="alert">That password is not right for jun@example.com.</p>',
   "https://login.test/blank-user":
     '<form><input id="user" autocomplete="username"><input id="pw" type="password"></form>',
   "https://login.test/welcome": [
@@ -602,4 +621,102 @@ describe.skipIf(!chromiumInstalled)("which account a filled password goes to", (
       }).pipe(Effect.provide(layerFor(secrets))),
     );
   });
+});
+
+describe.skipIf(!chromiumInstalled)("what a filled password may never leave behind", () => {
+  it.live("fills nothing when the form shows another identifier than the expected account", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/mention");
+        const { ref } = secrets.save("https://login.test");
+        const refused = yield* fill(tabId, {
+          secretRef: ref,
+          selector: "#pw",
+          expectedAccount: "jun@example.com",
+        }).pipe(Effect.flip);
+        expect(JSON.stringify(refused)).toContain("no longer shows the account");
+        expect(yield* Effect.promise(() => fieldValue(page))).toBe("");
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("keeps the pixels of a tab off after a framed field it filled navigates away", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/framed");
+        yield* Effect.promise(() => page.frameLocator("#auth").locator("#pw").focus());
+        const { ref } = secrets.save("https://auth.test");
+        yield* fill(tabId, { secretRef: ref });
+        // The frame leaves the field behind; the tab's top document never had the password.
+        yield* Effect.promise(() =>
+          Promise.all([
+            page.waitForEvent("framenavigated"),
+            page.evaluate("document.querySelector('#auth').src = 'https://other.test/'"),
+          ]),
+        );
+        const pictured = yield* call<object>(tabId, "snapshot", { captureImage: true }).pipe(
+          Effect.flip,
+        );
+        expect(JSON.stringify(pictured)).toContain("stay off");
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("masks a password in a long site error before cutting it", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId } = yield* open("https://login.test/echo-error");
+        const { ref, value } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state.validation.length).toBe(1);
+        expect(JSON.stringify(state)).not.toContain(value.slice(0, 4));
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("counts only a request that carried the whole password as a submission", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/form");
+        const { ref, value } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        // A body ending on the start of the value is not the value.
+        const body = JSON.stringify("help " + value.slice(0, 3));
+        yield* Effect.promise(() =>
+          page.evaluate("fetch('https://login.test/api', { method: 'POST', body: " + body + " })"),
+        );
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state.submitted).toBe(false);
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live(
+    "reports a submission the site refused with an error and no form as a validation error",
+    () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, call, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/form-denied");
+          const { ref } = secrets.save("https://login.test");
+          yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+          yield* Effect.promise(() =>
+            Promise.all([page.waitForURL("https://login.test/denied"), page.click("#go")]),
+          );
+          const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+          expect(state.stage).toBe("validation_error");
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    },
+  );
 });
