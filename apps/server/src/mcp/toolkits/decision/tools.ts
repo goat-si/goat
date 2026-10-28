@@ -1,6 +1,7 @@
 import { withClientRequestId } from "../keyedParameters.ts";
 import {
   DecisionAnswerMcpInput,
+  DecisionEscalateInput,
   DecisionGetMcpInput,
   DecisionItem,
   DecisionListMcpInput,
@@ -47,4 +48,10 @@ const answer = Tool.make("goat_decision_answer", {
   parameters: DecisionAnswerMcpInput,
   success: DecisionItem,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.answer"]));
-export const DecisionToolkit = Toolkit.make(list, get, request, answer);
+const escalate = Tool.make("goat_decision_escalate", {
+  ...shared,
+  description: agentSurfaceRegistry["decision.escalate"].description,
+  parameters: DecisionEscalateInput,
+  success: DecisionItem,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["decision.escalate"]));
+export const DecisionToolkit = Toolkit.make(list, get, request, answer, escalate);

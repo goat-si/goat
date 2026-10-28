@@ -22,11 +22,15 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../../lib/threadActivity";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
 import { decisionInbox, environmentThreads, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 const sameRef = (a: DecisionItem["ref"], b: DecisionItem["ref"]) =>
   a.environmentId === b.environmentId && a.threadId === b.threadId;
+/** What an item asks; it changes identity when the asking side updates the request. */
+const payloadOf = (item: DecisionItem | null) =>
+  item === null ? null : item.kind === "decision" ? item.decision : item.request;
 
 function prune<A>(values: Record<string, A>, keep: (id: string) => boolean) {
   const entries = Object.entries(values);
@@ -40,6 +44,10 @@ export function useDecisionInboxSessionState() {
   const [draftsById, setDraftsById] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
+  // Durable choices survive Skip like question drafts do, until the decision leaves the feed.
+  const [decisionDraftsById, setDecisionDraftsById] = useState<
+    Record<string, { readonly optionId: string | null; readonly reason: string }>
+  >({});
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
   const [errorsById, setErrorsById] = useState<Record<string, string>>({});
   const inFlight = useRef(new Map<string, DecisionItem>());
@@ -50,6 +58,8 @@ export function useDecisionInboxSessionState() {
     setSkippedIds,
     draftsById,
     setDraftsById,
+    decisionDraftsById,
+    setDecisionDraftsById,
     busyById,
     setBusyById,
     errorsById,
@@ -71,6 +81,8 @@ export function useDecisionInbox(
     setSkippedIds,
     draftsById,
     setDraftsById,
+    decisionDraftsById,
+    setDecisionDraftsById,
     busyById,
     setBusyById,
     errorsById,
@@ -83,9 +95,12 @@ export function useDecisionInbox(
   );
   const unresolved = useCallback(
     (item: DecisionItem) =>
-      state.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
-      state.errors.some(({ ref }) => sameRef(ref, item.ref)),
-    [state.loadingRefs, state.errors],
+      // Durable decisions come from the environment's feed, not the thread's detail.
+      item.kind === "decision"
+        ? !state.feedEnvironments.includes(item.ref.environmentId)
+        : state.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
+          state.errors.some(({ ref }) => sameRef(ref, item.ref)),
+    [state.loadingRefs, state.errors, state.feedEnvironments],
   );
   const liveSelected =
     selected === null ? undefined : queue.find((item) => item.id === selected.id);
@@ -119,10 +134,11 @@ export function useDecisionInbox(
     threadEnvironment.respondToUserInput,
     "decision question response",
   );
+  const answerDecision = useAtomCommand(serverEnvironment.answerDecision, "decision answer");
 
   useEffect(() => {
     if (!isFocused()) return;
-    if (selected?.id !== current?.id || selected?.request !== current?.request)
+    if (selected?.id !== current?.id || payloadOf(selected) !== payloadOf(current))
       setSelected(current);
   }, [current, selected, setSelected, isFocused]);
 
@@ -134,12 +150,22 @@ export function useDecisionInbox(
     }
     setBusyById((previous) => prune(previous, (id) => inFlight.current.has(id)));
     setDraftsById((previous) => prune(previous, keep));
+    setDecisionDraftsById((previous) => prune(previous, keep));
     setErrorsById((previous) => prune(previous, keep));
     setSkippedIds((previous) => {
       const next = previous.filter(keep);
       return next.length === previous.length ? previous : next;
     });
-  }, [state, isFocused, inFlight, setBusyById, setDraftsById, setErrorsById, setSkippedIds]);
+  }, [
+    state,
+    isFocused,
+    inFlight,
+    setBusyById,
+    setDraftsById,
+    setDecisionDraftsById,
+    setErrorsById,
+    setSkippedIds,
+  ]);
 
   function readActionItem(id: string): DecisionItem | undefined {
     if (!isFocused()) return undefined;
@@ -147,12 +173,14 @@ export function useDecisionInbox(
     const item = latest.items.find((entry) => entry.id === id);
     if (
       !item ||
-      latest.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
-      latest.errors.some(({ ref }) => sameRef(ref, item.ref)) ||
+      (item.kind === "decision"
+        ? !latest.feedEnvironments.includes(item.ref.environmentId)
+        : latest.loadingRefs.some((ref) => sameRef(ref, item.ref)) ||
+          latest.errors.some(({ ref }) => sameRef(ref, item.ref))) ||
       !readEnvironmentScope(item.ref.environmentId, AuthOrchestrationOperateScope) ||
       (item.kind === "approval"
         ? item.request.responseCapability !== "live"
-        : item.request.responseCapability === "not_resumable")
+        : item.kind === "user_input" && item.request.responseCapability === "not_resumable")
     ) {
       setErrorsById((previous) => ({
         ...previous,
@@ -165,7 +193,10 @@ export function useDecisionInbox(
 
   async function runResponse(
     item: DecisionItem,
-    execute: () => ReturnType<typeof respondToApproval> | ReturnType<typeof respondToUserInput>,
+    execute: () =>
+      | ReturnType<typeof respondToApproval>
+      | ReturnType<typeof respondToUserInput>
+      | ReturnType<typeof answerDecision>,
   ) {
     if (inFlight.current.has(item.id)) return;
     inFlight.current.set(item.id, item);
@@ -180,7 +211,10 @@ export function useDecisionInbox(
     }
     try {
       const result = await execute();
-      if (result._tag === "Failure") fail(Cause.pretty(result.cause));
+      if (result._tag === "Failure") {
+        const cause: Cause.Cause<unknown> = result.cause;
+        fail(Cause.pretty(cause));
+      }
     } catch (error) {
       fail(error instanceof Error ? error.message : "Could not send answer.");
     }
@@ -226,6 +260,25 @@ export function useDecisionInbox(
       return;
     const item = readActionItem(current.id);
     return item?.kind === "user_input" && item.request.requestId === requestId ? item : undefined;
+  }
+
+  async function onAnswerDecision(optionId: string, reason: string) {
+    if (current === null || paused || inFlight.current.has(current.id)) return;
+    const item = readActionItem(current.id);
+    if (item?.kind !== "decision") return;
+    if (!item.decision.options.some((option) => option.id === optionId)) return;
+    return runResponse(item, () =>
+      answerDecision({
+        environmentId: item.ref.environmentId,
+        input: { id: item.decision.id, optionId, reason },
+      }),
+    );
+  }
+
+  function onChangeDecisionDraft(optionId: string | null, reason: string) {
+    if (current?.kind !== "decision" || inFlight.current.has(current.id)) return;
+    const id = current.id;
+    setDecisionDraftsById((previous) => ({ ...previous, [id]: { optionId, reason } }));
   }
 
   function onSelectOption(
@@ -309,6 +362,9 @@ export function useDecisionInbox(
     retry,
     onRespond,
     onSubmit,
+    onAnswerDecision,
+    onChangeDecisionDraft,
+    decisionDraft: currentId === null ? undefined : decisionDraftsById[currentId],
     onSelectOption,
     onChangeCustomAnswer,
   };

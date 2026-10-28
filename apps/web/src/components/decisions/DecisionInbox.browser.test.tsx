@@ -84,11 +84,13 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) => (command === "approval" ? state.approval : state.userInput),
 }));
 vi.mock("../../state/entities", () => ({
-  useThreadShell: (ref: ScopedThreadRef) => ({ title: `Thread ${ref.threadId}` }),
+  useThreadShell: (ref: ScopedThreadRef | null) =>
+    ref === null ? null : { title: `Thread ${ref.threadId}` },
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironment: (id: EnvironmentId) => ({ label: `Environment ${id}` }),
 }));
+vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "decisionAnswer" } }));
 
 import { DecisionInbox } from "./DecisionInbox";
 import { TooltipProvider } from "../ui/tooltip";
@@ -105,6 +107,7 @@ function approval(
   return {
     id: JSON.stringify([environmentId, thread, id]),
     ref,
+    routing: { routedTo: "person" },
     kind: "approval",
     createdAt,
     request: {

@@ -12,11 +12,14 @@ import {
   RuntimeRequestId,
   ThreadId,
   type DecisionAnswerMcpInput,
+  type DecisionEscalateInput,
+  type DecisionFeed,
   type DecisionGetMcpInput,
   type DecisionListMcpInput,
   type DecisionListResult,
   type PermissionProfile,
   type RuntimeMode,
+  pendingDecisionId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
@@ -25,6 +28,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling } from "../mcp/McpInvocationContext.ts";
 import { PERSON, canResolveHumanStep } from "../handoffs/HumanStepAuthority.ts";
@@ -49,6 +54,7 @@ import {
   type DecisionCaller,
 } from "./DecisionAuthority.ts";
 import { validateTransport } from "./DecisionDestination.ts";
+import { makeDecisionRouting } from "./DecisionRouting.ts";
 import { compareDecisions } from "./decisionOrder.ts";
 
 export type { DecisionCaller } from "./DecisionAuthority.ts";
@@ -77,6 +83,11 @@ export class DecisionInbox extends Context.Service<
       caller: DecisionCaller,
       id: string,
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
+    /** The asking thread's parent agent hands an open item to the person. */
+    readonly escalate: (
+      caller: DecisionCaller,
+      input: DecisionEscalateInput,
+    ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
     /**
      * A server-raised item, opened only when no open item's id starts with `idPrefix`, so a
      * condition that holds across passes and restarts asks once. Undefined when one is open.
@@ -88,6 +99,12 @@ export class DecisionInbox extends Context.Service<
     }) => Effect.Effect<DecisionItem | undefined, OrchestratorMcpFailure>;
     /** Withdraws the open server-raised items under `idPrefix` once their condition cleared. */
     readonly withdrawOpen: (idPrefix: string) => Effect.Effect<number, OrchestratorMcpFailure>;
+    /** Every open item here with its routing, as one environment-wide view. */
+    readonly feedSnapshot: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<DecisionFeed, OrchestratorMcpFailure>;
+    /** Emits after each committed change to decision rows or their routes. */
+    readonly changes: Stream.Stream<number>;
     readonly runDueWork: Effect.Effect<void, OrchestratorMcpFailure>;
   }
 >()("goat/goatclaw/DecisionInbox") {}
@@ -149,9 +166,9 @@ interface PendingRow {
   title: string;
   runtime_mode: RuntimeMode;
   interaction_mode: "plan" | "default";
+  archived_at: string | null;
 }
-const pendingId = (threadId: string, requestId: string) =>
-  `pending:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`;
+const pendingId = pendingDecisionId;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -161,6 +178,9 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const crypto = yield* Crypto.Crypto;
   const deliveryPermit = yield* Semaphore.make(1);
+  const routing = yield* makeDecisionRouting;
+  const version = yield* SubscriptionRef.make(0);
+  const changed = SubscriptionRef.update(version, (value) => value + 1);
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const audit = Effect.fn("DecisionInbox.audit")(function* (
     time: string,
@@ -197,7 +217,7 @@ const make = Effect.gen(function* () {
   });
   const expire = Effect.fn("DecisionInbox.expire")(function* () {
     const time = yield* now;
-    yield* sql.withTransaction(
+    const expired = yield* sql.withTransaction(
       Effect.gen(function* () {
         const expired = yield* sql<{
           id: string;
@@ -205,8 +225,10 @@ const make = Effect.gen(function* () {
         WHERE status = 'open' AND expires_at <= ${time} RETURNING id`;
         for (const row of expired)
           yield* audit(time, "scheduler", "system", "decision.expire", row.id, "expired");
+        return expired.length;
       }),
     );
+    if (expired > 0) yield* changed;
   }, Effect.mapError(storageFailure));
   const durable = Effect.fn("DecisionInbox.durable")(function* (id: string) {
     const row = (yield* sql<DecisionRow>`SELECT * FROM decision_items WHERE id = ${id}`.pipe(
@@ -381,7 +403,7 @@ const make = Effect.gen(function* () {
           });
     // Match the existing request index instead of hydrating every thread transcript.
     return yield* sql<PendingRow>`SELECT r.thread_id, r.runtime_request_id, r.kind, r.status, r.created_at, r.resolved_at,
-      t.title, t.runtime_mode, t.interaction_mode,
+      t.title, t.runtime_mode, t.interaction_mode, t.archived_at,
       (SELECT i.payload_json FROM orchestration_v2_projection_turn_items i
        WHERE i.thread_id = r.thread_id AND i.type IN ('user_input_request', 'approval_request')
        AND json_extract(i.payload_json, '$.requestId') = r.runtime_request_id ORDER BY i.ordinal DESC LIMIT 1) AS item_json
@@ -410,14 +432,23 @@ const make = Effect.gen(function* () {
       yield* callerLimits(caller, options.permissionProfileCeiling);
     yield* expire();
     const item = yield* durable(id);
-    if (item !== undefined) return yield* presentItem(caller, item, transportEnvironmentId);
+    const environmentId = scopeOf(caller).environmentId;
+    if (item !== undefined)
+      return yield* presentItem(
+        caller,
+        yield* routing.annotateOne(environmentId, item),
+        transportEnvironmentId,
+      );
     const row = (yield* pendingRows(id, 200)).find(
       (row) => pendingId(row.thread_id, row.runtime_request_id) === id,
     );
     if (row === undefined) return yield* invalid("The decision was not found.");
     return yield* presentItem(
       caller,
-      yield* project(row, yield* callerLimits(caller, options.permissionProfileCeiling)),
+      yield* routing.annotateOne(
+        environmentId,
+        yield* project(row, yield* callerLimits(caller, options.permissionProfileCeiling)),
+      ),
       transportEnvironmentId,
     );
   });
@@ -496,7 +527,12 @@ const make = Effect.gen(function* () {
       }),
     );
   }, Effect.mapError(storageFailure));
-  const runDueWork = expire().pipe(Effect.andThen(reconcileAudits()), Effect.andThen(deliver()));
+  const runDueWork = expire().pipe(
+    Effect.andThen(reconcileAudits()),
+    Effect.andThen(deliver()),
+    Effect.andThen(routing.retryDue()),
+    Effect.flatMap((retried) => (retried > 0 ? changed : Effect.void)),
+  );
   const openUnder = (idPrefix: string) =>
     sql<{
       id: string;
@@ -520,14 +556,16 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(storageFailure));
-      return raised ? yield* durable(id) : undefined;
+      if (!raised) return undefined;
+      yield* changed;
+      return yield* durable(id);
     },
   );
   const withdrawOpen: DecisionInbox["Service"]["withdrawOpen"] = Effect.fn(
     "DecisionInbox.withdrawOpen",
   )(function* (idPrefix) {
     const time = yield* now;
-    return yield* sql
+    const withdrawn = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const open = yield* openUnder(idPrefix);
@@ -539,12 +577,44 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(storageFailure));
+    if (withdrawn > 0) yield* changed;
+    return withdrawn;
+  });
+  const feedSnapshot = Effect.fn("DecisionInbox.feedSnapshot")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    yield* expire();
+    const viewer: DecisionCaller = {
+      kind: "client",
+      environmentId,
+      sessionId: "decision-feed",
+      scopes: [],
+    };
+    // An answer to a deleted or archived thread has nowhere to go, so neither lists here.
+    const rows = yield* sql<DecisionRow>`SELECT d.* FROM decision_items d
+      LEFT JOIN orchestration_v2_projection_threads t ON t.thread_id = d.from_thread_id
+      WHERE d.status = 'open' AND (d.from_thread_id IS NULL
+        OR (t.thread_id IS NOT NULL AND t.deleted_at IS NULL AND t.archived_at IS NULL))
+      ORDER BY d.created_at DESC, d.id`.pipe(Effect.mapError(storageFailure));
+    const items: DecisionItem[] = yield* Effect.forEach(rows, toItem);
+    // Complete on purpose: open requests are few, and a capped feed would hide some from counts.
+    // Archived threads stay out of the inbox, as they do from thread shells.
+    for (const row of yield* pendingRows(undefined, -1))
+      if (row.archived_at === null) items.push(yield* project(row, undefined));
+    return {
+      items: yield* presentItems(
+        viewer,
+        yield* routing.annotate(environmentId, items.sort(compareDecisions)),
+      ),
+    };
   });
   return DecisionInbox.of({
     get,
     runDueWork,
     raiseOnce,
     withdrawOpen,
+    feedSnapshot,
+    changes: SubscriptionRef.changes(version),
     list: Effect.fn("DecisionInbox.list")(function* (caller, input) {
       const transportEnvironmentId = yield* validateTransport(caller, input);
       if (input.permissionProfileCeiling !== undefined)
@@ -570,7 +640,10 @@ const make = Effect.gen(function* () {
       return {
         items: yield* presentItems(
           caller,
-          items.sort(compareDecisions).slice(0, limit),
+          yield* routing.annotate(
+            scopeOf(caller).environmentId,
+            items.sort(compareDecisions).slice(0, limit),
+          ),
           transportEnvironmentId,
         ),
         unavailableHosts: [],
@@ -603,7 +676,7 @@ const make = Effect.gen(function* () {
         return yield* invalid("expiresAt must be in the future.");
       const id = `decision:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`;
       const sourceThreadId = scopeOf(caller).thread?.threadId ?? null;
-      yield* sql
+      const routed = yield* sql
         .withTransaction(
           Effect.gen(function* () {
             yield* sql`INSERT INTO decision_items (id, from_thread_id, title, context, options_json, recommended, required_profile, expires_at, status, created_at, updated_at)
@@ -616,10 +689,23 @@ const make = Effect.gen(function* () {
               id,
               "open",
             );
+            return sourceThreadId === null
+              ? false
+              : yield* routing.recordParent(id, sourceThreadId);
           }),
         )
         .pipe(Effect.mapError(storageFailure));
-      return yield* presentItem(caller, (yield* durable(id))!);
+      // Committed first, so a failed wake is retried by runDueWork and never loses the decision.
+      if (routed)
+        yield* routing
+          .notify(id)
+          .pipe(
+            Effect.catch(() =>
+              Effect.logWarning("Decision parent wake queued for retry", { decisionId: id }),
+            ),
+          );
+      yield* changed;
+      return yield* get(caller, id);
     }),
     answer: Effect.fn("DecisionInbox.answer")(function* (caller, input) {
       const transportEnvironmentId = yield* validateTransport(caller, input);
@@ -711,10 +797,12 @@ const make = Effect.gen(function* () {
             ),
           );
         yield* reconcileAudits();
+        yield* changed;
+        const { routedTo: _routedTo, ...closed } = item;
         return yield* presentItem(
           caller,
           {
-            ...item,
+            ...closed,
             status: "answered",
             answer: null,
             answeredBy: actorOf(caller),
@@ -749,7 +837,12 @@ const make = Effect.gen(function* () {
           Effect.logWarning("Decision answer delivery queued for retry", { decisionId: item.id }),
         ),
       );
-      return yield* presentItem(caller, (yield* durable(item.id))!, transportEnvironmentId);
+      yield* changed;
+      return yield* presentItem(
+        caller,
+        yield* routing.annotateOne(scopeOf(caller).environmentId, (yield* durable(item.id))!),
+        transportEnvironmentId,
+      );
     }),
     withdraw: Effect.fn("DecisionInbox.withdraw")(function* (caller, id) {
       yield* writeAccess(caller);
@@ -782,7 +875,28 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError((error) => (isMcpFailure(error) ? error : storageFailure())));
-      return yield* presentItem(caller, (yield* durable(id))!);
+      yield* changed;
+      return yield* get(caller, id);
+    }),
+    escalate: Effect.fn("DecisionInbox.escalate")(function* (caller, input) {
+      yield* writeAccess(caller);
+      const callerThreadId = caller.kind === "agent" ? caller.scope.thread?.threadId : undefined;
+      if (callerThreadId === undefined)
+        return yield* denied(
+          "Only the agent that launched or delegated the asking thread can escalate it.",
+        );
+      const item = yield* get(caller, input.id);
+      if (item.status !== "open") return yield* invalid("This decision is no longer open.");
+      yield* routing.escalate({
+        item,
+        callerThreadId,
+        actor: actorOf(caller),
+        profile: (yield* profiles.resolve(scopeOf(caller))).profile.id,
+        reason: input.reason,
+        audit,
+      });
+      yield* changed;
+      return yield* get(caller, input.id);
     }),
   });
 });

@@ -159,13 +159,20 @@ on connections you cannot change stay. Nothing is archived or deleted.
 ### Answer waiting decisions
 
 Open **Decisions** at the top of the thread sidebar, or search for it in the command palette,
-to answer agent questions and approve or reject tool requests from every connected environment.
-Requests from subagent threads are included; archived threads are not. Threads keep their place
-in Priority.
+to answer agent questions, approve or reject tool requests, and choose an option for decisions
+agents asked for, from every connected environment. Requests from subagent threads and launched
+threads are included, with the agent that started them; archived threads are not. Threads keep
+their place in Priority.
+
+A question or decision from a thread another agent started goes to that agent first. While it is
+working on it, Decisions lists the request as being handled and does not count it as waiting on
+you; you can still answer it. It counts as yours once that agent hands it to you or ends its turn
+without answering. Approvals always come straight to you, and an unanswered request never counts
+as approval.
 
 Decisions starts with the oldest request and moves to the next one after each answer. **Skip**
-sends a request to the end of the queue for this visit. The sidebar counts waiting threads, so a
-thread with two requests counts once until Decisions loads and shows the real total.
+sends a request to the end of the queue for this visit. The sidebar counts requests waiting on
+you; with servers that cannot report them yet, it counts waiting threads instead.
 
 Use **Go to thread** for more context or to
 [attach files to an answer](./question-attachments.md). A request whose provider session cannot

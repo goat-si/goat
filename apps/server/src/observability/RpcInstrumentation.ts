@@ -108,6 +108,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.decisionRequest]: "decision",
   [WS_METHODS.decisionAnswer]: "decision",
   [WS_METHODS.decisionWithdraw]: "decision",
+  [WS_METHODS.decisionSubscribe]: "decision",
   [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",

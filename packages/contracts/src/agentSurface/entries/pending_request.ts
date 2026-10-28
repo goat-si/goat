@@ -52,7 +52,7 @@ export const pendingRequestEntries = {
     description:
       "Answer a pending user-input question or, for an approve-scoped outside MCP client, accept or decline an approval. Records the response and reason for the user. Forward humanRequired questions to the user.",
     guide:
-      "Use answers keyed by question id from goat_pending_request_read. Send a string for single select or free text, or a string array for multiSelect. Include reason with 1–2000 characters and some non-whitespace text; it is shown to the user.\n\nPass host and threadId for another machine. Remote writes require default interaction mode.\n\nApprovals require a person, except an MCP client token holding orchestration:approve can answer with decision (accept or decline) instead of answers. Do not send both fields.\n\nrespondedBy is reserved for outside host transport. Thread callers must omit it.",
+      "Use answers keyed by question id from goat_pending_request_read. Send a string for single select or free text, or a string array for multiSelect. Include reason with 1–2000 characters and some non-whitespace text; it is shown to the user. To hand a launched or delegated thread's question to the person instead, use goat_decision_escalate.\n\nPass host and threadId for another machine. Remote writes require default interaction mode.\n\nApprovals require a person, except an MCP client token holding orchestration:approve can answer with decision (accept or decline) instead of answers. Do not send both fields.\n\nrespondedBy is reserved for outside host transport. Thread callers must omit it.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: true,

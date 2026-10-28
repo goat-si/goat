@@ -20,6 +20,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { environmentPresentations } from "./presentation";
+import { serverEnvironment } from "./server";
 import { appAtomRegistry } from "./atom-registry";
 import {
   pendingThreadCreationOutcomesAtom,
@@ -81,6 +82,7 @@ export const decisionInbox = createDecisionInboxAtoms({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   presentationAtom: environmentPresentations.presentationAtom,
   details: environmentThreadDetails,
+  feedAtom: serverEnvironment.decisionFeed,
 });
 /** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */
 export function useThreadFamily(

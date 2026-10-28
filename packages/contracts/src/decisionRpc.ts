@@ -12,6 +12,7 @@ export const DECISION_WS_METHODS = {
   decisionRequest: "decision.request",
   decisionAnswer: "decision.answer",
   decisionWithdraw: "decision.withdraw",
+  decisionSubscribe: "decision.subscribe",
 } as const;
 
 const decisionRpcErrors = Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]);
@@ -40,5 +41,11 @@ export const DecisionRpcs = RpcGroup.make(
     payload: Decisions.DecisionWithdrawInput,
     success: Decisions.DecisionItem,
     error: decisionRpcErrors,
+  }),
+  Rpc.make(DECISION_WS_METHODS.decisionSubscribe, {
+    payload: Schema.Struct({}),
+    success: Decisions.DecisionFeed,
+    error: decisionRpcErrors,
+    stream: true,
   }),
 );

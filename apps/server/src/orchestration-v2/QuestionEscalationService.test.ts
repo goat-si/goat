@@ -158,14 +158,14 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
       assert.notInclude(block, "`");
       assert.include(block, "\\u0060\\u0060\\u0060");
       assert.deepEqual((yield* decodeQuestion(JSON.parse(block))).questions, questions);
-      assert.include(message.text, "they can answer it directly there.");
+      assert.include(message.text, "it reaches their inbox right away");
       assert.include(
         message.text,
         "Forward to the user any decision your own user has not authorized, such as pushing, deploying, sending outside, or starting new work beyond the request.",
       );
       assert.include(
         message.text,
-        "If you already handled this question, for example after a wait returned it, end the turn.",
+        "If you already answered or escalated this question, for example after a wait returned it, end the turn.",
       );
       assert.include(
         message.text,

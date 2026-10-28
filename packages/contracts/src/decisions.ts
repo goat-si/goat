@@ -18,6 +18,10 @@ export const DecisionItem = Schema.Struct({
     environmentId: Schema.optionalKey(EnvironmentId),
     threadId: Schema.optionalKey(ThreadId),
     host: Schema.optionalKey(TrimmedNonEmptyString),
+    threadTitle: Schema.optionalKey(Schema.String),
+    /** The local thread that launched or delegated the asking thread. */
+    parentThreadId: Schema.optionalKey(ThreadId),
+    parentThreadTitle: Schema.optionalKey(Schema.String),
   }),
   title: TrimmedNonEmptyString,
   context: Schema.String,
@@ -33,6 +37,15 @@ export const DecisionItem = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   humanRequired: Schema.Boolean,
+  /**
+   * Who is asked first while the item is open: the parent agent while the wake it was sent is
+   * queued or running and it may answer, otherwise the person. Older servers omit it: person.
+   */
+  routedTo: Schema.optionalKey(Schema.Literals(["parent", "person"])),
+  /** Set once the parent agent handed the item to the person. */
+  escalation: Schema.optionalKey(
+    Schema.Struct({ by: Schema.String, at: IsoDateTime, reason: Schema.String }),
+  ),
   pending: Schema.optionalKey(
     Schema.Struct({
       threadId: ThreadId,
@@ -66,6 +79,9 @@ export const DecisionListResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type DecisionListResult = typeof DecisionListResult.Type;
+/** Every open item of one environment with its routing; pushed again whenever any of it changes. */
+export const DecisionFeed = Schema.Struct({ items: Schema.Array(DecisionItem) });
+export type DecisionFeed = typeof DecisionFeed.Type;
 export const DecisionGetInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   host: Schema.optionalKey(TrimmedNonEmptyString),
@@ -90,6 +106,14 @@ export const DecisionAnswerInput = Schema.Struct({
   reason: TrimmedNonEmptyString.check(Schema.isMaxLength(2000)),
 });
 export type DecisionAnswerInput = typeof DecisionAnswerInput.Type;
+export const DecisionEscalateInput = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  reason: TrimmedNonEmptyString.check(Schema.isMaxLength(2000)),
+});
+export type DecisionEscalateInput = typeof DecisionEscalateInput.Type;
+/** The decision id of a projected runtime request. */
+export const pendingDecisionId = (threadId: string, requestId: string) =>
+  `pending:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`;
 
 // Foreign identity accompanies controls accepted only from an authenticated outside transport.
 const transportFields = {

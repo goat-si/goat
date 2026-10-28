@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Inbox from "./DecisionInbox.ts";
+import * as Feed from "./DecisionFeed.ts";
 import { compareDecisions } from "./decisionOrder.ts";
 import * as Authority from "./DecisionAuthority.ts";
 import * as Profiles from "./PermissionProfiles.ts";
@@ -72,11 +73,16 @@ export class DecisionService extends Context.Service<
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
     readonly create: Inbox.DecisionInbox["Service"]["create"];
     readonly withdraw: Inbox.DecisionInbox["Service"]["withdraw"];
+    /** Local only: the asking thread and its parent live in this environment. */
+    readonly escalate: Inbox.DecisionInbox["Service"]["escalate"];
+    /** This environment's live view of open items, for the Decisions inbox. */
+    readonly feed: Feed.DecisionFeed["Service"]["stream"];
   }
 >()("goat/goatclaw/DecisionService") {}
 
 const make = Effect.gen(function* () {
   const inbox = yield* Inbox.DecisionInbox;
+  const feed = yield* Feed.DecisionFeed;
   const hosts = yield* Hosts.HostThreadsMcpService;
   const dispatch = yield* Dispatch.SshRemoteDispatch;
   const profiles = yield* Profiles.PermissionProfiles;
@@ -353,6 +359,14 @@ const make = Effect.gen(function* () {
     if (first === undefined) return yield* outdated(host);
     return first;
   });
-  return DecisionService.of({ list, get, answer, create: inbox.create, withdraw: inbox.withdraw });
+  return DecisionService.of({
+    list,
+    get,
+    answer,
+    create: inbox.create,
+    withdraw: inbox.withdraw,
+    escalate: inbox.escalate,
+    feed: feed.stream,
+  });
 });
 export const layer = Layer.effect(DecisionService, make);
