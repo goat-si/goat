@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { resolveGoatMcpToolDefinition } from "@goat/shared/goatMcpToolPresentation";
 
 it("exposes lifecycle writes and resource-specific reconciliation reads", () => {
   for (const path of [
@@ -13,6 +14,7 @@ it("exposes lifecycle writes and resource-specific reconciliation reads", () => 
     "provider_session.receipt",
   ]) {
     expect(agentSurfaceRegistry, path).toHaveProperty([path]);
+    expect(resolveGoatMcpToolDefinition(`goat_${path.replace(".", "_")}`), path).not.toBeNull();
   }
 });
 
@@ -54,6 +56,10 @@ import * as Executor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import * as Invocation from "./McpInvocationContext.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as Sessions from "./McpSessionRegistry.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { HttpServer } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 import * as Lifecycle from "./ThreadLifecycleMcpService.ts";
 import { ThreadLifecycleToolkit } from "./toolkits/threadLifecycle/tools.ts";
 import * as LifecycleHandlers from "./toolkits/threadLifecycle/handlers.ts";
@@ -226,6 +232,68 @@ it.effect(
           }),
         ),
       ).toMatchObject({ reason: "idempotency_mismatch" });
+    }).pipe(Effect.provide(served)),
+);
+
+it.effect(
+  "an issued live thread credential controls lifecycle without outside-client operate scope",
+  () =>
+    Effect.gen(function* () {
+      const callerId = yield* create("thread:issued-caller");
+      const callerRun = yield* queue(callerId, "message:issued-caller");
+      yield* call("goat_queued_run_start", { threadId: callerId, queuedRunId: callerRun });
+      const registry = yield* Sessions.__testing.make().pipe(
+        Effect.provide(NodeCrypto.layer),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(scope.environmentId),
+          getDescriptor: Effect.die("unused"),
+        }),
+        Effect.provideService(
+          HttpServer.HttpServer,
+          HttpServer.HttpServer.of({
+            address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
+            serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
+          }),
+        ),
+      );
+      const issued = yield* registry.issue({
+        threadId: callerId,
+        providerInstanceId: instanceId,
+        grantedScopes: ["orchestration:read"],
+        isLiveCaller: Effect.succeed(true),
+      });
+      const credential = yield* registry.resolve(
+        issued.config.authorizationHeader.replace(/^Bearer\s+/, ""),
+      );
+      if (credential === undefined) return yield* Effect.die("Expected issued thread credential");
+      expect(credential.grantedScopes).not.toContain(AuthOrchestrationOperateScope);
+      const target = yield* create("thread:issued-target");
+      expect(
+        value(
+          yield* call(
+            "goat_thread_delete",
+            { threadId: target, clientRequestId: "issued-delete" },
+            credential,
+          ),
+        ),
+      ).toMatchObject({ accepted: true });
+      expect(
+        value(
+          yield* call(
+            "goat_thread_lifecycle_receipt",
+            { clientRequestId: "issued-delete" },
+            credential,
+          ),
+        ),
+      ).toMatchObject({ state: "completed", commandStatus: "accepted" });
+      yield* registry.revokeThread(callerId);
+      expect(
+        (yield* call(
+          "goat_thread_lifecycle_receipt",
+          { clientRequestId: "issued-delete" },
+          credential,
+        )).isError,
+      ).toBe(true);
     }).pipe(Effect.provide(served)),
 );
 

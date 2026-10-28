@@ -89,7 +89,7 @@ const make = Effect.gen(function* () {
       });
     if (scope.reauthorize !== undefined)
       yield* scope
-        .reauthorize([AuthOrchestrationOperateScope])
+        .reauthorize(scope.thread === undefined ? [AuthOrchestrationOperateScope] : [])
         .pipe(Effect.mapError(reauthorizationFailure));
     return context;
   });
