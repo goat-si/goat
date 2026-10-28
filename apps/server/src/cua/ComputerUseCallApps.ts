@@ -89,6 +89,11 @@ export const makeCallApps = () => {
     return pid === undefined ? undefined : byPid.get(pid);
   };
   return {
+    /** The bundle id of the app a pid runs, when a proxy learned one; none on Linux or Windows. */
+    bundleIdOf: (pid: number) => {
+      const bundleId = byPid.get(pid)?.bundleId;
+      return bundleId !== undefined && APP_ID.test(bundleId) ? bundleId : undefined;
+    },
     /**
      * Keeps the app an admitted call's pid runs, as its proxy labelled it. A call whose proxy
      * could not label its pid forgets it, so a pid reused by another app never shows the old one.

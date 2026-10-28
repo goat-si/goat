@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 
+import { ComputerUseCallApps, makeCallApps } from "../cua/ComputerUseCallApps.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
@@ -268,6 +269,45 @@ describe("preview sessions", () => {
       undefined,
     );
   });
+
+  effectIt.effect(
+    "names the app of the window the agent acts on by the bundle id its proxy learned",
+    () => {
+      const apps = makeCallApps();
+      apps.admitted({ pid: 7 }, { bundleId: "com.apple.calculator", name: "Calculator" });
+      // A Linux or Windows app reports no bundle id; its card keeps the monitor icon.
+      apps.admitted({ pid: 8 }, { name: "gnome-calculator" });
+      const controlOn = (pid: number) => ({
+        control: { ...control, controlId: `control:${pid}`, target: { pid, windowId: 3 } },
+        state: active,
+      });
+      const layer = PreviewSessions.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ComputerUseCallApps, apps),
+            Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+              detection: Effect.succeed(detected),
+              sessions: Effect.succeed([controlOn(7), controlOn(8), controlOn(9)]),
+              blockedTurns: Effect.succeed([]),
+              subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
+              proxy: undefined,
+            }),
+            Layer.mock(Handoffs.Handoffs)({}),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(base.environmentId),
+            }),
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const { sessions } = yield* (yield* PreviewSessions.PreviewSessions).snapshot;
+        const bundleIds = sessions.map((session) =>
+          session.target.kind === "desktop" ? session.target.bundleId : "not desktop",
+        );
+        expect(bundleIds).toEqual(["com.apple.calculator", undefined, undefined]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   effectIt.effect("stops every agent without waiting on a page that never answers", () => {
     const stopped: Array<string> = [];
