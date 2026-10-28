@@ -54,6 +54,31 @@ Then choose what the agent may do:
   threads in every project. A thread it starts or steers cannot run with more
   permissions than the mode you chose.
 
+## Work with files and terminals
+
+In **Settings → Integrations → Agent tools**, choose workspace and terminal access for the
+environment or project. Both start **Off**. Approve the matching optional access when the agent
+signs in; existing agent permissions, including Full access, do not add these grants.
+
+An agent can list, search paths and read uncommitted workspace files. Saves require the version
+from a complete read, or an explicit create-only request for a new file. Conflicts preserve the
+current file. Reads and saves stay inside the selected workspace; large files can be read in
+pages, while saves are limited to 32 KiB of encoded UTF-8 text.
+
+For an outside agent to use terminals, bind its authorized session to an existing thread under
+**Settings → Connections → Authorized clients → Terminal binding**. Only the opener can write,
+clear, restart or close its terminals. Output is read in bounded pages; a gap means some output
+was evicted or the terminal was reset. Terminal operations also require Full access mode.
+
+**Operate grants shell execution with the server's OS file and network authority.** The starting
+workspace directory is not a sandbox. Connect directly to the destination environment's MCP URL;
+these file and terminal tools do not forward through a `host` argument.
+
+Turn access Off, unbind the session, or revoke it to prevent further agent calls. Existing
+processes keep running; use the normal terminal view to close them. Rebinding does not transfer
+old terminals. Signing in again creates a separate session, so revoke the previous session when
+reducing its access.
+
 ## Claude Code
 
 ```sh

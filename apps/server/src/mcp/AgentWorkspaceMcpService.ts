@@ -16,6 +16,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Fixed-size cursor targets avoid duplicating long escaped paths.
+import * as NodeCrypto from "node:crypto";
 
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "../workspace/WorkspaceFileSystem.ts";
@@ -25,7 +27,7 @@ import * as Audit from "./AgentWorkspaceTerminalAudit.ts";
 import * as ToolAccess from "./McpToolAccess.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
-const Cursor = Schema.Struct({ root: Schema.String, path: Schema.String, after: Schema.String });
+const Cursor = Schema.Struct({ target: Schema.String, after: Schema.String });
 const decodeCursor = Schema.decodeUnknownSync(Schema.fromJsonString(Cursor));
 const encodeCursor = Schema.encodeSync(Schema.fromJsonString(Cursor));
 const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -77,20 +79,21 @@ const make = Effect.gen(function* () {
     path: string,
   ) {
     const permit = yield* access.authorize(scope, input, "filesystem:read");
-    yield* audit.append(scope, action, `${permit.projectId}/${path}`, "requested");
-    return permit;
+    const auditId = Audit.newAccessAuditId();
+    yield* audit.append(scope, action, `${permit.projectId}/${path}`, "requested", auditId);
+    return { ...permit, auditId };
   });
   const finish = Effect.fn("AgentWorkspace.finish")(function* (
     scope: McpInvocationScope,
     input: Access.AgentWorkspaceTarget,
-    permit: Access.AgentWorkspacePermit,
+    permit: Access.AgentWorkspacePermit & { readonly auditId: string },
     action: string,
     path: string,
   ) {
     const current = yield* access.authorize(scope, input, "filesystem:read");
     if (!samePermit(current, permit))
       return yield* Access.denied("The workspace changed during the operation.");
-    yield* audit.append(scope, action, `${permit.projectId}/${path}`, "completed");
+    yield* audit.append(scope, action, `${permit.projectId}/${path}`, "completed", permit.auditId);
   });
   const read = Effect.fn("AgentWorkspace.read")(function* (
     scope: McpInvocationScope,
@@ -115,11 +118,17 @@ const make = Effect.gen(function* () {
     const permit = yield* start(scope, input, "workspace.list", path);
     if (!validAgentRelativePath(path, true)) return yield* failed();
     const target = yield* checkPath(permit.root, path);
+    const cursorTarget = NodeCrypto.createHash("sha256")
+      .update(`${target.root}\0${path}`)
+      .digest("hex");
+    const basename = (value: string) => value.slice(value.lastIndexOf("/") + 1);
+    const cursorFor = (entry: ProjectEntry) =>
+      encodeCursor({ target: cursorTarget, after: basename(entry.path) });
     const cursor =
       input.cursor === undefined
         ? undefined
         : yield* Effect.try({ try: () => decodeCursor(input.cursor), catch: failed });
-    if (cursor && (cursor.root !== target.root || cursor.path !== path))
+    if (cursor && cursor.target !== cursorTarget)
       return yield* Access.invalid("The cursor belongs to another workspace or directory.");
     const result = yield* entries
       .list({ cwd: permit.root, directoryPath: path })
@@ -127,10 +136,13 @@ const make = Effect.gen(function* () {
     const ordered = result.entries
       .filter((entry) => validAgentRelativePath(entry.path))
       .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-      .filter((entry) => cursor === undefined || entry.path > cursor.after);
+      .filter((entry) => cursor === undefined || basename(entry.path) > cursor.after);
     const page: ProjectEntry[] = [];
     for (const entry of ordered) {
-      if (page.length >= (input.limit ?? 100) || !withinBudget({ entries: [...page, entry] }))
+      if (
+        page.length >= (input.limit ?? 100) ||
+        !withinBudget({ entries: [...page, entry], nextCursor: cursorFor(entry), truncated: true })
+      )
         break;
       yield* checkPath(permit.root, entry.path);
       page.push(entry);
@@ -141,8 +153,7 @@ const make = Effect.gen(function* () {
     return {
       entries: page,
       truncated,
-      nextCursor:
-        truncated && last ? encodeCursor({ root: target.root, path, after: last.path }) : null,
+      nextCursor: truncated && last ? cursorFor(last) : null,
     };
   });
   const search = Effect.fn("AgentWorkspace.search")(function* (
@@ -190,7 +201,14 @@ const make = Effect.gen(function* () {
       ...input,
       destination: { ...permit, canonicalRoot: target.root, canonicalPath: target.path },
     });
-    yield* audit.append(scope, "workspace.write", `${permit.projectId}/${input.path}`, "requested");
+    const auditId = Audit.newAccessAuditId();
+    yield* audit.append(
+      scope,
+      "workspace.write",
+      `${permit.projectId}/${input.path}`,
+      "requested",
+      auditId,
+    );
     const loaded =
       input.expectedVersion === null
         ? undefined
@@ -235,7 +253,13 @@ const make = Effect.gen(function* () {
                 ),
         ),
       );
-    yield* audit.append(scope, "workspace.write", `${permit.projectId}/${input.path}`, "completed");
+    yield* audit.append(
+      scope,
+      "workspace.write",
+      `${permit.projectId}/${input.path}`,
+      "completed",
+      auditId,
+    );
     if (!result.version)
       return yield* new OrchestratorMcpFailure({
         code: "orchestration_error",

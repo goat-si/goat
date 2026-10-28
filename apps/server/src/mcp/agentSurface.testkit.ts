@@ -14,6 +14,8 @@ import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import { WorkspaceToolkit } from "./toolkits/workspace/tools.ts";
 import * as AgentWorkspace from "./AgentWorkspaceMcpService.ts";
+import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
+import * as AgentTerminal from "./AgentTerminalMcpService.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
@@ -136,6 +138,7 @@ import { HttpBody, HttpClient, HttpRouter, HttpServer } from "effect/http";
 // handlers do not touch live state.
 export const toolkits = {
   workspace: WorkspaceToolkit,
+  terminal: TerminalToolkit,
   agentSurface: AgentSurfaceToolkit,
   decision: DecisionToolkit,
   attachment: AttachmentToolkit,
@@ -174,6 +177,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
   Layer.mock(AgentWorkspace.AgentWorkspaceMcpService)({}),
+  Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),

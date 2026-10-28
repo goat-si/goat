@@ -8,16 +8,24 @@ import {
   GoatclawSettings,
   clientRpcRequiredScopes,
   WS_METHODS,
+  AuthSessionId,
+  ThreadId,
+  type ServerSettings,
+  type ProjectEntry,
+  AgentWorkspaceListInput,
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 
 import { McpInvocationContext } from "./McpInvocationContext.ts";
@@ -33,18 +41,25 @@ import * as Settings from "../serverSettings.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
+import { layerPermissionProfilesOff, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { mcpClientScopes } from "../auth/mcpClientScopes.ts";
 import { OrchestratorMcpFailure } from "@goat/contracts";
+import * as TerminalService from "./AgentTerminalMcpService.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
+import { FakePtyAdapter } from "../terminal/Manager.testkit.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as Sqlite from "../persistence/Sqlite.ts";
 const decodeProject = Schema.decodeEffect(Project);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
+const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
 
 const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agent-workspace-" });
   const outside = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agent-outside-" });
-  const settings = yield* Ref.make({
+  const settings = yield* Ref.make<ServerSettings>({
     ...DEFAULT_SERVER_SETTINGS,
     agentWorkspaceAccess: "read_write" as const,
   });
@@ -88,10 +103,12 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
         ),
       ),
   };
+  const listed = yield* Ref.make<ReadonlyArray<ProjectEntry>>([
+    { path: "draft.txt", kind: "file" },
+  ]);
   const entries = Layer.mock(WorkspaceEntries.WorkspaceEntries)({
     refresh: () => Effect.void,
-    list: () =>
-      Effect.succeed({ entries: [{ path: "draft.txt", kind: "file" as const }], truncated: false }),
+    list: () => Ref.get(listed).pipe(Effect.map((entries) => ({ entries, truncated: false }))),
     search: () =>
       Effect.succeed({
         entries: [
@@ -127,7 +144,9 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
       getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
     }),
     Layer.mock(Environment.ServerEnvironment)({ getEnvironmentId: Effect.succeed(environmentId) }),
-    Layer.mock(Threads.ThreadManagementService)({}),
+    Layer.mock(Threads.ThreadManagementService)({
+      getThreadShell: (id) => Effect.succeed({ ...liveThreadShell(id), projectId }),
+    }),
   );
   const files = WorkspaceFiles.layer.pipe(
     Layer.provide(WorkspacePaths.layer),
@@ -149,9 +168,173 @@ const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () {
     settings,
     events,
     auditOnline,
+    base,
+    listed,
     service: Context.get(built, Workspace.AgentWorkspaceMcpService),
   };
 });
+
+const terminalFixture = Effect.fn("agentWorkspaceTerminal.terminalFixture")(function* () {
+  const f = yield* fixture();
+  const threadId = ThreadId.make("fixture-thread");
+  yield* Ref.update(f.settings, (settings) => ({
+    ...settings,
+    agentTerminalAccess: "operate" as const,
+    agentTerminalClientBindings: {
+      [AuthSessionId.make("fixture-client")]: { threadId, generation: "binding-a" },
+      [AuthSessionId.make("fixture-other")]: { threadId, generation: "binding-b" },
+    },
+  }));
+  const permissions: ReadonlyArray<AuthEnvironmentScope> = [
+    "filesystem:read",
+    "filesystem:write",
+    "terminal:read",
+    "terminal:operate",
+  ];
+  yield* Ref.set(f.grants, permissions);
+  const scope = { ...f.scope, grantedScopes: permissions };
+  const pty = new FakePtyAdapter();
+  const manager = yield* TerminalManager.makeWithOptions({
+    logsDir: `${f.root}/terminal-logs`,
+    historyLineLimit: 10,
+    historyByteLimit: 64,
+    shellResolver: () => "/bin/sh",
+    ptyAdapter: pty,
+    processTable: Effect.succeed([]),
+    subprocessInspector: () =>
+      Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
+    processKillGraceMs: 1,
+    subprocessPollIntervalMs: 10 * 24 * 60 * 60 * 1000,
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(Layer.mock(ProcessRunner.ProcessRunner)({}), McpProviderSessions.layer),
+    ),
+  );
+  const built = yield* Layer.build(
+    TerminalService.layer.pipe(
+      Layer.provide(Access.layer),
+      Layer.provide(f.base),
+      Layer.provide(Layer.succeed(TerminalManager.TerminalManager, manager)),
+    ),
+  );
+  return {
+    ...f,
+    scope,
+    manager,
+    pty,
+    threadId,
+    terminal: Context.get(built, TerminalService.AgentTerminalMcpService),
+  };
+});
+
+it.effect("#2059 keeps cursors reusable for long escaped directory paths", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const path = Array.from({ length: 10 }, () => '"'.repeat(240)).join("/");
+    yield* f.fs.makeDirectory(`${f.root}/${path}`, { recursive: true });
+    for (const name of ["a", "b"]) yield* f.fs.writeFileString(`${f.root}/${path}/${name}`, name);
+    yield* Ref.set(f.listed, [
+      { path: `${path}/a`, kind: "file" },
+      { path: `${path}/b`, kind: "file" },
+    ]);
+    const first = yield* f.service.list(f.scope, { projectId: f.projectId, path, limit: 1 });
+    expect(first.nextCursor).not.toBeNull();
+    const nextInput = yield* decodeListInput({
+      projectId: f.projectId,
+      path,
+      limit: 1,
+      cursor: first.nextCursor!,
+    });
+    const next = yield* f.service.list(f.scope, nextInput);
+    expect(next.entries[0]?.path).toBe(`${path}/b`);
+    expect(next.nextCursor).toBeNull();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("#2059 preserves valid audit JSON and correlation for escaped metadata", () =>
+  Effect.gen(function* () {
+    const audit = yield* Audit.AgentWorkspaceTerminalAudit;
+    const sql = yield* SqlClient.SqlClient;
+    yield* audit.append(
+      {
+        environmentId: EnvironmentId.make("fixture"),
+        issuedAt: 0,
+        requestNamespace: "fixture",
+        capabilities: new Set(),
+        thread: undefined,
+        client: { sessionId: "fixture", label: "Fixture", access: "read-only" },
+      },
+      "workspace.list",
+      "\u0001".repeat(4000),
+      "requested",
+      "fixture-correlation",
+    );
+    const rows = yield* sql<{
+      target: string;
+    }>`SELECT target FROM audit_events WHERE action = 'workspace.list'`;
+    const metadata = JSON.parse(rows[0]!.target);
+    expect(metadata.correlation).toBe("fixture-correlation");
+    expect(metadata.targetTruncated).toBe(true);
+    expect(metadata.targetDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(Buffer.byteLength(rows[0]!.target)).toBeLessThan(8192);
+  }).pipe(
+    Effect.provide(Audit.layer.pipe(Layer.provideMerge(Sqlite.layerMemory))),
+    Effect.scoped,
+    Effect.provide(NodeServices.layer),
+  ),
+);
+
+it.effect("#2059 never resends an expired eval terminal write on resume", () =>
+  Effect.gen(function* () {
+    const f = yield* terminalFixture();
+    const opened = yield* f.terminal.open(f.scope);
+    const process = f.pty.processes[0]!;
+    process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+    const context = yield* Layer.build(
+      catalog.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            dependencies,
+            f.base,
+            Layer.succeed(TerminalService.AgentTerminalMcpService, f.terminal),
+            Layer.succeed(Workspace.AgentWorkspaceMcpService, f.service),
+          ),
+        ),
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(Sqlite.layerMemory),
+      ),
+    );
+    const server = Context.get(context, McpServer.McpServer);
+    const evaluate = Effect.fn("agentWorkspaceTerminal.evaluate")(function* (
+      args: Record<string, unknown>,
+    ) {
+      const result = yield* server.callTool({ name: "goat_eval", arguments: args });
+      const content = result.content[0];
+      expect(content?.type).toBe("text");
+      return content?.type === "text" ? JSON.parse(content.text) : null;
+    });
+    yield* Effect.gen(function* () {
+      const first = yield* evaluate({
+        program: [
+          "seq",
+          ["terminal.write", { handle: opened.handle, data: "expired\\n" }],
+          ["terminal.read", { handle: "invalid" }],
+        ],
+      });
+      expect(first.status).toBe("error");
+      expect(first.evalRunId).toBeDefined();
+      expect(process.writes.filter((data) => data === "expired\\n")).toHaveLength(1);
+      yield* TestClock.adjust("25 hours");
+      const resumed = yield* evaluate({ resume: first.evalRunId });
+      expect(process.writes.filter((data) => data === "expired\\n")).toHaveLength(1);
+      expect(resumed.error.code).toBe("unknown_outcome");
+    }).pipe(
+      Effect.provideService(McpInvocationContext, f.scope),
+      Effect.provideService(McpSchema.McpServerClient, client),
+    );
+    yield* f.manager.close({ threadId: f.threadId });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 const feature = Workspace.layer.pipe(
   Layer.provide(Access.layer),
@@ -293,6 +476,9 @@ it.effect(
           agentTerminalBinding: { sessionId: "fixture-client", threadId: null },
         }),
       ).toEqual(["settings:write", "access:write"]);
+      expect(clientRpcRequiredScopes(WS_METHODS.serverUpdateSettings, undefined)).toEqual([
+        "settings:write",
+      ]);
       const settings = yield* Settings.ServerSettingsService;
       expect(
         yield* settings
@@ -420,4 +606,176 @@ it.effect("#2059 rejects omitted and null mutation keys through direct tools and
       ),
     ),
   ),
+);
+
+it.effect(
+  "#2059 binds PTY mutations to their opener and reads bounded output without spawning",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* terminalFixture();
+      expect((yield* f.terminal.list(f.scope)).terminals).toEqual([]);
+      expect(f.pty.processes).toHaveLength(0);
+      const opened = yield* f.terminal.open(f.scope);
+      expect(opened.owned).toBe(true);
+      const process = f.pty.processes[0]!;
+      process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+      const emit = Effect.fn("agentWorkspaceTerminal.emit")(function* (data: string) {
+        const received = yield* Deferred.make<void>();
+        const stop = yield* f.manager.subscribe((event) =>
+          event.type === "output" && event.data === data
+            ? Deferred.succeed(received, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        process.emitData(data);
+        yield* Deferred.await(received);
+        stop();
+      });
+      yield* emit("\ud83d");
+      const incomplete = yield* f.terminal.read(f.scope, { handle: opened.handle });
+      expect(incomplete.data).toBe("");
+      yield* emit("\ude00x");
+      const first = yield* f.terminal.read(f.scope, { handle: opened.handle, maxBytes: 4 });
+      expect(first.data).toBe("😀");
+      const next = yield* f.terminal.read(f.scope, {
+        handle: opened.handle,
+        cursor: first.nextCursor,
+      });
+      expect(next.data).toBe("x");
+      expect(next.eof).toBe(true);
+      expect(f.pty.processes).toHaveLength(1);
+      const other = {
+        ...f.scope,
+        client: { sessionId: "fixture-other", label: "Other", access: "full-access" as const },
+      };
+      expect(
+        yield* f.terminal
+          .mutate(other, { handle: opened.handle, data: "stolen\n" }, "write")
+          .pipe(Effect.isFailure),
+      ).toBe(true);
+      const cleared = yield* f.terminal.mutate(f.scope, { handle: opened.handle }, "clear");
+      expect(cleared.handle).not.toBe(opened.handle);
+      expect(
+        (yield* f.terminal.read(f.scope, { handle: opened.handle, cursor: next.nextCursor })).gap,
+      ).toBe(true);
+      expect(
+        yield* f.terminal
+          .mutate(f.scope, { handle: opened.handle, data: "stale\n" }, "write")
+          .pipe(Effect.isFailure),
+      ).toBe(true);
+      yield* f.terminal.mutate(f.scope, { handle: cleared.handle, data: "owned\n" }, "write");
+      expect(process.writes).toContain("owned\n");
+      expect(process.writes).not.toContain("stolen\n");
+      const closed = yield* f.terminal.mutate(f.scope, { handle: cleared.handle }, "close");
+      expect(closed.status).toBe("closed");
+      expect(process.killed).toBe(true);
+      expect(JSON.stringify(f.events)).not.toContain("owned\\n");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("#2059 cannot adopt human PTYs or retain authority after client rebinding", () =>
+  Effect.gen(function* () {
+    const f = yield* terminalFixture();
+    yield* f.manager.open({ threadId: f.threadId, terminalId: "human-terminal", cwd: f.root });
+    f.pty.processes[0]!.onKill = () => f.pty.processes[0]!.emitExit({ exitCode: 0, signal: null });
+    const human = (yield* f.terminal.list(f.scope)).terminals[0]!;
+    expect(human.owned).toBe(false);
+    expect(
+      yield* f.terminal.mutate(f.scope, { handle: human.handle }, "close").pipe(Effect.isFailure),
+    ).toBe(true);
+    const opened = yield* f.terminal.open(f.scope);
+    f.pty.processes[1]!.onKill = () => f.pty.processes[1]!.emitExit({ exitCode: 0, signal: null });
+    yield* Ref.update(f.settings, (settings) => ({
+      ...settings,
+      agentTerminalClientBindings: {
+        ...settings.agentTerminalClientBindings,
+        [AuthSessionId.make("fixture-client")]: { threadId: f.threadId, generation: "replaced" },
+      },
+    }));
+    expect(
+      yield* f.terminal.mutate(f.scope, { handle: opened.handle }, "close").pipe(Effect.isFailure),
+    ).toBe(true);
+    const inherited = (yield* f.terminal.list(f.scope)).terminals;
+    expect(inherited.every((terminal) => !terminal.owned)).toBe(true);
+    yield* Ref.update(f.settings, (settings) => ({
+      ...settings,
+      agentTerminalAccess: "off" as const,
+    }));
+    expect(yield* f.terminal.read(f.scope, { handle: opened.handle }).pipe(Effect.isFailure)).toBe(
+      true,
+    );
+    expect(f.pty.processes.every((process) => !process.killed)).toBe(true);
+    yield* f.manager.close({ threadId: f.threadId });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "#2059 replays PTY mutations once and binds an open receipt to the current client binding",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* terminalFixture();
+      const context = yield* Layer.build(
+        catalog.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              dependencies,
+              f.base,
+              Layer.succeed(TerminalService.AgentTerminalMcpService, f.terminal),
+              Layer.succeed(Workspace.AgentWorkspaceMcpService, f.service),
+            ),
+          ),
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(Sqlite.layerMemory),
+        ),
+      );
+      const server = Context.get(context, McpServer.McpServer);
+      const call = Effect.fn("agentWorkspaceTerminal.call")(function* (
+        path: string,
+        args: Record<string, unknown>,
+      ) {
+        const result = yield* server.callTool({ name: "goat_call", arguments: { path, args } });
+        const content = result.content[0];
+        expect(content?.type).toBe("text");
+        return content?.type === "text" ? JSON.parse(content.text) : null;
+      });
+      const run = Effect.gen(function* () {
+        const opened = yield* call("terminal.open", { clientRequestId: "open-a" });
+        expect(opened.status).toBe("ok");
+        const handle: string = opened.value.handle;
+        expect((yield* call("terminal.open", { clientRequestId: "open-a" })).value.handle).toBe(
+          handle,
+        );
+        expect(f.pty.processes).toHaveLength(1);
+        const process = f.pty.processes[0]!;
+        process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+        const write = { handle, data: "once\n", clientRequestId: "write-a" };
+        expect((yield* call("terminal.write", write)).status).toBe("ok");
+        expect((yield* call("terminal.write", write)).status).toBe("ok");
+        expect(process.writes.filter((data) => data === "once\n")).toHaveLength(1);
+        const clear = { handle, clientRequestId: "clear-a" };
+        const cleared = yield* call("terminal.clear", clear);
+        expect(cleared.status).toBe("ok");
+        expect((yield* call("terminal.clear", clear)).value.handle).toBe(cleared.value.handle);
+        const close = { handle: cleared.value.handle, clientRequestId: "close-a" };
+        expect((yield* call("terminal.close", close)).value.status).toBe("closed");
+        expect((yield* call("terminal.close", close)).value.status).toBe("closed");
+        yield* Ref.update(f.settings, (settings) => ({
+          ...settings,
+          agentTerminalClientBindings: {
+            ...settings.agentTerminalClientBindings,
+            [AuthSessionId.make("fixture-client")]: {
+              threadId: f.threadId,
+              generation: "new-binding",
+            },
+          },
+        }));
+        expect((yield* call("terminal.open", { clientRequestId: "open-a" })).error.reason).toBe(
+          "idempotency_mismatch",
+        );
+        expect(f.pty.processes).toHaveLength(1);
+      });
+      yield* run.pipe(
+        Effect.provideService(McpInvocationContext, f.scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

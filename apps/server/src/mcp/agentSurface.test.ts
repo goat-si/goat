@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(266);
+  expect(entries).toHaveLength(273);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -528,7 +528,7 @@ describe("agent surface access", () => {
       const mismatches: Array<string> = [];
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
-        if (entry.resource === "memory" || entry.resource === "workspace") continue;
+        if (["memory", "workspace", "terminal"].includes(entry.resource)) continue;
         // No screen runner in this inert catalog; screen/handlers.test.ts covers its admission.
         if (entry.path === "surface.screen_run") continue;
         const args = yield* argumentsFor(entry);

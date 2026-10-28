@@ -190,7 +190,8 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
-  if (method === WS_METHODS.serverUpdateSettings && input !== undefined) {
+  if (method === WS_METHODS.serverUpdateSettings) {
+    if (input === undefined) return [AuthSettingsWriteScope];
     const payload = decodeSettingsUpdate(input);
     const scopes = requiredScopesForServerSettingsPatch(
       payload.patch,
