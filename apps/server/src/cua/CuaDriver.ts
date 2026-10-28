@@ -443,18 +443,12 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   const running = () => active?.running === true;
   // Status reads wait for a grant check already in flight, and re-check every ten seconds. A
   // desktop helper has no daemon socket to ask, so its own last report answers instead.
-  const reported = Effect.all([
-    cachedProbe,
-    cachedGrants,
-    options.helperReadiness ?? Effect.succeedNone,
-  ]).pipe(
-    Effect.map(([display, , helper]) =>
+  const helperGrants = options.helperReadiness ?? Effect.succeedNone;
+  const reported = Effect.all([cachedProbe, helperGrants, cachedGrants]).pipe(
+    Effect.map(([display, helper]) =>
       CuaDisplay.withMacGrants(
         withoutEnvironment(display),
-        (active?.running ? active.grants : null) ??
-          CuaDisplay.reportedMacGrants(
-            Option.isSome(helper) ? helper.value.readiness?.grants : undefined,
-          ),
+        (active?.running ? active.grants : null) ?? CuaDisplay.reportedMacGrants(helper),
       ),
     ),
   );

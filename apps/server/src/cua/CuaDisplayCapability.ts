@@ -5,6 +5,7 @@ import type { CuaDisplayCapability } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -337,8 +338,13 @@ export function parseMacGrants(structuredJson: string | undefined): MacGrants | 
  * null while either is unread. Asked and still off counts as off.
  */
 export function reportedMacGrants(
-  grants: { readonly accessibility: string; readonly screenCapture: string } | undefined,
+  helper: Option.Option<{
+    readonly readiness?: {
+      readonly grants: { readonly accessibility: string; readonly screenCapture: string };
+    };
+  }>,
 ): MacGrants | null {
+  const grants = Option.isSome(helper) ? helper.value.readiness?.grants : undefined;
   if (
     grants === undefined ||
     grants.accessibility === "unknown" ||
