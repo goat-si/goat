@@ -786,9 +786,23 @@ it.effect("reports native reader durations on successful and failed statements",
       Effect.gen(function* () {
         yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.withSpan("test.nativeReader"));
         yield* sql`SELECT * FROM missing_native_table`.pipe(SqliteClient.readOnly, Effect.exit);
+        yield* sql`SELECT abs(-9223372036854775808)`.pipe(
+          SqliteClient.readOnly,
+          Effect.withSpan("test.nativeReaderFailure"),
+          Effect.exit,
+        );
         assert.equal(replies[0]?.nativeMs, 75, "success carries worker-native duration");
         assert.equal(replies[0]?.prepareMs, 75);
         assert.equal(replies[1]?.prepareMs, 75, "prepare failure retains native duration");
+        assert.equal(replies[2]?.nativeMs, 75, "execute failure retains native duration");
+        assert.isTrue(
+          SqliteClient.recentSlowSql(30_000).some(
+            (record) =>
+              record.owner === "test.nativeReaderFailure" &&
+              record.operation === "execute" &&
+              record.nativeMs === 75,
+          ),
+        );
         const records = SqliteClient.recentSlowSql(30_000).filter(
           (record) => record.owner === "test.nativeReader",
         );

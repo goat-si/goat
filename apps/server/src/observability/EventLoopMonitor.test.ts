@@ -205,6 +205,10 @@ it.effect("correlates native writer successes and failures with local stall evid
         Effect.withSpan("test.nativeWriterFailure"),
         Effect.exit,
       );
+      yield* sql`SELECT abs(-9223372036854775808)`.pipe(
+        Effect.withSpan("test.nativeWriterExecuteFailure"),
+        Effect.exit,
+      );
     });
     yield* Effect.gen(function* () {
       const monitor = yield* EventLoopMonitor.EventLoopMonitor;
@@ -214,6 +218,7 @@ it.effect("correlates native writer successes and failures with local stall evid
       assert.include(startup, '"phase":"startup"');
       assert.include(startup, '"owner":"test.nativeWriter"');
       assert.include(startup, '"owner":"test.nativeWriterFailure"');
+      assert.include(startup, '"owner":"test.nativeWriterExecuteFailure"');
       assert.include(startup, '"nativeMs":75');
       assert.notInclude(startup, "native_failure_missing_table");
       yield* TestClock.adjust("30 seconds");

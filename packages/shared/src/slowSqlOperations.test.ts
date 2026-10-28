@@ -35,13 +35,23 @@ it("bounds and expires slow SQL evidence without retaining SQL or bindings", () 
     "operation",
     "owner",
   ]);
-  recordSlowSql({
+  const withPrivateFields = {
     connection: "reader",
     operation: "prepare",
     owner: "x".repeat(200),
     nativeMs: 50,
     completedAtMs,
-  });
+    sql: "SELECT private_value",
+    bindings: ["private"],
+  } as const;
+  recordSlowSql(withPrivateFields);
+  assert.deepEqual(Object.keys(recentSlowSql(completedAtMs).at(-1) ?? {}).sort(), [
+    "completedAtMs",
+    "connection",
+    "nativeMs",
+    "operation",
+    "owner",
+  ]);
   assert.equal(recentSlowSql(completedAtMs).at(-1)?.owner.length, 160);
 });
 
