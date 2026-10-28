@@ -99,6 +99,12 @@ export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (te
 /** Masks every string in an evaluation result, object keys included: all of it is the page's. */
 export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
   if (typeof value === "string") return mask(value);
+  // A number read from a masked field (a one-time code, a phone number) is that value too.
+  if (typeof value === "number" || typeof value === "bigint") {
+    const text = String(value);
+    const masked = mask(text);
+    return masked === text ? value : masked;
+  }
   if (Array.isArray(value)) return value.map((each) => redactValue(each, mask));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
@@ -326,6 +332,13 @@ export const openReaders = async (page: Page, cdp: CDPSession) => {
 /** Short values need word boundaries to avoid masking unrelated text. */
 export const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
+    // A phone number or code read back as a number loses its separators and leading zeros.
+    .flatMap((value) => {
+      const digits = value.replace(/\D/g, "");
+      return /^[\d\s+().-]+$/.test(value) && digits.length >= 4
+        ? [value, digits, digits.replace(/^0+(?=\d)/, "")]
+        : [value];
+    })
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
       const quoted = playwrightQuoted(value);
