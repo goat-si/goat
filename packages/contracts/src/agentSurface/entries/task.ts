@@ -19,6 +19,7 @@ export const taskEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotency: "domain",
     idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Delegate a child task",
@@ -70,7 +71,8 @@ export const taskEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
-    idempotencyReason: ORCHESTRATION_RECEIPT,
+    idempotencyReason:
+      "clientRequestId fixes the stop command ids, but each call re-reads the child's delegated tasks, so a repeat can also stop work started after the first call.",
     annotations: {
       title: "Cancel delegated task",
       idempotentHint: false,

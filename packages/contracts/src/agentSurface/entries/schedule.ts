@@ -1,5 +1,4 @@
 import { entry } from "../entry.ts";
-import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const scheduleEntries = {
   "schedule.create": entry({
@@ -18,7 +17,8 @@ export const scheduleEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["secret"],
-    idempotencyReason: ORCHESTRATION_RECEIPT,
+    idempotencyReason:
+      "clientRequestId fixes the scheduled task id, so a repeat never creates a second task, but it upserts that row with the repeated arguments and can undo an edit made in between.",
     annotations: {
       title: "Schedule a recurring task",
       idempotentHint: false,

@@ -8,8 +8,8 @@
 export const ORCHESTRATION_RECEIPT =
   "Deduplicates clientRequestId as a stable orchestration command id, whose receipt commits in the same transaction as the command and outlives a 24-hour reservation.";
 
-/** Host-routable orchestration writes forward the key, so the machine that runs them dedupes. */
-export const ROUTED_ORCHESTRATION_RECEIPT = `${ORCHESTRATION_RECEIPT} A call with host forwards the key, so that machine's receipts deduplicate it where it runs.`;
+/** Host-routable orchestration writes forward the key; the destination dedupes it per dispatch session. */
+export const ROUTED_ORCHESTRATION_RECEIPT = `${ORCHESTRATION_RECEIPT} A call with host forwards the key, but that machine keys its receipt by this one's dispatch session, which renews, so a routed repeat can run again.`;
 
 /** goat_ssh_host_add and goat_connection_add_ssh run one handler that is meant to be called again. */
 export const SSH_HOST_ADD_CONVERGES =

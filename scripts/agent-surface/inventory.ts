@@ -76,7 +76,7 @@ export interface ToolEntry {
   /** The input schema /mcp serves does not close its top level, so a client may send extra keys. */
   readonly acceptsUndeclaredArguments: boolean;
   readonly clientRequestId: boolean;
-  /** The registry marks it `idempotency: "key"`, so GOAT reserves its clientRequestId. */
+  /** The registry marks it "key" or "domain": ToolAdmission or its own store deduplicates clientRequestId. */
   readonly deduplicated: boolean;
   readonly pagination: ReadonlyArray<string>;
   readonly humanSteps: ReadonlyArray<string>;
@@ -458,12 +458,12 @@ export async function collectTools(): Promise<{
     NodePath.join(repoRoot, "packages/contracts/src/agentSurface/resolve.ts"),
   )) as {
     resolveAgentSurfaceEntry: (name: string) => unknown;
-    isKeyedWrite: (entry: unknown) => boolean;
+    deduplicatesClientRequestId: (entry: unknown) => boolean;
     listedToolName: (entry: unknown) => string;
   };
   const keyed = (name: string) => {
     const entry = resolve.resolveAgentSurfaceEntry(name);
-    return entry !== undefined && resolve.isKeyedWrite(entry);
+    return entry !== undefined && resolve.deduplicatesClientRequestId(entry);
   };
   const { agentSurfaceRegistry } = (await importFile(
     NodePath.join(repoRoot, "packages/contracts/src/agentSurface/registry.ts"),

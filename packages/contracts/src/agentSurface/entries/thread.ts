@@ -64,6 +64,7 @@ export const threadEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotency: "domain",
     idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Create GOAT threads",
@@ -129,6 +130,7 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "domain",
     idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Update GOAT thread metadata",
@@ -152,6 +154,8 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "domain",
+    keyIgnoredWith: ["host"],
     idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Send to a GOAT thread",
@@ -217,7 +221,9 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
-    idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
+    idempotency: "domain",
+    keyIgnoredWith: ["host", "stopCascade"],
+    idempotencyReason: `${ROUTED_ORCHESTRATION_RECEIPT} stopCascade:true re-reads delegated children on each call, so a repeat can stop work started after the first.`,
     annotations: {
       title: "Interrupt a GOAT thread",
       idempotentHint: false,
@@ -240,6 +246,8 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "domain",
+    keyIgnoredWith: ["host"],
     idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Retry a GOAT thread's failed workspace preparation",

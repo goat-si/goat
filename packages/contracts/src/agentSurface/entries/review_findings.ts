@@ -19,6 +19,7 @@ export const reviewFindingsEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "domain",
     idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: { title: "Record review findings", idempotentHint: true, openWorldHint: false },
   }),

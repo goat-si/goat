@@ -14,7 +14,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Toolkits                                               | 27               |
 | Mutating tools, by enforced handler access             | 143              |
 | Mutating tools that accept clientRequestId             | 48               |
-| Mutating tools whose clientRequestId GOAT deduplicates | 35               |
+| Mutating tools whose clientRequestId GOAT deduplicates | 46               |
 | Input parameters with a description                    | 124 of 844 (15%) |
 | Tool descriptions with an example                      | 4 of 221         |
 | CLI commands, listed / unlisted                        | 62 / 19          |

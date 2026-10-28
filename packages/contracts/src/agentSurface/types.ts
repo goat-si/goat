@@ -37,10 +37,12 @@ export interface AgentSurfaceEntry {
   >;
   readonly capability?: AgentSurfaceCapability;
   readonly capabilityReason?: string;
-  readonly idempotency?: "key";
+  readonly idempotency?: "key" | "domain";
   readonly reconcile?: string;
-  /** Why a write takes no GOAT-deduplicated key: idempotency.test.ts requires a key or this. */
+  /** Why a write's key is not ToolAdmission's: idempotency.test.ts requires "key" or this. */
   readonly idempotencyReason?: string;
+  /** Arguments that, when set, make a "domain" write's store ignore clientRequestId. */
+  readonly keyIgnoredWith?: ReadonlyArray<string>;
   /** The kind of operation this path's accepted work becomes; goat_call returns its handle. */
   readonly operation?: OperationKind;
   readonly annotations: {
@@ -69,24 +71,32 @@ export type CapabilityDeclaration =
     };
 
 /**
- * "key": the write takes clientRequestId and GOAT's reservation store deduplicates it
- * (docs/internals/agent-surface.md#idempotency). `reconcile` is the read path that tells an agent
- * whether a write whose outcome is unknown happened. A write without a key says why in
- * `idempotencyReason`, such as a domain store that already deduplicates its own key.
+ * "key": ToolAdmission reserves clientRequestId, and `reconcile` reads whether an unknown outcome
+ * happened (docs/internals/agent-surface.md#idempotency). "domain": the write's own store
+ * deduplicates it unless a `keyIgnoredWith` argument is set. Others say why in `idempotencyReason`.
  */
 export type IdempotencyDeclaration =
   | {
       readonly idempotency?: undefined;
       readonly reconcile?: undefined;
       readonly idempotencyReason?: undefined;
+      readonly keyIgnoredWith?: undefined;
     }
   | {
       readonly idempotency: "key";
       readonly reconcile: string;
       readonly idempotencyReason?: undefined;
+      readonly keyIgnoredWith?: undefined;
+    }
+  | {
+      readonly idempotency: "domain";
+      readonly reconcile?: undefined;
+      readonly idempotencyReason: string;
+      readonly keyIgnoredWith?: ReadonlyArray<string>;
     }
   | {
       readonly idempotency?: undefined;
       readonly reconcile?: undefined;
       readonly idempotencyReason: string;
+      readonly keyIgnoredWith?: undefined;
     };
