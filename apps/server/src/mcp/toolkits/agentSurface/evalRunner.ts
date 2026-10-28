@@ -1,11 +1,7 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- run ids and element digests need node:crypto.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- run ids need node:crypto.
 import * as NodeCrypto from "node:crypto";
 
-import {
-  type AgentSurfaceResult,
-  fromToolResult,
-  settlementOf,
-} from "@goat/contracts/agentSurface/envelope";
+import { type AgentSurfaceResult, settlementOf } from "@goat/contracts/agentSurface/envelope";
 import {
   EVAL_LIMITS,
   type EvalInput,
@@ -35,6 +31,7 @@ import {
   principalOf,
 } from "../../ToolAdmission.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
+import { storedEnvelope } from "./dispatchEnvelope.ts";
 import { type EvalJournal, makeEvalJournal } from "./evalJournal.ts";
 import { makeEvalPlan } from "./evalPlan.ts";
 import {
@@ -74,6 +71,14 @@ export interface EvalRunnerOptions<R> {
   readonly admission: EvalAdmission;
   readonly readHandoff: HandoffReader;
   readonly hostConditions?: Effect.Effect<HostConditions>;
+  /**
+   * goat_call's operation handle for a recorded result recovered without sending the call again;
+   * the mount passes the same function goat_call uses.
+   */
+  readonly withOperation?: (
+    entry: CallSite["entry"],
+    result: Envelope,
+  ) => Effect.Effect<Envelope, never, R>;
 }
 
 const failure = (
@@ -100,11 +105,6 @@ const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const toJson = Schema.encodeSync(UnknownJson);
 const fromJson = Schema.decodeSync(UnknownJson);
 
-const digest12 = (value: unknown) =>
-  NodeCrypto.createHash("sha256")
-    .update(toJson(value ?? null))
-    .digest("hex")
-    .slice(0, 12);
 const bytesOf = (value: unknown) => Buffer.byteLength(toJson(value ?? null), "utf8");
 const isRecord = (value: unknown): value is Readonly<Record<string, Json>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,6 +142,7 @@ const unknownOutcome = (path: string, reconcile: string | undefined, from?: Erro
  */
 export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
   const { invoke, permissions, admission, readHandoff } = options;
+  const withOperation = options.withOperation ?? ((_entry, result) => Effect.succeed(result));
   const plan = makeEvalPlan(
     options.dispatch,
     permissions,
@@ -172,21 +173,35 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
     if (Option.isNone(database))
       return refused("internal", "storage_failed", "goat_eval needs this server's database.");
     const journal = makeEvalJournal(database.value, admission.bootId);
-    const opened = yield* open(journal, input, parsed, principal).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError("goat_eval could not open its run", { cause }).pipe(
-          Effect.as(
-            refused(
-              "internal",
-              "storage_failed",
-              "GOAT could not record this run, so it did not run.",
+    // A claim, once taken, is always settled: interrupting the call or a defect halts the run,
+    // so a later resume is not refused as in progress until the server restarts.
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const opened = yield* open(journal, input, parsed, principal).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("goat_eval could not open its run", { cause }).pipe(
+              Effect.as(
+                refused(
+                  "internal",
+                  "storage_failed",
+                  "GOAT could not record this run, so it did not run.",
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+        if ("status" in opened) return opened;
+        return yield* restore(execute(journal, opened)).pipe(
+          Effect.onExit((exit) =>
+            exit._tag === "Success"
+              ? Effect.void
+              : journal
+                  .settleRun(opened.evalRunId, opened.claimId, "halted")
+                  .pipe(Effect.catchCause(() => journal.abandonRun(opened.claimId))),
+          ),
+        );
+      }),
     );
-    if ("status" in opened) return opened;
-    return yield* execute(journal, opened);
   });
 
   interface Opened {
@@ -408,11 +423,10 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
           );
           switch (outcome.kind) {
             case "replay":
-              envelope = fromToolResult(outcome.result, {
-                effect: entry.effect,
-                deduplicated: true,
-                pathOf: (name) => resolveAgentSurfaceEntry(name)?.path,
-              });
+              envelope = yield* withOperation(
+                entry,
+                storedEnvelope(entry.name, args, entry.effect, outcome.result, outcome.failure),
+              );
               yield* stored(journal.settleStep(evalRunId, at, "completed", toJson(envelope)), at);
               restored = true;
               break;
@@ -508,18 +522,16 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         state.restored += 1;
         state.completed.push({ step: at, path: entry.path });
       }
+      // Collected before anything can stop the run, so running work is never hidden.
+      const operation = envelope.meta?.operation;
+      if (operation !== undefined) state.operations.push({ step: at, path: entry.path, operation });
       yield* account(envelope, at);
-      if (envelope.status === "ok") {
-        const operation = envelope.meta?.operation;
-        if (operation !== undefined)
-          state.operations.push({ step: at, path: entry.path, operation });
-        return (envelope.value ?? null) as Json;
-      }
+      if (envelope.status === "ok") return (envelope.value ?? null) as Json;
       if (envelope.status === "needs_human") {
         if (!restored) return yield* halt(envelope, at);
         // The person's action finishes this step through the handoff; it never runs again.
         const read = yield* readHandoff(envelope.handoff.handoffId);
-        if (read.status === "needs_human") return yield* halt(read, at);
+        if (read.status !== "ok") return yield* halt(read, at);
         return yield* halt(
           failure(
             "failed_precondition",
@@ -589,7 +601,9 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
                   : Array.isArray(current) && typeof key === "number"
                     ? ((current as ReadonlyArray<Json>)[key] ?? null)
                     : isRecord(current) && typeof key === "string"
-                      ? (current[key] ?? null)
+                      ? Object.hasOwn(current, key)
+                        ? (current[key] ?? null)
+                        : null
                       : null;
             }
             return current;
@@ -603,7 +617,9 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
             const pick = (value: Json): Json =>
               isRecord(value)
                 ? Object.fromEntries(
-                    keys.filter((key) => key in value).map((key) => [key, value[key] as Json]),
+                    keys
+                      .filter((key) => Object.hasOwn(value, key))
+                      .map((key) => [key, value[key] as Json]),
                   )
                 : null;
             return Array.isArray(target) ? (target as ReadonlyArray<Json>).map(pick) : pick(target);
@@ -628,10 +644,13 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
             for (const [index, item] of items.entries()) {
               const scope = new Map(env).set(expr.name, item);
               // A call inside map is keyed by the element too, so a changed list never reuses a step.
+              const at = `${expr.site}${frames}`;
+              // The same digest as arguments, so key order never changes an element's steps.
+              const element = (yield* stored(argumentsDigest(item), at)).slice(0, 12);
               const value = yield* go(
                 expr.body,
                 scope,
-                `${frames}@${expr.site}[${index}:${digest12(item)}]`,
+                `${frames}@${expr.site}[${index}:${element}]`,
               );
               if (expr.t === "map") out.push(value);
               else if (truthy(value)) out.push(item);
@@ -666,18 +685,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
       "",
       false,
     ).pipe(
-      Effect.filterOrFail(
-        (value) => bytesOf(value) <= EVAL_LIMITS.resultBytes,
-        () =>
-          halt(
-            failure(
-              "resource_exhausted",
-              "eval_result_limit",
-              `The result is over ${EVAL_LIMITS.resultBytes} bytes. Pick fewer fields.`,
-            ),
-            "run",
-          ),
-      ),
+      Effect.tap((value) => account(value, "run")),
       Effect.timeoutOrElse({
         duration: EVAL_LIMITS.timeoutMs,
         orElse: () =>

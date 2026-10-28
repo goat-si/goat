@@ -643,7 +643,11 @@ export const derivedStepRequestId = (
     .slice(0, 48)}`;
 
 export type KeyedOutcome =
-  | { readonly kind: "replay"; readonly result: McpSchema.CallToolResult }
+  | {
+      readonly kind: "replay";
+      readonly result: McpSchema.CallToolResult;
+      readonly failure: Literal | undefined;
+    }
   | { readonly kind: "absent" | "in_progress" | "unknown" | "grant_lost" };
 
 /**
@@ -695,8 +699,10 @@ export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(fu
       readonly boot_id: string;
       readonly receipt_id: string;
       readonly result_json: string | null;
+      readonly failure_json: string | null;
       readonly grant_json: string;
-    }>`SELECT state, boot_id, receipt_id, result_json, grant_json FROM mcp_request_reservations
+    }>`SELECT state, boot_id, receipt_id, result_json, failure_json, grant_json
+      FROM mcp_request_reservations
       WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
         AND path = ${path} AND client_request_id = ${clientRequestId}`;
     if (row === undefined) return { kind: "absent" } satisfies KeyedOutcome as KeyedOutcome;
@@ -714,6 +720,7 @@ export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(fu
     return {
       kind: "replay",
       result: yield* decodeResult(row.result_json),
+      failure: row.failure_json === null ? undefined : yield* decodeLiteral(row.failure_json),
     } satisfies KeyedOutcome as KeyedOutcome;
   });
 

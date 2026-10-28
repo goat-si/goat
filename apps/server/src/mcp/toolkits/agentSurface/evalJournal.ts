@@ -66,9 +66,14 @@ export const makeEvalJournal = (sql: SqlClient.SqlClient, bootId: string) => {
     principal: string,
   ) {
     const at = yield* now;
-    yield* sql`DELETE FROM mcp_eval_steps WHERE eval_run_id IN (SELECT eval_run_id
-      FROM mcp_eval_runs WHERE expires_at IS NOT NULL AND expires_at <= ${at})`;
-    yield* sql`DELETE FROM mcp_eval_runs WHERE expires_at IS NOT NULL AND expires_at <= ${at}`;
+    // One transaction, so a claim cannot keep a run whose steps were just deleted.
+    yield* sql.withTransaction(
+      Effect.andThen(
+        sql`DELETE FROM mcp_eval_steps WHERE eval_run_id IN (SELECT eval_run_id
+          FROM mcp_eval_runs WHERE expires_at IS NOT NULL AND expires_at <= ${at})`,
+        sql`DELETE FROM mcp_eval_runs WHERE expires_at IS NOT NULL AND expires_at <= ${at}`,
+      ),
+    );
     const [row] = yield* sql<RunRow>`SELECT eval_run_id, program_digest, program_json,
       bindings_json, state, boot_id, claim_id FROM mcp_eval_runs
       WHERE eval_run_id = ${evalRunId} AND environment_id = ${environmentId}

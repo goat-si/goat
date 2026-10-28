@@ -1,6 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- the expected key digests an element as the runner does.
-import * as NodeCrypto from "node:crypto";
-
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -12,7 +9,9 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import type { EvalInput } from "@goat/contracts/agentSurface/eval";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -48,6 +47,7 @@ class Probe extends Context.Service<
     readonly writes: Ref.Ref<ReadonlyArray<string>>;
     readonly cancels: Ref.Ref<number>;
     readonly handoff: Ref.Ref<"pending" | "completed">;
+    readonly parked: Deferred.Deferred<void>;
   }
 >()("goat/mcp/toolkits/agentSurface/eval.test/Probe") {}
 
@@ -104,6 +104,10 @@ const handlers = {
             message: "The host stopped answering after the write was sent.",
           });
         if (projectId === "human") return { kind: "needs_human", handoff: handoff("pending") };
+        if (projectId === "park") {
+          yield* Deferred.succeed(probe.parked, undefined);
+          return yield* Effect.never;
+        }
         return { deleted: projectId };
       }),
   ),
@@ -131,6 +135,7 @@ const served = Layer.mergeAll(
         writes: Ref.make<ReadonlyArray<string>>([]),
         cancels: Ref.make(0),
         handoff: Ref.make<"pending" | "completed">("pending"),
+        parked: Deferred.make<void>(),
       }),
     ),
   ),
@@ -274,10 +279,7 @@ it.effect(
       expect(new Set(keys).size).toBe(2);
       // The second element's key binds the run, its place in the map, the element and the arguments.
       const element = { id: "b", title: "Project b", root: "/work/b" };
-      const elementDigest = NodeCrypto.createHash("sha256")
-        .update(JSON.stringify(element))
-        .digest("hex")
-        .slice(0, 12);
+      const elementDigest = (yield* ToolAdmission.argumentsDigest(element)).slice(0, 12);
       expect(keys).toContain(
         ToolAdmission.derivedStepRequestId(
           String(done.evalRunId),
@@ -358,6 +360,7 @@ it.effect("refuses recursion and over-limit programs before anything runs", () =
         "eval_call_limit",
       ],
       [{ program: '(project.delete :projectId "a" :clientRequestId "mine")' }, "eval_explicit_key"],
+      [{ program: "(if 1e999 (project.list) (project.list))" }, "eval_parse"],
     ] as const;
     for (const [input, reason] of refusals) {
       const result = yield* evaluate(input);
@@ -400,5 +403,41 @@ it.effect("answers dryRun with the plan alone and runs nothing", () =>
     });
     expect(yield* probed).toEqual({ reads: 0, writes: [], cancels: 0 });
     expect(yield* sql`SELECT eval_run_id FROM mcp_eval_runs`).toEqual([]);
+  }).pipe(Effect.provide(served)),
+);
+
+it.effect("treats an element with its keys in another order as the same step", () =>
+  Effect.gen(function* () {
+    const program = '(map p ps (project.delete :projectId (. p "id")))';
+    const first = yield* evaluate({
+      program,
+      bindings: { ps: [{ id: "a", owner: "o" }] },
+      clientRequestId: "order",
+    });
+    expect(first).toMatchObject({ status: "ok", value: [{ deleted: "a" }] });
+    expect(
+      yield* evaluate({
+        program,
+        bindings: { ps: [{ owner: "o", id: "a" }] },
+        clientRequestId: "order",
+      }),
+    ).toMatchObject({ status: "ok", steps: { live: 0, restored: 1 } });
+    expect((yield* probed).writes).toEqual(["a"]);
+  }).pipe(Effect.provide(served)),
+);
+
+it.effect("settles a run whose call was interrupted so it can be resumed", () =>
+  Effect.gen(function* () {
+    const probe = yield* Probe;
+    const input = { program: '(project.delete :projectId "park")', clientRequestId: "park" };
+    const running = yield* Effect.forkChild(evaluate(input));
+    yield* Deferred.await(probe.parked);
+    yield* Fiber.interrupt(running);
+    // Not refused as still running: the write may have happened, so it is never sent again.
+    expect(yield* evaluate(input)).toMatchObject({
+      status: "error",
+      error: { code: "unknown_outcome" },
+    });
+    expect((yield* probed).writes).toEqual(["park"]);
   }).pipe(Effect.provide(served)),
 );

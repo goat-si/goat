@@ -168,7 +168,10 @@ const readText = (source: string): Node => {
     if (token === "null" || token === "nil") return { kind: "lit", value: null };
     if (/^-?[0-9]/.test(token)) {
       if (!NUMBER.test(token)) return fail(`${token} is not a number`);
-      return { kind: "lit", value: Number(token) };
+      const value = Number(token);
+      // A literal that overflows would read back as null from the journal and change branches.
+      if (!Number.isFinite(value)) return fail(`${token} is too large`);
+      return { kind: "lit", value };
     }
     return { kind: "sym", name: token };
   };

@@ -125,3 +125,27 @@ export const dispatchEnvelope = Effect.fn("AgentSurface.dispatch")(function* (
     }),
   );
 });
+
+/**
+ * A keyed write's recorded result, answered as goat_call answers the call that recorded it, for a
+ * caller that must not send the write again (goat_eval's recovery of an interrupted step).
+ */
+export const storedEnvelope = (
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+  effect: AgentSurfaceEffect,
+  result: Parameters<typeof fromToolResult>[0],
+  failure: { readonly _tag: string; readonly code?: string } | undefined,
+): AgentSurfaceResult => {
+  const entry = resolveAgentSurfaceEntry(name);
+  const context: CallContext = { effect, deduplicated: true, pathOf };
+  const direct = fromToolResult(result, context);
+  const host =
+    entry?.hostRoutable === true && typeof args.host === "string" ? args.host : undefined;
+  return withHost(
+    result.isError === true && failure !== undefined
+      ? reclassified(direct, failure, context)
+      : direct,
+    host,
+  );
+};
