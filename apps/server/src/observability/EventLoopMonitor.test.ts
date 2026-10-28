@@ -249,7 +249,6 @@ it.effect("correlates native writer successes and failures with local stall evid
     );
   }).pipe(
     Effect.scoped,
-    Effect.provide(SqliteClient.layer({ filename: ":memory:" })),
-    Effect.provide(NodeServices.layer),
+    Effect.provide([SqliteClient.layer({ filename: ":memory:" }), NodeServices.layer]),
   ),
 );
