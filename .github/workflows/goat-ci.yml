@@ -406,7 +406,7 @@ jobs:
         if: matrix.task == 'build'
         run: node apps/web/scripts/verify-built-boot.ts
 
-      # The release verifier's private-repository URL rule, so a bundled link fails here, not the nightly.
+      # The release verifier's source-repository link rule, so a bundled link fails here, not the nightly.
       - name: Check bundled links
         if: matrix.task == 'build'
         run: >-
