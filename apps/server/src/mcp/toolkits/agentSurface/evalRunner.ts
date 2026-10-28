@@ -441,7 +441,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
     ) {
       const { entry } = expr;
       const at = `${expr.site}${frames}`;
-      if ("clientRequestId" in args) {
+      if ("clientRequestId" in args && isKeyedWrite(entry)) {
         const refusal = explicitKey(entry.path);
         return yield* halt(failure(refusal.code, refusal.reason, refusal.message), at);
       }

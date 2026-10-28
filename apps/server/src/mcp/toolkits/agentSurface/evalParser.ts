@@ -1,6 +1,6 @@
 import type { AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import { EVAL_LIMITS } from "@goat/contracts/agentSurface/eval";
-import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
 export type Json =
   | null
@@ -423,7 +423,7 @@ export const analyzeProgram = (node: Node, bindingNames: ReadonlyArray<string>):
         argsExpr = at(args[0] as Node, 0);
         keys = argsExpr.t === "obj" ? argsExpr.entries.map(([key]) => key) : undefined;
       } else throw formError(`Pass ${entry.path}'s arguments as :key value pairs or as one map.`);
-      if (keys?.includes("clientRequestId")) throw explicitKey(entry.path);
+      if (keys?.includes("clientRequestId") && isKeyedWrite(entry)) throw explicitKey(entry.path);
       sites.push({ site: path, entry, keys, args: argsExpr, times });
       return { t: "call", site: path, entry, args: argsExpr };
     }
@@ -438,10 +438,10 @@ export const analyzeProgram = (node: Node, bindingNames: ReadonlyArray<string>):
   return { root, sites };
 };
 
-/** A program may not pick a write's key: each is derived from its run and step. */
+/** A program may not pick a keyed write's key: each is derived from its run and step. */
 export const explicitKey = (path: string) =>
   new ProgramRefusal(
     "invalid_request",
     "eval_explicit_key",
-    `Remove clientRequestId from ${path}: goat_eval derives every call's key from its run and step.`,
+    `Remove clientRequestId from ${path}: goat_eval derives a keyed write's key from its run and step.`,
   );

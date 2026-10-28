@@ -20,6 +20,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import {
   canonicalToolName,
+  isKeyedWrite,
   legacyToolNameTargets,
   listedToolName,
   resolveAgentSurfaceEntry,
@@ -50,12 +51,15 @@ import {
   resolveGoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import { NodeHttpServer } from "@effect/platform-node";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
+  // As served: ToolAdmission reserves keys and goat_eval journals steps in the database.
+  Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
@@ -488,28 +492,38 @@ const argumentsFor = Effect.fn(function* (entry: Entry) {
   };
 });
 
+// The envelope's reason and message stand in for the direct result's text.
+const asDirectResult = (result: McpSchema.CallToolResult) => {
+  const envelope = result.structuredContent as AgentSurfaceResult;
+  if (envelope.status !== "error")
+    return new McpSchema.CallToolResult({ isError: false, content: [] });
+  // A plain-text failure stays the direct call's own text; a classified one names its code.
+  const text =
+    envelope.error.reason === "tool_error"
+      ? envelope.error.message
+      : JSON.stringify({ code: envelope.error.reason, message: envelope.error.message });
+  return new McpSchema.CallToolResult({ isError: true, content: [{ type: "text", text }] });
+};
+
 const via = {
   direct: (name: string, args: Record<string, unknown>) =>
     McpServer.McpServer.pipe(
       Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     ),
-  // The envelope's reason and message stand in for the direct result's text.
   goat_call: (name: string, args: Record<string, unknown>) =>
     McpServer.McpServer.pipe(
       Effect.flatMap((server) =>
         server.callTool({ name: "goat_call", arguments: { path: name, args } }),
       ),
-      Effect.map((result) => {
-        const envelope = result.structuredContent as AgentSurfaceResult;
-        if (envelope.status !== "error")
-          return new McpSchema.CallToolResult({ isError: false, content: [] });
-        // A plain-text failure stays the direct call's own text; a classified one names its code.
-        const text =
-          envelope.error.reason === "tool_error"
-            ? envelope.error.message
-            : JSON.stringify({ code: envelope.error.reason, message: envelope.error.message });
-        return new McpSchema.CallToolResult({ isError: true, content: [{ type: "text", text }] });
-      }),
+      Effect.map(asDirectResult),
+    ),
+  // A one-call program; quote keeps the arguments literal.
+  goat_eval: (name: string, args: Record<string, unknown>) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({ name: "goat_eval", arguments: { program: [name, ["quote", args]] } }),
+      ),
+      Effect.map(asDirectResult),
     ),
 };
 // legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
@@ -534,9 +548,18 @@ describe("agent surface access", () => {
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
           for (const route of ROUTES) {
-            // goat_call refuses to call itself or goat_eval by design.
+            // The admission store remembers keys, so each call gets its own; goat_eval derives a
+            // keyed write's key itself and refuses one the program passes.
+            const { clientRequestId, ...rest } = args;
+            const callArgs =
+              route === "goat_eval" && isKeyedWrite(entry)
+                ? rest
+                : typeof clientRequestId === "string"
+                  ? { ...rest, clientRequestId: `${clientRequestId}:${caller}:${route}` }
+                  : args;
+            // goat_call and goat_eval refuse to call either meta tool by design.
             if (
-              route === "goat_call" &&
+              (route === "goat_call" || route === "goat_eval") &&
               (entry.path === "surface.call" || entry.path === "surface.eval")
             )
               continue;
@@ -547,8 +570,8 @@ describe("agent surface access", () => {
               McpServer.McpServer
             > =
               route === "legacy"
-                ? http.callTool(caller, legacy!, args)
-                : via[route](listedToolName(entry), args).pipe(
+                ? http.callTool(caller, legacy!, callArgs)
+                : via[route](listedToolName(entry), callArgs).pipe(
                     Effect.provideService(McpInvocationContext, callers[caller]),
                     Effect.provideService(McpSchema.McpServerClient, client),
                   );
@@ -574,7 +597,10 @@ describe("agent surface access", () => {
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
-              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
+              route !== "direct" &&
+              route !== "legacy" &&
+              classified === "unexpected" &&
+              directOutcome === "reached"
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;
@@ -605,11 +631,6 @@ describe("agent surface access", () => {
         agentSurfaceRegistry[path as keyof typeof agentSurfaceRegistry]?.name,
       );
   });
-
-  // quarantine: #778 goat_eval is gated on measurement (rollout step 11); add a one-call program to via if it ships.
-  it.todo(
-    "gives a goat_eval call step the same outcome as a direct call for every entry and caller",
-  );
 });
 
 const callerScope = (
