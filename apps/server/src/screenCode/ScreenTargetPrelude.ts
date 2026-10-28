@@ -193,7 +193,6 @@ const __target = (binding, note, owner) => {
       return act('click', options.button === 'right' ? 'right_click' : 'click', {
         ...aim(target),
         ...(!tab && options.count !== undefined ? { count: options.count } : {}),
-        ...(tab && options.expect !== undefined ? { expect: condition(options.expect) } : {}),
       });
     },
     type: (text, target) => {

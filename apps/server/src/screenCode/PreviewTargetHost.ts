@@ -24,7 +24,6 @@ import {
 } from "./ScreenHostBridge.ts";
 import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
-import { type Expectation, expectationOf, observeExpectation } from "./PreviewExpectation.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
 
@@ -730,42 +729,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       else observations.index.invalidatePoints(bound.ref.id);
-      const expectation =
-        arg.expect === undefined
-          ? undefined
-          : expectationOf(arg.expect, (element) => observations.index.resolveElement(element));
-      if (expectation && "code" in expectation) return yield* Effect.fail(expectation);
-      const observe = (expected: Expectation) =>
-        Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            observeExpectation(
-              expected,
-              (condition, timeoutMs) =>
-                broker
-                  .invoke({
-                    scope: context.invocation,
-                    operation: "waitFor",
-                    input: { ...condition, timeoutMs },
-                    exact: exact(bound.tab),
-                    timeoutMs,
-                  })
-                  .pipe(
-                    Effect.as("met" as const),
-                    Effect.catch((error) =>
-                      Effect.succeed(
-                        error._tag === "PreviewAutomationTimeoutError"
-                          ? ("timeout" as const)
-                          : ("failed" as const),
-                      ),
-                    ),
-                  ),
-              call.deadlineMillis - now,
-            ),
-          ),
-        );
       // A point carries its screenshot's document so the browser's input gate can refuse it.
       const pointDocument = point ? bound.documentGeneration : undefined;
-      const acted = yield* invoke(
+      const result = yield* invoke(
         bound,
         context,
         operation,
@@ -773,6 +739,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         cellBudgetMs,
         pointDocument,
       ).pipe(
+        Effect.tapError(() => retire),
         Effect.ensuring(
           Effect.sync(() => {
             if (!ownClose) return;
@@ -781,29 +748,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             else closingTabs.delete(ownClose);
           }),
         ),
-        Effect.result,
       );
-      if (acted._tag === "Failure") {
-        // A reply that may have been lost is never resent: the expected state settles it, and
-        // the receipt keeps the unknown dispatch.
-        const seen =
-          expectation && acted.failure.effectStarted ? yield* observe(expectation) : undefined;
-        yield* retire;
-        if (seen?.status !== "confirmed") return yield* Effect.fail(acted.failure);
-        const outcome = {
-          dispatch: "unknown",
-          effect: "unknown",
-          observation: "confirmed",
-        } as const;
-        return {
-          value: { outcome },
-          category: "confirmed",
-          evidence: ["dispatch:unknown", ...seen.evidence],
-          ...(acted.failure.safety ? { safety: acted.failure.safety } : {}),
-          outcome,
-        };
-      }
-      const result = acted.success;
       if (call.method === "close_tab") {
         observations.evictTarget(bound.ref.id);
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
@@ -816,25 +761,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
       const confirmed = seen?.effect === "confirmed" && Array.isArray(seen.evidence);
-      const observed = expectation ? yield* observe(expectation) : undefined;
-      const outcome = {
-        dispatch: "confirmed",
-        effect: confirmed ? "confirmed" : "unknown",
-        ...(observed ? { observation: observed.status } : {}),
-      } as const;
       return {
         value: result,
-        category: confirmed || observed?.status === "confirmed" ? "confirmed" : "unverifiable",
-        evidence: [
-          ...(confirmed
-            ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
-            : observed
-              ? []
-              : ["dispatched; observe to confirm"]),
-          ...(observed?.evidence ?? []),
-        ],
+        category: confirmed ? "confirmed" : "unverifiable",
+        evidence: confirmed
+          ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
+          : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
-        outcome,
+        outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
       };
     },
   );

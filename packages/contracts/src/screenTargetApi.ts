@@ -31,9 +31,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number; expect?: Condition }): Promise<Done>;
-  // expect: what the click should bring about, checked on its own budget. If the click's reply is
-  // lost and that shows, the click is confirmed and is never resent.
+  click(t: Target, o?: { button?: "right"; count?: number }): Promise<Done>;
   type(text: string, t?: Target): Promise<Done>;
   press(key: string, t?: Target): Promise<Done>; // "Enter", "cmd+a"; a target is clicked first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;

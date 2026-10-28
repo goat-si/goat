@@ -102,26 +102,6 @@ const savingTab = () => {
   return { broker, operations };
 };
 
-it.live(
-  "a click whose reply was lost is confirmed by its expected state, and never sent twice",
-  () => {
-    const { broker, operations } = savingTab();
-    return runCell(
-      broker,
-      `const tab = await screen.tab('form');
-      await tab.claim();
-      const page = await tab.observe();
-      return await tab.click(page.elements[0].index, { expect: { text: 'Saved' } });`,
-    ).pipe(
-      Effect.map((result) => {
-        expect(result.status).toBe("completed");
-        expect(result.value).toMatchObject({ verdict: "confirmed" });
-        expect(operations.filter((operation) => operation === "click")).toHaveLength(1);
-      }),
-    );
-  },
-);
-
 it.live("after a click's reply is lost, the same cell still observes the page", () => {
   const { broker, operations } = savingTab();
   return runCell(

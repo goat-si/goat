@@ -19,10 +19,15 @@ it.effect("a click the browser saw change something is a confirmed receipt", () 
     const receipts = fixture.bridge
       .takeCellImagesNow("run", "turn", "cell")
       .journal.filter((entry) => entry.receipt.method === "click")
-      .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
+      .map((entry) => [entry.receipt.category, entry.receipt.evidence, entry.receipt.outcome]);
+    // The input went out both times; only the first was seen to change the page.
     expect(receipts).toEqual([
-      ["confirmed", ["click:dom"]],
-      ["unverifiable", ["dispatched; observe to confirm"]],
+      ["confirmed", ["click:dom"], { dispatch: "confirmed", effect: "confirmed" }],
+      [
+        "unverifiable",
+        ["dispatched; observe to confirm"],
+        { dispatch: "confirmed", effect: "unknown" },
+      ],
     ]);
   }),
 );
@@ -70,54 +75,5 @@ it.effect(
       expect((after?.value as ScreenObservation | undefined)?.indexedText).toContain("Cancel");
       expect((yield* inCell("click", 42, { ref }))?.error?.code).toBe("not_run");
       expect(fixture.requests.filter((request) => request.operation === "click")).toHaveLength(1);
-    }),
-);
-
-it.effect(
-  "an expected state seen after a lost reply confirms the click and keeps the unknown dispatch",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* browserFixture();
-      yield* fixture.dispatch("claim_tab");
-      const ref = (yield* fixture.observe()).elements[0]!.ref;
-      fixture.state.lostReply = new PreviewAutomationTimeoutError(actionErrorContext);
-      const reply = yield* fixture.dispatch("click", {
-        ref,
-        expect: { text: "Cancel", timeoutMs: 2_000 },
-      });
-      expect(reply?.outcome).toBe("ok");
-      const receipt = fixture.bridge
-        .takeCellImagesNow("run", "turn", "cell")
-        .journal.find((entry) => entry.receipt.method === "click")?.receipt;
-      expect(receipt).toMatchObject({
-        category: "confirmed",
-        outcome: { dispatch: "unknown", effect: "unknown", observation: "confirmed" },
-      });
-      expect(receipt?.safety?.possibleCommit).toBe(true);
-      const wait = fixture.requests.find((request) => request.operation === "waitFor");
-      // Its own 2 s budget, cut to the 1 s this cell has left.
-      expect(wait).toMatchObject({ input: { text: "Cancel" }, timeoutMs: 1_000 });
-      expect(fixture.requests.filter((request) => request.operation === "click")).toHaveLength(1);
-    }),
-);
-
-it.effect(
-  "an expected state not seen in its own budget leaves the outcome unknown, not failed",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* browserFixture();
-      yield* fixture.dispatch("claim_tab");
-      const ref = (yield* fixture.observe()).elements[0]!.ref;
-      fixture.state.clickResult = { effect: "suspected_noop", evidence: [] };
-      // The expected text never shows: this page only adds Cancel.
-      const reply = yield* fixture.dispatch("click", { ref, expect: { text: "Done" } });
-      expect(reply?.outcome).toBe("ok");
-      const receipt = fixture.bridge
-        .takeCellImagesNow("run", "turn", "cell")
-        .journal.find((entry) => entry.receipt.method === "click")?.receipt;
-      expect(receipt).toMatchObject({
-        category: "unverifiable",
-        outcome: { dispatch: "confirmed", effect: "unknown", observation: "unknown" },
-      });
     }),
 );

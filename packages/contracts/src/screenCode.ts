@@ -259,13 +259,12 @@ export type ScreenObservation = typeof ScreenObservation.Type;
 const ScreenOutcomeStatus = Schema.Literals(["confirmed", "refused", "failed", "unknown"]);
 
 /**
- * An action's result on three axes: whether the input went out, whether the page visibly changed,
- * and whether the state the caller expected was observed. Each can be unknown on its own.
+ * An action's result on two axes: whether the input went out, and whether the page visibly
+ * changed. Whether the task's state was reached is the caller's verify, on its own budget.
  */
 export const ScreenActionOutcome = Schema.Struct({
   dispatch: ScreenOutcomeStatus,
   effect: ScreenOutcomeStatus,
-  observation: Schema.optionalKey(ScreenOutcomeStatus),
 });
 export type ScreenActionOutcome = typeof ScreenActionOutcome.Type;
 
