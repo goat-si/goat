@@ -25,9 +25,9 @@ interface Watch {
 }
 
 /**
- * Runs in the clicked frame, passed as source since the server compiles without DOM types. It
- * counts what `arm` starts: elements added or removed anywhere, any change at or around the
- * target, input, focus and URL changes. Text changing elsewhere, such as a clock, is ambient.
+ * Runs in the clicked frame, as source: the server has no DOM types. After `arm` it counts any
+ * change at or around the target, elements added or removed while the click's own events are
+ * handled, input, focus and URL. What happens elsewhere between events (a feed, a clock) is ambient.
  */
 const INSTALL = `(() => {
   const seen = new Set();
@@ -43,19 +43,26 @@ const INSTALL = `(() => {
   };
   const near = (node) => target !== null && (target.contains(node) || node.contains(target));
   const elementIn = (nodes) => Array.from(nodes).some((node) => node.nodeType === 1);
-  const observer = new MutationObserver((records) => {
+  const consider = (records, handled) => {
     for (const record of records)
-      if (near(record.target) || (record.type === "childList" &&
+      if (near(record.target) || (handled && record.type === "childList" &&
           (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
         return note("dom");
-  });
+  };
+  const observer = new MutationObserver((records) => consider(records, false));
   observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  // Records pending when a click event starts are ambient; those its handlers made are its own.
+  const before = () => consider(observer.takeRecords(), false);
+  const after = () => consider(observer.takeRecords(), true);
+  const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].flatMap((type) => [
+    [window, type, before, true], [window, type, after, false]]);
   const onInput = () => note("input");
   const onFocus = () => note("focus");
   const onUrl = () => location.href !== href && note("url");
   const listeners = [[document, "input", onInput], [document, "change", onInput],
     [document, "focusin", onFocus], [window, "popstate", onUrl], [window, "hashchange", onUrl]];
   for (const [on, type, listener] of listeners) on.addEventListener(type, listener, true);
+  for (const [on, type, listener, capture] of phases) on.addEventListener(type, listener, capture);
   const arm = (at) => {
     seen.clear();
     href = location.href;
@@ -68,6 +75,7 @@ const INSTALL = `(() => {
     resolve();
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
+    for (const [on, type, listener, capture] of phases) on.removeEventListener(type, listener, capture);
   };
   return { seen, changed, arm, stop };
 })()`;
@@ -96,33 +104,56 @@ export type ClickAim =
   | { readonly frame?: Frame; readonly element: ElementHandle }
   | { readonly frame?: Frame; readonly point: Point };
 
+/** The offset of a frame's content inside the parent frame's viewport: past border and padding. */
+const contentOrigin = (x: number, y: number) => `(() => {
+  const el = document.elementFromPoint(${x}, ${y});
+  if (!el) return null;
+  const box = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  return [box.left + el.clientLeft + parseFloat(style.paddingLeft),
+    box.top + el.clientTop + parseFloat(style.paddingTop)];
+})()`;
+
+const disposeAim = (aim: ClickAim | undefined) => {
+  if (aim && "element" in aim) void aim.element.dispose().catch(constVoid);
+};
+
 /**
  * Where a click lands: a locator's own element and frame, or the innermost frame under a page
- * point, with the point in that frame's coordinates.
+ * point, with the point in that frame's coordinates. Bounded as a whole, since a dialog the page
+ * opens holds every evaluation; a late result is released. `release` drops the element it holds.
  */
-export const aimClick = (page: Page, locator: Locator | null, point: Point): Promise<ClickAim> =>
-  // Aiming only narrows what the watch observes; it never fails the click.
-  findAim(page, locator, point).catch(() => ({ point }));
+export const aimClick = async (
+  page: Page,
+  locator: Locator | null,
+  point: Point,
+): Promise<ClickAim> => {
+  const finding = findAim(page, locator, point).catch(() => undefined);
+  const aim = await bounded(finding, 2 * SETTLE_MS);
+  if (aim === undefined) void finding.then(disposeAim);
+  return aim ?? { point };
+};
+export const releaseAim = disposeAim;
 
 const findAim = async (page: Page, locator: Locator | null, point: Point): Promise<ClickAim> => {
   if (locator !== null) {
-    const element = await bounded(locator.elementHandle({ timeout: SETTLE_MS }).catch(() => null));
+    const element = await locator.elementHandle({ timeout: SETTLE_MS }).catch(() => null);
     const frame = element ? await element.ownerFrame() : null;
     if (element && frame) return { frame, element };
+    void element?.dispose().catch(constVoid);
   }
   let frame = page.mainFrame();
   let at = point;
   for (let depth = 0; depth < 3; depth++) {
-    const hit = await bounded(
-      frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`).catch(() => undefined),
-    );
-    const element = hit?.asElement() ?? null;
+    const hit = await frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`);
+    const element = hit.asElement();
     const child = element ? await element.contentFrame().catch(() => null) : null;
-    const box = child && element ? await element.boundingBox() : null;
-    void hit?.dispose().catch(constVoid);
-    if (!child || !box) break;
+    void hit.dispose().catch(constVoid);
+    if (!child) break;
+    const origin = (await frame.evaluate(contentOrigin(at.x, at.y))) as [number, number] | null;
+    if (!origin) break;
     frame = child;
-    at = { x: point.x - box.x, y: point.y - box.y };
+    at = { x: at.x - origin[0], y: at.y - origin[1] };
   }
   return { frame, point: at };
 };

@@ -1,6 +1,6 @@
 import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
-import { watchClick } from "./clickEffect.ts";
+import { aimClick, watchClick } from "./clickEffect.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -95,3 +95,39 @@ it("sees what a click changes inside an iframe, by locator and by point", () =>
       ServerBrowserPage.click(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }),
     ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
   }));
+
+it("does not confirm an inert click while a feed inserts rows elsewhere, and does confirm one that opens a menu", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still">static</p><button id="menu" onclick="document.body.append(Object.assign(document.createElement('div'), { textContent: 'menu' }))">open</button><ul id="feed"></ul><script>
+        setInterval(() => feed.append(document.createElement("li")), 5);
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await expect(ServerBrowserPage.click(page, { selector: "#menu" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));
+
+it("aims a point click inside a bordered, padded iframe at the control under the point", () =>
+  fixture(async (page) => {
+    // The border and padding put the content 42px in: a translation that ignores them lands on #a.
+    await page.setContent(
+      `<iframe style="position:absolute;left:40px;top:40px;width:300px;height:200px;border:30px solid #888;padding:12px" srcdoc="<span id=b onclick=&quot;this.firstChild.data='saved'&quot; style='position:absolute;left:30px;top:30px;width:20px;height:20px'>save</span><span id=a style='position:absolute;left:72px;top:72px;width:20px;height:20px'>a</span>"></iframe>`,
+    );
+    const target = page.frameLocator("iframe").locator("#b");
+    await target.waitFor();
+    const box = (await target.boundingBox())!;
+    await expect(
+      ServerBrowserPage.click(page, { x: box.x + 5, y: box.y + 5 }),
+    ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
+    expect(await target.textContent()).toBe("saved");
+  }));
+
+it("stops aiming when the page cannot answer, so the click is not held", async () => {
+  const page = fakePage(() => new Promise(() => undefined));
+  await expect(aimClick(page, null, { x: 3, y: 4 })).resolves.toEqual({ point: { x: 3, y: 4 } });
+});

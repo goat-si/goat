@@ -32,7 +32,7 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
-import { aimClick, type ClickEffect, watchClick } from "./clickEffect.ts";
+import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
   narrowTree,
@@ -766,12 +766,13 @@ export const click = async (
     }
   } catch (cause) {
     watch.cancel();
+    releaseAim(aim);
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  return { ...point, ...(await watch.settle(dialog)) };
+  return { ...point, ...(await watch.settle(dialog).finally(() => releaseAim(aim))) };
 };
 
 export const type = async (
