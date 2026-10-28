@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as DateTime from "effect/DateTime";
 import * as TestClock from "effect/testing/TestClock";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as ClientKeys from "./ClientKeys.ts";
 import * as ConnectAuthentication from "./ConnectAuthentication.ts";
@@ -58,6 +59,7 @@ const assurance = {
 function layer(denied = false) {
   return ConnectTokenExchange.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
+    Layer.provide(policyUnitLayer),
     Layer.provide(
       Layer.mergeAll(
         RelayConfiguration.layer(config),

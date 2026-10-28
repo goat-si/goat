@@ -1,3 +1,4 @@
+import { publishFailurePolicy, RelayPublishCooldown } from "./relayPublishPolicy.ts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import type {
   EnvironmentId,
@@ -418,6 +419,8 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
   let cachedRelayClient: Effect.Success<ReturnType<typeof makeRelayClient>> | undefined;
+  let relayRetryAt = 0;
+  let blockedCredential: string | undefined;
   let publishedRelayConfig: NonNullable<Effect.Success<typeof readRelayConfig>> | undefined;
 
   // Confirm through the same worker so tombstones cannot race live updates; recovery clears the deadline.
@@ -473,7 +476,15 @@ export const make = Effect.gen(function* () {
     ) {
       yield* resetPublishedConnection;
       publishedRelayConfig = relayConfig;
+      if (blockedCredential !== relayConfig.environmentCredential) {
+        blockedCredential = undefined;
+        relayRetryAt = 0;
+      }
+      yield* Ref.set(publishedStateByThreadRef, new Map());
     }
+    if (blockedCredential === relayConfig.environmentCredential) return;
+    if ((yield* DateTime.now).epochMilliseconds < relayRetryAt)
+      return yield* new RelayPublishCooldown({ retryAt: relayRetryAt });
     const environmentId = yield* serverEnvironment.getEnvironmentId;
 
     const publishState = Effect.fn("relay.agent_activity.publish")(function* (input: {
@@ -514,7 +525,18 @@ export const make = Effect.gen(function* () {
             proof,
           },
         })
-        .pipe(Effect.timeout("10 seconds"));
+        .pipe(
+          Effect.timeout("10 seconds"),
+          Effect.tapError((error) =>
+            Effect.gen(function* () {
+              const now = (yield* DateTime.now).epochMilliseconds;
+              const policy = publishFailurePolicy(error, now);
+              if (policy.blocked) blockedCredential = relayConfig.environmentCredential;
+              if (policy.retryAfterMillis !== undefined)
+                relayRetryAt = Math.max(relayRetryAt, now + policy.retryAfterMillis);
+            }),
+          ),
+        );
 
       yield* Effect.logInfo("agent activity publish completed", {
         environmentId,
@@ -675,10 +697,11 @@ export const make = Effect.gen(function* () {
       Effect.tap(() => cancelPublishRetry(threadId)),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+        const failure = Cause.squash(cause);
         return Effect.logWarning("agent activity publish failed", {
           threadId,
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.andThen(schedulePublishRetry(threadId)));
+          errorTag: failure instanceof Error ? failure.name : "publish_failed",
+        }).pipe(Effect.andThen(blockedCredential ? Effect.void : schedulePublishRetry(threadId)));
       }),
       Effect.withSpan("AgentAwarenessRelay.publishThread"),
     );
@@ -692,12 +715,13 @@ export const make = Effect.gen(function* () {
 
   schedulePublishRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
     const attempts = publishRetries.get(threadId)?.attempts ?? 0;
-    const delayMs = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts];
-    if (delayMs === undefined) {
+    const ladderDelay = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts];
+    if (ladderDelay === undefined) {
       // Retain exhausted budgets until activity or success resets them; old timers must not restart retries.
       yield* Effect.logWarning("agent activity publish retry budget exhausted", { threadId });
       return;
     }
+    const delayMs = Math.max(ladderDelay, relayRetryAt - (yield* DateTime.now).epochMilliseconds);
     const retry = {
       attempts: attempts + 1,
       timer: undefined as Fiber.Fiber<void> | undefined,

@@ -154,6 +154,8 @@ export async function run(input: {
       }),
       Layer.succeed(Relay.ManagedRelayClient, {
         relayUrl: "https://unused.invalid",
+        deleteAccount: unused,
+        getAccountDeletion: unused,
         listEnvironments: unused,
         listDevices: unused,
         createEnvironmentLinkChallenge: unused,

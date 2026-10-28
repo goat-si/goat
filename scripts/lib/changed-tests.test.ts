@@ -159,3 +159,15 @@ describe("testsForChanges", () => {
     }
   });
 });
+
+it("relay migration and fixture changes select real persistence suites", () => {
+  for (const change of [
+    "infra/relay/migrations/postgres/fixture/migration.sql",
+    "infra/relay/src/accounts/test/PostgresFixture.ts",
+  ]) {
+    const selected = testsForChanges(root, change.endsWith(".ts") ? [change] : [], [change]);
+    expect(selected).toContain("infra/relay/src/accounts/AccountPolicyMigration.test.ts");
+    expect(selected).toContain("infra/relay/src/accounts/AccountLifecycle.test.ts");
+    expect(selected).toContain("infra/relay/src/environments/RetiredEndpointCollector.test.ts");
+  }
+});

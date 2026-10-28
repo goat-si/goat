@@ -1,14 +1,20 @@
 import {
+  SessionClaims,
+  WebSocketClaims,
+  decodeSessionClaims,
+  decodeWebSocketClaims,
+} from "./sessionClaims.ts";
+import * as CloudSessionFence from "./CloudSessionFence.ts";
+import {
   AuthSessionId,
   AuthStandardClientScopes,
-  AuthEnvironmentScopes,
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthEnvironmentScope,
-  AuthWebSocketTicketUse,
-  ChildSetupPurpose,
+  type AuthWebSocketTicketUse,
+  type ChildSetupPurpose,
   type ClientSurface,
-  RuntimeMode,
+  type RuntimeMode,
   type ServerAuthSessionMethod,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -67,15 +73,14 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly connectAccessGeneration?: number;
   readonly proofKeyThumbprint?: string;
   readonly runtimeModeCeiling?: RuntimeMode;
   readonly childSetupPurpose?: ChildSetupPurpose;
 }
-
 export interface VerifiedWebSocketTicket extends VerifiedSession {
   readonly audience?: AuthWebSocketTicketUse;
 }
-
 export type SessionCredentialChange =
   | {
       readonly type: "clientUpserted";
@@ -389,6 +394,7 @@ export class SessionStore extends Context.Service<
       readonly method?: ServerAuthSessionMethod;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly client?: AuthClientMetadata;
+      readonly connectAccessGeneration?: number;
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly childSetupPurpose?: ChildSetupPurpose;
@@ -400,6 +406,7 @@ export class SessionStore extends Context.Service<
      * with no SQL or lock, so it is safe inside a SQL transaction. Covers sessions loaded at
      * startup, issued here, or accepted by `verify`, including ones another process issued.
      */
+    readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
     readonly readActiveScopes: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope>, SessionCredentialError>;
@@ -456,35 +463,6 @@ const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const MARK_USED_INTERVAL_MS = 60_000;
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
-
-const SessionClaims = Schema.Struct({
-  v: Schema.Literals([1, 2]),
-  kind: Schema.Literal("session"),
-  sid: AuthSessionId,
-  sub: Schema.String,
-  scopes: AuthEnvironmentScopes,
-  method: Schema.Literals(["browser-session-cookie", "bearer-access-token", "dpop-access-token"]),
-  jkt: Schema.optionalKey(Schema.String),
-  rtc: Schema.optionalKey(RuntimeMode),
-  csp: Schema.optionalKey(ChildSetupPurpose),
-  iat: Schema.Number,
-  exp: Schema.Number,
-});
-type SessionClaims = typeof SessionClaims.Type;
-
-const WebSocketClaims = Schema.Struct({
-  v: Schema.Literal(1),
-  kind: Schema.Literal("websocket"),
-  sid: AuthSessionId,
-  aud: Schema.optionalKey(AuthWebSocketTicketUse),
-  jkt: Schema.optionalKey(Schema.String),
-  iat: Schema.Number,
-  exp: Schema.Number,
-});
-type WebSocketClaims = typeof WebSocketClaims.Type;
-
-const decodeSessionClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(SessionClaims));
-const decodeWebSocketClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(WebSocketClaims));
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -594,6 +572,8 @@ export const make = Effect.gen(function* () {
       Effect.andThen(PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId })),
       Effect.asVoid,
     );
+
+  const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
 
   /** Registers a running verify; yields its ticket and the removal count it started at. */
   const beginVerify = Ref.modify(activeScopes, (current) => {
@@ -832,6 +812,7 @@ export const make = Effect.gen(function* () {
       const sessionRecord = {
         sessionId,
         subject: claims.sub,
+        connectAccessGeneration: input?.connectAccessGeneration ?? null,
         scopes: claims.scopes,
         method: claims.method,
         client: {
@@ -906,6 +887,7 @@ export const make = Effect.gen(function* () {
   const readActiveScopes: SessionStore["Service"]["readActiveScopes"] = Effect.fn(
     "SessionStore.readActiveScopes",
   )(function* (sessionId) {
+    yield* cloudFence.guardId(sessionId);
     const record = (yield* Ref.get(activeScopes)).records.get(sessionId);
     if (!record) return yield* new UnknownSessionTokenError({ sessionId });
     const observedAt = yield* DateTime.now;
@@ -1024,6 +1006,9 @@ export const make = Effect.gen(function* () {
       client: toClientMetadata(row.value.client),
       expiresAt: expiresAt.value,
       subject: claims.sub,
+      ...(row.value.connectAccessGeneration != null
+        ? { connectAccessGeneration: row.value.connectAccessGeneration }
+        : {}),
       scopes: claims.scopes,
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
       ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
@@ -1144,6 +1129,9 @@ export const make = Effect.gen(function* () {
       client: toClientMetadata(row.value.client),
       expiresAt: row.value.expiresAt,
       subject: row.value.subject,
+      ...(row.value.connectAccessGeneration != null
+        ? { connectAccessGeneration: row.value.connectAccessGeneration }
+        : {}),
       scopes: row.value.scopes,
       ...(claims.aud ? { audience: claims.aud } : {}),
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
@@ -1243,7 +1231,12 @@ export const make = Effect.gen(function* () {
               (cause) => new SessionCredentialVerificationError({ sessionId, cause }),
             ),
           );
-        if (Option.isNone(row) || row.value.revokedAt !== null) return;
+        if (
+          Option.isNone(row) ||
+          row.value.revokedAt !== null ||
+          (yield* cloudFence.denied(sessionId))
+        )
+          return;
         const now = yield* DateTime.now;
         const remaining = row.value.expiresAt.epochMilliseconds - now.epochMilliseconds;
         if (remaining <= 0) return;
@@ -1261,13 +1254,25 @@ export const make = Effect.gen(function* () {
   });
 
   return SessionStore.of({
+    setCloudWithdrawalPending: cloudFence.setPending,
     readActiveScopes,
     cookieName,
     legacyCookieName,
-    issue: (input) => authorityLock.withPermit(issue(input).pipe(Effect.uninterruptible)),
-    verify,
+    issue: (input) =>
+      authorityLock.withPermit(
+        issue(input).pipe(
+          Effect.tap((session) =>
+            cloudFence.observe({
+              sessionId: session.sessionId,
+              subject: input?.subject ?? "browser",
+            }),
+          ),
+          Effect.uninterruptible,
+        ),
+      ),
+    verify: (token) => verify(token).pipe(Effect.tap(cloudFence.guard)),
     issueWebSocketToken,
-    verifyWebSocketToken,
+    verifyWebSocketToken: (token) => verifyWebSocketToken(token).pipe(Effect.tap(cloudFence.guard)),
     listActive,
     awaitInvalidation,
     get streamChanges() {

@@ -48,7 +48,9 @@
         "apps/desktop",
         "apps/mobile",
         "packages/client-runtime",
-        "packages/contracts"
+        "packages/contracts",
+        "infra/relay",
+        "infra/relay/src/accounts/AccountRateLimitObject.ts"
       ]
     },
     {

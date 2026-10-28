@@ -58,11 +58,9 @@ export const AuthMemoryReadScope = "memory:read" as const;
 export const AuthMemoryWriteScope = "memory:write" as const;
 export const AuthMemorySyncScope = "memory:sync" as const;
 /**
- * Lets a client reach the hub's nodes through `/hub/nodes`. What it may do on a node is still
- * capped by the session the hub holds there. Granted only on request (`goat pair --hub-proxy`):
- * signed sessions decode their scopes strictly, so a server rolled back to a build without it
- * rejects every session that carries it, and keeping it out of the default limits that to hub
- * pairings.
+ * Reaches hub nodes within their scope ceiling, via explicit `goat pair --hub-proxy` or
+ * Connect hub standing consent. Strict signed-scope decoding rejects credentials carrying
+ * this scope on rollback to a build without it; ordinary default client scopes exclude it.
  */
 export const AuthHubProxyScope = "hub:proxy" as const;
 export const AuthEnvironmentScope = Schema.Literals([

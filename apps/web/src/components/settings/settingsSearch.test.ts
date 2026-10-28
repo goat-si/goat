@@ -5,6 +5,7 @@ import {
   SourceControlProviderKind,
 } from "@goat/contracts";
 import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@goat/client-runtime/source-control-clients";
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import * as Schema from "effect/Schema";
 
 import {
@@ -19,6 +20,11 @@ import {
   sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
 } from "./settingsSearch";
+
+vi.mock("@goat/shared/goatConnect", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@goat/shared/goatConnect")>();
+  return { ...original, isGoatConnectEnabled: vi.fn(original.isGoatConnectEnabled) };
+});
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -52,6 +58,34 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it.each([false, true])(
+    "shows Hub Connect consent only when Connect is enabled: %s",
+    (enabled) => {
+      vi.mocked(isGoatConnectEnabled).mockReturnValue(enabled);
+      try {
+        const available = filterAvailableSettingsSearchItems({
+          hasCloudPublicConfig: true,
+          hasEnvironment: true,
+          hasProviderSettingsEnvironment: true,
+          hasMacProviderSettingsEnvironment: true,
+          canManageLocalBackend: true,
+          isWslSettingsRowVisible: true,
+          hasThreadAutoSettlement: true,
+        });
+        expect(available.some((item) => item.id === "hub-connect-access")).toBe(enabled);
+        for (const items of [SETTINGS_SEARCH_ITEMS, available]) {
+          expect(
+            searchSettings("connect hub access", items).some(
+              (item) => item.id === "hub-connect-access",
+            ),
+          ).toBe(enabled);
+        }
+      } finally {
+        vi.mocked(isGoatConnectEnabled).mockReset();
+      }
+    },
+  );
+
   it.each(["hub", "phone qr", "pair phone"])("routes %s to the hub card", (query) => {
     const match = searchSettings(query).find((item) => item.id === "hub-device");
     expect(match).toMatchObject({

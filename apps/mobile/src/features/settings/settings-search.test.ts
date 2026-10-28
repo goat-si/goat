@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 
 import { filterSettingsSections } from "./settings-search";
+
+vi.mock("@goat/shared/goatConnect", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@goat/shared/goatConnect")>();
+  return { ...original, isGoatConnectEnabled: vi.fn(original.isGoatConnectEnabled) };
+});
 
 const SECTIONS = [
   { rows: [{ id: "usage", label: "Usage" }] },
@@ -35,6 +41,19 @@ function visible(query: string) {
 }
 
 describe("filterSettingsSections", () => {
+  it.each([false, true])("finds Hub consent only when Connect is enabled: %s", (enabled) => {
+    vi.mocked(isGoatConnectEnabled).mockReturnValue(enabled);
+    try {
+      const hubSections = [{ rows: [{ id: "SettingsHubNodes", label: "Hub devices" }] }];
+      for (const query of ["connect", "access", "grant", "revoke"]) {
+        expect(filterSettingsSections(hubSections, query).length > 0).toBe(enabled);
+      }
+      expect(filterSettingsSections(hubSections, "hub devices")).toEqual(hubSections);
+    } finally {
+      vi.mocked(isGoatConnectEnabled).mockReset();
+    }
+  });
+
   it.each([
     {
       query: "",

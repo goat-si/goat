@@ -91,6 +91,7 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
     readonly authorizeDpopHttp: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
       readonly rejectedAccessToken?: string;
+      readonly directEndpoint?: { readonly httpBaseUrl: string };
     }) => Effect.Effect<AuthorizedRemoteHttpEnvironment, ConnectionAttemptError>;
   }
 >()("@goat/client-runtime/authorization/service/RemoteEnvironmentAuthorization") {}
@@ -599,8 +600,14 @@ export const make = Effect.gen(function* () {
     // The relay tracer must wrap span creation, not just the token request.
     authorizeDpopHttp: Effect.fnUntraced(function* (input) {
       if (!isGoatConnectEnabled()) return yield* connectDisabled();
+      if (input.directEndpoint !== undefined)
+        yield* verifyDirectEndpoint({
+          expectedEnvironmentId: input.expectedEnvironmentId,
+          httpBaseUrl: input.directEndpoint.httpBaseUrl,
+          connectionMethod: "direct",
+        });
       return yield* getDpopToken(input).pipe(
-        Effect.map(({ token }) => httpAuthorization(token)),
+        Effect.map(({ token }) => httpAuthorization(token, input.directEndpoint?.httpBaseUrl)),
         Effect.withSpan("environment.authorization.http"),
         withRelayClientTracing,
       );

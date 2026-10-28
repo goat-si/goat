@@ -1,3 +1,4 @@
+import { hubProxyEndpointUrl } from "../environment/endpoint.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import {
@@ -48,39 +49,39 @@ const withEnvironmentCredentials = <A, E, R>(
     ? request.pipe(Effect.provideService(FetchHttpClient.RequestInit, { credentials: "include" }))
     : request;
 
-const buildEnvironmentAuthHeaders = Effect.fn("environmentHttpAuth.buildEnvironmentAuthHeaders")(
-  function* (
-    authorization: PreparedHttpAuthorization | null,
-    method: HttpMethod.HttpMethod,
-    url: string,
-    signer: Option.Option<ManagedRelayDpopSigner["Service"]>,
-  ): Effect.fn.Return<EnvironmentHttpAuthHeaders, RemoteEnvironmentAuthFetchError> {
-    if (authorization === null) {
-      return {};
-    }
-    if (authorization._tag === "Bearer") {
-      return { authorization: `Bearer ${authorization.token}` };
-    }
-    if (Option.isNone(signer)) {
-      return yield* new RemoteEnvironmentAuthFetchError({
-        message: "No DPoP signer is available to authorize the environment request.",
-        cause: authorization._tag,
-      });
-    }
-    const proof = yield* signer.value
-      .createProof({ method, url, accessToken: authorization.accessToken })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new RemoteEnvironmentAuthFetchError({
-              message: "Could not create the environment request authorization proof.",
-              cause,
-            }),
-        ),
-      );
-    return { authorization: `DPoP ${authorization.accessToken}`, dpop: proof };
-  },
-);
+export const buildEnvironmentAuthHeaders = Effect.fn(
+  "environmentHttpAuth.buildEnvironmentAuthHeaders",
+)(function* (
+  authorization: PreparedHttpAuthorization | null,
+  method: HttpMethod.HttpMethod,
+  url: string,
+  signer: Option.Option<ManagedRelayDpopSigner["Service"]>,
+): Effect.fn.Return<EnvironmentHttpAuthHeaders, RemoteEnvironmentAuthFetchError> {
+  if (authorization === null) {
+    return {};
+  }
+  if (authorization._tag === "Bearer") {
+    return { authorization: `Bearer ${authorization.token}` };
+  }
+  if (Option.isNone(signer)) {
+    return yield* new RemoteEnvironmentAuthFetchError({
+      message: "No DPoP signer is available to authorize the environment request.",
+      cause: authorization._tag,
+    });
+  }
+  const proof = yield* signer.value
+    .createProof({ method, url, accessToken: authorization.accessToken })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new RemoteEnvironmentAuthFetchError({
+            message: "Could not create the environment request authorization proof.",
+            cause,
+          }),
+      ),
+    );
+  return { authorization: `DPoP ${authorization.accessToken}`, dpop: proof };
+});
 
 /**
  * A DPoP request is GOAT Connect work, so its span starts an exported trace that
@@ -150,7 +151,11 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
         }
         const current = yield* remote.value
           .authorizeDpopHttp({
-            expectedEnvironmentId: input.prepared.environmentId,
+            expectedEnvironmentId:
+              authorization.hubProxyOwner?.environmentId ?? input.prepared.environmentId,
+            ...(authorization.hubProxyOwner?.endpointMode === "direct"
+              ? { directEndpoint: { httpBaseUrl: authorization.hubProxyOwner.httpBaseUrl } }
+              : {}),
             ...(rejectedAccessToken === undefined ? {} : { rejectedAccessToken }),
           })
           .pipe(
@@ -163,10 +168,20 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
             ),
           );
         // A learned direct route keeps its own origin; only the token renews.
-        if (input.prepared.target._tag === "RelayConnectionTarget") {
+        if (authorization.hubProxyOwner?.endpointMode === "managed") {
+          httpBaseUrl = hubProxyEndpointUrl(
+            current.httpBaseUrl,
+            authorization.hubProxyOwner.nodeId,
+          );
+        } else if (input.prepared.target._tag === "RelayConnectionTarget") {
           httpBaseUrl = current.httpBaseUrl;
         }
-        authorization = current.httpAuthorization;
+        authorization = {
+          ...current.httpAuthorization,
+          ...(authorization.hubProxyOwner === undefined
+            ? {}
+            : { hubProxyOwner: authorization.hubProxyOwner }),
+        };
       }
 
       const requestUrl = requestUrlFor(httpBaseUrl);
@@ -187,8 +202,10 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
         if (
           authorization?._tag === "Dpop" &&
           rejectedAccessToken === undefined &&
-          result.failure._tag === "EnvironmentAuthInvalidError" &&
-          result.failure.reason === "invalid_credential"
+          ((result.failure._tag === "EnvironmentAuthInvalidError" &&
+            result.failure.reason === "invalid_credential") ||
+            (result.failure._tag === "RemoteEnvironmentAuthUndeclaredStatusError" &&
+              result.failure.status === 401))
         ) {
           rejectedAccessToken = authorization.accessToken;
           continue;

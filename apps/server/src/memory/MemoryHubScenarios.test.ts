@@ -1,3 +1,4 @@
+import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -13,7 +14,6 @@ import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
 import * as PubSub from "effect/PubSub";
-import * as Stream from "effect/Stream";
 import * as Statement from "effect/sql/Statement";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -208,13 +208,7 @@ const pendingReloadScenario = Effect.gen(function* () {
   let holdHistory = false;
   const controlledFs = FileSystem.FileSystem.of({
     ...fs,
-    watch: () =>
-      Stream.unwrap(
-        PubSub.subscribe(events).pipe(
-          Effect.tap(() => Deferred.succeed(watching, undefined)),
-          Effect.map((subscription) => Stream.fromSubscription(subscription)),
-        ),
-      ).pipe(Stream.tap(() => Deferred.succeed(eventSeen, undefined))),
+    watch: watchedEvents(events, watching, eventSeen),
   });
   const transformer: Statement.Transformer = (statement) =>
     Effect.gen(function* () {

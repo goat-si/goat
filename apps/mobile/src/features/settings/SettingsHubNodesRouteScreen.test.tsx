@@ -9,10 +9,19 @@ import { useSyncExternalStore, act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+vi.mock("@goat/shared/goatConnect", async (original) => ({
+  ...(await original<typeof import("@goat/shared/goatConnect")>()),
+  isGoatConnectEnabled: () => true,
+}));
+
 type Target = {
   environmentId: string;
   label: string;
-  serverConfig?: { settings: { hub: { enabled: boolean; autoJoinCloudMachines: boolean } } };
+  serverConfig?: {
+    settings: {
+      hub: { enabled: boolean; autoJoinCloudMachines: boolean; connectDevicesHubProxy?: boolean };
+    };
+  };
 };
 const state = vi.hoisted(() => ({
   revision: 0,
@@ -392,6 +401,30 @@ it("offers neither switch for a hub that does not report them", async () => {
   state.hosts = [{ host: "lab", reachability: "ok" }];
   await render();
   expect(container.querySelector('[role="switch"]')).toBeNull();
+});
+
+it("saves account-wide Connect consent on the selected mobile hub and reports an older server", async () => {
+  const hub = {
+    ...second,
+    serverConfig: {
+      settings: {
+        hub: { enabled: true, autoJoinCloudMachines: true, connectDevicesHubProxy: false },
+      },
+    },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  state.updateSettings.mockReset().mockResolvedValue({ _tag: "Success", value: { hub: {} } });
+  await render();
+  const consent = button("Allow GOAT Connect devices to reach hub devices");
+  expect(consent.getAttribute("aria-checked")).toBe("false");
+  await act(async () => consent.click());
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    environmentId: second.environmentId,
+    input: { patch: { hub: { connectDevicesHubProxy: true } } },
+  });
+  expect(container.textContent).toContain("sign out of GOAT Connect and sign back in");
+  expect(container.textContent).toContain("Update GOAT on the hub");
 });
 
 function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {

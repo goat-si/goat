@@ -14,6 +14,8 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import type * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as ClientKeys from "./ClientKeys.ts";
 import * as ConnectAuthentication from "./ConnectAuthentication.ts";
@@ -23,6 +25,8 @@ type ExchangeError =
   | import("@goat/contracts/connectAssurance").RelayAuthenticationStrengthError
   | import("@goat/contracts/connectAssurance").RelayAuthenticationUnavailableError
   | RelayConnectUpgradeRequiredError
+  | AccountAccess.AccountAccessError
+  | RelayRateLimits.RateLimitError
   | RelayAuthInvalidError
   | RelayInternalError;
 export class ConnectTokenExchange extends Context.Service<
@@ -41,6 +45,7 @@ const make = Effect.gen(function* () {
   const tokens = yield* RelayTokens.RelayTokens;
   const auth = yield* ConnectAuthentication.ConnectAuthentication;
   const keys = yield* ClientKeys.ClientKeys;
+  const access = yield* AccountAccess.AccountAccess;
   const unavailable = () =>
     new RelayInternalError({
       code: "internal_error",
@@ -72,6 +77,8 @@ const make = Effect.gen(function* () {
         traceId: "connect-exchange",
       });
     const assurance = yield* auth.session(request.subject_token);
+    // Invite and suspension denials surface as 403 before client-key admission records anything.
+    yield* access.capture(assurance.userId);
     const now = yield* DateTime.now;
     const issuedAtEpochSeconds = Math.floor(now.epochMilliseconds / 1000);
     const admission = yield* keys.admit({
@@ -95,7 +102,7 @@ const make = Effect.gen(function* () {
         issuedAtEpochSeconds,
         expiresAtEpochSeconds: Math.floor(expires.epochMilliseconds / 1000),
       })
-      .pipe(Effect.mapError(unavailable));
+      .pipe(Effect.catchTags({ RelayJwtError: () => Effect.fail(unavailable()) }));
     return {
       access_token: token,
       issued_token_type: RelayAccessTokenType,

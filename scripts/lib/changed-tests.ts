@@ -6,8 +6,9 @@ import * as NodePath from "node:path";
 
 const CODE = /\.[cm]?[jt]sx?$/;
 const TEST = /\.test\.[cm]?[jt]sx?$/;
-const TEST_HELPER = /\.(?:testkit|fixture)\.[cm]?[jt]sx?$/;
-const GRAPH_SOURCE = /^(?:apps|packages|scripts)\//;
+const TEST_HELPER =
+  /(?:\.(?:testkit|fixture)\.[cm]?[jt]sx?$|^infra\/relay\/src\/accounts\/test\/.*\.[cm]?[jt]sx?$)/;
+const GRAPH_SOURCE = /^(?:(?:apps|packages|scripts)\/|infra\/relay\/)/;
 const { buildImportGraph } = NodeModule.createRequire(import.meta.url)(
   "../../.github/scripts/goat-ci-imports.cjs",
 ) as {
@@ -140,6 +141,8 @@ export function testsForChanges(
   const sources = present.filter(
     (file) => GRAPH_SOURCE.test(file) && CODE.test(file) && !TEST.test(file),
   );
+  if (changed.some((file) => file.startsWith("infra/relay/migrations/")))
+    sources.push("infra/relay/src/accounts/test/PostgresFixture.ts");
   if (sources.length > 0) {
     const graph = buildImportGraph(root);
     const queue = sources.filter((file) => graph.files.has(file));

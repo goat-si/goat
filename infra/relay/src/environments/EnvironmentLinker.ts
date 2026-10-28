@@ -1,3 +1,9 @@
+import { assertEnabled } from "../auth/MintControl.ts";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import { strengthRequired } from "../auth/ConnectAuthentication.ts";
 import {
@@ -69,11 +75,14 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedError<EnvironmentL
 }
 
 export type EnvironmentLinkError =
+  | EnvironmentOwnership.OwnershipError
+  | RelayRateLimits.RateLimitError
   | EnvironmentLinkProofExpired
   | import("@goat/contracts/relay").RelayInternalError
   | import("@goat/contracts/connectAssurance").RelayAuthenticationStrengthError
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
+  | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
   | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
   | ManagedEndpointProvider.ManagedEndpointProviderError
@@ -146,6 +155,10 @@ function isLoopbackManagedTunnelOrigin(
 }
 
 const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const transactions = yield* AccountTransactions.AccountTransactions;
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
   const crypto = yield* Crypto.Crypto;
@@ -158,6 +171,8 @@ const make = Effect.gen(function* () {
 
   return EnvironmentLinker.of({
     link: Effect.fn("relay.environment_linker.link")(function* (input) {
+      yield* assertEnabled(config);
+      const admitted = yield* access.admit(input.userId);
       const now = yield* DateTime.now;
       const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
       const unverified = yield* Effect.try({
@@ -272,6 +287,11 @@ const make = Effect.gen(function* () {
           stage: "verify_challenge",
         });
       }
+      yield* access.requireAllowed({
+        userId: input.userId,
+        accountEpoch: challenge.account_epoch,
+        credentialKind: "link_challenge",
+      });
       if (!(yield* accounts.check(input.userId, challenge.assurance.authGeneration)))
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
@@ -353,10 +373,27 @@ const make = Effect.gen(function* () {
           yield* reservations.recover(input.userId, assertOwner, (environmentId) =>
             cleanup(environmentId),
           );
+          const releaseOwnership = Effect.fn("EnvironmentLinker.releaseOwnership")(
+            function* (environmentId: string) {
+              const key = { userId: input.userId, environmentId };
+              const claims = yield* ownership.beginRelease(key);
+              yield* ownership.finishRelease({ ...key, claims });
+            },
+            (effect, environmentId) =>
+              effect.pipe(
+                Effect.tapError(() =>
+                  Effect.logWarning("Failed link retains its ownership claim for retry", {
+                    environmentId,
+                  }),
+                ),
+                Effect.ignore,
+              ),
+          );
           let cleanupTarget:
             | ManagedEndpointProvider.ManagedEndpointDeprovisionTarget
             | null
             | undefined;
+          let previousLink: EnvironmentLinks.RelayLinkedEnvironmentRecord | null | undefined;
           yield* assertOwner;
           const prior = yield* reservations.reserve(
             reservation,
@@ -406,7 +443,17 @@ const make = Effect.gen(function* () {
           if (prior) return prior;
           return yield* Effect.gen(function* () {
             yield* assertOwner;
+            previousLink = yield* links.getForUser({
+              userId: input.userId,
+              environmentId: verified.environmentId,
+            });
+            yield* ownership.claim({
+              ...admitted,
+              environmentId: verified.environmentId,
+              environmentPublicKey: verified.environmentPublicKey,
+            });
             if (!input.request.managedTunnelsEnabled) {
+              yield* rates.charge({ userId: input.userId, operation: "link" });
               yield* cleanup(verified.environmentId);
             }
             const provisioned = input.request.managedTunnelsEnabled
@@ -417,9 +464,21 @@ const make = Effect.gen(function* () {
                 })
               : null;
             yield* assertOwner;
-            cleanupTarget = input.request.managedTunnelsEnabled
+            const captured = input.request.managedTunnelsEnabled
               ? yield* managedEndpointProvider.prepareDeprovision(reservation)
               : null;
+            const claim = provisioned?.allocationClaim;
+            // Compensate only the allocation this attempt provisioned, never a concurrent replacement.
+            cleanupTarget =
+              captured &&
+              (!claim ||
+                (captured.incarnationId === claim.incarnationId &&
+                  captured.generation === claim.generation &&
+                  captured.accountEpoch === claim.accountEpoch &&
+                  captured.endpointGeneration === claim.endpointGeneration &&
+                  captured.tunnelId === claim.tunnelId))
+                ? captured
+                : null;
             const endpoint = provisioned?.endpoint ?? verified.endpoint;
             // Only advertised managed endpoints need secure URLs; publish-only links route out of band.
             if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
@@ -431,27 +490,50 @@ const make = Effect.gen(function* () {
               });
             }
             yield* assertOwner;
-            return yield* reservations.complete(
-              reservation,
-              Effect.gen(function* () {
-                yield* links.upsert({ ...input, proof: verified, endpoint });
-                const environmentCredential = yield* credentials.create({
-                  environmentId: verified.environmentId,
-                  environmentPublicKey: verified.environmentPublicKey,
-                });
-                return {
-                  environmentId: verified.environmentId,
-                  endpoint,
-                  endpointRuntime: provisioned?.runtime ?? null,
-                  environmentCredential,
-                };
-              }),
-            );
+            return yield* transactions
+              .run(
+                { userIds: [input.userId], environmentPublicKey: verified.environmentPublicKey },
+                reservations.complete(
+                  reservation,
+                  Effect.gen(function* () {
+                    yield* access.requireAllowed(admitted);
+                    yield* ownership.claim({
+                      ...admitted,
+                      environmentId: verified.environmentId,
+                      environmentPublicKey: verified.environmentPublicKey,
+                    });
+                    yield* links.upsert({ ...input, proof: verified, endpoint });
+                    const environmentCredential = yield* credentials.create({
+                      ...admitted,
+                      environmentId: verified.environmentId,
+                      environmentPublicKey: verified.environmentPublicKey,
+                    });
+                    return {
+                      environmentId: verified.environmentId,
+                      endpoint,
+                      endpointRuntime: provisioned?.runtime ?? null,
+                      environmentCredential,
+                    };
+                  }),
+                ),
+              )
+              .pipe(
+                Effect.mapError((error) =>
+                  error._tag === "SqlError"
+                    ? new RelayAuthorizationUnavailableError({
+                        code: "authorization_unavailable",
+                        traceId: "relay",
+                      })
+                    : error,
+                ),
+              );
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
-                if (input.request.managedTunnelsEnabled) {
+                // A failed relink keeps the existing link's endpoint; only a new environment is torn down.
+                if (input.request.managedTunnelsEnabled && previousLink === null) {
                   yield* cleanup(verified.environmentId, cleanupTarget);
+                  yield* releaseOwnership(verified.environmentId);
                 }
                 yield* reservations.failed(reservation);
               }).pipe(Effect.andThen(Effect.failCause(cause))),

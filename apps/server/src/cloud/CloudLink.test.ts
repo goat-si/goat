@@ -95,7 +95,9 @@ const withService = <A, E>(
         getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-1")),
       }),
       Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ requestCatchUp: () => Effect.void }),
-      Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({}),
+      Layer.mock(ManagedEndpointRuntime.CloudManagedEndpointRuntime)({
+        withLinkStateLock: (effect) => effect,
+      }),
       Layer.mock(ConnectReachability.ConnectReachability)({
         latest: Effect.succeedNone,
       }),

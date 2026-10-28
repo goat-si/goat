@@ -60,6 +60,7 @@ export interface SettingsSearchItem {
   readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
+  readonly isVisible?: () => boolean;
   readonly desktopOnly?: boolean;
   readonly macOnly?: boolean;
   readonly windowsOnly?: boolean;
@@ -1314,12 +1315,17 @@ export function isGoatBotSettingsTarget(hash: string): boolean {
   return GOAT_BOT_SETTINGS_TARGETS.has(hash.replace(/^#/, ""));
 }
 
+function isSettingsSearchItemVisible(item: SettingsSearchItem): boolean {
+  return item.isVisible?.() ?? true;
+}
+
 export function filterAvailableSettingsSearchItems(
   availability: SettingsSearchAvailability,
 ): ReadonlyArray<SettingsSearchItem> {
   const items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
   return items.filter(
     (item) =>
+      isSettingsSearchItemVisible(item) &&
       (item.id !== "goat-connect-coming-soon" || !isGoatConnectEnabled()) &&
       (!item.requiresMemory || availability.hasMemory === true) &&
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
@@ -1341,6 +1347,7 @@ export function settingsForThisPlatform(
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   return items.filter(
     (item) =>
+      isSettingsSearchItemVisible(item) &&
       (isElectron || item.desktopOnly !== true) &&
       (!item.requiresDesktopWindowMaterial || hasDesktopWindowMaterialApi()) &&
       (!item.releaseChannelOnly || isElectron) &&

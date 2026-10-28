@@ -1,5 +1,10 @@
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { useAtomValue } from "@effect/atom-react";
-import { cloudAutoJoinSaveError, hubDeviceList } from "@goat/client-runtime/hub-devices";
+import {
+  cloudAutoJoinSaveError,
+  connectHubProxySaveError,
+  hubDeviceList,
+} from "@goat/client-runtime/hub-devices";
 import {
   canRemoveHubNode,
   HUB_NODE_IMPORT_NOTICE,
@@ -222,6 +227,40 @@ function HubDevicesList({
             value={hubSettings.autoJoinCloudMachines}
             disabled={!canConfigure || !hubSettings.enabled || busy !== null}
             onValueChange={saveCloudAutoJoin}
+          />
+        </View>
+      )}
+      {isGoatConnectEnabled() && hubSettings !== null && (
+        <View className="flex-row items-center gap-3 rounded-xl bg-grouped-card p-4">
+          <View className="flex-1 gap-1">
+            <Text className="text-foreground">Allow GOAT Connect devices to reach hub devices</Text>
+            <Text className="text-sm text-foreground-muted">
+              Standing consent for every trusted device on the linked account. After enabling, sign
+              out of GOAT Connect and sign back in. Turning this off ends privileged Connect
+              sessions, including direct hub access. The preference stays saved while the hub is
+              off.
+            </Text>
+          </View>
+          <ThemedSwitch
+            accessibilityLabel="Allow GOAT Connect devices to reach hub devices"
+            value={hubSettings.connectDevicesHubProxy}
+            disabled={!canConfigure || !hubSettings.enabled || busy !== null}
+            onValueChange={(connectDevicesHubProxy) =>
+              void run("connect-access", async () => {
+                const result = await updateSettings({
+                  environmentId,
+                  input: { patch: { hub: { connectDevicesHubProxy } } },
+                });
+                if (result._tag === "Success")
+                  setError(
+                    connectHubProxySaveError(
+                      connectDevicesHubProxy,
+                      result.value.hub.connectDevicesHubProxy,
+                    ),
+                  );
+                return result;
+              })
+            }
           />
         </View>
       )}

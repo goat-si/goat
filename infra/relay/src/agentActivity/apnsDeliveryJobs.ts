@@ -1,3 +1,4 @@
+import { signDeliveryPayload } from "./deliveryJobSigning.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac or timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 
@@ -6,7 +7,6 @@ import {
   RelayAgentAwarenessPhase,
   type RelayDeliveryKind,
 } from "@goat/contracts/relay";
-import { stableStringify } from "@goat/shared/relaySigning";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -55,11 +55,12 @@ export const ApnsLiveActivityAlert = Schema.Struct({
 export type ApnsLiveActivityAlert = typeof ApnsLiveActivityAlert.Type;
 
 export const ApnsDeliveryJobPayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   jobId: Schema.String,
   kind: ApnsDeliveryKindSchema,
   target: Schema.Struct({
     userId: Schema.String,
+    accountEpoch: Schema.Int.check(Schema.isGreaterThan(0)),
     deviceId: Schema.String,
     token: Schema.String,
     bundleId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -238,6 +239,7 @@ export const isApnsDeliveryJobVerificationError = Schema.is(ApnsDeliveryJobVerif
 export function makeApnsDeliveryJobPayload(input: {
   readonly kind: RelayDeliveryKind;
   readonly userId: string;
+  readonly accountEpoch: number;
   readonly deviceId: string;
   readonly token: string;
   readonly bundleId?: string | null | undefined;
@@ -250,11 +252,12 @@ export function makeApnsDeliveryJobPayload(input: {
   readonly jobId: string;
 }): ApnsDeliveryJobPayload {
   return {
-    version: 1,
+    version: 2,
     jobId: input.jobId,
     kind: input.kind,
     target: {
       userId: input.userId,
+      accountEpoch: input.accountEpoch,
       deviceId: input.deviceId,
       token: input.token,
       ...(input.bundleId ? { bundleId: input.bundleId } : {}),
@@ -327,9 +330,7 @@ function signatureForPayload(input: {
   readonly secret: Redacted.Redacted<string>;
   readonly payload: ApnsDeliveryJobPayload;
 }): string {
-  return NodeCrypto.createHmac("sha256", Redacted.value(input.secret))
-    .update(stableStringify(input.payload))
-    .digest("base64url");
+  return signDeliveryPayload(input.secret, "apns-v2", input.payload);
 }
 
 function timingSafeEqualBase64Url(left: string, right: string): boolean {

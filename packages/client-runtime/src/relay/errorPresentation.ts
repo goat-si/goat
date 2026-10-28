@@ -23,6 +23,38 @@ export function dpopFailureMessage(message: string, reason: DpopFailureReason | 
 
 export function relayProtectedErrorMessage(error: RelayProtectedError): string {
   switch (error._tag) {
+    case "RelayAccountDeletionUnavailableError":
+      return "Account deletion status is unavailable. Read status again before retrying.";
+    case "RelayMintDisabledError":
+      return "Relay credential issuance and tunnel provisioning are paused. Try again later.";
+    case "RelayAccountDeletionConflictError":
+      return "A conflicting account request was received. Read deletion status before retrying.";
+    case "RelayAccountAccessDeniedError":
+      if (error.reason === "account_deleted")
+        return "This GOAT Connect account has been deleted. Unlink connected machines locally if cleanup is unconfirmed.";
+      return error.reason === "not_invited"
+        ? "GOAT Connect is invite-only. Ask the operator for access."
+        : "GOAT Connect access is suspended. Contact the operator.";
+    case "RelayAccountEpochStaleError":
+      return error.action === "refresh_token"
+        ? "GOAT Connect credentials changed. Refresh the connection."
+        : error.action === "new_challenge"
+          ? "Restart linking this environment."
+          : "Link this environment again to restore GOAT Connect.";
+    case "RelayEnvironmentRelinkRequiredError":
+      return "Link this environment again to restore GOAT Connect.";
+    case "RelayEnvironmentOwnerConflictError":
+      return "Another account owns this environment. Unlink it from that account before linking again.";
+    case "RelayEnvironmentOwnerMismatchError":
+      return "This account does not own the linked environment.";
+    case "RelayAccountResourceLimitExceededError":
+      return `This account has reached its limit of ${error.limit} ${error.resource === "mobile_devices" ? "mobile devices" : "environment links"}. Remove an unused one first.`;
+    case "RelayMobileDeviceNotRegisteredError":
+      return "Register this device before starting a Live Activity.";
+    case "RelayRateLimitExceededError":
+      return `GOAT Connect request budget exhausted. Try again in ${error.retryAfterSeconds} seconds.`;
+    case "RelayAuthorizationUnavailableError":
+      return "GOAT Connect authorization is temporarily unavailable. Try again later.";
     case "RelayAuthenticationStrengthError":
       return "Verify both factors again, then retry this action. If your client cannot reverify, sign out and sign in with MFA.";
     case "RelayAuthenticationUnavailableError":
@@ -89,6 +121,10 @@ export function relayRequestFailureDetail(error: {
   readonly status?: number | undefined;
 }): string | null {
   if (error.relayError) return relayProtectedErrorMessage(error.relayError);
+  if (error.status === 403)
+    return "GOAT Connect refused access. Check your invitation, account status, and resource limits.";
+  if (error.status === 429) return "GOAT Connect request budget exhausted. Wait before retrying.";
+  if (error.status === 503) return "GOAT Connect is temporarily unavailable.";
   if (error.status === 504) return RELAY_GATEWAY_TIMEOUT_MESSAGE;
   if (error.status !== undefined) return `Relay returned an unexpected HTTP ${error.status}.`;
   return null;

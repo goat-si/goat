@@ -169,3 +169,5 @@ See:
 - [GOAT Connect setup](../../docs/operations/connect-setup.md) for Clerk keys, JWT templates, and sign-up restrictions.
 - [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
 - [GOAT Connect architecture](../../docs/internals/goat-connect.md) for environment linking and trust boundaries.
+
+Account deletion and offline-host cleanup: [Connect operations](../../docs/operations/connect-setup.md#deletion-retained-denial-and-offline-machines). Signing-key incidents: [pause, withdraw and rotate](../../docs/operations/connect-signing-key-compromise.md).

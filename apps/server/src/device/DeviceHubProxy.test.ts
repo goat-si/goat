@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse, HttpRouter } from "effect/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as SessionLifetime from "../auth/SessionSocketLifetime.testkit.ts";
 import type * as DeviceHost from "./DeviceHost.ts";
 import * as DeviceService from "./DeviceService.ts";
 import * as DeviceHubProxy from "./DeviceHubProxy.ts";
@@ -68,6 +69,7 @@ const fixture = (
         } as DeviceService.DeviceService["Service"]),
       ),
       Layer.provideMerge(Layer.succeed(HttpClient.HttpClient, client)),
+      Layer.provideMerge(SessionLifetime.layerStable),
     ),
     { disableLogger: true },
   );

@@ -1,3 +1,7 @@
+import * as ConnectHubCredentials from "./ConnectHubCredentials.ts";
+import * as HubConnectAccess from "./HubConnectAccess.ts";
+import * as IssuedEnvironmentSession from "./issueEnvironmentSession.ts";
+import * as CloudCredentialWithdrawal from "./CloudCredentialWithdrawal.ts";
 import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
@@ -95,6 +99,7 @@ export interface McpClientSession {
 }
 
 export interface AuthenticatedSession {
+  readonly connectAccessGeneration?: number;
   readonly sessionId: AuthSessionId;
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
@@ -367,6 +372,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthCloudRelayIssuerMissingError,
   ServerAuthCloudHealthJwtSigningError,
   ServerAuthCloudMintJwtSigningError,
+  CloudCredentialWithdrawal.CloudCredentialWithdrawalError,
 ]);
 export type ServerAuthInternalError = typeof ServerAuthInternalError.Type;
 export const isServerAuthInternalError = Schema.is(ServerAuthInternalError);
@@ -467,6 +473,11 @@ export class EnvironmentAuth extends Context.Service<
     readonly getSessionState: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthSessionState, ServerAuthInternalError>;
+    readonly withCloudCredentialPermit: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | CloudCredentialWithdrawal.CloudCredentialWithdrawalError, R>;
+    readonly withdrawCloudCredentials: () => Effect.Effect<void, ServerAuthInternalError>;
+    readonly completeCloudWithdrawal: () => Effect.Effect<void, ServerAuthInternalError>;
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
@@ -494,6 +505,10 @@ export class EnvironmentAuth extends Context.Service<
     readonly setCloudLinkTrust: (
       userId: string | null,
     ) => Effect.Effect<void, ServerAuthInternalError>;
+    readonly createCloudConnectPairingLink: (input: {
+      readonly proofKeyThumbprint: string;
+      readonly label?: string;
+    }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
     readonly createPairingLink: (input?: {
       readonly ttl?: Duration.Duration;
       readonly label?: string;
@@ -725,7 +740,11 @@ function isBrowserOriginAllowed(
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const withdrawal = yield* CloudCredentialWithdrawal.make;
   const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
+  const connectAccess = yield* HubConnectAccess.HubConnectAccess;
+  const { createPairingLink, createCloudConnectPairingLink, admit } =
+    yield* ConnectHubCredentials.make;
   const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
   const sessions = yield* SessionStore.SessionStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -751,15 +770,10 @@ export const make = Effect.gen(function* () {
           : Effect.void,
       ),
       mapSessionVerificationErrors,
+      Effect.tap((session) => withdrawal.guard(session.subject)),
       Effect.flatMap(rejectMcpClientAudience),
-      Effect.map((session) => ({
-        sessionId: session.sessionId,
-        subject: session.subject,
-        method: session.method,
-        scopes: session.scopes,
-        ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
-        ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
-      })),
+      Effect.flatMap(admit),
+      Effect.map(ConnectHubCredentials.authenticatedSession),
     );
 
   const resolveRequestCredential = (request: HttpServerRequest.HttpServerRequest) => {
@@ -897,10 +911,15 @@ export const make = Effect.gen(function* () {
     const grant = yield* bootstrapCredentials
       .consume(credential)
       .pipe(Effect.mapError(toBootstrapExchangeError));
+    yield* withdrawal.guard(grant.subject);
+    yield* admit(grant);
     const session = yield* sessions
       .issue({
         method: "browser-session-cookie",
         subject: grant.subject,
+        ...(grant.connectAccessGeneration !== undefined
+          ? { connectAccessGeneration: grant.connectAccessGeneration }
+          : {}),
         scopes: grant.scopes,
         ...(previousSession?.method === "browser-session-cookie"
           ? { replaceSessionId: previousSession.sessionId }
@@ -924,7 +943,7 @@ export const make = Effect.gen(function* () {
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
-    "scopes" | "subject" | "label"
+    "scopes" | "subject" | "label" | "connectAccessGeneration"
   > & {
     readonly method: PairingGrantStore.BootstrapGrant["method"] | "reusable-dev-token";
   };
@@ -939,15 +958,14 @@ export const make = Effect.gen(function* () {
     ServerAuthInvalidCredentialError | ServerAuthInternalError | ServerAuthScopeNotGrantedError
   > => {
     if (!devAuth?.matches(credential)) {
-      return bootstrapCredentials
-        .consume(credential, input)
-        .pipe(
-          Effect.mapError((cause) =>
-            cause._tag === "BootstrapCredentialScopeNotGrantedError"
-              ? new ServerAuthScopeNotGrantedError({})
-              : toBootstrapExchangeError(cause),
-          ),
-        );
+      return bootstrapCredentials.consume(credential, input).pipe(
+        Effect.mapError((cause) =>
+          cause._tag === "BootstrapCredentialScopeNotGrantedError"
+            ? new ServerAuthScopeNotGrantedError({})
+            : toBootstrapExchangeError(cause),
+        ),
+        Effect.flatMap(admit),
+      );
     }
     return sessions.verify(credential).pipe(
       mapSessionVerificationErrors,
@@ -970,6 +988,8 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
+            yield* withdrawal.guard(grant.subject);
+            yield* admit(grant);
             const grantedScopes =
               requestedScopes === undefined
                 ? grant.scopes
@@ -981,6 +1001,9 @@ export const make = Effect.gen(function* () {
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
                 subject: grant.subject,
+                ...(grant.connectAccessGeneration !== undefined
+                  ? { connectAccessGeneration: grant.connectAccessGeneration }
+                  : {}),
                 scopes: grantedScopes,
                 ...(input?.proofKeyThumbprint
                   ? {
@@ -1047,32 +1070,6 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const createPairingLink: EnvironmentAuth["Service"]["createPairingLink"] = Effect.fn(
-    "EnvironmentAuth.createPairingLink",
-  )(
-    function* (input) {
-      const createdAt = yield* DateTime.now;
-      const issued = yield* bootstrapCredentials.issueOneTimeToken({
-        scopes: input?.scopes ?? AuthStandardClientScopes,
-        subject: input?.subject ?? "one-time-token",
-        ...(input?.ttl ? { ttl: input.ttl } : {}),
-        ...(input?.label ? { label: input.label } : {}),
-        ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
-        ...(input?.purpose ? { purpose: input.purpose } : {}),
-      });
-      return {
-        id: issued.id,
-        credential: issued.credential,
-        scopes: input?.scopes ?? AuthStandardClientScopes,
-        subject: input?.subject ?? "one-time-token",
-        ...(issued.label ? { label: issued.label } : {}),
-        createdAt: DateTime.toUtc(createdAt),
-        expiresAt: DateTime.toUtc(issued.expiresAt),
-      } satisfies IssuedPairingLink;
-    },
-    Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause })),
-  );
-
   const listPairingLinks: EnvironmentAuth["Service"]["listPairingLinks"] = (input) =>
     bootstrapCredentials.listActive().pipe(
       Effect.map((pairingLinks) => {
@@ -1096,41 +1093,7 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokePairingLink"),
     );
 
-  const issueSession: EnvironmentAuth["Service"]["issueSession"] = (input) =>
-    input?.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
-      ? Effect.fail(new PairingGrantStore.ReservedAuthSubjectError())
-      : sessions
-          .issue({
-            subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
-            method: "bearer-access-token",
-            scopes: input?.scopes ?? AuthStandardClientScopes,
-            client: {
-              ...(input?.label ? { label: input.label } : {}),
-              deviceType: "bot",
-            },
-            ...(input?.ttl ? { ttl: input.ttl } : {}),
-            ...(input?.runtimeModeCeiling ? { runtimeModeCeiling: input.runtimeModeCeiling } : {}),
-            ...(input?.childSetupPurpose ? { childSetupPurpose: input.childSetupPurpose } : {}),
-          })
-          .pipe(
-            Effect.map(
-              (issued) =>
-                ({
-                  sessionId: issued.sessionId,
-                  token: issued.token,
-                  method: "bearer-access-token",
-                  scopes: issued.scopes,
-                  subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
-                  client: issued.client,
-                  expiresAt: DateTime.toUtc(issued.expiresAt),
-                  ...(issued.childSetupPurpose
-                    ? { childSetupPurpose: issued.childSetupPurpose }
-                    : {}),
-                }) satisfies IssuedBearerSession,
-            ),
-            Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
-            Effect.withSpan("EnvironmentAuth.issueSession"),
-          );
+  const issueSession = yield* IssuedEnvironmentSession.make(DEFAULT_SESSION_SUBJECT);
 
   const listSessions: EnvironmentAuth["Service"]["listSessions"] = () =>
     sessions.listActive().pipe(
@@ -1266,14 +1229,13 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(requestUrl)) {
         const websocketTicket = requestUrl.value.searchParams.get(WEBSOCKET_TICKET_QUERY_PARAM);
         if (websocketTicket && websocketTicket.trim().length > 0) {
-          const session = yield* sessions
-            .verifyWebSocketToken(websocketTicket)
-            .pipe(mapSessionVerificationErrors, Effect.flatMap(rejectMcpClientAudience));
-          if (session.audience !== undefined && session.audience !== use) {
-            return yield* new ServerAuthInvalidCredentialError({
-              diagnostic: `WebSocket ticket was issued for the ${session.audience} route.`,
-            });
-          }
+          const session = yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
+            mapSessionVerificationErrors,
+            Effect.tap((session) => withdrawal.guard(session.subject)),
+            Effect.flatMap(rejectMcpClientAudience),
+            Effect.flatMap(admit),
+          );
+          yield* ConnectHubCredentials.admitSocketUse(session, use);
           if (session.proofKeyThumbprint) {
             // WebSocket clients cannot set headers, so the proof travels in the query.
             // The proof hashes the ticket; consuming its jti prevents replay after first use.
@@ -1298,16 +1260,7 @@ export const make = Effect.gen(function* () {
               Effect.provideService(Crypto.Crypto, crypto),
             );
           }
-          return {
-            sessionId: session.sessionId,
-            subject: session.subject,
-            method: session.method,
-            scopes: session.scopes,
-            ...(session.proofKeyThumbprint
-              ? { proofKeyThumbprint: session.proofKeyThumbprint }
-              : {}),
-            ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
-          };
+          return ConnectHubCredentials.authenticatedSession(session);
         }
       }
 
@@ -1399,6 +1352,7 @@ export const make = Effect.gen(function* () {
             ? Effect.void
             : Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "insufficient_scope" })),
       ),
+      (exchange) => connectAccess.withPolicy(() => exchange),
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
   return EnvironmentAuth.of({
@@ -1406,19 +1360,55 @@ export const make = Effect.gen(function* () {
       return Effect.succeed(descriptor);
     }),
     getSessionState,
-    createBrowserSession,
-    exchangeBootstrapCredentialForAccessToken,
-    createPairingLink,
+    withCloudCredentialPermit: Effect.fn("EnvironmentAuth.withCloudCredentialPermit")(
+      <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        withdrawal.withPermit(withdrawal.guard("cloud-connect").pipe(Effect.andThen(effect))),
+    ),
+    withdrawCloudCredentials: withdrawal.withdraw,
+    completeCloudWithdrawal: withdrawal.complete,
+    createBrowserSession: Effect.fn("EnvironmentAuth.exchangeBrowserCredential")((...args) =>
+      withdrawal.withPermit(connectAccess.withPolicy(() => createBrowserSession(...args))),
+    ),
+    exchangeBootstrapCredentialForAccessToken: Effect.fn(
+      "EnvironmentAuth.exchangeAccessCredential",
+    )((...args) =>
+      withdrawal.withPermit(
+        connectAccess.withPolicy(() => exchangeBootstrapCredentialForAccessToken(...args)),
+      ),
+    ),
+    createCloudConnectPairingLink: Effect.fn("EnvironmentAuth.createCloudConnectPairingLink")(
+      (input) =>
+        withdrawal.withPermit(
+          withdrawal
+            .guard("cloud-connect")
+            .pipe(Effect.andThen(createCloudConnectPairingLink(input))),
+        ),
+    ),
+    createPairingLink: Effect.fn("EnvironmentAuth.createPairingLink")((input) =>
+      withdrawal.withPermit(
+        withdrawal
+          .guard(input?.subject ?? "one-time-token")
+          .pipe(Effect.andThen(createPairingLink(input))),
+      ),
+    ),
     setCloudLinkTrust: Effect.fn("EnvironmentAuth.setCloudLinkTrust")((userId) =>
-      bootstrapCredentials
-        .setCloudTrust(userId)
-        .pipe(Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause }))),
+      withdrawal.withPermit(
+        connectAccess
+          .rotate(bootstrapCredentials.setCloudTrust(userId))
+          .pipe(Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause }))),
+      ),
     ),
     issuePairingCredential,
     issueStartupPairingCredential,
     listPairingLinks,
     revokePairingLink,
-    issueSession,
+    issueSession: Effect.fn("EnvironmentAuth.issueSession")((input) =>
+      withdrawal.withPermit(
+        withdrawal
+          .guard(input?.subject ?? DEFAULT_SESSION_SUBJECT)
+          .pipe(Effect.andThen(issueSession(input))),
+      ),
+    ),
     listSessions,
     revokeSession,
     revokeOtherSessionsExcept,
@@ -1436,8 +1426,7 @@ export const make = Effect.gen(function* () {
   });
 });
 export const layer = Layer.effect(EnvironmentAuth, make).pipe(
-  Layer.provideMerge(PairingGrantStore.layer),
-  Layer.provideMerge(SessionStore.layer),
+  Layer.provideMerge(HubConnectAccess.layer),
   Layer.provideMerge(EnvironmentAuthPolicy.layer),
 );
 const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerConfig);

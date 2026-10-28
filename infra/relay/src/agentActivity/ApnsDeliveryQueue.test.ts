@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as Alchemy from "alchemy";
@@ -41,6 +42,7 @@ describe("ApnsDeliveryQueue", () => {
     };
     const runtimeContext = {} as Alchemy.BaseRuntimeContext;
     const layer = ApnsDeliveryQueue.layerCloudflareQueues(sender, runtimeContext).pipe(
+      Layer.provide(policyUnitLayer),
       Layer.provide(NodeCryptoLayer.layer),
       Layer.provide(RelayConfiguration.layer(config)),
     );
@@ -48,6 +50,7 @@ describe("ApnsDeliveryQueue", () => {
     return Effect.gen(function* () {
       const queue = yield* ApnsDeliveryQueue.ApnsDeliveryQueue;
       yield* queue.enqueuePushNotification({
+        accountEpoch: 1,
         userId: "user-1",
         deviceId: "device-1",
         token: "push-token",
