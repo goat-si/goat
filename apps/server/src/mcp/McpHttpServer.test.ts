@@ -567,7 +567,6 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
           element("Continue", 4),
         ],
         accessibilityTree: { nodes: Array.from({ length: 2_000 }, (_, i) => ({ nodeId: `${i}` })) },
-        // Errors, which snapshots keep; other entries are only counted.
         consoleEntries: Array.from({ length: 100 }, (_, i) => ({
           level: "error",
           text: `entry ${i}`,
@@ -948,7 +947,6 @@ it.effect("registers annotated tools and preserves authenticated request context
             : { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }),
         };
         expect(result.structuredContent).toMatchObject(expected);
-        // A click names its page's URL, so its icon needs no status read.
         expect(routedRequests.at(-1)?.operation).toBe(
           request.name === "goat_preview_click" ? "click" : "status",
         );
