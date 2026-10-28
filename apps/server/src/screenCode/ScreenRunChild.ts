@@ -465,6 +465,7 @@ export async function runScreenChild(
               t: "result",
               cellId,
               status: "deadline",
+              ...partialValue(),
               console: linesOut,
               truncated,
               unawaitedCallIds: [...pending.keys()],
@@ -574,6 +575,7 @@ export async function runScreenChild(
                 t: "result",
                 cellId,
                 status: Date.now() >= deadline ? "deadline" : "failed",
+                ...partialValue(),
                 console: linesOut,
                 truncated,
               });
