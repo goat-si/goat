@@ -352,10 +352,35 @@ it("retries a document replaced during settling and counts unreadable frames", (
     );
     await page.goto("https://read.test/one");
     const { observed } = await observerGate(page);
-    const reading = read();
+    // Hold the navigation event so the old context dies before this side learns of the new document.
+    const held: Array<Array<unknown>> = [];
+    // Playwright's Page is an event emitter, though its public type leaves emit out.
+    const emitter = page as unknown as {
+      emit: (event: string, ...args: Array<unknown>) => boolean;
+    };
+    const emit = emitter.emit.bind(page);
+    const mocks = new DisposableStack();
+    mocks.use(vi.spyOn(page, "url").mockReturnValue(page.url()));
+    mocks.use(
+      vi.spyOn(emitter, "emit").mockImplementation((event, ...args) => {
+        if (event !== "framenavigated") return emit(event, ...args);
+        held.push(args);
+        return true;
+      }),
+    );
+    const reading = read().then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     await observed;
     await page.goto("https://read.test/two");
-    const result = await reading;
+    mocks.dispose();
+    expect(held.length).toBeGreaterThan(0);
+    for (const args of held) emit("framenavigated", ...args);
+    const outcome = await reading;
+    expect(outcome).not.toHaveProperty("error");
+    if (!("value" in outcome)) return;
+    const result = outcome.value;
     expect(result.text).toContain("Replacement document");
     expect(result.text).not.toContain("First document");
     expect(result.text).not.toContain("Unshared frame");

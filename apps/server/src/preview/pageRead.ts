@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - page deadlines and hashing sit at the browser boundary.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - page deadlines and hashing sit at the browser boundary.
 import type { PreviewAutomationRead, PreviewAutomationReadInput } from "@goat/contracts";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, Page } from "playwright-core";
@@ -155,6 +155,33 @@ const pageResult = (
   return result(end);
 };
 
+const contextDestroyed = (cause: unknown) =>
+  cause instanceof Error && cause.message.includes("Execution context was destroyed");
+
+/** Resolves on the first frame navigation since it was created, bounded by the read's deadline. */
+const watchNavigation = (page: Page) => {
+  let seen = false;
+  let wake = () => {};
+  const navigated = () => {
+    seen = true;
+    wake();
+  };
+  page.on("framenavigated", navigated);
+  return {
+    next: (timeoutMs: number) =>
+      seen
+        ? Promise.resolve()
+        : new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(readFailure("pageChanged")), timeoutMs);
+            wake = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          }),
+    dispose: () => page.off("framenavigated", navigated),
+  };
+};
+
 export const pageRead = (
   page: Page,
   cdp: CDPSession,
@@ -168,6 +195,7 @@ export const pageRead = (
     const tracker = attachNetworkTracker(page);
     const deadline = Date.now() + (input.timeoutMs ?? 10_000);
     for (let attempt = 0; attempt < 2; attempt++) {
+      const navigation = watchNavigation(page);
       const documentId = tracker.state().documentId;
       const initialUrl = page.url();
       try {
@@ -258,13 +286,19 @@ export const pageRead = (
           input,
         );
       } catch (cause) {
-        if (tracker.state().documentId === documentId && page.url() === initialUrl) throw cause;
+        // A replaced document can destroy its context before its navigation event arrives here.
+        const destroyed = contextDestroyed(cause);
+        if (!destroyed && tracker.state().documentId === documentId && page.url() === initialUrl)
+          throw cause;
         if (attempt === 1 || Date.now() >= deadline) throw readFailure("pageChanged");
+        if (destroyed) await navigation.next(Math.max(1, deadline - Date.now()));
         await page
           .waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) })
           .catch(() => {
             throw readFailure("pageChanged");
           });
+      } finally {
+        navigation.dispose();
       }
     }
     throw readFailure("pageChanged");
