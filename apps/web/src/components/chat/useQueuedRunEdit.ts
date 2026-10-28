@@ -5,6 +5,7 @@ import {
   queuedRunEditBlockedReason,
 } from "@goat/client-runtime/queued-run-edit";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
+import type { PendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ChatAttachment,
@@ -172,10 +173,23 @@ function useEditQueuedRunCommand() {
   return useAtomCommand(threadEnvironment.editQueuedRun, { reportFailure: false });
 }
 
+const NO_PENDING_REQUESTS_ATOM = Atom.make<PendingThreadRequests | null>(null).pipe(
+  Atom.withLabel("queued-run-edit:no-pending-requests"),
+);
+
+// Mounting a thread's detail before the server has it parks the stream as deleted.
+function pendingRequestsAtom(threadDetailRef: ScopedThreadRef | null) {
+  return threadDetailRef === null
+    ? NO_PENDING_REQUESTS_ATOM
+    : environmentThreadDetails.pendingRequestsAtom(threadDetailRef);
+}
+
 /** Edits preserve the thread draft; attachment removals stay local until save. */
 export function useQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
   readonly routeThreadRef: ScopedThreadRef;
+  /** Null while the route waits for the server's shell; see resolveThreadDetailRef. */
+  readonly threadDetailRef: ScopedThreadRef | null;
   readonly threadDraftTarget: ComposerThreadTarget;
   readonly activeThreadId: ThreadId | null;
   readonly serverProjection: ThreadStructure | null;
@@ -185,6 +199,7 @@ export function useQueuedRunEdit(input: {
   const {
     environmentId,
     routeThreadRef,
+    threadDetailRef,
     threadDraftTarget,
     activeThreadId,
     serverProjection,
@@ -192,9 +207,7 @@ export function useQueuedRunEdit(input: {
     composerRef,
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
-  const pendingRequests = useAtomValue(
-    environmentThreadDetails.pendingRequestsAtom(routeThreadRef),
-  );
+  const pendingRequests = useAtomValue(pendingRequestsAtom(threadDetailRef));
   const editKey = scopedThreadKey(routeThreadRef);
   const storedEdit = useAtomValue(queuedRunEdits.atom)[editKey] ?? null;
   const editing = activeThreadId === null ? null : storedEdit;
@@ -227,9 +240,7 @@ export function useQueuedRunEdit(input: {
 
   const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
     if (activeThreadId === null) return;
-    const pending = appAtomRegistry.get(
-      environmentThreadDetails.pendingRequestsAtom(routeThreadRef),
-    );
+    const pending = appAtomRegistry.get(pendingRequestsAtom(threadDetailRef));
     if (queuedRunEditBlockedReason({ openQuestionCount: pending?.userInputs.length ?? 0 }) !== null)
       return;
     if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
