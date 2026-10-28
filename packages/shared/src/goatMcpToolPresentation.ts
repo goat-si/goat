@@ -1,3 +1,4 @@
+import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
@@ -119,6 +120,7 @@ function tool(
 const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
+  ...lifecycleToolDefinitions(tool),
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",
@@ -393,38 +395,6 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "schedule-run",
   ),
   goat_queue_list: tool(["List", "Listing", "Listed", "queued messages"], "queue-list"),
-  goat_queue_resume: tool(
-    ["Resume", "Resuming", "Requested resumption of", "a thread queue"],
-    "thread-update",
-  ),
-  goat_queue_receipt: tool(
-    ["Read", "Reading", "Read", "a queue resumption receipt"],
-    "thread-read",
-  ),
-  goat_queued_run_start: tool(
-    ["Start", "Starting", "Requested a start of", "a queued run"],
-    "thread-update",
-  ),
-  goat_queued_run_receipt: tool(
-    ["Read", "Reading", "Read", "a queued run start receipt"],
-    "thread-read",
-  ),
-  goat_thread_delete: tool(
-    ["Delete", "Deleting", "Requested deletion of", "an inactive thread"],
-    "thread-update",
-  ),
-  goat_thread_lifecycle_receipt: tool(
-    ["Read", "Reading", "Read", "a thread deletion receipt"],
-    "thread-read",
-  ),
-  goat_provider_session_detach: tool(
-    ["Disconnect", "Disconnecting", "Requested disconnection of", "a provider session"],
-    "thread-update",
-  ),
-  goat_provider_session_receipt: tool(
-    ["Read", "Reading", "Read", "a provider session disconnection receipt"],
-    "thread-read",
-  ),
   goat_queue_read: tool(["Read", "Reading", "Read", "a queued message"], "queue-read"),
   goat_queue_edit: tool(["Edit", "Editing", "Edited", "a queued message"], "queue-edit"),
   goat_queue_cancel: tool(
