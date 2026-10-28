@@ -122,7 +122,7 @@ describe("foldLaunchedThreads", () => {
     expect(ids(result.childrenByParentKey.get(key("a")) ?? [])).toEqual(["c"]);
   });
 
-  it("orders children by who needs a person, then running work, then finished, in launch order", () => {
+  it("orders children by who needs a person, then running work, then finished, newest launch first", () => {
     const at = (minute: number) => `2026-10-27T10:0${minute}:00.000Z`;
     const result = fold([
       thread("root"),
@@ -130,11 +130,13 @@ describe("foldLaunchedThreads", () => {
       thread("running-late", { launchedBy: "root", status: "running", createdAt: at(5) }),
       thread("asking", { launchedBy: "root", input: true, createdAt: at(4) }),
       thread("running-early", { launchedBy: "root", status: "queued", createdAt: at(2) }),
+      thread("done-late", { launchedBy: "root", createdAt: at(3) }),
     ]);
     expect(ids(result.childrenByParentKey.get(key("root")) ?? [])).toEqual([
       "asking",
-      "running-early",
       "running-late",
+      "running-early",
+      "done-late",
       "done-early",
     ]);
   });
