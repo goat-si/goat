@@ -9,6 +9,8 @@ export const narrowTree = (tree: string, interactiveOnly?: boolean) =>
     ? tree
         .split("\n")
         .filter((line) => interactive.test(line))
+        // Ancestors are filtered out, so their indentation and child markers would invent nesting.
+        .map((line) => line.trimStart().replace(/:$/, ""))
         .join("\n")
     : tree;
 
