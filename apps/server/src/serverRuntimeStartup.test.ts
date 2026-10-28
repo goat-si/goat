@@ -473,6 +473,26 @@ it.effect("settles pending startup callers when the gate scope closes", () =>
   ),
 );
 
+it.effect("settles an active startup caller when the gate scope interrupts its command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const gate = yield* ServerRuntimeStartup.makeCommandGate.pipe(
+        Effect.provideService(Scope.Scope, scope),
+      );
+      const started = yield* Deferred.make<void>();
+      const active = yield* gate
+        .enqueueCommand(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)))
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* gate.signalCommandReady;
+      yield* Deferred.await(started);
+      yield* Scope.close(scope, Exit.void);
+      assert.isDefined(active.pollUnsafe(), "scope close must settle the active result");
+      assert.isTrue(Exit.isFailure(yield* Fiber.await(active)));
+    }),
+  ),
+);
+
 it.effect(
   "drains startup commands serially despite command failures and keeps ready calls direct",
   () =>
@@ -481,19 +501,21 @@ it.effect(
         const gate = yield* ServerRuntimeStartup.makeCommandGate;
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
+        const mutations: string[] = [];
         const first = yield* gate
           .enqueueCommand(
             Deferred.succeed(started, undefined).pipe(
               Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.sync(() => mutations.push("first"))),
               Effect.andThen(Effect.fail("command-failed")),
             ),
           )
           .pipe(Effect.forkScoped({ startImmediately: true }));
         const cancelled = yield* gate
-          .enqueueCommand(Effect.die("cancelled command ran"))
+          .enqueueCommand(Effect.sync(() => mutations.push("cancelled")))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         const last = yield* gate
-          .enqueueCommand(Effect.succeed("last"))
+          .enqueueCommand(Effect.sync(() => mutations.push("last")).pipe(Effect.as("last")))
           .pipe(Effect.forkScoped({ startImmediately: true }));
         yield* gate.signalCommandReady;
         yield* Deferred.await(started);
@@ -503,6 +525,7 @@ it.effect(
         yield* Deferred.succeed(release, undefined);
         assert.equal(yield* Effect.flip(Fiber.join(first)), "command-failed");
         assert.equal(yield* Fiber.join(last), "last");
+        assert.deepEqual(mutations, ["first", "last"]);
       }),
     ),
 );
