@@ -330,6 +330,18 @@ describe("presentAsChrome", () => {
       expectedFullVersion: "154.0.8037.92",
     },
     {
+      name: "drops the desktop app's own and Electron's tokens, which sites read as a bot",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) GOATNightly/0.1.2-nightly.20261027.285 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36",
+      product: "Chrome/152.0.7977.167",
+      host: { platform: "darwin" as const, arch: "arm64", release: "27.2.0" },
+      expectedUa:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+      expectedPlatform: "macOS",
+      expectedPlatformVersion: "27.0.0",
+      expectedFullVersion: "152.0.7977.167",
+    },
+    {
       name: "normalizes Linux kernel release to x.y.z",
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.8037.92",
       product: "HeadlessChrome/154.0.8037.92",

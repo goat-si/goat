@@ -672,9 +672,9 @@ const make = Effect.gen(function* () {
     attachNetworkTracker(page);
     const cdp = await context.newCDPSession(page);
     await installPdfDocumentNavigation(cdp);
-    // The desktop's page is already a normal browser. A popup's first request
-    // went out before it became a tab; everything after presents as Chrome.
-    if (!desktop) await presentAsChrome(cdp, host);
+    // A popup's first request went out before it became a tab; everything after presents as
+    // Chrome, a desktop page too, whose Electron UA would name the app.
+    await presentAsChrome(cdp, host);
     if (!desktop) await recordCopies(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);

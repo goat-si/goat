@@ -84,7 +84,10 @@ const chromeIdentity = (
     { brand: "Not A(Brand", version: names("99") },
   ];
   return {
-    userAgent: headlessUserAgent.replace(version[0], `Chrome/${major}.0.0.0`),
+    // A desktop tab's Electron UA also names the app and Electron; Chrome's names neither.
+    userAgent: headlessUserAgent
+      .replace(version[0], `Chrome/${major}.0.0.0`)
+      .replace(/ (?:GOAT\w*|Electron)\/\S+/g, ""),
     userAgentMetadata: {
       brands: brands((value) => value),
       fullVersionList: brands((value) => (value === major ? fullVersion : `${value}.0.0.0`)),
