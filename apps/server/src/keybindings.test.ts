@@ -3,11 +3,16 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import { KeybindingsConfigError, MAX_KEYBINDINGS_COUNT } from "@goat/contracts";
@@ -52,6 +57,72 @@ const readKeybindingsConfig = (configPath: string) =>
   });
 
 it.layer(NodeServices.layer)("keybindings", (it) => {
+  it.effect.each(["error", "end"] as const)(
+    "reattaches the keybindings watcher after %s and resyncs detached edits",
+    (outcome) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fail = yield* Deferred.make<void>();
+        const closed = yield* Deferred.make<void>();
+        let attachments = 0;
+        const controlledFs = FileSystem.FileSystem.of({
+          ...fs,
+          watch: (_directory, options) =>
+            Stream.unwrap(
+              Effect.sync(() => {
+                attachments++;
+                options?.onReady?.();
+                return attachments === 1
+                  ? Stream.fromEffect(
+                      Effect.gen(function* () {
+                        yield* Deferred.await(fail);
+                        if (outcome === "error")
+                          return yield* PlatformError.systemError({
+                            _tag: "Unknown",
+                            module: "FileSystem",
+                            method: "watch",
+                          });
+                      }),
+                    ).pipe(Stream.drain, Stream.ensuring(Deferred.succeed(closed, undefined)))
+                  : Stream.never;
+              }),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* Keybindings.Keybindings;
+          const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+          yield* service.start;
+          yield* TestClock.adjust("100 millis");
+          const seen = yield* Queue.unbounded<Keybindings.KeybindingsChangeEvent>();
+          const subscription = yield* service.subscribeChanges;
+          yield* subscription.pipe(
+            Stream.runForEach((event) => Queue.offer(seen, event)),
+            Effect.forkScoped,
+          );
+          yield* Deferred.succeed(fail, undefined);
+          yield* Deferred.await(closed);
+          yield* writeKeybindingsConfig(keybindingsConfigPath, [
+            { key: "mod+shift+9", command: "terminal.toggle" },
+          ]);
+          yield* TestClock.adjust("1100 millis");
+          assert.equal(attachments, 2);
+          assert.equal(yield* Queue.size(seen), 1);
+          const event = yield* Queue.take(seen);
+          assert.isTrue(
+            event.keybindings.some(
+              (rule) => rule.command === "terminal.toggle" && rule.shortcut.key === "9",
+            ),
+          );
+          yield* TestClock.adjust("60 seconds");
+          assert.equal(attachments, 2);
+          assert.equal(yield* Queue.size(seen), 0);
+        }).pipe(
+          Effect.provide(layerKeybindings()),
+          Effect.provideService(FileSystem.FileSystem, controlledFs),
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("rejects new previous-worktree bindings", () =>
     Effect.sync(() => {
       assert.equal(decodeKeybindingCommandExit("composer.previousWorktree")._tag, "Failure");

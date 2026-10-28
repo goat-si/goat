@@ -12,6 +12,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Config from "../config.ts";
@@ -21,6 +23,89 @@ import { parseNote, serializeNote } from "./frontmatter.ts";
 const isSummary = Schema.is(NoteSummary);
 const linked = { threadId: ThreadId.make("thread-1"), host: null, lastResult: null };
 import { notesLayer as layer, racing } from "./NotesTestkit.ts";
+
+it.effect.each([false, true])(
+  "reattaches the notes watcher and resyncs detached edits (failed refresh: %s)",
+  (failRefresh) =>
+    Effect.gen(function* () {
+      const fail = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      const changes = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      const seen = yield* Queue.unbounded<import("@goat/contracts").NotesEvent>();
+      let attachments = 0;
+      let failNextScan = false;
+      const testLayer = layer(undefined, undefined, (fs) => ({
+        ...fs,
+        readDirectory: (directory) =>
+          Effect.gen(function* () {
+            if (failNextScan) {
+              failNextScan = false;
+              return yield* PlatformError.systemError({
+                _tag: "Unknown",
+                module: "FileSystem",
+                method: "readDirectory",
+              });
+            }
+            return yield* fs.readDirectory(directory);
+          }),
+        watch: (_directory, options) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              attachments++;
+              options?.onReady?.();
+              return attachments === 1
+                ? Stream.fromEffect(
+                    Effect.gen(function* () {
+                      yield* Deferred.await(fail);
+                      return yield* PlatformError.systemError({
+                        _tag: "Unknown",
+                        module: "FileSystem",
+                        method: "watch",
+                      });
+                    }),
+                  ).pipe(Stream.ensuring(Deferred.succeed(closed, undefined)))
+                : Stream.fromQueue(changes);
+            }),
+          ),
+      }));
+      yield* Effect.gen(function* () {
+        const notes = yield* Notes.NotesService;
+        const fs = yield* FileSystem.FileSystem;
+        const { notesDir } = yield* Config.ServerConfig;
+        yield* notes.subscribe.pipe(
+          Stream.runForEach((event) => Queue.offer(seen, event)),
+          Effect.forkScoped,
+        );
+        assert.equal((yield* Queue.take(seen)).type, "snapshot");
+        yield* TestClock.adjust("100 millis");
+        yield* Deferred.succeed(fail, undefined);
+        yield* Deferred.await(closed);
+        yield* fs.writeFileString(`${notesDir}/watcher.md`, "# Detached edit\n");
+        failNextScan = failRefresh;
+        yield* TestClock.adjust("1100 millis");
+        assert.equal(attachments, 2);
+        if (failRefresh) {
+          assert.equal(yield* Queue.size(seen), 0);
+          yield* TestClock.adjust("2100 millis");
+          assert.equal(attachments, 3);
+        }
+        assert.equal(yield* Queue.size(seen), 1);
+        const event = yield* Queue.take(seen);
+        assert.equal(event.type, "upserted");
+        if (event.type === "upserted") assert.equal(event.note.path, "watcher.md");
+        yield* fs.writeFileString(`${notesDir}/watcher.md`, "# Second edit\n");
+        yield* Queue.offer(changes, { _tag: "Update", path: "watcher.md" });
+        yield* TestClock.adjust("100 millis");
+        assert.equal(yield* Queue.size(seen), 1);
+        assert.equal((yield* Queue.take(seen)).type, "upserted");
+        yield* fs.remove(`${notesDir}/watcher.md`);
+        yield* Queue.offer(changes, { _tag: "Remove", path: "watcher.md" });
+        yield* TestClock.adjust("100 millis");
+        assert.equal(yield* Queue.size(seen), 1);
+        assert.equal((yield* Queue.take(seen)).type, "removed");
+      }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.scoped),
+);
 
 it("round trips unknown frontmatter keys, comments, remote links, and body", () => {
   const source =
