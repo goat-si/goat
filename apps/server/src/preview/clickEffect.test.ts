@@ -174,3 +174,21 @@ it("sends nothing when a dialog opened before the press, and does not call it th
     });
     expect(await page.evaluate("window.clicked === true")).toBe(false);
   }));
+
+it("does not credit a click with what timers change right after it", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still" style="position:absolute;left:10px;top:10px;margin:0">static</p><div id="feed" style="position:absolute;top:100px"></div><script>
+        setInterval(() => feed.append(document.createElement("aside")), 1);
+      </script>`,
+    );
+    // On the paragraph, and on the page's background beside it.
+    for (const point of [
+      { x: 20, y: 18 },
+      { x: 400, y: 40 },
+    ])
+      for (let attempt = 0; attempt < 5; attempt++)
+        await expect(ServerBrowserPage.click(page, point)).resolves.toMatchObject({
+          effect: "suspected_noop",
+        });
+  }));

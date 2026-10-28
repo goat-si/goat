@@ -54,20 +54,27 @@ const INSTALL = `(() => {
           (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
         return note("dom");
   };
-  // From the moment a click event starts until its task ends, microtasks included, element
-  // changes anywhere are its own, even when a handler stops propagation; earlier ones are ambient.
+  // While a click event is dispatched, its handlers' microtasks included, element changes anywhere
+  // are its own. It ends where propagation ends, a stopped one too; timers after it are ambient.
   let handling = false;
   let settleTask;
   const observer = new MutationObserver((records) => consider(records, handling));
   observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  const begin = () => {
+  const finish = () => {
+    consider(observer.takeRecords(), true);
+    handling = false;
+    clearTimeout(settleTask);
+  };
+  const begin = (event) => {
     consider(observer.takeRecords(), handling);
     handling = true;
     clearTimeout(settleTask);
-    settleTask = setTimeout(() => {
-      consider(observer.takeRecords(), true);
-      handling = false;
-    }, 0);
+    // Only if a handler stopped immediate propagation does no listener below end it.
+    settleTask = setTimeout(finish, 0);
+    const check = (seen) => {
+      if (seen === event && handling && (seen.cancelBubble || seen.currentTarget === window)) finish();
+    };
+    for (const node of event.composedPath()) node.addEventListener(event.type, check, { once: true });
   };
   const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].map((type) => [
     window, type, begin, true]);
@@ -82,6 +89,8 @@ const INSTALL = `(() => {
     seen.clear();
     href = location.href;
     target = at && typeof at.x === "number" ? document.elementFromPoint(at.x, at.y) : at;
+    // A click on the page's background has no target: everything would be "inside" it.
+    if (target === document.body || target === document.documentElement) target = null;
     armed = true;
   };
   const stop = () => {
