@@ -189,12 +189,22 @@ export const screenActionGate = (
   request: PreviewAutomationRequest,
 ): DispatchGate => {
   const base = tab.control.dispatchGate(request.screenExpectation?.controlGeneration);
+  const check = base.check;
   return Object.assign(
     () => {
       assertScreenExpectation(tab, request);
       base();
     },
     base.linger ? { linger: base.linger } : {},
+    // The same checks without dispatching, for a pointer drawn before the input.
+    check
+      ? {
+          check: () => {
+            assertScreenExpectation(tab, request);
+            check();
+          },
+        }
+      : {},
   );
 };
 

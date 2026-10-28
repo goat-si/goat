@@ -7,7 +7,13 @@ import {
   type PreviewAutomationRequest,
 } from "@goat/contracts";
 import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
-import { assertScreenExpectation, makeSurface, type ScreenTab } from "./ServerBrowserScreen.ts";
+import {
+  assertScreenExpectation,
+  makeSurface,
+  type ScreenTab,
+  screenActionGate,
+} from "./ServerBrowserScreen.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 const tab = (documentGeneration: number) =>
   ({
@@ -45,6 +51,26 @@ describe("screen expectation at the input gate", () => {
     expect(() => assertScreenExpectation(tab(2), request(2))).not.toThrow();
     // Element actions carry no document; Playwright refs already fail on a new document.
     expect(() => assertScreenExpectation(tab(2), request())).not.toThrow();
+  });
+
+  it("an action's gate check refuses once Stop and resume changed its control, as type sees it", () => {
+    const control = new SessionControl("agent");
+    const agentTab = {
+      threadId: "thread",
+      tabId: "tab",
+      control,
+      page: { url: () => "https://example.test/after" },
+      desktop: null,
+      viewers: new Set(),
+      documentGeneration: 2,
+    } as unknown as ScreenTab;
+    const gate = screenActionGate(agentTab, request());
+    expect(() => gate.check?.()).not.toThrow();
+    control.stopAgents();
+    control.resumeAgents();
+    // The agent may dispatch again, but this action began under the control that Stop ended.
+    expect(() => control.assertAgentMayDispatch()).not.toThrow();
+    expect(() => gate.check?.()).toThrow();
   });
 });
 
