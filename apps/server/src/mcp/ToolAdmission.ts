@@ -37,7 +37,7 @@ import { refusalResult } from "./toolRefusals.ts";
 /** Completed keys live at least this long (docs/internals/agent-surface.md#idempotency). */
 export const KEY_LIFETIME_HOURS = 24;
 /** One per process: a running row from another boot was left by a server that stopped mid-call. */
-export const PROCESS_BOOT_ID = NodeCrypto.randomUUID();
+const PROCESS_BOOT_ID = NodeCrypto.randomUUID();
 /**
  * Reservations whose call ended but whose outcome could not be written. Their rows still say
  * running under this boot, which would otherwise read as in_progress until the next restart.

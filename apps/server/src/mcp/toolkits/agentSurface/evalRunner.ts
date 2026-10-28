@@ -10,15 +10,10 @@ import {
   EVAL_LIMITS,
   type EvalInput,
   type EvalOperation,
-  type EvalPlan,
   type EvalResult,
   type EvalStepRef,
 } from "@goat/contracts/agentSurface/eval";
-import {
-  isKeyedWrite,
-  listedToolName,
-  resolveAgentSurfaceEntry,
-} from "@goat/contracts/agentSurface/resolve";
+import { isKeyedWrite, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,7 +26,7 @@ import type * as ThreadManagement from "../../../orchestration-v2/ThreadManageme
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import type { HandoffReader } from "../../operations/handoffReads.ts";
-import { availability, callerProfile, type HostConditions } from "../../toolAvailability.ts";
+import type { HostConditions } from "../../toolAvailability.ts";
 import {
   argumentsDigest,
   derivedStepRequestId,
@@ -654,11 +649,12 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         case "try":
           return go(expr.body, env, frames, true).pipe(
             Effect.map((value): Json => ({ status: "ok", value })),
-            Effect.catchTag("EvalHalt", (stopped) =>
-              stopped.catchable
-                ? Effect.succeed(stopped.result as unknown as Json)
-                : Effect.fail(stopped),
-            ),
+            Effect.catchTags({
+              EvalHalt: (stopped) =>
+                stopped.catchable
+                  ? Effect.succeed(stopped.result as unknown as Json)
+                  : Effect.fail(stopped),
+            }),
           );
       }
     };

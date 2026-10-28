@@ -203,7 +203,7 @@ const readJson = (value: unknown, depth: number): Node => {
 };
 
 /** UTF-8 bytes of the program as sent. */
-export const programBytes = (program: string | ReadonlyArray<unknown>) =>
+const programBytes = (program: string | ReadonlyArray<unknown>) =>
   Buffer.byteLength(typeof program === "string" ? program : JSON.stringify(program), "utf8");
 
 export const readProgram = (program: string | ReadonlyArray<unknown>): Node => {
@@ -217,7 +217,7 @@ export const readProgram = (program: string | ReadonlyArray<unknown>): Node => {
 };
 
 /** A quoted node as data: symbols become their names, keywords keep their colon. */
-export const quoted = (node: Node): Json => {
+const quoted = (node: Node): Json => {
   switch (node.kind) {
     case "lit":
       return node.value;

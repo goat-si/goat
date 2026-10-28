@@ -25,7 +25,8 @@ export const EVAL_LIMITS = {
 
 /**
  * The language, served as goat_eval's guide. Kept beside the schema so the contract and its
- * description cannot drift.
+ * description cannot drift; the registration that serves it lands separately.
+ * @public
  */
 export const EVAL_GUIDE = [
   "A program is one S-expression, as text or as the same tree in JSON arrays.",

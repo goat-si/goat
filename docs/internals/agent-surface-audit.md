@@ -226,7 +226,7 @@ Names that look like tools but are not in the registry:
 | Name           | Where                                                                                                          |
 | -------------- | -------------------------------------------------------------------------------------------------------------- |
 | `list_changed` | docs/internals/agent-surface.md                                                                                |
-| `goat_eval`    | docs/internals/agent-surface.md, docs/operations/agent-surface-eval.md                                         |
+| `goat_eval`    | docs/internals/agent-surface.md, structure/mcp-toolkits.md                                                     |
 | `run_steps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md, structure/decisions/ADR-0023-goat-computer-use-app.md |
 | `run_script`   | structure/decisions/ADR-0022-cua-driver-computer-use.md, structure/decisions/ADR-0023-goat-computer-use-app.md |
 | `list_apps`    | structure/decisions/ADR-0022-cua-driver-computer-use.md                                                        |
