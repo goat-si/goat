@@ -46,6 +46,7 @@ import {
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
   PullRequestReadFailedError,
+  PullRequestRepositoryAmbiguousError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
 } from "./tools.ts";
@@ -324,25 +325,47 @@ const make = Effect.gen(function* () {
       const { host } = projectHostAndProvider(project);
       return host !== null && projectForPullRequest([project], { host, repository }, undefined);
     };
-    const urlProject = (input: PullRequestTargetInput) => {
-      if (input.url !== undefined || input.repository === undefined) return callerProject;
+    // The project a target resolves through, and the repository path it names there: a matched
+    // holder's full path from its canonical host/path key, so a short Azure DevOps name builds
+    // its org/project/_git URL.
+    const throughHolder = (input: PullRequestTargetInput, holder: OrchestrationProjectShell) => {
+      const key = holder.repositoryIdentity?.canonicalKey;
+      const path = key === undefined ? "" : key.slice(key.indexOf("/") + 1);
+      return {
+        input: path === "" || !key?.includes("/") ? input : { ...input, repository: path },
+        project: holder,
+      };
+    };
+    const routed = Effect.fn("PullRequestsToolkit.routeTarget")(function* (
+      input: PullRequestTargetInput,
+    ) {
+      if (input.url !== undefined || input.repository === undefined)
+        return { input, project: callerProject };
       const { repository } = input;
       if (input.host !== undefined)
-        return (
-          projectForPullRequest(known, { host: input.host, repository }, callerProject) ??
-          callerProject
-        );
+        return {
+          input,
+          project:
+            projectForPullRequest(known, { host: input.host, repository }, callerProject) ??
+            callerProject,
+        };
       // Checkouts of one repository share its canonical key; two repositories that answer to the
-      // same short name (Azure DevOps org/project/_git/web) are ambiguous, so the caller passes url.
+      // same short name are ambiguous whoever calls.
       const holders = known.filter((project) => holds(project, repository));
       const repositories = new Set(
         holders.map((project) => project.repositoryIdentity?.canonicalKey ?? project.id),
       );
-      if (callerProject !== undefined && holders.includes(callerProject)) return callerProject;
-      return repositories.size === 1 ? holders[0] : callerProject;
-    };
+      if (repositories.size > 1)
+        return yield* new PullRequestRepositoryAmbiguousError({ repository });
+      const [first] = holders;
+      if (first === undefined) return { input, project: callerProject };
+      const holder =
+        callerProject !== undefined && holders.includes(callerProject) ? callerProject : first;
+      return throughHolder(input, holder);
+    });
     return yield* Effect.forEach(targets, (input) =>
-      resolveTarget(input, urlProject(input)).pipe(
+      routed(input).pipe(
+        Effect.flatMap((route) => resolveTarget(route.input, route.project)),
         Effect.map((target) => ({
           input,
           target,

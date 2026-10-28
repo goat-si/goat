@@ -180,6 +180,15 @@ export class PullRequestProjectNotFoundError extends Schema.TaggedError<PullRequ
   }
 }
 
+export class PullRequestRepositoryAmbiguousError extends Schema.TaggedError<PullRequestRepositoryAmbiguousError>()(
+  "PullRequestRepositoryAmbiguousError",
+  { repository: Schema.String },
+) {
+  override get message(): string {
+    return `${this.repository} names more than one repository checked out here. Pass url, or repository as its full path.`;
+  }
+}
+
 export class PullRequestGuideFailedError extends Schema.TaggedError<PullRequestGuideFailedError>()(
   "PullRequestGuideFailedError",
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
@@ -215,6 +224,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestNotOpenError,
   PullRequestWatchFromSubagentError,
   PullRequestProjectNotFoundError,
+  PullRequestRepositoryAmbiguousError,
   PullRequestGuideFailedError,
   PullRequestReadFailedError,
 ]);

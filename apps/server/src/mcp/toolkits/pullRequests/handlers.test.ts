@@ -792,39 +792,49 @@ describe("pull request reads", () => {
       }),
   );
   it.effect(
-    "refuses a short repository name two Azure DevOps projects share instead of picking one",
+    "refuses a short repository name several repositories answer to, and reads a lone one at its full path",
     () =>
       Effect.gen(function* () {
-        const azure = (org: string) => ({
+        const azure = (
+          org: string,
+          name: string,
+          id = ProjectId.make(`project-${org}-${name}`),
+        ) => ({
           ...makeProject({
-            canonicalKey: `dev.azure.com/${org}/project/_git/web`,
+            canonicalKey: `dev.azure.com/${org}/project/_git/${name}`,
             locator: {
               source: "git-remote",
               remoteName: "origin",
-              remoteUrl: `https://dev.azure.com/${org}/project/_git/web`,
+              remoteUrl: `https://dev.azure.com/${org}/project/_git/${name}`,
             },
             provider: SourceControlProviderKind.make("azure-devops"),
-            displayName: `${org}/project/_git/web`,
+            displayName: `${org}/project/_git/${name}`,
             owner: org,
-            name: "web",
+            name,
           }),
-          id: ProjectId.make(`project-${org}`),
+          id,
         });
-        const harness = yield* makeHarness({
-          thread: null,
-          projects: [azure("one"), azure("two")],
+        // The caller's own project, on the same host, holds neither.
+        const caller = azure("one", "api", PROJECT_ID);
+        const shared = yield* makeHarness({
+          project: caller,
+          projects: [caller, azure("one", "web"), azure("two", "web")],
         });
         expect(
-          yield* harness
+          yield* shared
             .call("goat_pull_request_checks", { repository: "web", number: 9 })
             .pipe(Effect.flip),
-        ).toMatchObject({ _tag: "PullRequestHostRequiredError" });
-        yield* harness.call("goat_pull_request_checks", {
-          repository: "two/project/_git/web",
+        ).toMatchObject({ _tag: "PullRequestRepositoryAmbiguousError" });
+        expect(yield* Ref.get(shared.reads)).toEqual([]);
+
+        const lone = yield* makeHarness({ thread: null, projects: [azure("two", "web")] });
+        const result = yield* lone.call("goat_pull_request_checks", {
+          repository: "web",
           number: 9,
         });
-        expect((yield* Ref.get(harness.reads)).map((ref) => ref.projectId)).toEqual([
-          "project-two",
+        expect(result.url).toContain("/two/project/_git/web/");
+        expect((yield* Ref.get(lone.reads)).map((ref) => [ref.projectId, ref.repository])).toEqual([
+          ["project-two-web", result.repository],
         ]);
       }),
   );
