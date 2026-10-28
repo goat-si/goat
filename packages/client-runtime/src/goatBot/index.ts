@@ -1,6 +1,7 @@
 export * from "./rows.ts";
 export * from "./labels.ts";
 export * from "./readers.ts";
+export * from "./activity.ts";
 export * from "./links.ts";
 export * from "./ensure.ts";
 export * from "./sendQueue.ts";

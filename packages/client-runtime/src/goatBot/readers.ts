@@ -168,6 +168,7 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       requestKey: meta.inputId ?? null,
       replyToKey: meta.inReplyToInputId ?? null,
       clientKey: item.type === "user_message" ? item.messageId : null,
+      ...(meta.taskId === undefined ? {} : { taskId: meta.taskId }),
       ...(meta.options === undefined || meta.options.length === 0 ? {} : { options: meta.options }),
     };
   },
