@@ -17,6 +17,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -209,6 +210,25 @@ it.effect("actions retire refs while preserving the last complete tree for a dif
       dispatched: true,
       evidence: ["dispatched; observe to confirm"],
     });
+  }),
+);
+
+it.effect("typing and selecting from a cell wait no longer than the cell has left", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    yield* fixture.dispatch("type_text", { ref: first.elements[0]!.ref, text: "x" });
+    const typed = fixture.requests.find((entry) => entry.operation === "type");
+    expect(typed?.input).toMatchObject({ text: "x", timeoutMs: 1000 });
+    // The request deadline also covers time queued behind other browser work on the server.
+    expect(typed?.timeoutMs).toBe(1000);
+    yield* TestClock.adjust("400 millis");
+    const second = yield* fixture.observe();
+    yield* fixture.dispatch("select", { ref: second.elements[0]!.ref, values: ["a"] });
+    const selected = fixture.requests.find((entry) => entry.operation === "select");
+    expect(selected?.input).toMatchObject({ values: ["a"], timeoutMs: 600 });
+    expect(selected?.timeoutMs).toBe(600);
   }),
 );
 
