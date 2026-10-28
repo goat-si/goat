@@ -1,6 +1,7 @@
 import { OrchestratorMcpFailure, OrchestratorMcpHost } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
+import { listedDescription } from "@goat/contracts/agentSurface/signature";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
@@ -25,6 +26,8 @@ const EntrySummary = Schema.Struct({
   requires: Schema.optionalKey(Requires),
   available: Schema.optionalKey(Availability),
   description: Schema.optionalKey(Schema.String),
+  /** The path's arguments on one line, such as (thread.read :threadId :host? ...). */
+  signature: Schema.optionalKey(Schema.String),
 });
 const SearchMatch = Schema.Struct({
   ...EntrySummary.fields,
@@ -36,6 +39,26 @@ const SearchMatch = Schema.Struct({
 
 /** The machine that answered, when goat_describe was asked for another one. */
 const AnsweredBy = { host: Schema.optionalKey(Schema.String) };
+
+const FullEntry = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  summary: Schema.String,
+  effect: Effect,
+  available: Availability,
+  canonicalName: Schema.String,
+  legacyNames: Schema.Array(Schema.String),
+  description: Schema.String,
+  /** Guidance longer than the listed description, for this path only. */
+  guide: Schema.optionalKey(Schema.String),
+  hostRoutable: Schema.Boolean,
+  requires: Requires,
+  dryRun: Schema.Literals(["supported", "unsupported"]),
+  humanSteps: Schema.Array(Schema.String),
+  signature: Schema.optionalKey(Schema.String),
+  inputSchema: Schema.Unknown,
+  outputSchema: Schema.NullOr(Schema.Unknown),
+});
 
 export const DescribeResult = Schema.Union([
   Schema.Struct({
@@ -92,27 +115,17 @@ export const DescribeResult = Schema.Union([
   Schema.Struct({
     depth: Schema.Literal("path"),
     /** Every field below, or at detail "names" or "summary" only the fields a list shows. */
-    entry: Schema.Union([
-      Schema.Struct({
-        path: Schema.String,
-        name: Schema.String,
-        summary: Schema.String,
-        effect: Effect,
-        available: Availability,
-        canonicalName: Schema.String,
-        legacyNames: Schema.Array(Schema.String),
-        description: Schema.String,
-        /** Guidance longer than the listed description, for this path only. */
-        guide: Schema.optionalKey(Schema.String),
-        hostRoutable: Schema.Boolean,
-        requires: Requires,
-        dryRun: Schema.Literals(["supported", "unsupported"]),
-        humanSteps: Schema.Array(Schema.String),
-        inputSchema: Schema.Unknown,
-        outputSchema: Schema.NullOr(Schema.Unknown),
-      }),
-      EntrySummary,
-    ]),
+    entry: Schema.Union([FullEntry, EntrySummary]),
+    ...AnsweredBy,
+  }),
+  Schema.Struct({
+    depth: Schema.Literal("paths"),
+    /** One per path asked for that names one, in the order asked. */
+    entries: Schema.Array(Schema.Union([FullEntry, EntrySummary])),
+    /** Asked-for names that are no path, with the paths spelled closest to each. */
+    missing: Schema.Array(
+      Schema.Struct({ path: Schema.String, nearest: Schema.Array(Schema.String) }),
+    ),
     ...AnsweredBy,
   }),
 ]);
@@ -127,6 +140,14 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
         description:
           'A resource ("thread"), a path ("thread.send"), or a tool name. Omit to list resources.',
       }),
+    ),
+    paths: Schema.optional(
+      Schema.Array(Schema.String.check(Schema.isMaxLength(500)))
+        .check(Schema.isMinLength(1), Schema.isMaxLength(10))
+        .annotate({
+          description:
+            'Up to 10 paths or tool names, each answered with its schema in one call, without path or query. Example: {paths:["thread.read","task.create"]}',
+        }),
     ),
     query: Schema.optional(
       Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)).annotate({
@@ -160,7 +181,7 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["surface.describe"]));
 
 const CallTool = Tool.make(agentSurfaceRegistry["surface.call"].name, {
-  description: agentSurfaceRegistry["surface.call"].description,
+  description: listedDescription(agentSurfaceRegistry["surface.call"]),
   parameters: Schema.Struct({
     path: Schema.String.check(Schema.isMinLength(1)).annotate({
       description: 'Path such as "thread.read", or a tool name.',

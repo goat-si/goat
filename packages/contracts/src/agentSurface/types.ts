@@ -24,6 +24,11 @@ export interface AgentSurfaceEntry {
   /** Guidance longer than the description, served only by goat_describe for one path. */
   readonly guide?: string;
   /**
+   * One-line signatures of other paths that the listing shows after the description, so an agent
+   * can call them without asking goat_describe first (signature.ts renders the syntax).
+   */
+  readonly signatures?: ReadonlyArray<string>;
+  /**
    * "core" lists the tool in the core listing and marks it to load up front in every listing.
    * Everything else is found with goat_describe and called by name or through goat_call.
    */

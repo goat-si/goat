@@ -69,6 +69,7 @@ interface Listed {
 export interface HostDescribeInput {
   readonly host: string;
   readonly path?: string | undefined;
+  readonly paths?: ReadonlyArray<string> | undefined;
   readonly query?: string | undefined;
   readonly detail?: "names" | "summary" | "full" | undefined;
   readonly limit?: number | undefined;
@@ -124,6 +125,7 @@ export const makeHostDescribe = (
         tool: "goat_describe",
         arguments: {
           ...(input.path === undefined ? {} : { path: input.path }),
+          ...(input.paths === undefined ? {} : { paths: input.paths }),
           ...(input.query === undefined ? {} : { query: input.query }),
           ...(input.detail === undefined ? {} : { detail: input.detail }),
           ...(input.limit === undefined ? {} : { limit: input.limit }),
@@ -178,6 +180,8 @@ export const makeHostDescribe = (
         return { ...result, entries: result.entries.map(fold) };
       case "path":
         return { ...result, entry: fold(result.entry) };
+      case "paths":
+        return { ...result, entries: result.entries.map(fold) };
       case "search": {
         const { nextCursor, ...rest } = result;
         return {

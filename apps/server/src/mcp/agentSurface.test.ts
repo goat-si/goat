@@ -25,6 +25,7 @@ import {
   resolveAgentSurfaceEntry,
 } from "@goat/contracts/agentSurface/resolve";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
+import { listedDescription } from "@goat/contracts/agentSurface/signature";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
@@ -76,7 +77,7 @@ it("gives every entry a unique path, listed name and resolvable schema reference
     expect(Tool.getJsonSchema(tool!)).toMatchObject({ type: "object" });
     expect(tool!.successSchema).toBeDefined();
     expect(tool!.failureSchema).toBeDefined();
-    expect(Tool.getDescription(tool!)).toBe(entry.description);
+    expect(Tool.getDescription(tool!)).toBe(listedDescription(entry));
   }
 });
 

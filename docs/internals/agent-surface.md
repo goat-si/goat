@@ -420,7 +420,7 @@ other way. An outside agent that does not need that sends `x-goat-tool-listing: 
 `tools/list` result names the listing agents get in `_meta["goat/agentToolListing"]`, which is
 how the D8 runner checks a core arm.
 
-**Now.** `goat_describe` answers at the three depths from the
+**Now.** `goat_describe` answers at the three depths, or for up to 10 `paths` at once, from the
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
 `available` reports the refusals the server is sure of before a call: thread-only,
@@ -444,6 +444,16 @@ tools only when its tool search exists, and keeps core tools active
 Codex also compacts an MCP input schema above 5,000 bytes, which the two launch tools exceed in
 the full listing. The core listing avoids that: `goat_describe` returns their schemas whole as
 result data. `context-budget.ts` names the tools over the limit.
+
+**Now.** The D8 turns left after [#1065](https://github.com/goat-si/goat/pull/1065) come from
+asking `goat_describe` before a first call, so the core listing carries the arguments of about 25
+common paths. `goat_call`'s listed description ends with one line per path, such as
+`(thread.read :threadId :host? ...)`, kept on its registry entry's `signatures`; a test renders each
+line again from the schema the server serves, so a line cannot name an argument the path lacks or
+omit a required one ([signature.ts](../../packages/contracts/src/agentSurface/signature.ts),
+[discovery test](../../apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts)).
+Search and resource entries carry the same `signature`, and a `goat_call` refused for an argument
+the path does not take or cannot decode returns it as `details.expectedSignature`.
 
 **Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
 authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
