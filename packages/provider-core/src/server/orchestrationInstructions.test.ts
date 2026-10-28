@@ -30,7 +30,8 @@ describe("GOAT provider instructions", () => {
       "goat_screen_run",
       "goat_preview_open",
       "unclaimed",
-      "saved screenshot",
+      "Embed a saved screenshot in your reply",
+      "passwords only through goat_preview_fill_secret",
     ])
       assert.include(GOAT_BROWSER_TOOL_INSTRUCTIONS, text);
   });

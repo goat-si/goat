@@ -25,6 +25,7 @@ import {
   actionDeadline,
   pinTarget,
   remaining,
+  revealFramesOf,
   waitUntilSelectable,
   waitUntilWritable,
   type Readiness,
@@ -245,6 +246,12 @@ const targetPoint = async (
   timeout: number,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
+  const target = await elementOf(locator, timeout);
+  try {
+    await revealFramesOf(target, timeout);
+  } finally {
+    void target.dispose().catch(constVoid);
+  }
   await locator.scrollIntoViewIfNeeded({ timeout });
   const box = await locator.boundingBox({ timeout });
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };

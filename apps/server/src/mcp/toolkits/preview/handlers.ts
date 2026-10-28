@@ -1,5 +1,5 @@
 import { classifyBrowserActionOutcome } from "../../../preview/actionOutcomeSafety.ts";
-import { previewHints } from "./hints.ts";
+import { failureHint, previewHints } from "./hints.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -80,21 +80,20 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       ...(tabId === undefined ? {} : { tabId }),
     })
     .pipe(
-      Effect.mapError((error) =>
-        Object.assign(error, {
-          safety: classifyBrowserActionOutcome({
-            operation,
-            status: "failed",
-            errorTag: error._tag,
-            ...(error._tag === "PreviewAutomationControlInterruptedError"
-              ? { controlReason: error.reason }
-              : {}),
-            ...("dispatched" in error && error.dispatched !== undefined
-              ? { dispatched: error.dispatched }
-              : {}),
-          }),
-        }),
-      ),
+      Effect.mapError((error) => {
+        const safety = classifyBrowserActionOutcome({
+          operation,
+          status: "failed",
+          errorTag: error._tag,
+          ...(error._tag === "PreviewAutomationControlInterruptedError"
+            ? { controlReason: error.reason }
+            : {}),
+          ...("dispatched" in error && error.dispatched !== undefined
+            ? { dispatched: error.dispatched }
+            : {}),
+        });
+        return Object.assign(error, { safety, ...failureHint(operation, error, safety) });
+      }),
     );
   const completed = classifyBrowserActionOutcome({ operation, status: "completed" });
   // A finished read says nothing an agent can act on, so only writes carry their safety.

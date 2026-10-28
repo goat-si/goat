@@ -91,7 +91,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Open browser preview",
     description:
-      "Open or reuse a GOAT browser tab. Use a supplied or discovered URL; do not guess URLs beyond well-known sites. Parallel agents each need a separate tabId. Profiles apply only to new tabs. Retry with the same clientRequestId to avoid duplicates.",
+      "Open or reuse a GOAT browser tab. Use a supplied or discovered URL; do not guess URLs beyond well-known sites. If a tab already shows the page, read it instead of reloading. Parallel agents each need a separate tabId. Profiles apply only to new tabs. Retry with the same clientRequestId to avoid duplicates.",
     guide:
       "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. profileId accepts an id or case-insensitive name from goat_preview_status. A reused tab keeps its original profile and ignores profileId. With a reported default profile, omission uses it; without one, a new headless agent tab uses an isolated context rather than inheriting saved logins. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
     effect: "destructive",
@@ -116,7 +116,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Navigate browser preview",
     description:
-      "Navigate a GOAT browser tab to a supplied or discovered URL; do not guess URLs beyond well-known sites. Prefer the site's search and filters. For a dev server, use an environment-port target so localhost names the browser host.",
+      "Navigate a GOAT browser tab to a supplied or discovered URL; do not guess URLs beyond well-known sites. Prefer the site's search and filters; use an archived copy only when the live page is gone. For a dev server, use an environment-port target so localhost names the browser host.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Supply exactly one of url for a directly reachable website or target for an environment-relative destination. An environment-port target resolves to localhost on the browser host, with the supplied port, path, and protocol. For a local dev server, target={kind:'environment-port',port:5173} avoids referring to a different device's localhost.",
     effect: "write",
@@ -215,7 +215,8 @@ export const previewEntries = {
     name: "preview_type",
     toolkit: "preview",
     summary: "Type into preview page",
-    description: "Insert literal text into a browser text field or editable element.",
+    description:
+      "Insert literal text into a browser text field or editable element once it can take input. Passwords only through goat_preview_fill_secret.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Prefer a unique Playwright locator. Without a locator or selector, text goes to the currently focused editable element. clear=true replaces existing text; otherwise text is inserted at the current caret or selection.",
     effect: "destructive",
