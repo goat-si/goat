@@ -83,12 +83,17 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
   const localRows = rows.map((row) => {
     const metrics = row.entry?.metrics;
     if (metrics === undefined) return row;
-    const explicit = metrics.quotas.some((quota) => quota.limits.quotaPool !== undefined);
+    const explicit = metrics.quotas.some(
+      (quota) => quota.limits.quotaPool !== undefined || quota.limits.quotaPoolRoute !== undefined,
+    );
     const homeId = metrics.quotaPool?.producer.homeId;
     const quotas = metrics.quotas.filter((quota) => {
       const reference = quota.limits.quotaPool;
+      // Hosts that predate route references publish neither marker; only their rows are guessed.
       const inferred =
-        !explicit && metrics.quotaPool?.providers.find((p) => matchesProvider(quota, p));
+        !explicit &&
+        quota.limits.unavailable === undefined &&
+        metrics.quotaPool?.providers.find((p) => matchesProvider(quota, p));
       const id = reference?.homeId ?? (inferred ? homeId : undefined);
       if (id === undefined) return true;
       const provider = reference?.provider ?? (inferred ? inferred.provider : undefined);

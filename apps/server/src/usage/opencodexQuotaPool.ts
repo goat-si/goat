@@ -1,8 +1,8 @@
 import {
-  CodexSettings,
   ClaudeSettings,
   ProviderDriverKind,
   QuotaPool,
+  TrimmedNonEmptyString,
   UsageLimitSourceId,
   quotaWindowToUsageWindow,
   type ProviderInstanceConfig,
@@ -29,7 +29,7 @@ const Config = Schema.Struct({
 });
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config));
 const decodePool = Schema.decodeUnknownEffect(QuotaPool);
-const decodeCodex = Schema.decodeUnknownOption(CodexSettings);
+const decodeHealth = Schema.decodeUnknownEffect(Schema.Struct({ version: TrimmedNonEmptyString }));
 const decodeClaude = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeDriver = Schema.decodeUnknownOption(ProviderDriverKind);
 const decodeClaudeEndpoint = Schema.decodeUnknownEffect(
@@ -40,7 +40,20 @@ const decodeClaudeEndpoint = Schema.decodeUnknownEffect(
   ),
 );
 
-function localEndpoint(value: string | undefined, origin: string): boolean {
+/** An OpenCodex that is installed here: its pool, or why GOAT could not read it. */
+export type QuotaPoolSnapshot =
+  | { readonly origin: string; readonly pool: QuotaPool; readonly unavailable?: undefined }
+  | { readonly origin: string; readonly pool?: undefined; readonly unavailable: string };
+
+// The Home base (Codex, and every driver's explicit Home route) ends in /v1; Claude Code takes the origin.
+const HOME_PATHS = ["/v1", "/v1/"];
+const ORIGIN_PATHS = ["/"];
+
+function matchesOpenCodex(
+  value: string | undefined,
+  origin: string,
+  paths: ReadonlyArray<string>,
+): boolean {
   const url = URL.parse(value ?? "");
   return (
     url !== null &&
@@ -50,13 +63,19 @@ function localEndpoint(value: string | undefined, origin: string): boolean {
     !url.username &&
     !url.password &&
     !url.search &&
-    !url.hash
+    !url.hash &&
+    paths.includes(url.pathname)
   );
 }
 
 const openCodexHomeLabel = (pool: QuotaPool) => `via OpenCodex Home ${pool.producer.homeId}`;
 
 const drivers = { openai: "codex", anthropic: "claudeAgent" } as const;
+const poolProviders: Partial<Record<string, keyof typeof drivers>> = {
+  codex: "openai",
+  claudeAgent: "anthropic",
+};
+const UNVERIFIED = "The OpenCodex route for this instance is not verified yet.";
 
 export function quotaPoolSource(pool: QuotaPool): UsageLimitSourceSnapshot {
   return {
@@ -97,80 +116,162 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
   const configDir = environment.OPENCODEX_HOME || path.join(home, ".opencodex");
 
-  const read = Effect.fn("OpenCodexQuotaPool.read")(
-    function* () {
-      const config = yield* fs
-        .readFileString(path.join(configDir, "config.json"))
-        .pipe(Effect.flatMap(decodeConfig));
-      const origin = `http://127.0.0.1:${config.port}`;
-      // A Child authenticates to its own management API; only its passive relay reaches Home.
-      const endpoint =
-        config.runtimeRole === "client"
-          ? "/api/machine/hub-relay/api/quota-pool"
-          : "/api/quota-pool";
-      const token = (yield* fs.readFileString(path.join(configDir, "admin-api-token"))).trim();
-      if (token.length === 0) return undefined;
+  // HTTP errors retain the request, which carries the admin token. Never log their causes.
+  const fetchPool = Effect.fn("OpenCodexQuotaPool.fetchPool")(
+    function* (url: string, token: string, relay: boolean) {
       const response = yield* http.execute(
-        HttpClientRequest.get(`${origin}${endpoint}`).pipe(HttpClientRequest.bearerToken(token)),
+        HttpClientRequest.get(url).pipe(HttpClientRequest.bearerToken(token)),
       );
-      // OCX-1 is optional during rollout, including on older Children/Home pairs.
-      if (response.status === 404) return undefined;
-      if (response.status !== 200) return undefined;
-      const pool = yield* response.json.pipe(Effect.flatMap(decodePool));
-      return { pool, origin };
+      if (response.status === 404)
+        return relay
+          ? "Home's relay has no quota-pool API"
+          : "this OpenCodex has no quota-pool API";
+      if (response.status !== 200) return `it answered HTTP ${response.status}`;
+      return yield* response.json.pipe(
+        Effect.flatMap(decodePool),
+        Effect.orElseSucceed(() => "its pool response could not be read"),
+      );
     },
     Effect.scoped,
+    Effect.orElseSucceed(() => "it could not be reached"),
+    Effect.timeoutOption("5 seconds"),
+    Effect.map(Option.getOrElse(() => "it did not answer within 5 seconds")),
+  );
+
+  const readVersion = (origin: string) =>
+    http.execute(HttpClientRequest.get(`${origin}/healthz`)).pipe(
+      Effect.flatMap((response) => response.json),
+      Effect.flatMap(decodeHealth),
+      Effect.map((health) => health.version),
+      Effect.scoped,
+      Effect.orElseSucceed(() => undefined),
+      Effect.timeoutOption("2 seconds"),
+      Effect.map(Option.getOrUndefined),
+    );
+
+  const read = Effect.fn("OpenCodexQuotaPool.read")(
+    function* (): Effect.fn.Return<QuotaPoolSnapshot | undefined> {
+      const config = yield* fs
+        .readFileString(path.join(configDir, "config.json"))
+        .pipe(Effect.flatMap(decodeConfig), Effect.option);
+      if (Option.isNone(config)) return undefined;
+      const origin = `http://127.0.0.1:${config.value.port}`;
+      // A Child authenticates to its own management API; only its passive relay reaches Home.
+      const relay = config.value.runtimeRole === "client";
+      const endpoint = relay ? "/api/machine/hub-relay/api/quota-pool" : "/api/quota-pool";
+      const token = yield* fs.readFileString(path.join(configDir, "admin-api-token")).pipe(
+        Effect.map((value) => value.trim()),
+        Effect.orElseSucceed(() => ""),
+      );
+      const outcome =
+        token.length === 0
+          ? "GOAT could not read its admin token"
+          : yield* fetchPool(`${origin}${endpoint}`, token, relay);
+      if (typeof outcome !== "string") return { origin, pool: outcome };
+      const version = yield* readVersion(origin);
+      return {
+        origin,
+        unavailable:
+          "OpenCodex pool unavailable" +
+          (version === undefined ? "" : ` (OpenCodex ${version})`) +
+          `: ${outcome}.`,
+      };
+    },
     Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.mebibytes(4)),
     Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual", credentials: "omit" }),
-    Effect.timeout("5 seconds"),
-    // HTTP errors retain the request, which carries the admin token. Never log their causes.
-    Effect.orElseSucceed(() => undefined),
   );
+
+  /** Where this instance's requests actually go, from what its own probe or launch observed. */
+  const routeOf = Effect.fn("OpenCodexQuotaPool.routeOf")(function* (
+    provider: ServerProvider,
+    instance: ProviderInstanceConfig,
+    origin: string,
+  ) {
+    const poolProvider = poolProviders[provider.driver];
+    if (poolProvider === undefined) return undefined;
+    const verified = { provider: poolProvider, verified: true } as const;
+    const homeBase = provider.homeRoute?.effectiveBaseUrl;
+    if (homeBase !== undefined)
+      return matchesOpenCodex(homeBase, origin, HOME_PATHS) ? verified : undefined;
+    if (provider.driver === "codex") {
+      const route = provider.codexRoute;
+      // Published only after config/read in the instance's own home and environment.
+      if (route?.effectiveBaseUrl !== undefined)
+        return matchesOpenCodex(route.effectiveBaseUrl, origin, HOME_PATHS) ? verified : undefined;
+      return route?.modelRoute === "opencodex"
+        ? ({ provider: poolProvider, verified: false } as const)
+        : undefined;
+    }
+    const env = yield* mergeProviderInstanceEnvironment(instance.environment, environment);
+    const config = decodeClaude(instance.config ?? {});
+    // Claude Code applies settings-file env over its process environment.
+    const fromSettings = Option.isNone(config)
+      ? undefined
+      : yield* fs
+          .readFileString(
+            path.join(yield* resolveClaudeHomePath(config.value, env), "settings.json"),
+          )
+          .pipe(
+            Effect.flatMap(decodeClaudeEndpoint),
+            Effect.map((settings) => settings.env?.ANTHROPIC_BASE_URL),
+            Effect.orElseSucceed(() => undefined),
+          );
+    return matchesOpenCodex(fromSettings ?? env.ANTHROPIC_BASE_URL, origin, ORIGIN_PATHS)
+      ? verified
+      : undefined;
+  });
 
   const project = Effect.fn("OpenCodexQuotaPool.project")(
     function* (
       providers: ReadonlyArray<ServerProvider>,
       instances: Readonly<Record<string, ProviderInstanceConfig>>,
-      snapshot: { readonly pool: QuotaPool; readonly origin: string } | undefined,
+      snapshot: QuotaPoolSnapshot | undefined,
     ) {
       if (snapshot === undefined) return providers;
-      const { pool, origin } = snapshot;
       return yield* Effect.forEach(
         providers,
         Effect.fn("OpenCodexQuotaPool.projectProvider")(function* (provider) {
-          const instance = instances[provider.instanceId];
-          if (instance === undefined) return provider;
-          let poolProvider: string | undefined;
-          if (instance.driver === "codex") {
-            const config = decodeCodex(instance.config ?? {});
-            if (Option.isSome(config) && config.value.modelRoute === "opencodex") {
-              if (localEndpoint(config.value.opencodexBaseUrl, origin)) poolProvider = "openai";
-            }
-          } else if (instance.driver === "claudeAgent") {
-            const env = yield* mergeProviderInstanceEnvironment(instance.environment, environment);
-            let value = env.ANTHROPIC_BASE_URL;
-            const config = decodeClaude(instance.config ?? {});
-            if (value === undefined && Option.isSome(config)) {
-              const dir = yield* resolveClaudeHomePath(config.value, env);
-              value = yield* fs.readFileString(path.join(dir, "settings.json")).pipe(
-                Effect.flatMap(decodeClaudeEndpoint),
-                Effect.map((settings) => settings.env?.ANTHROPIC_BASE_URL),
-                Effect.orElseSucceed(() => undefined),
-              );
-            }
-            if (localEndpoint(value, origin)) poolProvider = "anthropic";
+          // Instances absent from settings are the registry's implicit defaults: just the driver.
+          const instance = instances[provider.instanceId] ?? { driver: provider.driver };
+          const route = yield* routeOf(provider, instance, snapshot.origin);
+          if (route === undefined) return provider;
+          const quotaPoolRoute = { provider: route.provider };
+          if (snapshot.pool === undefined || !route.verified) {
+            return {
+              ...provider,
+              usageLimits: {
+                checkedAt: provider.usageLimits?.checkedAt ?? provider.checkedAt,
+                windows: [],
+                unavailable: {
+                  reason: "probeFailed" as const,
+                  message: (route.verified ? snapshot.unavailable : undefined) ?? UNVERIFIED,
+                },
+                quotaPoolRoute,
+              },
+            };
           }
-          if (poolProvider === undefined) return provider;
-          const pooled = pool.providers.find((entry) => entry.provider === poolProvider);
+          const { pool } = snapshot;
+          const entry = pool.providers.find((item) => item.provider === route.provider);
+          const accounts = new Map(entry?.accounts.map((account) => [account.accountRef, account]));
           return {
             ...provider,
             usageLimits: {
               checkedAt: pool.generatedAt,
-              windows: (pooled?.pooled.windows ?? []).flatMap((window) => {
+              windows: (entry?.pooled.windows ?? []).flatMap((window) => {
                 const mapped = quotaWindowToUsageWindow(window);
                 return mapped === undefined ? [] : [mapped];
               }),
-              quotaPool: { provider: poolProvider, homeId: pool.producer.homeId },
+              quotaPool: {
+                provider: route.provider,
+                homeId: pool.producer.homeId,
+                accounts: {
+                  available: [...accounts.values()].filter(
+                    (account) => account.state === "available",
+                  ).length,
+                  total: accounts.size,
+                },
+              },
+              quotaPoolRoute,
             },
           };
         }),

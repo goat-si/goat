@@ -387,6 +387,7 @@ export function hostStatusQuotas(
 ): Array<HostStatusQuota> {
   return providers.flatMap((provider) => {
     if (provider.usageLimits === undefined) return [];
+    const note = quotaPoolNote(provider.usageLimits);
     return [
       {
         instanceId: provider.instanceId,
@@ -394,7 +395,36 @@ export function hostStatusQuotas(
         ...(provider.displayName === undefined ? {} : { displayName: provider.displayName }),
         limits: provider.usageLimits,
         fromCache: !refreshed.has(provider.instanceId),
+        ...(note === undefined ? {} : { note }),
       },
     ];
   });
+}
+
+/** Agents otherwise read a pool percentage as the limit of the instance's own login. */
+function quotaPoolNote(limits: ServerProviderUsageLimits): string | undefined {
+  const pool = limits.quotaPool;
+  if (pool === undefined) {
+    if (limits.quotaPoolRoute === undefined) return undefined;
+    return (
+      `Routes through OpenCodex for ${limits.quotaPoolRoute.provider}, but GOAT could not read the pool` +
+      (limits.unavailable?.message === undefined ? "." : `: ${limits.unavailable.message}`) +
+      " Its own account limit is not shown."
+    );
+  }
+  const accounts =
+    pool.accounts === undefined
+      ? ""
+      : ` ${pool.accounts.available} of ${pool.accounts.total} accounts available.`;
+  const readings =
+    limits.windows.length === 0
+      ? "The pool reports no readings."
+      : limits.windows
+          .map(
+            (window) =>
+              `${window.label} ${Math.round(window.usedPercent)}%` +
+              (window.source === undefined ? "" : ` (${window.source})`),
+          )
+          .join(", ") + ".";
+  return `OpenCodex pool for ${pool.provider} on Home ${pool.homeId}:${accounts} ${readings} These are the pool's limits, not this instance's own account.`;
 }

@@ -64,8 +64,14 @@ export const ServerProviderUsageLimits = Schema.Struct({
     Schema.Struct({
       provider: TrimmedNonEmptyString,
       homeId: TrimmedNonEmptyString,
+      /** Distinct pool accounts for this provider, and how many of them are available. */
+      accounts: Schema.optional(
+        Schema.Struct({ available: NonNegativeInt, total: NonNegativeInt }),
+      ),
     }),
   ),
+  // Present on every OpenCodex-routed report, including one whose pool could not be read.
+  quotaPoolRoute: Schema.optional(Schema.Struct({ provider: TrimmedNonEmptyString })),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
