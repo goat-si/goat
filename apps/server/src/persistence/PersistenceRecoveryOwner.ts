@@ -49,25 +49,25 @@ export const run = Effect.fn("PersistenceRecoveryOwner.run")(function* <A, E, R>
   boundary: ExitBoundary = processBoundary,
 ) {
   const failed = yield* Deferred.make<FatalPersistenceError>();
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   let failure: FatalPersistenceError | undefined;
   const owner: Owner = {
     report: (cause) => {
       if (failure !== undefined) return;
       failure = new FatalPersistenceError({ cause });
+      // Construction can fail before the fatal race branch is scheduled.
+      runSync(
+        Effect.logFatal(
+          "Server persistence failed permanently; disabling commands and exiting 80. No uncertain operation will be replayed.",
+        ),
+      );
       boundary.armHardExit(() => boundary.exit(SERVER_EXIT_CODE_FATAL_PERSISTENCE));
       Deferred.doneUnsafe(failed, Effect.succeed(failure));
     },
     check: Effect.suspend(() => (failure === undefined ? Effect.void : Effect.fail(failure))),
     awaitFailure: Deferred.await(failed),
   };
-  const fatal = owner.awaitFailure.pipe(
-    Effect.tap(() =>
-      Effect.logFatal(
-        "Server persistence failed permanently; disabling commands and exiting 80. No uncertain operation will be replayed.",
-      ),
-    ),
-    Effect.flatMap(Effect.fail),
-  );
+  const fatal = owner.awaitFailure.pipe(Effect.flatMap(Effect.fail));
   return yield* Effect.raceFirst(Effect.scoped(application), fatal).pipe(
     Effect.provideService(PersistenceRecoveryOwner, owner),
     Effect.ensuring(

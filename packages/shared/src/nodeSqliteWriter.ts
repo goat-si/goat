@@ -1,6 +1,7 @@
 import * as NodeWorkerThreads from "node:worker_threads";
 import { identity } from "effect/Function";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Duration from "effect/Duration";
@@ -247,7 +248,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     Effect.mapError((cause) => (isSqlError(cause) ? cause : failure(cause, "open"))),
     Effect.onError((cause) =>
       Effect.sync(() => {
-        if (!startupRefused) failPending(cause);
+        if (!startupRefused && !Cause.hasInterruptsOnly(cause)) failPending(cause);
         // Return the startup error now; the owning scope still awaits native retirement.
         closing = true;
         worker.unref();
