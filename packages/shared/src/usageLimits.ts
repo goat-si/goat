@@ -67,6 +67,10 @@ function providersWithLimits(providers: readonly ServerProvider[]): readonly Ser
   );
 }
 
+/** Pool quota, or a pool GOAT could not read: never the instance's own login. */
+const routedThroughOpenCodex = (limits: ServerProviderUsageLimits) =>
+  limits.quotaPool !== undefined || limits.quotaPoolRoute !== undefined;
+
 export type LimitPresentations = ReadonlyMap<
   EnvironmentId,
   {
@@ -666,10 +670,9 @@ export function collectProviderUsageLimits(
   for (const provider of providersWithLimits(providers)) {
     if (provider.driver !== selected.driver || !provider.usageLimits) continue;
     const snapshot = { provider, limits: provider.usageLimits };
-    const key =
-      provider.usageLimits.quotaPool !== undefined
-        ? `instance:${provider.instanceId}`
-        : (resolveKey(nativeReport(provider)) ?? `instance:${provider.instanceId}`);
+    const key = routedThroughOpenCodex(provider.usageLimits)
+      ? `instance:${provider.instanceId}`
+      : (resolveKey(nativeReport(provider)) ?? `instance:${provider.instanceId}`);
     const previous = nativeByAccount.get(key);
     const previousUsable = previous ? limitsNotice(previous.usage.limits) === null : false;
     const usable = limitsNotice(snapshot.limits) === null;
@@ -703,7 +706,7 @@ export function collectProviderUsageLimits(
     usage: { provider, limits },
     credits,
   } of native) {
-    const routed = limits.quotaPool !== undefined;
+    const routed = routedThroughOpenCodex(limits);
     const key = resolveKey(nativeReport(provider));
     const hubCredits = sources
       .flatMap((source) => source.accounts.map((account) => ({ source, account })))
@@ -732,7 +735,12 @@ export function collectProviderUsageLimits(
       driver: provider.driver,
       label: `${provider.displayName?.trim() || String(provider.driver)} [${provider.instanceId}]`,
       ...(routed
-        ? { sourceLabel: `via OpenCodex Home ${limits.quotaPool!.homeId}` }
+        ? {
+            sourceLabel:
+              limits.quotaPool === undefined
+                ? "via OpenCodex"
+                : `via OpenCodex Home ${limits.quotaPool.homeId}`,
+          }
         : provider.auth.label
           ? { plan: provider.auth.label }
           : {}),

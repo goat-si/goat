@@ -179,6 +179,8 @@ export const HostStatusQuota = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
   limits: ServerProviderUsageLimits,
   fromCache: Schema.Boolean,
+  /** Says when the limits describe an OpenCodex pool rather than this instance's own login. */
+  note: Schema.optional(TrimmedNonEmptyString),
 });
 export type HostStatusQuota = typeof HostStatusQuota.Type;
 
