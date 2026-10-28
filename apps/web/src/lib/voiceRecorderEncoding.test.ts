@@ -72,6 +72,7 @@ function fakeMicrophone() {
     createGain: () => gain,
   };
   const permission = deferred<typeof stream>();
+  vi.stubGlobal("window", {});
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: () => permission.promise } });
   vi.stubGlobal("AudioContext", function () {
     return context;

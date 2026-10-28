@@ -1,4 +1,4 @@
-import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ } from "@goat/contracts";
+import { VOICE_TRANSCRIPTION_SAMPLE_RATE_HZ, type DesktopBridge } from "@goat/contracts";
 import { VOICE_RECORDING_LIMIT_SECONDS } from "@goat/client-runtime/voice-input";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { encodeMonoPcm16Wav, uint8ArrayToBase64 } from "./voiceRecorderEncoding";
@@ -33,8 +33,10 @@ export class VoiceMicrophoneError extends Error {
 const MACOS_MICROPHONE_SETTINGS =
   "System Settings › Privacy & Security › Microphone, then try again. GOAT may need to restart to notice the change.";
 
-async function ensureDesktopMicrophoneAccess(): Promise<void> {
-  const access = await window.desktopBridge?.requestMicrophoneAccess?.();
+async function ensureDesktopMicrophoneAccess(
+  requestMicrophoneAccess: NonNullable<DesktopBridge["requestMicrophoneAccess"]>,
+): Promise<void> {
+  const access = await requestMicrophoneAccess();
   if (access === "denied")
     throw new VoiceMicrophoneError(
       "permission-denied",
@@ -206,15 +208,18 @@ export class BrowserVoiceRecorder {
       if (generation !== this.generation) throw new VoiceRecordingCancelledError();
     };
     try {
-      await ensureDesktopMicrophoneAccess();
-      assertCurrent();
-      stream = await navigator.mediaDevices
-        .getUserMedia({
+      const requestMicrophoneAccess = window.desktopBridge?.requestMicrophoneAccess;
+      if (requestMicrophoneAccess) {
+        await ensureDesktopMicrophoneAccess(requestMicrophoneAccess);
+        assertCurrent();
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-        })
-        .catch((error: unknown) => {
-          throw toMicrophoneError(error);
         });
+      } catch (error) {
+        throw toMicrophoneError(error);
+      }
       assertCurrent();
       context = new AudioContext({ latencyHint: "interactive" });
       this.releaseStarting = release;
