@@ -129,6 +129,8 @@ export class ScreenHostBridge {
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
+  /** Each cell's targets in first-use order, kept past a cut until the cell's result takes them. */
+  private readonly cellTargetOrder = new Map<string, string[]>();
   private readonly closedCells = new Map<string, Set<string>>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
@@ -308,6 +310,9 @@ export class ScreenHostBridge {
       let cellTargets = this.cellTargets.get(cellId);
       if (!cellTargets) this.cellTargets.set(cellId, (cellTargets = new Set()));
       cellTargets.add(call.targetRef.id);
+      const order = this.cellTargetOrder.get(cellId) ?? [];
+      if (!order.includes(call.targetRef.id) && order.length < 64) order.push(call.targetRef.id);
+      this.cellTargetOrder.set(cellId, order);
     }
     if (
       call.targetRef &&
@@ -628,6 +633,14 @@ export class ScreenHostBridge {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
   }
 
+  /** The targets a finished cell acted on, in first-use order, even when its cell was cut. */
+  takeCellTargets(runId: string, turnId: string, cellId: string): readonly string[] {
+    const id = key(runId, turnId, cellId);
+    const order = this.cellTargetOrder.get(id) ?? [];
+    this.cellTargetOrder.delete(id);
+    return order;
+  }
+
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -753,6 +766,8 @@ export class ScreenHostBridge {
     this.cursorPhases?.finishTurn(runId, turnId);
     for (const cellId of this.cellTargets.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
+    for (const cellId of this.cellTargetOrder.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.cellTargetOrder.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
     this.fencedTurns.delete(turn);

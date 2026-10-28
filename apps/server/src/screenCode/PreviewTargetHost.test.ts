@@ -6,13 +6,17 @@ import {
   DEFAULT_SCREEN_RUN_LIMITS,
   PreviewTabId,
   PreviewAutomationInvalidSelectorError,
+  ThreadId,
+  TurnItemId,
   type ScreenTargetRef,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { ComputerUseCallApps, makeCallApps } from "../cua/ComputerUseCallApps.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
@@ -136,6 +140,40 @@ it.effect("same-tab origin changes require observation before further input", ()
     ).toBe("https://next.test");
   }),
 );
+
+it.effect("a cell's timeline row shows the page its tab navigated to last", () => {
+  const callApps = makeCallApps();
+  return Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.clickResult = { tabId: fixture.tab.tabId, url: "https://next.test/page" };
+    const navigated = yield* fixture.dispatch("navigate_tab", { url: "https://next.test/page" });
+    expect(navigated?.outcome).toBe("ok");
+    const row = callApps.present({
+      id: TurnItemId.make("cell-row"),
+      type: "dynamic_tool",
+      threadId: ThreadId.make("thread"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      toolName: "mcp__goat__goat_screen_run",
+      input: { code: "..." },
+      output: {
+        journal: [{ receipt: { callId: 2, targetId: fixture.ref.id, method: "navigate_tab" } }],
+      },
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-10-29T00:00:00.000Z"),
+    });
+    expect(row.toolIcon).toEqual({ _tag: "website", pageUrl: "https://next.test/page" });
+  }).pipe(Effect.provideService(ComputerUseCallApps, callApps));
+});
 
 it.effect("observation cannot refresh a replaced tab or control generation", () =>
   Effect.gen(function* () {
