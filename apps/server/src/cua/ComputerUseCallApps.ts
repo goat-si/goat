@@ -92,10 +92,14 @@ function answerFields(
   return object;
 }
 
-/** The targets a screen cell's receipts name, in call order; a failed cell lists them too. */
-function receiptTargetIds(item: OrchestrationV2TurnItem): readonly string[] {
-  if (item.type !== "dynamic_tool") return [];
+/**
+ * The targets a screen cell's receipts name, in call order; a failed or refused cell's error lists
+ * its receipts too. Undefined when the provider kept neither a result nor an error.
+ */
+function receiptTargetIds(item: OrchestrationV2TurnItem): readonly string[] | undefined {
+  if (item.type !== "dynamic_tool") return undefined;
   const fields = answerFields(item.output, MAX_SCREEN_ANSWER_CHARS);
+  if (!Array.isArray(fields?.journal) && typeof fields?.code !== "string") return undefined;
   const journal = Array.isArray(fields?.journal) ? fields.journal : [];
   const receipts = [
     ...journal.map((entry) => record(record(entry)?.receipt)),
@@ -261,7 +265,17 @@ export const makeCallApps = () => {
       const cell = finishedScreenCell(item);
       const recorded =
         cell?.code === undefined ? undefined : screenCells.get(cellKey(item.threadId, cell.code));
-      const targetIds = cell === undefined ? [] : (recorded ?? receiptTargetIds(item));
+      const receipts = cell === undefined ? undefined : receiptTargetIds(item);
+      // The record is a cell with this code, which may not be this call: kept receipts decide,
+      // and the record stands in only where it agrees with them or none survived.
+      const targetIds =
+        receipts === undefined
+          ? (recorded ?? [])
+          : recorded !== undefined &&
+              receipts.length > 0 &&
+              receipts.every((id) => recorded.includes(id))
+            ? recorded
+            : receipts;
       const targets = targetIds.flatMap((id) => screenTargets.get(id) ?? []);
       const app = targets.find((target) => target.kind === "app");
       if (app !== undefined) return asApp(item, app.label);

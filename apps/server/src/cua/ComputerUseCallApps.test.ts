@@ -286,6 +286,23 @@ describe("ComputerUseCallApps", () => {
         threadId: ThreadId.make("thread-2"),
       };
       for (const item of [running, otherThread]) expect(apps.present(item)).toBe(item);
+
+      // A refusal names no receipts, so it never takes the record of another call's cell.
+      const refused = screenCall(
+        "goat.goat_screen_run",
+        [
+          {
+            type: "text",
+            text: JSON.stringify({
+              code: "pending_limit",
+              effectStarted: false,
+              nextStep: "Wait.",
+            }),
+          },
+        ],
+        { code: "await calc()" },
+      );
+      expect(apps.present(refused)).toBe(refused);
     });
 
     it("falls back to a cell's receipts once a later cell with its code acted on nothing", () => {

@@ -464,6 +464,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   };
   const service: ScreenRunService["Service"] = {
     runCell: Effect.fn("ScreenRunService.runCell")(function* (input: ScreenRunInput) {
+      // A call refused before its cell runs must not show an earlier cell with the same code.
+      callApps.screenCell(input.threadId, input.source, []);
       if (endedRuns.has(input.runId)) return yield* Effect.fail(fail("stale_run"));
       const runIsOpen = Effect.gen(function* () {
         if (!orchestrator) return true;
@@ -590,9 +592,11 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           Effect.ensuring(
             Effect.sync(() => {
               // Before the provider sees the result, so the cell's row can name what it acted on.
-              callApps.screenCell(input.threadId, input.source, [
-                ...bridge.cellTargetIds(input.runId, input.turnId, cellId),
-              ]);
+              callApps.screenCell(
+                input.threadId,
+                input.source,
+                bridge.takeCellTargets(input.runId, input.turnId, cellId),
+              );
               if (activeCells.get(id) === cellId) activeCells.delete(id);
             }),
           ),
