@@ -104,12 +104,26 @@ export function isCommandMissingCause(error: unknown): boolean {
   return error instanceof PlatformError.PlatformError && error.reason._tag === "NotFound";
 }
 
+function withEscalation(input: ChildProcess.Command): ChildProcess.Command {
+  if (ChildProcess.isStandardCommand(input)) {
+    return ChildProcess.make(input.command, input.args, {
+      ...input.options,
+      forceKillAfter: input.options.forceKillAfter ?? "1 second",
+    });
+  }
+  return ChildProcess.pipeTo(
+    withEscalation(input.left),
+    withEscalation(input.right),
+    input.options,
+  );
+}
+
 export const spawnAndCollect = Effect.fn("snapshotProbe.spawnAndCollect")(function* (
   binaryPath: string,
   command: ChildProcess.Command,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const child = yield* spawner.spawn(command);
+  const child = yield* spawner.spawn(withEscalation(command));
   const [stdout, stderr, exitCode] = yield* Effect.all(
     [
       collectStreamAsString(child.stdout),

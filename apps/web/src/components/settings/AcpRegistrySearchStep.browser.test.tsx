@@ -139,3 +139,23 @@ it("ignores prepare completion after unmount", async () => {
 
   expect(onPrepared).not.toHaveBeenCalled();
 });
+
+it.each([
+  "codex-acp",
+  "claude-acp",
+  "antigravity-acp",
+  "cursor",
+  "grok-build",
+  "opencode",
+  "opencode-v2",
+  "pi-acp",
+])("leaves %s to GOAT's first-class provider while retaining other registry agents", async (id) => {
+  setup();
+  state.result = { agents: [gemini, { ...gemini, id, name: "Built-in provider" }] };
+  await using _screen = await render(step());
+  await expect.element(page.getByRole("button", { name: "Add Gemini CLI" })).toBeVisible();
+  await expect
+    .element(page.getByRole("button", { name: "Add Built-in provider" }))
+    .not.toBeInTheDocument();
+  await expect.element(page.getByRole("status")).toHaveTextContent("1 compatible agent found.");
+});

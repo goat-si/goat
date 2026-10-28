@@ -1,6 +1,6 @@
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
-import { useEnvironment } from "../../state/environments";
+import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
 import { filePreviewKind } from "@goat/shared/filePreview";
 import { findRevealRef } from "./markdownFindContext";
 import { type MessageId, type ServerProviderSkill, ThreadId } from "@goat/contracts";
@@ -171,6 +171,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           expanded && "w-full",
         )}
       >
+        <MessageAuthorHeading>Automation</MessageAuthorHeading>
         <FoldedMessageHeader
           lead={{ icon: CalendarClockIcon, label: "Automation" }}
           name="Automation"
@@ -324,15 +325,33 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const senderTitle = senderShell?.title.trim() || "Untitled thread";
   // An inherited message in a fork was delivered to the thread it was forked from.
   const destinationThreadId = row.projectedItem?.item.threadId ?? ctx.threadRef?.threadId ?? null;
-  const machine = useEnvironment(folded ? ctx.activeThreadEnvironmentId : null)?.label ?? null;
+  // A send from another machine names its sender in the context, as that machine described it.
+  const remoteSender = senderThreadId ? undefined : row.message.context?.remoteSender;
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const localMachine = useEnvironment(folded ? ctx.activeThreadEnvironmentId : null)?.label ?? null;
+  const machine = remoteSender?.environmentLabel ?? localMachine;
   // Only a sender this environment still holds gets a link; anything else would open nowhere.
-  const sender: SentBySender = !senderThreadId
-    ? { kind: "unrecorded" }
-    : senderShell === null
-      ? { kind: "unknown" }
-      : senderShell.deletedAt !== null
-        ? { kind: "deleted", title: senderTitle }
-        : { kind: "open", threadId: senderThreadId, title: senderTitle };
+  const sender: SentBySender = remoteSender
+    ? {
+        kind: "remote",
+        environmentId: remoteSender.environmentId,
+        threadId: remoteSender.threadId,
+        title: remoteSender.title,
+        connected: connectedEnvironmentIds.includes(remoteSender.environmentId),
+      }
+    : !senderThreadId
+      ? { kind: "unrecorded" }
+      : senderShell === null
+        ? { kind: "unknown" }
+        : senderShell.deletedAt !== null
+          ? { kind: "deleted", title: senderTitle }
+          : { kind: "open", threadId: senderThreadId, title: senderTitle };
+  const footerSender =
+    folded && senderThreadId
+      ? { threadId: senderThreadId }
+      : sender.kind === "remote" && sender.connected
+        ? { threadId: sender.threadId, environmentId: sender.environmentId }
+        : null;
   const resolvedContext = resolveUserMessageContext(
     userMessage.standingInstructions !== null || userMessage.attribution === "guest"
       ? { ...row.message, text: userMessage.text }
@@ -496,6 +515,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           folded && expanded && "w-full",
         )}
       >
+        <MessageAuthorHeading>
+          {folded
+            ? sender.kind === "open" || sender.kind === "deleted"
+              ? sender.title
+              : "Agent"
+            : userMessage.guestName === undefined
+              ? "You"
+              : `${userMessage.guestName} (guest)`}
+        </MessageAuthorHeading>
         {folded ? (
           <FoldedMessageHeader
             name={
@@ -516,9 +544,6 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
-            <MessageAuthorHeading>
-              {userMessage.guestName === undefined ? "You" : `${userMessage.guestName} (guest)`}
-            </MessageAuthorHeading>
             {(regularImages.length > 0 || userVideos.length > 0) && (
               <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
                 {regularImages.map((image) => (
@@ -672,8 +697,27 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         >
           <div className="flex shrink-0 items-center gap-2">
-            {folded && senderThreadId ? (
-              <InlineButton onClick={() => ctx.onOpenThread(senderThreadId)} tone="muted">
+            {sender.kind === "remote" && !sender.connected ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span tabIndex={0} className="text-muted-foreground/70 text-xs" />}
+                >
+                  Open thread
+                </TooltipTrigger>
+                <TooltipPopup>{`Connect ${machine ?? "that machine"} to open this thread`}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {footerSender !== null ? (
+              <InlineButton
+                onClick={() =>
+                  "environmentId" in footerSender
+                    ? ctx.onOpenThread(footerSender.threadId, {
+                        environmentId: footerSender.environmentId,
+                      })
+                    : ctx.onOpenThread(footerSender.threadId)
+                }
+                tone="muted"
+              >
                 Open thread
               </InlineButton>
             ) : null}
@@ -809,7 +853,7 @@ const COLLAPSED_USER_MESSAGE_FADE_MASK = `linear-gradient(to bottom, black calc(
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
   text: string;
   renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
-  skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills: ReadonlyArray<ServerProviderSkill>;
   markdownCwd: string | undefined;
   collapsible?: boolean;
   footer?: ReactNode;
@@ -885,7 +929,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   renderContextReference?: (reference: ChatMarkdownContextReference) => ReactNode;
-  skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills: ReadonlyArray<ServerProviderSkill>;
   markdownCwd: string | undefined;
 }) {
   const ctx = use(TimelineRowCtx);

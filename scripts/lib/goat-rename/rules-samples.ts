@@ -64,6 +64,29 @@ const sampleRepo = (id: string, find: RegExp, replace: string): TextRule => ({
 
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "samples:change-request-github-fields",
+    category: "samples",
+    find: /(\bowner:\s*")pingdotgg("\s*,\s*name:\s*")t3code"/g,
+    replace: '$1goat-si$2goat"',
+    multiline: true,
+    scope: (path) => path === "packages/client-runtime/src/changeRequestLinks.test.ts",
+  },
+  {
+    id: "samples:github-fork-head-name",
+    category: "samples",
+    find: /(\bheadRepository:\s*\{[^{}\r\n]*\bname:\s*")t3code(?=")/g,
+    replace: "$1goat",
+    scope: (path) =>
+      path === "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
+  },
+  {
+    id: "samples:palette-reference-query",
+    category: "samples",
+    find: /(?<![\w/])t3code(?=#\d)/g,
+    replace: "goat",
+    scope: (path) => path === "packages/shared/src/paletteSearch.test.ts",
+  },
+  {
     // Upstream's hosted app is no longer an accepted Codex sign-in return; these tests return to the desktop.
     id: "samples:auth-return-origin",
     category: "samples",
@@ -98,6 +121,20 @@ export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
     find: /Use julius\//g,
     replace: "Use feature/",
     scope: (path) => /BranchNamingSettings(?:\.test)?\.tsx$/.test(path),
+  },
+  {
+    id: "samples:worktree-setup-branch",
+    category: "samples",
+    find: /"t3\/feature"/g,
+    replace: '"goat/feature"',
+    scope: (path) => path === "apps/web/src/components/chat/WorktreeSetupCard.browser.test.tsx",
+  },
+  {
+    id: "samples:worktree-setup-path",
+    category: "samples",
+    find: /"\/repo\/\.t3\/worktrees\/feature"/g,
+    replace: '"/repo/.goat/worktrees/feature"',
+    scope: (path) => path === "apps/web/src/components/chat/WorktreeSetupCard.browser.test.tsx",
   },
   sample("handle-julius", /\bjuliusmarminge\b/g, "alexmorgan"),
   sample("handle-theo", /\bt3dotgg\b/g, "riven-example"),

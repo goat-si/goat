@@ -9,6 +9,7 @@ import {
   ThreadId,
   ProviderInstanceId,
   ProviderDriverKind,
+  type ResolvedKeybindingsConfig,
   type ServerProvider,
   type SshWorkspaceLaunchResult,
 } from "@goat/contracts";
@@ -26,6 +27,7 @@ import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import type { LegendListRef } from "@legendapp/list/react";
 import type { MessagesTimeline } from "~/components/chat/MessagesTimeline";
 import type { ChatComposer } from "~/components/chat/ChatComposer";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
 const state = vi.hoisted(() => ({
   data: null as ReturnType<typeof createSshData> | null,
   noopCommand: vi.fn(),
@@ -48,6 +50,8 @@ const state = vi.hoisted(() => ({
   scrollToEnd: vi.fn(),
   // Per-test query data by atom; null keeps every query empty.
   queryData: null as ((atom: unknown) => unknown) | null,
+  narrowRightPanel: false,
+  keybindings: null as ResolvedKeybindingsConfig | null,
   // Stable like the real store selectors; a fresh array per render loops the timeline.
   empty: [] as never[],
 }));
@@ -68,7 +72,10 @@ vi.mock("/src/state/projectClones", { spy: true });
 vi.mock("/src/state/device", { spy: true });
 vi.mock("/src/state/environments", { spy: true });
 vi.mock("/src/state/entities", { spy: true });
-vi.mock("/src/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
+vi.mock("/src/hooks/useMediaQuery", () => ({
+  useMediaQuery: (query: string) =>
+    state.narrowRightPanel && query === RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+}));
 vi.mock("/src/hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
 vi.mock("/src/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 vi.mock("/src/state/use-orchestration-command", () => ({
@@ -315,6 +322,8 @@ export async function setupSshComposer(realComposer = false) {
   overrideModuleSpies();
   state.primaryConnection = null;
   state.queryData = null;
+  state.narrowRightPanel = false;
+  state.keybindings = null;
   state.noopCommand.mockReset().mockResolvedValue({ _tag: "Success", value: { providers: [] } });
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
@@ -386,7 +395,7 @@ export async function setupSshComposer(realComposer = false) {
         : atom === primaryServerAvailableEditorsAtom
           ? noEditors
           : atom === primaryServerKeybindingsAtom
-            ? DEFAULT_RESOLVED_KEYBINDINGS
+            ? (state.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS)
             : atom === environmentServerConfigsAtom
               ? noServerConfigs
               : get(atom)) as typeof registry.get);

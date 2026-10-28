@@ -1,13 +1,19 @@
 import type { DesktopBridge } from "@goat/contracts";
 import { classifyFleetThread } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/models";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { sortPinnedThreadsByOrderKey } from "@goat/client-runtime/state/thread-sort";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { AtomRegistry } from "effect/reactivity";
 
+import { toastManager } from "./components/ui/toast";
+import { watchTrayComputerUse } from "./desktopTrayComputerUse";
 import { requestNewThread } from "./newThreadRequests";
+import { primaryEnvironmentIdAtom } from "./state/primaryEnvironment";
+import { previewSessionsEnvironment } from "./state/previewSessions";
 import { environmentProjects } from "./state/projects";
+import { serverEnvironment } from "./state/server";
 import { liveShellEnvironmentIdsAtom } from "./state/shell";
 import { environmentThreadShells } from "./state/threads";
 
@@ -107,13 +113,34 @@ export function startDesktopTray(
 
   let sent: string | null = null;
   let scheduled = false;
-  const publish = () => {
+  // Several atoms settle in one burst when an environment connects; send once for all of them.
+  let publish = () => {};
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    queueMicrotask(() => publish());
+  };
+  const computerUse = watchTrayComputerUse(
+    registry,
+    {
+      primary: primaryEnvironmentIdAtom,
+      live: liveShellEnvironmentIdsAtom,
+      sessions: (environmentId) =>
+        previewSessionsEnvironment.sessions({ environmentId, input: {} }),
+      apps: (environmentId) => serverEnvironment.computerUseApps({ environmentId, input: {} }),
+    },
+    schedule,
+  );
+  publish = () => {
     scheduled = false;
-    const menu = deriveTrayMenu(
-      registry.get(environmentThreadShells.quietThreadShellsAtom),
-      registry.get(environmentProjects.projectsAtom),
-      registry.get(liveShellEnvironmentIdsAtom),
-    );
+    const menu = {
+      ...deriveTrayMenu(
+        registry.get(environmentThreadShells.quietThreadShellsAtom),
+        registry.get(environmentProjects.projectsAtom),
+        registry.get(liveShellEnvironmentIdsAtom),
+      ),
+      computerUse: computerUse.current(),
+    };
     const key = JSON.stringify(menu);
     if (key === sent) return;
     sent = key;
@@ -121,15 +148,32 @@ export function startDesktopTray(
       sent = null;
     });
   };
-  // Several atoms settle in one burst when an environment connects; send once for all of them.
-  const schedule = () => {
-    if (scheduled) return;
-    scheduled = true;
-    queueMicrotask(publish);
-  };
 
   // The thread route waits for its environment's shells, so a fresh window can navigate at once.
   const onAction = (action: DesktopTrayAction) => {
+    if (action.kind === "stop-computer-use" || action.kind === "stop-all-computer-use") {
+      void computerUse.run(action, {
+        control: (environmentId, input) =>
+          runAtomCommand(registry, previewSessionsEnvironment.control, { environmentId, input }),
+        notify: (copy, stopAll) => {
+          const id = toastManager.add({
+            type: "error",
+            ...copy,
+            actionProps: {
+              children: "Stop all",
+              onClick: () => {
+                toastManager.close(id);
+                void stopAll();
+              },
+            },
+          });
+        },
+        reveal: () => {
+          void window.desktopBridge?.revealWindow?.().catch(() => undefined);
+        },
+      });
+      return;
+    }
     if (action.kind === "new-thread") {
       requestNewThread();
       return;
@@ -148,6 +192,7 @@ export function startDesktopTray(
     registry.subscribe(environmentProjects.projectsAtom, schedule),
     registry.subscribe(liveShellEnvironmentIdsAtom, schedule),
     bridge.onTrayAction?.(onAction) ?? (() => {}),
+    computerUse.dispose,
   ];
   schedule();
   return () => {

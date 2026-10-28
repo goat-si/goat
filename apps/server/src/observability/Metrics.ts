@@ -7,6 +7,11 @@ import * as Metric from "effect/Metric";
 
 import { compactMetricAttributes, outcomeFromExit } from "./Attributes.ts";
 
+export const serverTraceDroppedRecords = Metric.counter("goat_server_trace_dropped_records_total", {
+  description: "Local trace records lost, by bounded reason.",
+  incremental: true,
+});
+
 export const rpcRequestsTotal = Metric.counter("goat_rpc_requests_total", {
   description: "Total RPC requests handled by the websocket RPC server.",
 });

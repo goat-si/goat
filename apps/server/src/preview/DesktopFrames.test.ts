@@ -146,6 +146,7 @@ const fixture = Effect.fnUntraced(function* (
     pause: () => unused,
     detection: Effect.succeed(detects),
     resume: unused,
+    hold: () => unused,
     // A held read returns the state it saw before it was held, like a read awaiting the database.
     sessions: Effect.gen(function* () {
       const current = yield* Ref.get(state);

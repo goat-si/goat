@@ -1,4 +1,4 @@
-import type { MessageId, ThreadId } from "@goat/contracts";
+import type { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 
 declare module "@tanstack/react-router" {
   interface HistoryState {
@@ -10,6 +10,8 @@ declare module "@tanstack/react-router" {
 export interface SentFromTarget {
   /** The thread that sent it, whose timeline reveals the call. */
   readonly senderThreadId: ThreadId;
+  /** Set when the sender is on another machine; absent means the same environment. */
+  readonly senderEnvironmentId?: EnvironmentId;
   /** The thread and message the call delivered to. */
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -19,4 +21,6 @@ export interface SentFromTarget {
 
 export interface OpenThreadOptions {
   readonly sentFrom?: SentFromTarget;
+  /** Opens the thread on that connected environment instead of this timeline's. */
+  readonly environmentId?: EnvironmentId;
 }

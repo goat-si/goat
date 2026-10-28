@@ -70,7 +70,11 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
   return [...seen.values(), ...filled];
 };
 
-/** A secret GOAT filled joins the tab's values, so it and a cookie it overlaps mask as one. */
+/**
+ * A secret GOAT filled joins the tab's values, so it and a cookie it overlaps mask as one. Keyed
+ * by browser context, which several threads' tabs can share: there it masks in each of their
+ * answers, which only hides more. The answer mask itself stays per thread.
+ */
 export const rememberSecret = (page: Pick<Page, "context">, value: string) => {
   const context = page.context();
   filledSecrets.set(context, (filledSecrets.get(context) ?? new Set<string>()).add(value));

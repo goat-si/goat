@@ -1,3 +1,4 @@
+import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Cause from "effect/Cause";
@@ -6,7 +7,6 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Random from "effect/Random";
@@ -35,7 +35,7 @@ import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
-import { isLoopbackEntry, loopbackBudget, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
+import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -52,13 +52,10 @@ const SSH_PREPARATION_TIMEOUT_MS = 900_000;
 const SETUP_SAMPLE_COUNT = 5;
 const SETUP_HEADROOM = 1.5;
 const synchronizationTimeout = Duration.fromInputUnsafe("75 seconds");
-const CONNECTION_PROBE_TIMEOUT = "15 seconds";
-const QUICK_CONNECTION_PROBE_TIMEOUT = "3 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
 const WAKE_RETRY_WINDOW_MS = 30_000;
 const WAKE_RETRY_DELAY_MS = 2_000;
 const LOCAL_PROXY_RECHECK_MS = 60_000;
-const BETTER_ROUTE_CHECK_INTERVAL = "60 seconds";
 // A better route that answered the check but then failed to connect is not
 // tried again for this long, so a flaky LAN cannot bounce the connection.
 const BETTER_ROUTE_COOLDOWN_MS = 300_000;
@@ -68,7 +65,7 @@ interface SupervisorIntent {
   readonly network: NetworkStatus;
 }
 
-type SupervisorSignal =
+export type SupervisorSignal =
   | { readonly _tag: "ConnectRequested" }
   | { readonly _tag: "DisconnectRequested" }
   | { readonly _tag: "RetryRequested" }
@@ -438,7 +435,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       ) {
         yield* Ref.set(suspended, false);
       }
-      if (next.reason === "application-active-reconnect") {
+      if (next.reason === "application-active-long") {
         yield* Ref.set(
           wakeRetryUntil,
           (yield* Clock.monotonicTimeNanos) + BigInt(WAKE_RETRY_WINDOW_MS) * 1_000_000n,
@@ -793,7 +790,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (ConnectionWakeups.resetsRetryBackoff(next.reason)) {
             yield* Ref.set(resetRetryState, true);
           }
-          if (next.reason === "application-active-reconnect") {
+          if (next.reason === "application-active-long") {
             if (next.attemptSequence === sequence) return true;
             yield* Ref.set(ignoreOffline, true);
           }
@@ -820,124 +817,24 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       yield* Ref.set(preferredRouteId, Option.some(next.routeId));
       return "reset" as const;
     }
-    if (next._tag !== "Wakeup") {
-      return undefined;
-    }
-    if (next.reason === "application-active-reconnect") {
-      // Mobile operating systems often kill a suspended socket without a close
-      // event. A probe would show a dead socket as "Resuming" until it times
-      // out, so a long background resume replaces the session at once.
-      return "reset" as const;
-    }
     // Only a session over GOAT Connect holds the old account's credential.
-    if (next.reason === "credentials-changed" && isRelayLease(lease)) {
+    if (next._tag === "Wakeup" && next.reason === "credentials-changed" && isRelayLease(lease)) {
       yield* logManagedRelayAccountChange;
       return "end" as const;
     }
     return undefined;
   });
 
-  const probeTimeoutFor = (next: SupervisorSignal): Duration.Input | undefined => {
-    switch (next._tag) {
-      case "RetryRequested":
-        return QUICK_CONNECTION_PROBE_TIMEOUT;
-      case "NetworkChanged":
-        return next.network === "offline" ? QUICK_CONNECTION_PROBE_TIMEOUT : undefined;
-      case "Wakeup":
-        if (next.reason === "application-active") {
-          return CONNECTION_PROBE_TIMEOUT;
-        }
-        return next.reason === "application-active-probe" || next.reason === "network-changed"
-          ? QUICK_CONNECTION_PROBE_TIMEOUT
-          : undefined;
-      case "ConnectRequested":
-      case "DisconnectRequested":
-      case "BetterRouteAvailable":
-        return undefined;
-    }
-  };
-
-  // Returning to the app, an explicit retry, and the network reporting offline
-  // all probe the live session instead of replacing it, so a healthy socket is
-  // not torn down (the offline report is often wrong, for example for a
-  // loopback server).
-  const monitorConnectedLease = Effect.fnUntraced(function* (
-    lease: ConnectionDriver.EnvironmentConnectionLease,
-  ) {
-    // A probe answers an explicit retry here, so the retry must not also reset
-    // the backoff of a later, unrelated failure.
-    const takeSignal = Queue.take(signals).pipe(
-      Effect.tap((next) =>
-        next._tag === "RetryRequested" ? Ref.set(resetRetryState, false) : Effect.void,
-      ),
-    );
-    // Ticks always run: the check skips the preferred route itself, and the
-    // route list can grow while connected (learned routes).
-    yield* Stream.tick(BETTER_ROUTE_CHECK_INTERVAL).pipe(
-      Stream.drop(1),
-      Stream.runForEach(() => requestBetterRouteCheck(lease)),
-      Effect.forkScoped,
-    );
-    for (;;) {
-      const next = yield* takeSignal;
-      const end = yield* connectedLeaseEnd(next, lease);
-      if (end !== undefined) {
-        return end === "reset";
-      }
-      if (
-        (next._tag === "NetworkChanged" && next.network !== "offline") ||
-        (next._tag === "Wakeup" && ConnectionWakeups.resetsRetryBackoff(next.reason))
-      ) {
-        yield* requestBetterRouteCheck(lease);
-      }
-      const probeTimeout = probeTimeoutFor(next);
-      if (probeTimeout === undefined) {
-        continue;
-      }
-      yield* Ref.set(probeUnanswered, true);
-      const probe = yield* Effect.forkChild(lease.session.probe);
-      let deadline =
-        (yield* Clock.monotonicTimeNanos) +
-        Duration.toNanosUnsafe(loopbackBudget(loopback, probeTimeout));
-      for (;;) {
-        const remaining = deadline - (yield* Clock.monotonicTimeNanos);
-        const probeEvent = yield* Effect.raceAllFirst([
-          Fiber.await(probe).pipe(
-            Effect.map((exit) => ({ _tag: "ProbeCompleted" as const, exit })),
-          ),
-          takeSignal.pipe(Effect.map((signal) => ({ _tag: "Signal" as const, signal }))),
-          Effect.sleep(Duration.nanos(remaining > 0n ? remaining : 0n)).pipe(
-            Effect.as({ _tag: "TimedOut" as const }),
-          ),
-        ]);
-        if (probeEvent._tag === "TimedOut") {
-          yield* Fiber.interrupt(probe);
-          return yield* new ConnectionTransientError({
-            reason: "timeout",
-            detail: `${target.label} did not respond to a connection health check.`,
-          });
-        }
-        if (probeEvent._tag === "ProbeCompleted") {
-          if (Exit.isSuccess(probeEvent.exit)) {
-            yield* Ref.set(probeUnanswered, false);
-          }
-          yield* probeEvent.exit;
-          break;
-        }
-        const endDuringProbe = yield* connectedLeaseEnd(probeEvent.signal, lease);
-        if (endDuringProbe !== undefined) {
-          yield* Fiber.interrupt(probe);
-          return endDuringProbe === "reset";
-        }
-        const signalTimeout = probeTimeoutFor(probeEvent.signal);
-        if (signalTimeout !== undefined) {
-          const signalDeadline =
-            (yield* Clock.monotonicTimeNanos) +
-            Duration.toNanosUnsafe(loopbackBudget(loopback, signalTimeout));
-          if (signalDeadline < deadline) deadline = signalDeadline;
-        }
-      }
-    }
+  const monitorConnectedLease = makeConnectedLeaseMonitor({
+    target,
+    loopback,
+    currentRoutes,
+    signals,
+    resetRetryState,
+    probeUnanswered,
+    driver,
+    connectedLeaseEnd,
+    requestBetterRouteCheck,
   });
 
   const runAttempt = Effect.fnUntraced(function* (
@@ -1281,7 +1178,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const handleSignal = (next: SupervisorSignal | undefined) => {
       if (next?._tag === "Wakeup") {
         if (ConnectionWakeups.resetsRetryBackoff(next.reason)) resetRetryLadder();
-        if (next.reason === "application-active-reconnect") replacing = true;
+        if (next.reason === "application-active-long") replacing = true;
       }
     };
 

@@ -1,3 +1,4 @@
+import * as AuxiliarySqlite from "../../storage/AuxiliarySqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- the local Messages path is fixed for this adapter.
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -20,6 +21,7 @@ import {
   ImessageDbError,
   openImessageChatDb,
   type ImessageChatDb,
+  type ImessageRow,
 } from "./imessageChatDb.ts";
 import { loadImessageSettings, type ImessageSettings } from "./ImessageChannelSettings.ts";
 import { admitImessageRow, classifyImessageText, toImessageInbound } from "./imessageRowMapping.ts";
@@ -52,7 +54,7 @@ interface RuntimeInput {
   readonly home: Pick<ChannelBotHome.ChannelBotHome["Service"], "requireHome">;
   readonly registry: ChannelTransport.ChannelTransportRegistry["Service"];
   readonly scope: Scope.Scope;
-  readonly openDb?: (path: string) => ImessageChatDb;
+  readonly openDb: (path: string) => Effect.Effect<ImessageChatDb, ImessageDbError>;
   readonly now?: () => number;
 }
 
@@ -68,7 +70,7 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
   let nextDue = 0;
   let registeredConnection: string | undefined;
   const now = input.now ?? Date.now;
-  const openDb = input.openDb ?? openImessageChatDb;
+  const openDb = input.openDb;
   const settings = () =>
     loadImessageSettings({ stateDir: input.stateDir, platform: input.platform });
   const active = (connectionId: string) =>
@@ -104,10 +106,7 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
       next,
       now: DateTime.formatIso(DateTime.makeUnsafe(now())),
     });
-  const ingestRow = (
-    row: ReturnType<ImessageChatDb["rowsAfter"]>[number],
-    current: ImessageSettings,
-  ) =>
+  const ingestRow = (row: ImessageRow, current: ImessageSettings) =>
     Effect.gen(function* () {
       const classified = admitImessageRow(row, current);
       if (classified.type !== "message") return classified;
@@ -169,16 +168,10 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
       yield* register(current);
       if (now() < nextDue) return 0;
       nextDue = now() + POLL_MS;
-      const db = yield* Effect.try({
-        try: () => openDb(input.dbPath),
-        catch: databaseFailure,
-      });
+      const db = yield* openDb(input.dbPath).pipe(Effect.mapError(databaseFailure));
       return yield* Effect.gen(function* () {
         const initial = yield* input.ledger.getImessageCursor(current.connectionId);
-        const max = yield* Effect.try({
-          try: () => db.maxRowId(),
-          catch: databaseFailure,
-        });
+        const max = yield* db.maxRowId().pipe(Effect.mapError(databaseFailure));
         if (initial === undefined) {
           yield* checkpoint(owner, current, undefined, { cursor: max, pendingRowIds: [] });
           return 0;
@@ -187,10 +180,7 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
         if (max < cursor.cursor) return yield* failure("iMessage database ROWID reset");
         let processed = 0;
         for (const id of cursor.pendingRowIds) {
-          const row = yield* Effect.try({
-            try: () => db.rowById(id),
-            catch: databaseFailure,
-          });
+          const row = yield* db.rowById(id).pipe(Effect.mapError(databaseFailure));
           if (row === undefined) return yield* failure("iMessage pending row missing");
           const result = yield* ingestRow(row, current);
           if (result.type === "pending_join") continue;
@@ -206,10 +196,9 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
           yield* Effect.logWarning("iMessage pending join limit reached");
           return processed;
         }
-        const rows = yield* Effect.try({
-          try: () => db.rowsAfter(cursor.cursor, BATCH),
-          catch: databaseFailure,
-        });
+        const rows = yield* db
+          .rowsAfter(cursor.cursor, BATCH)
+          .pipe(Effect.mapError(databaseFailure));
         for (const row of rows) {
           const result = yield* ingestRow(row, current);
           if (result.type === "pending_join" && cursor.pendingRowIds.length >= PENDING_CAP) {
@@ -228,7 +217,7 @@ export function makeImessageChannelRuntime(input: RuntimeInput): ImessageChannel
           processed += 1;
         }
         return processed;
-      }).pipe(Effect.ensuring(Effect.sync(() => db.close())));
+      }).pipe(Effect.ensuring(db.close()));
     });
   return ImessageChannelRuntime.of({ pollDue });
 }
@@ -239,6 +228,7 @@ export const makeLayerLive = (
   Layer.effect(
     ImessageChannelRuntime,
     Effect.gen(function* () {
+      const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
       const config = yield* ServerConfig.ServerConfig;
       const ledger = yield* ChannelLedger.ChannelLedger;
       const gateway = yield* ChannelGateway.ChannelGateway;
@@ -250,6 +240,10 @@ export const makeLayerLive = (
         stateDir: config.stateDir,
         platform,
         dbPath,
+        openDb: (file) =>
+          openImessageChatDb(file).pipe(
+            Effect.provideService(AuxiliarySqlite.AuxiliarySqlite, reader),
+          ),
         ledger,
         gateway,
         home,
@@ -257,6 +251,6 @@ export const makeLayerLive = (
         scope,
       });
     }),
-  );
+  ).pipe(Layer.provide(AuxiliarySqlite.layer));
 
 export const layerLive = makeLayerLive();

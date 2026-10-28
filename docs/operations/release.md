@@ -9,6 +9,11 @@ Nightly builds `dev`; stable rebuilds a nightly that has soaked for 24 hours. Th
 must be enabled before it publishes. Install and update GOAT from those archives
 or with `goat update <version>`.
 
+The built web client must boot before the JS bundle is staged. macOS DMGs and Linux AppImages
+must also open a seeded thread in a temporary GOAT home before their assets can be staged for
+publication. A failed desktop launch keeps its logs and screenshot in the run's staging drafts;
+the fixture starts at schema 69 so the packaged server must apply GOAT's later migrations.
+
 Linux ARM64 CLI executables must build on a Linux ARM64 host. They temporarily use
 postject instead of `--build-sea` so they load on 16 and 64 KiB page kernels
 ([nodejs/node#67048](https://github.com/nodejs/node/issues/67048)). Archive assembly

@@ -18,7 +18,7 @@ function makeSource() {
       };
     },
   };
-  const emit: Emit = (user) => listener?.({ user });
+  const emit: Emit = (user) => listener?.({ user, session: user ? { status: "active" } : null });
   return { source, emit, isSubscribed: () => listener !== null };
 }
 
@@ -241,4 +241,21 @@ describe("createCloudAccountService", () => {
     expect(service.getState()).toEqual({ _tag: "Unobserved" });
     expect(log).toEqual(["prepare:a", "activate:a:false", "detach"]);
   });
+});
+
+it("pending MFA cannot activate account discovery", async () => {
+  const { service, nextActivation } = makeService();
+  let observe: Parameters<CloudAccountSource["addListener"]>[0] | undefined;
+  service.attach({
+    addListener: (listener) => {
+      observe = listener;
+      return () => undefined;
+    },
+  });
+  observe?.({ user: { id: "pending-user" }, session: { status: "pending" } });
+  expect(service.getState()._tag).toBe("SignedOut");
+  const activation = nextActivation();
+  observe?.({ user: { id: "pending-user" }, session: { status: "active" } });
+  await activation;
+  expect(service.getState()).toEqual({ _tag: "Active", accountId: "pending-user" });
 });

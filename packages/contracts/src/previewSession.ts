@@ -208,8 +208,9 @@ export const previewSessionChip = (session: Pick<PreviewSession, "owner" | "stat
   if (session.owner === "private") return "Private (paused)" as const;
   if (session.status === "permission-needed") return "Permission needed" as const;
   if (session.status === "stopped") return "Stopped" as const;
+  // An agent's request outranks who holds the screen: the person still has a step to finish.
+  if (session.status === "waiting-for-human") return "Waiting for you" as const;
   if (session.owner === "human") return "You're controlling" as const;
-  if (session.status === "waiting-for-human" || session.status === "paused")
-    return "Waiting for you" as const;
+  if (session.status === "paused") return "Waiting for you" as const;
   return "Agent controlling" as const;
 };

@@ -2,13 +2,17 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import "../index.css";
 
 import { filesystemEnvironment } from "../state/filesystem";
-import { useRightPanelStore } from "../rightPanelStore";
+import {
+  selectActiveRightPanelSurface,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "../rightPanelStore";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
@@ -119,7 +123,7 @@ describe("ChatMarkdown context references", () => {
     setup();
     await using screen = await renderText("Use $babysit on [notes.md](notes.md) today.", {
       environmentId: EnvironmentId.make("env-local"),
-      skills: [{ name: "babysit" }],
+      skills: [{ name: "babysit", path: "/skills/babysit/SKILL.md", enabled: true }],
     });
     const paragraph = screen.container.querySelector("p");
     if (!paragraph) throw new Error("Paragraph did not render");
@@ -325,6 +329,51 @@ describe("ChatMarkdown workspace file opens", () => {
 
     expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, "/elsewhere/b.md", 9);
     expect(workspaceSearch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ChatMarkdown skill chips", () => {
+  it("shows the skill's details and opens its instructions", async () => {
+    setup();
+    const threadRef = {
+      environmentId: EnvironmentId.make("workspace"),
+      threadId: ThreadId.make("thread"),
+    };
+    await using screen = await renderText("Run $review now", {
+      threadRef,
+      skills: [
+        {
+          name: "review",
+          displayName: "Review",
+          description: "Reviews the current branch.",
+          path: "/skills/review/SKILL.md",
+          enabled: true,
+        },
+      ],
+    });
+    const otherThread = { ...threadRef, threadId: ThreadId.make("other-thread") };
+    const otherEnvironment = { ...threadRef, environmentId: EnvironmentId.make("other-workspace") };
+    const previous = useRightPanelStore.getState();
+    using _restorePanels = { [Symbol.dispose]: () => useRightPanelStore.setState(previous) };
+    useRightPanelStore.getState().openFile(otherThread, "/notes/thread.md");
+    useRightPanelStore.getState().openFile(otherEnvironment, "/notes/environment.md");
+    const before = useRightPanelStore.getState().byThreadKey;
+
+    await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
+    await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "View instructions" }));
+
+    const after = useRightPanelStore.getState().byThreadKey;
+    expect(selectActiveRightPanelSurface(after, threadRef)).toMatchObject({
+      kind: "file",
+      relativePath: "/skills/review/SKILL.md",
+    });
+    expect(selectThreadRightPanelState(after, otherThread)).toEqual(
+      selectThreadRightPanelState(before, otherThread),
+    );
+    expect(selectThreadRightPanelState(after, otherEnvironment)).toEqual(
+      selectThreadRightPanelState(before, otherEnvironment),
+    );
   });
 });
 

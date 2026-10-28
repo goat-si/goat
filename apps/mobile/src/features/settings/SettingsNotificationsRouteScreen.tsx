@@ -5,12 +5,11 @@ import { readEnvironmentScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAuth } from "@clerk/expo";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import * as Notifications from "expo-notifications";
 import { useNavigation } from "@react-navigation/native";
 import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { AppState, Linking, Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -44,7 +43,7 @@ import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
 
-type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
+import { useNotificationPermissionStatus } from "../../lib/useNotificationPermissionStatus";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
 
 function useDeviceRegistered(): boolean {
@@ -81,15 +80,14 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const agentAwarenessPushAvailable = supportsAgentAwarenessPush();
   const agentAwarenessPlatform = resolveAgentAwarenessPlatformPresentation(Platform.OS);
-  const agentAwarenessSubtitle =
-    Platform.OS === "android" && !agentAwarenessPushAvailable
-      ? "Install a newer app build to enable notifications"
-      : agentAwarenessPlatform.subtitle;
+  const agentAwarenessSubtitle = !agentAwarenessPushAvailable
+    ? "Push notifications and Live Activities are unavailable in the Connect beta"
+    : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>("checking");
+  const [notificationStatus, setNotificationStatus] = useNotificationPermissionStatus();
   const [liveActivityStatus, setLiveActivityStatus] = useState<LiveActivityStatus>("checking");
   const liveActivityWriteInFlight = useRef(false);
   const deviceRegistered = useDeviceRegistered();
@@ -102,29 +100,6 @@ function ConfiguredSettingsNotificationsRouteScreen() {
 
   const connections = Object.values(savedConnectionsById);
   const environmentCount = connections.length;
-
-  const refreshNotifications = async () => {
-    if (Platform.OS !== "ios" && Platform.OS !== "android") {
-      setNotificationStatus("unsupported");
-      return;
-    }
-    const result = await settlePromise(() => Notifications.getPermissionsAsync());
-    if (result._tag === "Failure") {
-      reportAtomCommandResult(result, { label: "notification permission refresh" });
-      setNotificationStatus("disabled");
-      return;
-    }
-    setNotificationStatus(result.value.granted ? "enabled" : "disabled");
-  };
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- Reads native notification permission on mount and on every foreground.
-    void refreshNotifications();
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refreshNotifications();
-    });
-    return () => subscription.remove();
-  }, [refreshNotifications]);
 
   useEffect(() => {
     if (!isLoaded) {

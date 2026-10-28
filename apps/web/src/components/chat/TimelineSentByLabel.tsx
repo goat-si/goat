@@ -1,4 +1,4 @@
-import type { MessageId, ThreadId } from "@goat/contracts";
+import type { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import { ArrowUpRightIcon, MessagesSquareIcon } from "~/components/solar";
 
 import { randomUUID } from "../../lib/utils";
@@ -10,12 +10,20 @@ export type SentBySender =
   /** A thread this environment holds; the name opens it. */
   | { readonly kind: "open"; readonly threadId: ThreadId; readonly title: string }
   | { readonly kind: "deleted"; readonly title: string }
+  /** A thread on another machine, as that machine named it; opens only while it is connected. */
+  | {
+      readonly kind: "remote";
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      readonly title: string;
+      readonly connected: boolean;
+    }
   /** Recorded, but this app holds no such thread. */
   | { readonly kind: "unknown" }
   /** Delivered without a sender, such as a send from another machine. */
   | { readonly kind: "unrecorded" };
 
-const UNAVAILABLE_REASON: Record<Exclude<SentBySender["kind"], "open">, string> = {
+const UNAVAILABLE_REASON: Record<Exclude<SentBySender["kind"], "open" | "remote">, string> = {
   deleted: "This thread was deleted",
   unknown: "That thread isn't available in this app",
   unrecorded: "The sending thread wasn't recorded",
@@ -33,37 +41,35 @@ export function TimelineSentByLabel(props: {
   readonly onOpenThread: (threadId: ThreadId, options?: OpenThreadOptions) => void;
 }) {
   const { sender } = props;
-  const name = sender.kind === "open" || sender.kind === "deleted" ? sender.title : null;
+  const name =
+    sender.kind === "open" || sender.kind === "deleted" || sender.kind === "remote"
+      ? sender.title
+      : null;
+  const target =
+    sender.kind === "open" || (sender.kind === "remote" && sender.connected) ? sender : null;
   const detail =
-    sender.kind === "open"
+    target !== null
       ? [props.machine, props.sentAt].filter((part) => part !== null).join(" · ")
-      : UNAVAILABLE_REASON[sender.kind];
+      : sender.kind === "remote"
+        ? `Connect ${props.machine ?? "that machine"} to open this thread`
+        : sender.kind === "open"
+          ? ""
+          : UNAVAILABLE_REASON[sender.kind];
   const nameNode =
-    sender.kind === "open" ? (
+    target !== null ? (
       <TooltipTrigger
         render={
           <InlineButton
             tone="muted"
-            aria-label={`Open ${sender.title}`}
+            aria-label={`Open ${target.title}`}
             onClick={() =>
-              props.onOpenThread(
-                sender.threadId,
-                props.destination === null
-                  ? undefined
-                  : {
-                      sentFrom: {
-                        ...props.destination,
-                        senderThreadId: sender.threadId,
-                        activation: randomUUID(),
-                      },
-                    },
-              )
+              props.onOpenThread(target.threadId, openOptions(target, props.destination))
             }
             className="group/sender inline-flex min-w-0 max-w-full items-center"
           />
         }
       >
-        <span className="truncate">{sender.title}</span>
+        <span className="truncate">{target.title}</span>
         <ArrowUpRightIcon
           aria-hidden
           className="hidden size-3 shrink-0 group-hover/sender:inline group-focus-visible/sender:inline"
@@ -104,4 +110,24 @@ export function TimelineSentByLabel(props: {
       )}
     </p>
   );
+}
+
+function openOptions(
+  target: Extract<SentBySender, { kind: "open" | "remote" }>,
+  destination: { readonly threadId: ThreadId; readonly messageId: MessageId } | null,
+): OpenThreadOptions {
+  const remote = target.kind === "remote" ? target.environmentId : undefined;
+  return {
+    ...(remote === undefined ? {} : { environmentId: remote }),
+    ...(destination === null
+      ? {}
+      : {
+          sentFrom: {
+            ...destination,
+            senderThreadId: target.threadId,
+            ...(remote === undefined ? {} : { senderEnvironmentId: remote }),
+            activation: randomUUID(),
+          },
+        }),
+  };
 }

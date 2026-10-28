@@ -96,7 +96,20 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: "SymbolView" }));
-vi.mock("../../components/ui/AppText", () => ({ AppText: "Text", AppTextInput: "TextInput" }));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: "Text",
+  AppTextInput: (props: {
+    value: string;
+    onChangeText: (value: string) => void;
+    placeholder?: string;
+  }) =>
+    createElement("input", {
+      value: props.value,
+      placeholder: props.placeholder,
+      onChange: (event: { currentTarget: HTMLInputElement }) =>
+        props.onChangeText(event.currentTarget.value),
+    }),
+}));
 vi.mock("../../components/EnvironmentMachineSymbol", () => ({
   EnvironmentMachineSymbol: "EnvironmentMachineSymbol",
 }));
@@ -109,6 +122,7 @@ vi.mock("../../state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     (environmentId === "environment" ? state.scopes : state.otherScopes).has(scope),
   readEnvironmentProxiedByHub: () => false,
+  environmentSession: { sessionStateAtom: () => null },
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => state.existingProjects,
@@ -693,4 +707,81 @@ describe("local project navigation", () => {
       expect(navigation.getState().routes).toEqual([navigation.home]);
     },
   );
+});
+
+describe("local folder path", () => {
+  function mountLocalFolder() {
+    state.scopes = new Set([AuthOrchestrationOperateScope]);
+    state.baseDirectory = "/work";
+    state.connectionStates = {};
+    state.environments = [
+      { environmentId: "environment", environmentLabel: "Environment" },
+      { environmentId: "another-environment", environmentLabel: "Another environment" },
+    ];
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const input = () => {
+      const element = container.querySelector("input");
+      if (!element) throw new Error("Path input missing");
+      return element;
+    };
+    return {
+      get path() {
+        return input().value;
+      },
+      type: (value: string) =>
+        act(() => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          if (!setter) throw new Error("Input value setter missing");
+          setter.call(input(), value);
+          input().dispatchEvent(new Event("input", { bubbles: true }));
+        }),
+      render: (environmentId?: string) =>
+        act(() => root.render(createElement(AddProjectLocalFolderScreen, { environmentId }))),
+      [Symbol.asyncDispose]: async () => {
+        await act(() => root.unmount());
+        state.connectionStates = {};
+        state.environments = [{ environmentId: "environment", environmentLabel: "Environment" }];
+      },
+    };
+  }
+
+  it("shows the new host's default path on the first render after the host changes", async () => {
+    await using screen = mountLocalFolder();
+    await screen.render("environment");
+    await screen.type("/work/edited");
+
+    await screen.render("another-environment");
+
+    expect(screen.path).toBe("~/");
+  });
+
+  it("keeps each host's typed path when switching between hosts", async () => {
+    await using screen = mountLocalFolder();
+    await screen.render("environment");
+    await screen.type("/work/a");
+    await screen.render("another-environment");
+    await screen.type("~/b");
+
+    await screen.render("environment");
+    expect(screen.path).toBe("/work/a");
+    await screen.render("another-environment");
+    expect(screen.path).toBe("~/b");
+  });
+
+  it("keeps a typed path when the default host drops out and comes back", async () => {
+    await using screen = mountLocalFolder();
+    await screen.render();
+    expect(screen.path).toBe("~/");
+    await screen.type("~/code/app");
+
+    state.connectionStates = { "another-environment": "offline" };
+    await screen.render();
+    expect(screen.path).toBe("/work/");
+
+    state.connectionStates = {};
+    await screen.render();
+    expect(screen.path).toBe("~/code/app");
+  });
 });

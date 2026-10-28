@@ -78,8 +78,9 @@ before it tries another action.
 
 Every thread in full access mode uses every app without asking, whatever
 started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
-channel. Threads you direct in full access mode also get foreground input
-without asking. In other modes, the agent asks before it uses an app. The
+channel. Threads in full access mode also get foreground input without asking,
+including ones an agent or another computer's GOAT started; work that runs on
+its own still asks for it. In other modes, the agent asks before it uses an app. The
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
 approved, it can list apps and windows but cannot look inside or type into them.
@@ -116,9 +117,8 @@ Full access skips only the app approval. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
 secret field in a browser tab still pauses agents, each action stays within
 what its call may reach, and work that runs on its own still asks for
-foreground control, still
-needs a computer that can tell when you type a secret, and still shares the
-screen one thread at a time. **Stop**, **Stop all** and turning computer use off
+foreground control and still shares the screen one thread at a time.
+**Stop**, **Stop all** and turning computer use off
 end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
@@ -144,6 +144,18 @@ work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
 
+The GOAT menu bar or taskbar menu offers the same stops, per app or all at
+once; its **Stop All Computer Use** also stops agents in browser tabs, like
+Stop all here.
+
+When an agent needs you for a step it cannot do, such as a sign-in, a second
+factor or a CAPTCHA, it asks: its tile reads **Waiting for you** with what it
+needs, and the request also appears in its thread on every device. The agent
+stays off that tab, or off this computer, until you finish the step and choose
+**Hand back**, or answer the request in the thread. Then the agent picks up
+where it stopped. If nobody answers within 30 minutes, the request expires and
+the agent hears that too.
+
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
@@ -166,7 +178,8 @@ and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
 In full access mode, a thread started from another computer's GOAT uses every
-app here beside the threads you run, rather than waiting for the screen.
+app and the foreground here beside the threads you run, rather than waiting for
+the screen.
 Detecting secret fields in desktop apps is switched off while it is being
 fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts

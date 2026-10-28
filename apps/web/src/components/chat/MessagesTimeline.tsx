@@ -1,6 +1,7 @@
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import { TimelineHistoryControl } from "./TimelineHistoryControl";
+import { timelineHeadingPins } from "./timelineHeadingPins";
 import { useSentCallReveal } from "./useSentCallReveal";
 import { TurnThreadCardsRow } from "./TurnThreadCards";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
@@ -170,7 +171,7 @@ function TimelineListFooter({
   );
 }
 
-const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_TIMELINE_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -272,7 +273,7 @@ interface MessagesTimelineProps {
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
-  skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills?: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
@@ -764,7 +765,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     rows,
     listRef,
     listReady: findListReady,
-    threadId: citationThreadRef?.threadId ?? null,
+    threadRef: citationThreadRef,
     history: historyControls,
     foldKeyOf: (entryId) =>
       (
@@ -787,6 +788,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const alwaysRenderIndices = restoringAlwaysRender?.indices ?? [];
   const alwaysRenderKeys = [
+    ...timelineHeadingPins(rows),
     ...(citationAlwaysRender?.keys ?? []),
     ...(fullscreenAppRowId === null ? [] : [fullscreenAppRowId]),
     ...new Set(

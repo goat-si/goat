@@ -23,7 +23,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
-import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
@@ -43,6 +42,7 @@ const LINKED_HOSTS_SECRET = "linked-hosts";
 /** Never dialled: the code comes back in the decision response, not through a browser. */
 const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
 const LINK_TIMEOUT = "20 seconds";
+const LINK_EXCHANGE_TIMEOUT = "60 seconds";
 const LINK_CLIENT_NAME_MAX = 100;
 /** Lowercase-led, ssh-alias-safe, and short enough to read in a tool result. */
 const LINK_NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/u;
@@ -206,22 +206,31 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const send = (request: HttpClientRequest.HttpClientRequest) =>
-    http.execute(request.pipe(HttpClientRequest.setHeader("accept", "application/json"))).pipe(
-      // Bodies can carry codes and tokens: never trace or follow them elsewhere.
-      Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-      Effect.provideService(FetchHttpClient.RequestInit, {
-        redirect: "manual",
-        credentials: "omit",
-        cache: "no-store",
-      }),
-      Effect.timeout(LINK_TIMEOUT),
-      Effect.mapError(() =>
-        fail("host_unavailable", `${new URL(request.url).origin} did not answer.`),
-      ),
-    );
-  const bodyOf = (response: HttpClientResponse.HttpClientResponse) =>
-    response.json.pipe(Effect.orElseSucceed((): unknown => undefined));
+  const send = Effect.fn("LinkedHosts.send")(function (
+    request: HttpClientRequest.HttpClientRequest,
+  ) {
+    return http
+      .execute(request.pipe(HttpClientRequest.setHeader("accept", "application/json")))
+      .pipe(
+        Effect.flatMap((response) =>
+          response.json.pipe(
+            Effect.orElseSucceed((): unknown => undefined),
+            Effect.map((body) => ({ status: response.status, body })),
+          ),
+        ),
+        // Bodies can carry codes and tokens: never trace or follow them elsewhere.
+        Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+        Effect.provideService(FetchHttpClient.RequestInit, {
+          redirect: "manual",
+          credentials: "omit",
+          cache: "no-store",
+        }),
+        Effect.timeout(LINK_TIMEOUT),
+        Effect.mapError(() =>
+          fail("host_unavailable", `${new URL(request.url).origin} did not answer.`),
+        ),
+      );
+  });
   const decoded =
     <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S, what: string) =>
     (body: unknown) =>
@@ -239,101 +248,107 @@ const make = Effect.gen(function* () {
   };
 
   /** Spends the pairing code through the host's MCP OAuth endpoints. */
-  const exchange = Effect.fn("LinkedHosts.exchange")(function* (
-    target: LinkTarget,
-    access: AuthMcpClientAccess,
-    clientName: string,
-  ) {
-    const url = (path: string) => new URL(path, target.baseUrl).toString();
-    const descriptorResponse = yield* send(HttpClientRequest.get(url(GOAT_ENVIRONMENT_PATH)));
-    if (descriptorResponse.status !== 200)
-      return yield* fail(
-        "host_unavailable",
-        `${target.baseUrl} is not a GOAT server (HTTP ${descriptorResponse.status} for its environment descriptor).`,
-      );
-    const descriptor = yield* bodyOf(descriptorResponse).pipe(
-      Effect.flatMap(decoded(ExecutionEnvironmentDescriptor, "its environment descriptor")),
-    );
+  const exchange = Effect.fn("LinkedHosts.exchange")(
+    function* (target: LinkTarget, access: AuthMcpClientAccess, clientName: string) {
+      const url = (path: string) => new URL(path, target.baseUrl).toString();
+      const descriptorResponse = yield* send(HttpClientRequest.get(url(GOAT_ENVIRONMENT_PATH)));
+      if (descriptorResponse.status !== 200)
+        return yield* fail(
+          "host_unavailable",
+          `${target.baseUrl} is not a GOAT server (HTTP ${descriptorResponse.status} for its environment descriptor).`,
+        );
+      const descriptor = yield* decoded(
+        ExecutionEnvironmentDescriptor,
+        "its environment descriptor",
+      )(descriptorResponse.body);
 
-    const registered = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
-        HttpClientRequest.bodyJsonUnsafe({
-          client_name: clientName.slice(0, LINK_CLIENT_NAME_MAX),
-          redirect_uris: [LINK_REDIRECT_URI],
-        }),
-      ),
-    );
-    const registeredBody = yield* bodyOf(registered);
-    if (registered.status < 200 || registered.status >= 300)
-      return yield* fail(
-        "host_unavailable",
-        `GOAT on ${target.baseUrl} cannot link agents${registered.status === 404 ? "; update it" : `: ${refusal(registeredBody) ?? `HTTP ${registered.status}`}`}.`,
+      const registered = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            client_name: clientName.slice(0, LINK_CLIENT_NAME_MAX),
+            redirect_uris: [LINK_REDIRECT_URI],
+          }),
+        ),
       );
-    const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
+      const registeredBody = registered.body;
+      if (registered.status < 200 || registered.status >= 300)
+        return yield* fail(
+          "host_unavailable",
+          `GOAT on ${target.baseUrl} cannot link agents${registered.status === 404 ? "; update it" : `: ${refusal(registeredBody) ?? `HTTP ${registered.status}`}`}.`,
+        );
+      const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
 
-    const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
-    const challenge = base64UrlEncode(
-      yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
-    );
-    const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
-    const resource = url("/mcp");
-    const decision = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(
-        HttpClientRequest.bodyJsonUnsafe({
-          authorization: {
-            response_type: "code",
-            client_id: client.client_id,
+      const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+      const challenge = base64UrlEncode(
+        yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+      );
+      const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+      const resource = url("/mcp");
+      const decision = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            authorization: {
+              response_type: "code",
+              client_id: client.client_id,
+              redirect_uri: LINK_REDIRECT_URI,
+              code_challenge: challenge,
+              code_challenge_method: "S256",
+              state,
+              resource,
+            },
+            decision: { _tag: "pairing-code", access, code: target.code },
+          }),
+        ),
+      );
+      const decisionBody = decision.body;
+      if (decision.status < 200 || decision.status >= 300)
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. Create a new one on that host with goat auth pairing create.`,
+        );
+      const { redirectTo } = yield* decoded(AuthMcpApprovalRedirect, "the approval")(decisionBody);
+      const answer = URL.parse(redirectTo);
+      const authorizationCode = answer?.searchParams.get("code");
+      if (
+        answer === null ||
+        `${answer.origin}${answer.pathname}` !== LINK_REDIRECT_URI ||
+        answer.searchParams.get("state") !== state ||
+        !authorizationCode
+      )
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} did not approve the link: ${answer?.searchParams.get("error_description") ?? answer?.searchParams.get("error") ?? "no code came back"}.`,
+        );
+
+      const tokenResponse = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/token")).pipe(
+          HttpClientRequest.bodyUrlParams({
+            grant_type: "authorization_code",
+            code: authorizationCode,
             redirect_uri: LINK_REDIRECT_URI,
-            code_challenge: challenge,
-            code_challenge_method: "S256",
-            state,
+            client_id: client.client_id,
+            code_verifier: verifier,
             resource,
-          },
-          decision: { _tag: "pairing-code", access, code: target.code },
+          }),
+        ),
+      );
+      const tokenBody = tokenResponse.body;
+      if (tokenResponse.status !== 200)
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} would not issue the session: ${refusal(tokenBody) ?? `HTTP ${tokenResponse.status}`}.`,
+        );
+      const token = yield* decoded(AuthMcpTokenResult, "the token request")(tokenBody);
+      return { descriptor, token };
+    },
+    (effect, target) =>
+      effect.pipe(
+        Effect.timeoutOrElse({
+          duration: LINK_EXCHANGE_TIMEOUT,
+          orElse: () => fail("host_unavailable", `${target.baseUrl} did not finish linking.`),
         }),
       ),
-    );
-    const decisionBody = yield* bodyOf(decision);
-    if (decision.status < 200 || decision.status >= 300)
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. Create a new one on that host with goat auth pairing create.`,
-      );
-    const { redirectTo } = yield* decoded(AuthMcpApprovalRedirect, "the approval")(decisionBody);
-    const answer = URL.parse(redirectTo);
-    const authorizationCode = answer?.searchParams.get("code");
-    if (
-      answer === null ||
-      `${answer.origin}${answer.pathname}` !== LINK_REDIRECT_URI ||
-      answer.searchParams.get("state") !== state ||
-      !authorizationCode
-    )
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} did not approve the link: ${answer?.searchParams.get("error_description") ?? answer?.searchParams.get("error") ?? "no code came back"}.`,
-      );
-
-    const tokenResponse = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/token")).pipe(
-        HttpClientRequest.bodyUrlParams({
-          grant_type: "authorization_code",
-          code: authorizationCode,
-          redirect_uri: LINK_REDIRECT_URI,
-          client_id: client.client_id,
-          code_verifier: verifier,
-          resource,
-        }),
-      ),
-    );
-    const tokenBody = yield* bodyOf(tokenResponse);
-    if (tokenResponse.status !== 200)
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} would not issue the session: ${refusal(tokenBody) ?? `HTTP ${tokenResponse.status}`}.`,
-      );
-    const token = yield* decoded(AuthMcpTokenResult, "the token request")(tokenBody);
-    return { descriptor, token };
-  });
+  );
 
   const list: LinkedHosts["Service"]["list"] = read.pipe(
     Effect.map((catalog) =>

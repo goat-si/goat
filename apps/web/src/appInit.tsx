@@ -5,6 +5,8 @@ import { createBrowserHistory, createHashHistory } from "@tanstack/react-router"
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables } from "./appearanceFonts";
 import { startElectronBrowserHost } from "./browser/ElectronBrowserHost";
+import { startBrowserProfileReporting } from "./browser/BrowserProfileReporter";
+import { startPreviewTitleRecording } from "./browserHistoryStore";
 import { retainThreadOverlaysForThread } from "./components/chat/threadOverlayRetention";
 import { startBackgroundThreadAnnouncements } from "./components/BackgroundThreadAnnouncer";
 import { startSshPasswordPromptQueue } from "./components/desktop/SshPasswordPromptDialog";
@@ -37,6 +39,7 @@ import {
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
 import { startDesktopTray } from "./desktopTray";
 import { getRouter, type AppRouter } from "./router";
+import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
 import { resolveThreadRouteTarget } from "./threadRoutes";
@@ -156,8 +159,11 @@ export function startAppServices(): AppRouter {
   startModelPreferencesMigration();
   startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();
+  startPreviewTitleRecording();
+  startBrowserProfileReporting();
   startThreadOverlayRetention(router);
   startMainAppLocationTracking(router);
+  installChatRouteCommands(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
   startThreadVisitedMigration(appAtomRegistry);
   startSshPasswordPromptQueue();

@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
+import * as PendingAttachmentSweep from "../../../assets/PendingAttachmentSweep.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as DocumentText from "../../../provider/DocumentText.ts";
@@ -18,6 +19,7 @@ import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 
 const attachmentToolkit = McpHttpServer.layerAttachmentToolkit.pipe(
   Layer.provide(DocumentText.layer),
+  Layer.provideMerge(PendingAttachmentSweep.layer),
 );
 
 const scope: McpInvocationContext.McpInvocationScope = {

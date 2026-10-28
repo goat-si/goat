@@ -6,7 +6,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
-  DESKTOP_SLEEP_RECONNECT_AFTER_MS,
+  DESKTOP_LONG_SLEEP_AFTER_MS,
   FOCUS_PROBE_MIN_INTERVAL_MS,
   desktopSystemWakeup,
   desktopWakeups,
@@ -40,19 +40,19 @@ function makeDesktopShell() {
 const settle = TestClock.adjust(0).pipe(Effect.provide(TestClock.layer()));
 
 describe("desktop wakeups", () => {
-  it("replaces sessions after a long sleep and only probes after a short one or an unlock", () => {
-    expect(
-      desktopSystemWakeup({ reason: "resume", asleepMs: DESKTOP_SLEEP_RECONNECT_AFTER_MS }),
-    ).toBe("application-active-reconnect");
+  it("uses the long resume probe after a long sleep and a normal probe after a short one or an unlock", () => {
+    expect(desktopSystemWakeup({ reason: "resume", asleepMs: DESKTOP_LONG_SLEEP_AFTER_MS })).toBe(
+      "application-active-long",
+    );
     expect(desktopSystemWakeup({ reason: "resume", asleepMs: 10 * 60_000 })).toBe(
-      "application-active-reconnect",
+      "application-active-long",
     );
     // A resume whose suspend the desktop missed still slept for an unknown time.
     expect(desktopSystemWakeup({ reason: "resume", asleepMs: null })).toBe(
-      "application-active-reconnect",
+      "application-active-long",
     );
     expect(
-      desktopSystemWakeup({ reason: "resume", asleepMs: DESKTOP_SLEEP_RECONNECT_AFTER_MS - 1 }),
+      desktopSystemWakeup({ reason: "resume", asleepMs: DESKTOP_LONG_SLEEP_AFTER_MS - 1 }),
     ).toBe("application-active-probe");
     expect(desktopSystemWakeup({ reason: "suspend", asleepMs: null })).toBe("suspend");
     expect(desktopSystemWakeup({ reason: "unlock-screen", asleepMs: null })).toBe(
@@ -76,14 +76,14 @@ describe("desktop wakeups", () => {
       shell.dispatch("focus");
       shell.dispatch("online");
       yield* settle;
-      expect(seen).toEqual(["application-active-reconnect", "application-active-probe"]);
+      expect(seen).toEqual(["application-active-long", "application-active-probe"]);
 
       shell.advance(FOCUS_PROBE_MIN_INTERVAL_MS);
       shell.dispatch("focus");
       shell.dispatch("focus");
       yield* settle;
       expect(seen).toEqual([
-        "application-active-reconnect",
+        "application-active-long",
         "application-active-probe",
         "application-active-probe",
       ]);
@@ -115,22 +115,22 @@ describe("desktop wakeups", () => {
         shell.wake({ reason: "unlock-screen", asleepMs: null });
         shell.dispatch("focus");
         yield* settle;
-        expect(seen).toEqual(["application-active-reconnect"]);
+        expect(seen).toEqual(["application-active-long"]);
 
         // After the sleep window, an early unlock probe still upgrades when a long resume arrives.
-        shell.advance(DESKTOP_SLEEP_RECONNECT_AFTER_MS);
+        shell.advance(DESKTOP_LONG_SLEEP_AFTER_MS);
         shell.wake({ reason: "unlock-screen", asleepMs: null });
         shell.advance(100);
         shell.wake({ reason: "unlock-screen", asleepMs: null });
         shell.advance(100);
-        shell.wake({ reason: "resume", asleepMs: DESKTOP_SLEEP_RECONNECT_AFTER_MS });
+        shell.wake({ reason: "resume", asleepMs: DESKTOP_LONG_SLEEP_AFTER_MS });
         shell.advance(100);
-        shell.wake({ reason: "resume", asleepMs: DESKTOP_SLEEP_RECONNECT_AFTER_MS });
+        shell.wake({ reason: "resume", asleepMs: DESKTOP_LONG_SLEEP_AFTER_MS });
         yield* settle;
         expect(seen).toEqual([
-          "application-active-reconnect",
+          "application-active-long",
           "application-active-probe",
-          "application-active-reconnect",
+          "application-active-long",
         ]);
 
         yield* Fiber.interrupt(fiber);
@@ -150,11 +150,11 @@ describe("desktop wakeups", () => {
       shell.advance(100);
       shell.wake({ reason: "suspend", asleepMs: null });
       yield* settle;
-      expect(seen).toEqual(["application-active-reconnect", "suspend"]);
+      expect(seen).toEqual(["application-active-long", "suspend"]);
       shell.advance(100);
       shell.wake({ reason: "resume", asleepMs: 100 });
       yield* settle;
-      expect(seen).toEqual(["application-active-reconnect", "suspend", "application-active-probe"]);
+      expect(seen).toEqual(["application-active-long", "suspend", "application-active-probe"]);
       yield* Fiber.interrupt(fiber);
     }),
   );
@@ -194,7 +194,7 @@ describe("desktop wakeups", () => {
       shell.advance(6_000);
       shell.wake({ reason: "resume", asleepMs: 5_000 });
       yield* settle;
-      expect(seen).toEqual(["application-active-reconnect", "application-active-probe"]);
+      expect(seen).toEqual(["application-active-long", "application-active-probe"]);
 
       yield* Fiber.interrupt(fiber);
     }),

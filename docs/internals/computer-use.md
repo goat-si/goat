@@ -434,13 +434,31 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged. In full access, a thread launched from another environment, and turns it
   launches or sends here (`launched_remotely`), use every app like a person's threads, beside
-  them rather than holding the screen alone, and wait in the same turn for a foreground approval
-  (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
-  cannot read the turn that launched it, so it stays unattended for steering a person's turn and
-  outside full access, and asks for foreground like any run no person started. A user's own
-  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
-  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
-  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
+  them rather than holding the screen alone (`usesScreenLikePerson` in `ComputerUseOrigin.ts`;
+  owner decision, Jun, 2026-10-28). Like every directed full access run, they take the foreground
+  without asking (`directedRun` in `ComputerUseOrigin.ts`): a person's client, an agent's message
+  traced to the directed run that sent it, a launch or an answer from another environment, or an
+  approval's wake. Other server wakes carry no provenance and ask, so a schedule's continuation
+  never gains the foreground. This host cannot read the
+  turn that launched it, so it stays unattended outside full access. A user's own `cua-driver`
+  stays blocked for it whatever admission decides, since that driver would not hear Stop. A
+  message, an agent's or the server's promotion of a queued message, or an agent's answer to a
+  question from an origin that reaches less of the screen than the running turn waits as the next turn instead of joining
+  it (`ComputerUseSteering.ts`): a person's turn outranks a remote full access turn, which
+  outranks unattended work, and a turn whose origin, or any sender or launcher behind it, cannot be read counts as a person's. A
+  promotion weighs the queued turn's own origin, and a person's own promotion from a client is
+  their decision and is not weighed (`ThreadManagementService.promoteQueuedToSteer` is the agent
+  path); an answer names the one turn it may join, which
+  the orchestrator checks again under its lock. Another computer's agent's answer counts as remote
+  work, and its queued turn keeps that origin through its runtime request's responder.
+  Provenance is recorded once, when it happens: the orchestrator writes the sender's executing
+  run on every message that names a sender (`senderRunId`) and the launcher's executing run on a
+  local launch (`launchedBy.runId`), replacing any value a command carried
+  (`orchestration-v2/senderProvenance.ts`). Classification follows exactly that run, so a restart
+  or a reordered queue cannot move authority. MCP credentials name no run, so the executing run is
+  the one run that is starting or running; a waiting run, or several executing ones, record none.
+  A message or launch recorded without one counts as `unknown`, except a sender known by itself
+  (GOAT Bot, a channel worker).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement

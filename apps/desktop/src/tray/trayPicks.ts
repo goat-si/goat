@@ -20,6 +20,10 @@ export function createTrayPicks<A, R extends TrayActionRenderer<A>>(channel: str
       pending = action;
       deliver();
     },
+    /** Delivers now to the listening renderer, or drops: a stop must not replay later. */
+    send: (action: A) => {
+      if (renderer !== null && !renderer.isDestroyed()) renderer.send(channel, action);
+    },
     listening: (next: R) => {
       renderer = next;
       deliver();

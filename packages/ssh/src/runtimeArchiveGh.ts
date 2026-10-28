@@ -86,6 +86,7 @@ export const downloadRuntimeArchiveWithGh = Effect.fn("ssh.runtimeArchive.gh")(f
               ],
               {
                 env: { GH_PROMPT_DISABLED: "1" },
+                forceKillAfter: "1 second",
                 extendEnv: true,
                 stdin: "ignore",
                 shell: false,

@@ -9,7 +9,7 @@ import {
   type ResolvedSharePayload,
   type SharePayload,
 } from "expo-sharing";
-import React, { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
 import {
@@ -19,6 +19,7 @@ import {
   type IncomingShareDraft,
 } from "./incoming-share-model";
 import { createIncomingSharePayloadReader } from "./incoming-share-native";
+import { coalescedRun } from "../../lib/coalescedRun";
 import { IncomingShareInbox } from "./incoming-share-inbox";
 import { persistComposerAttachmentFile } from "../../lib/composerImages";
 import {
@@ -202,25 +203,17 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
   const [drafts, setDrafts] = useState<ReadonlyArray<IncomingShareDraft>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+
   const mountedRef = useRef(false);
+  const refreshRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
+    let disposed = false;
     mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const refresh = useCallback(async () => {
-    if (refreshPromiseRef.current) {
-      return refreshPromiseRef.current;
-    }
-
-    const operation = (async () => {
+    const run = coalescedRun(async () => {
       try {
         const snapshot = await incomingShareInbox.refresh({ ingestNative: enabled });
-        if (mountedRef.current) {
+        if (!disposed) {
           setDrafts(snapshot);
           setError(null);
         }
@@ -228,44 +221,38 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
         const persisted = await incomingShareInbox
           .refresh({ ingestNative: false })
           .catch(() => null);
-        if (mountedRef.current) {
+        if (!disposed) {
           if (persisted) {
             setDrafts(persisted);
           }
           setError(cause instanceof Error ? cause : new Error("Could not import shared content."));
         }
       }
-    })().finally(() => {
-      refreshPromiseRef.current = null;
     });
-
-    refreshPromiseRef.current = operation;
-    return operation;
-  }, [enabled]);
-
-  useEffect(() => {
-    void refresh().finally(() => {
-      if (mountedRef.current) {
+    refreshRef.current = run;
+    void run().finally(() => {
+      if (!disposed) {
         setIsLoading(false);
       }
     });
-  }, [refresh]);
-
-  const refreshOnAppActive = useEffectEvent(() => {
-    void refresh();
-  });
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        refreshOnAppActive();
-      }
-    });
-    return () => subscription.remove();
+    const subscription = enabled
+      ? AppState.addEventListener("change", (state) => {
+          if (state === "active") {
+            void run();
+          }
+        })
+      : undefined;
+    return () => {
+      disposed = true;
+      mountedRef.current = false;
+      refreshRef.current = null;
+      subscription?.remove();
+    };
   }, [enabled]);
+
+  async function refresh() {
+    await refreshRef.current?.();
+  }
 
   useEffect(() => {
     if (!error) {

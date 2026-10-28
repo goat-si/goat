@@ -128,6 +128,8 @@ export const harness = Effect.fn(function* (
     readonly verifyInputByTreeDiff?: boolean;
     /** Stands in for the thread proxy's reconnecting state. */
     readonly transportHeld?: () => boolean;
+    /** Receives the hook the thread proxy calls when the lease stream drops. */
+    readonly onTransportDropReceiver?: (drop: () => void) => void;
     /** The app macOS asks for Automation consent on this host's behalf. */
     readonly automationHolder?: "helper" | "app";
   } = {},
@@ -189,6 +191,9 @@ export const harness = Effect.fn(function* (
     ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
     ...(options.verifyInputByTreeDiff ? { verifyInputByTreeDiff: true } : {}),
     ...(options.transportHeld === undefined ? {} : { transportHeld: options.transportHeld }),
+    ...(options.onTransportDropReceiver === undefined
+      ? {}
+      : { onTransportDropReceiver: options.onTransportDropReceiver }),
     ...(options.automationHolder === undefined
       ? {}
       : { automationHolder: options.automationHolder }),

@@ -1,4 +1,4 @@
-import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
+import { isGoatConnectPushAvailable as isConnectPushEnabled } from "@goat/shared/goatConnect";
 import { type LiveActivity } from "expo-widgets";
 import {
   configureAndroidAgentNotifications,
@@ -153,11 +153,11 @@ function readRelayConfig(): { readonly url: string } | null {
 }
 
 function canRegisterRemoteLiveActivities(): boolean {
-  return Platform.OS === "ios";
+  return isConnectPushEnabled() && Platform.OS === "ios";
 }
 
 function canRegisterPushNotifications(): boolean {
-  return Platform.OS === "ios" || Platform.OS === "android";
+  return isConnectPushEnabled() && (Platform.OS === "ios" || Platform.OS === "android");
 }
 
 export function shouldRegisterAgentAwarenessDeviceForProvider(
@@ -171,7 +171,7 @@ export function setAgentAwarenessRelayTokenProvider(
   provider: (() => Promise<string | null>) | null,
   identity?: string,
 ): void {
-  if (!isGoatConnectEnabled()) {
+  if (!isConnectPushEnabled()) {
     releaseAgentAwarenessRelayTokenProvider();
     return;
   }
@@ -464,7 +464,7 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
-  if (!isGoatConnectEnabled() || !canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+  if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
     return;
   }
   if (!environmentPublishesAgentActivity(input.environmentId)) {
@@ -686,7 +686,7 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
   input: RegisterDeviceInput = {},
   expectedGeneration = deviceRegistrationGeneration,
 ): Effect.fn.Return<void, unknown, ManagedRelay.ManagedRelayClient> {
-  if (!isGoatConnectEnabled() || !canRegisterPushNotifications()) {
+  if (!canRegisterPushNotifications()) {
     logRegistrationDebug("device registration skipped; platform does not support it");
     return;
   }
@@ -807,7 +807,7 @@ function dismissEndedLocalLiveActivities(): void {
 }
 
 function endLocalLiveActivities(context: string): void {
-  if (!isGoatConnectEnabled() || !canRegisterRemoteLiveActivities()) {
+  if (!canRegisterRemoteLiveActivities()) {
     return;
   }
   dismissEndedLocalLiveActivities();
@@ -823,7 +823,7 @@ function endLocalLiveActivities(context: string): void {
 }
 
 export function registerAgentAwarenessConnection(connection: SavedRemoteConnection): void {
-  if (!isGoatConnectEnabled() || !canRegisterPushNotifications()) {
+  if (!canRegisterPushNotifications()) {
     return;
   }
 
@@ -930,7 +930,7 @@ export const registerLiveActivityPushToken = Effect.fn(
 )(function* (input: {
   readonly activity: LiveActivity<AgentActivityProps>;
 }): Effect.fn.Return<boolean, unknown, ManagedRelay.ManagedRelayClient> {
-  if (!isGoatConnectEnabled() || !canRegisterRemoteLiveActivities()) {
+  if (!canRegisterRemoteLiveActivities()) {
     return false;
   }
 
@@ -1027,7 +1027,7 @@ function scheduleActiveLiveActivityRegistrationRetry(): void {
 export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   "remoteRegistration.refreshActiveLiveActivityRemoteRegistration",
 )(function* (): Effect.fn.Return<void, never, ManagedRelay.ManagedRelayClient> {
-  if (!isGoatConnectEnabled() || !canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+  if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
     return;
   }
 

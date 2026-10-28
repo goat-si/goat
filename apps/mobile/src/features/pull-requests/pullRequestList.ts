@@ -3,9 +3,12 @@ import {
   ProjectId,
   resolvePullRequestAuthorFilter,
   type EnvironmentId,
+  type PullRequestDiffStat,
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListResult,
+  type PullRequestListStatsInput,
+  type ScopedProjectRef,
 } from "@goat/contracts";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
 
@@ -44,6 +47,138 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
 
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
+
+export const pullRequestStatKey = (
+  row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
+) => `${row.projectId}:${row.repository}:${row.number}`;
+
+export interface PullRequestStatsCache {
+  readonly stats: ReadonlyMap<string, PullRequestDiffStat>;
+  readonly answeredBy: ReadonlyMap<string, PullRequestListStatsInput>;
+  readonly updatedAt: ReadonlyMap<string, string>;
+}
+
+export const EMPTY_PULL_REQUEST_STATS_CACHE: PullRequestStatsCache = {
+  stats: new Map(),
+  answeredBy: new Map(),
+  updatedAt: new Map(),
+};
+
+// Stats have no head identity; a changed list timestamp invalidates both the counts and their query.
+export function withListedPullRequests(
+  cache: PullRequestStatsCache,
+  entries: readonly Pick<
+    PullRequestListEntry,
+    "projectId" | "repository" | "number" | "updatedAt"
+  >[],
+): {
+  readonly cache: PullRequestStatsCache;
+  readonly refresh: readonly PullRequestListStatsInput[];
+} {
+  const moved = entries.filter(
+    (entry) => cache.updatedAt.get(pullRequestStatKey(entry)) !== entry.updatedAt,
+  );
+  if (!moved.length) return { cache, refresh: [] };
+  const stats = new Map(cache.stats);
+  const answeredBy = new Map(cache.answeredBy);
+  const updatedAt = new Map(cache.updatedAt);
+  const refresh = new Set<PullRequestListStatsInput>();
+  for (const entry of moved) {
+    const key = pullRequestStatKey(entry);
+    const query = answeredBy.get(key);
+    if (query) refresh.add(query);
+    stats.delete(key);
+    answeredBy.delete(key);
+    updatedAt.set(key, entry.updatedAt);
+  }
+  return { cache: { stats, answeredBy, updatedAt }, refresh: [...refresh] };
+}
+
+export function withAnsweredPullRequestStats(
+  cache: PullRequestStatsCache,
+  input: PullRequestListStatsInput,
+  answered: readonly PullRequestDiffStat[],
+): PullRequestStatsCache {
+  const stats = new Map(cache.stats);
+  const answeredBy = new Map(cache.answeredBy);
+  for (const row of answered) {
+    stats.set(pullRequestStatKey(row), row);
+    answeredBy.set(pullRequestStatKey(row), input);
+  }
+  return { ...cache, stats, answeredBy };
+}
+
+type PullRequestStatsAnswer = {
+  readonly environmentId: EnvironmentId;
+  readonly stats: readonly PullRequestDiffStat[];
+};
+
+export function retainPullRequestStatsAnswers(
+  counts: readonly {
+    readonly environmentId: EnvironmentId;
+    readonly stats: readonly PullRequestDiffStat[] | null;
+  }[],
+  previous: readonly PullRequestStatsAnswer[],
+): readonly PullRequestStatsAnswer[] {
+  const next = counts.flatMap(({ environmentId, stats }) => {
+    const kept = previous.find((answer) => answer.environmentId === environmentId);
+    if (stats === null) return kept ? [kept] : [];
+    return kept?.stats === stats ? [kept] : [{ environmentId, stats }];
+  });
+  return next.length === previous.length &&
+    next.every((answer, index) => answer === previous[index])
+    ? previous
+    : next;
+}
+
+export function pullRequestProjectOrderIsEqual(
+  previous: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+  next: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+) {
+  return (
+    previous.length === next.length &&
+    previous.every((group, index) => {
+      const members = next[index]?.memberProjectRefs;
+      return (
+        members !== undefined &&
+        group.memberProjectRefs.length === members.length &&
+        group.memberProjectRefs.every(
+          (ref, member) =>
+            ref.environmentId === members[member]?.environmentId &&
+            ref.projectId === members[member]?.projectId,
+        )
+      );
+    })
+  );
+}
+
+export function withShownPullRequestStats(
+  entries: readonly EnvironmentPullRequestListEntry[],
+  answers: readonly {
+    readonly environmentId: EnvironmentId;
+    readonly stats: readonly PullRequestDiffStat[];
+  }[],
+  listedStats?: ReadonlyMap<EnvironmentId, PullRequestStatsCache>,
+): readonly EnvironmentPullRequestListEntry[] {
+  const shown = new Map(
+    answers.flatMap(({ environmentId, stats }) =>
+      stats.map((row) => [`${environmentId}:${pullRequestStatKey(row)}`, row] as const),
+    ),
+  );
+  if (!shown.size) return entries;
+  let changed = false;
+  const next = entries.map((entry) => {
+    // Live rows use recorded stats; a retained offline answer must not refill an evicted count.
+    if (listedStats?.get(entry.environmentId)?.updatedAt.has(pullRequestStatKey(entry)))
+      return entry;
+    const stat = shown.get(`${entry.environmentId}:${pullRequestStatKey(entry)}`);
+    if (!stat || entry.additions + entry.deletions !== 0) return entry;
+    if (stat.additions + stat.deletions === 0) return entry;
+    changed = true;
+    return { ...entry, additions: stat.additions, deletions: stat.deletions };
+  });
+  return changed ? next : entries;
+}
 
 export function pullRequestListRowsAreEqual(
   previous: EnvironmentPullRequestListEntry,
@@ -141,6 +276,26 @@ export function pullRequestListHead(
         limit: PR_LIST_PAGE_SIZE,
         continued: false,
       };
+}
+
+export function patchPullRequestListEntry(
+  recorded: PullRequestListPages | null,
+  head: PullRequestListResult | null,
+  entry: PullRequestListEntry,
+  patch: Partial<PullRequestListEntry>,
+  observedAt: number,
+): PullRequestListPages | null {
+  const pages = head ? pullRequestListHead(recorded, head) : recorded;
+  return (
+    pages && {
+      ...pages,
+      entries: pages.entries.map((row) =>
+        pullRequestListKey(row) === pullRequestListKey(entry)
+          ? { ...row, ...patch, observedAt }
+          : row,
+      ),
+    }
+  );
 }
 
 export function pullRequestListInput(

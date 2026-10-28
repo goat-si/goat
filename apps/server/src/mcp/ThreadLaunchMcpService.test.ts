@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as ThreadLaunchMcp from "./ThreadLaunchMcpService.ts";
+import * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -317,6 +318,7 @@ function fixture(
   );
   return {
     layer: ThreadLaunchMcp.layer.pipe(
+      Layer.provideMerge(AttachmentFileLeases.layer),
       Layer.provide(registered === undefined ? deps : Layer.merge(deps, registered)),
       Layer.provideMerge(Sqlite.layerMemory),
     ),

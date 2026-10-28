@@ -3,7 +3,7 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { RocketIcon, SendIcon } from "~/components/solar";
-import { use, useState } from "react";
+import { use, useId, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useQuietThreadShell } from "../../state/entities";
@@ -93,6 +93,8 @@ function TurnThreadCard(props: {
   const openable = shell !== null && shell.deletedAt === null;
   const status = shell === null ? null : cardStatus(shell);
   const Icon = target.via === "launch" ? RocketIcon : SendIcon;
+  // The label names the card; the answer line under it describes it to screen readers too.
+  const detailId = useId();
   const detail =
     target.host !== null
       ? `On ${target.host} · open it from that machine's GOAT`
@@ -100,9 +102,11 @@ function TurnThreadCard(props: {
         ? "Not available in this app"
         : shell.deletedAt !== null
           ? "Deleted"
-          : target.via === "launch"
-            ? "Started in this turn"
-            : "Messaged in this turn";
+          : shell.source.latestAnswerExcerpt !== undefined
+            ? shell.source.latestAnswerExcerpt
+            : target.via === "launch"
+              ? "Started in this turn"
+              : "Messaged in this turn";
   const content = (
     <>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60">
@@ -110,7 +114,9 @@ function TurnThreadCard(props: {
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm font-medium text-foreground">{title}</span>
-        <span className="truncate text-xs text-muted-foreground">{detail}</span>
+        <span id={detailId} className="truncate text-xs text-muted-foreground">
+          {detail}
+        </span>
       </span>
       {status !== null ? (
         <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -126,6 +132,7 @@ function TurnThreadCard(props: {
     <button
       type="button"
       aria-label={`Open ${title}${status === null ? "" : `, ${STATUS[status].label}`}`}
+      aria-describedby={detailId}
       onClick={() => props.onOpen(target.threadId as ThreadId)}
       className={cn(
         className,

@@ -1,5 +1,10 @@
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
-import { type EnvironmentId, type PreviewSessionSnapshot, ThreadId } from "@goat/contracts";
+import {
+  type DeviceServiceState,
+  type EnvironmentId,
+  type PreviewSessionSnapshot,
+  ThreadId,
+} from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
@@ -18,6 +23,11 @@ import {
   revealServerTabs,
   startAgentOpenedPreviews,
 } from "./agentOpenedPreviews";
+import {
+  applyDeviceSnapshot,
+  floatDeviceSurface,
+  resetDeviceSessionBaselinesForTests,
+} from "./agentOpenedDevices";
 import { selectAgentCardsShown, usePreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 vi.mock("../../state/entities", () => ({
@@ -27,7 +37,43 @@ vi.mock("../../state/entities", () => ({
 const ref = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-1"));
 const threadKey = scopedThreadKey(ref);
 
+const device = {
+  hostId: "local",
+  id: "pixel",
+  platform: "android",
+  name: "Pixel 8",
+  version: "15",
+  booted: true,
+  physical: false,
+} as const;
+
+const session = {
+  threadId: ref.threadId,
+  hostId: "local",
+  deviceId: "pixel",
+  platform: "android",
+  openedAt: "2026-01-01T00:00:00.000Z",
+} as const;
+
+const deviceState = (input: {
+  readonly sessions?: ReadonlyArray<DeviceServiceState["sessions"][number]>;
+  readonly devices?: ReadonlyArray<typeof device>;
+}): DeviceServiceState => ({
+  hosts: [],
+  hostStatus: "ready",
+  hostStatuses: {},
+  devices: input.devices ?? [device],
+  sessions: input.sessions ?? [],
+  onboardingCompleted: true,
+  agentAccessEnabled: true,
+  hubBasePath: "/api/device-hub",
+  revision: 0,
+});
+
+const panel = { sheetLayout: false };
+
 function setup() {
+  resetDeviceSessionBaselinesForTests();
   resetPreviewStateForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   useRightPanelStore.setState({ byThreadKey: {} });
@@ -46,6 +92,148 @@ const largeCard = (thread = "thread-1") =>
 const focusedTab = () => usePreviewSessionStack.getState().focus?.tabId ?? null;
 const shownIn = (thread: string) =>
   selectAgentCardsShown(`env-1|${thread}`)(usePreviewSessionStack.getState());
+
+const deviceTabs = (threadRef: typeof ref) =>
+  useRightPanelStore
+    .getState()
+    .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.filter(
+      (surface) => surface.kind === "device",
+    );
+
+describe("applyDeviceSnapshot", () => {
+  it("keeps baselines and ended-session cleanup isolated by environment", () => {
+    setup();
+    const otherRef = scopeThreadRef("env-2" as EnvironmentId, ref.threadId);
+    const source = {
+      kind: "device",
+      hostId: "local",
+      deviceId: "pixel",
+      platform: "android",
+      name: "Pixel 8",
+    } as const;
+    usePreviewMiniPlayerStore.getState().open(otherRef, source);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(otherRef.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(otherRef)).toBeUndefined();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    expect(
+      usePreviewMiniPlayerStore.getState().byThreadKey[scopedThreadKey(otherRef)]?.source,
+    ).toEqual(source);
+  });
+
+  it("treats the first snapshot as a baseline and opens sessions that start later", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [] }), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+  });
+
+  it("opens a session once its device summary arrives", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(
+      ref.environmentId,
+      deviceState({ sessions: [session], devices: [] }),
+      panel,
+    );
+    expect(deviceTabs(ref)).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)?.[0]?.target?.name).toBe("Pixel 8");
+  });
+
+  it("opens one background panel tab, and nothing in sheet layouts", () => {
+    setup();
+    const options = { sheetLayout: false };
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), { ...options, sheetLayout: true });
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), {
+      ...options,
+      sheetLayout: true,
+    });
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    const devices = useRightPanelStore
+      .getState()
+      .byThreadKey[threadKey]?.surfaces.filter((surface) => surface.kind === "device");
+    expect(devices).toHaveLength(1);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("closes a floating device when its session ends, even before a baseline", () => {
+    setup();
+    usePreviewMiniPlayerStore.getState().open(ref, {
+      kind: "device",
+      hostId: "local",
+      deviceId: "pixel",
+      platform: "android",
+      name: "Pixel 8",
+    });
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(miniPlayerSource()).toMatchObject({ kind: "device" });
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [] }), panel);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("opens a session that ended and reopened between two snapshots", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(miniPlayerSource()).toBeUndefined();
+
+    const reopened = { ...session, openedAt: "2026-01-01T00:05:00.000Z" };
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [reopened] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+  });
+
+  it("opens a device for a thread that had no sessions when the baseline was taken", () => {
+    setup();
+    const otherRef = scopeThreadRef(ref.environmentId, ThreadId.make("thread-2"));
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    applyDeviceSnapshot(
+      ref.environmentId,
+      deviceState({ sessions: [session, { ...session, threadId: otherRef.threadId }] }),
+      panel,
+    );
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(deviceTabs(otherRef)).toHaveLength(1);
+    expect(deviceTabs(ref)).toBeUndefined();
+  });
+});
+
+describe("floatDeviceSurface", () => {
+  const source = {
+    kind: "device",
+    hostId: "local",
+    deviceId: "pixel",
+    platform: "android",
+    name: "Pixel 8",
+  } as const;
+
+  it("floats a device with a live session, or before device state loads", () => {
+    setup();
+    floatDeviceSurface(ref, source, deviceState({ sessions: [session] }));
+    expect(miniPlayerSource()).toMatchObject({ kind: "device", deviceId: "pixel" });
+
+    setup();
+    floatDeviceSurface(ref, source, null);
+    expect(miniPlayerSource()).toMatchObject({ kind: "device", deviceId: "pixel" });
+  });
+
+  it("does not float a device whose session ended", () => {
+    setup();
+    floatDeviceSurface(ref, source, deviceState({ sessions: [] }));
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+});
 
 describe("revealServerTabs", () => {
   const tab = (tabId: string, force?: boolean): PreviewSessionSnapshot => ({

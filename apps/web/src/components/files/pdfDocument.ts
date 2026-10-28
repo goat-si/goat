@@ -1,9 +1,3 @@
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import fallbackUrl from "pdfjs-dist/wasm/openjpeg_nowasm_fallback.js?url";
-
-GlobalWorkerOptions.workerSrc = workerUrl;
-
 const standardFonts = import.meta.glob<string>(
   "../../../node_modules/pdfjs-dist/standard_fonts/*",
   { query: "?url", import: "default", eager: true },
@@ -29,17 +23,4 @@ export class BinaryDataFactory {
       throw new Error(`PDF ${directory} asset unavailable.`);
     return new Uint8Array(await response.arrayBuffer());
   }
-}
-
-export function openPdf(bytes: ArrayBuffer) {
-  return getDocument({
-    data: new Uint8Array(bytes),
-    useSystemFonts: true,
-    useWorkerFetch: false,
-    BinaryDataFactory,
-    // PDF.js imports JavaScript decoders directly, bypassing BinaryDataFactory.
-    wasmUrl: new URL(".", new URL(fallbackUrl, window.location.href)).href,
-    canvasMaxAreaInBytes: 32 * 1024 * 1024,
-    useWasm: true,
-  });
 }

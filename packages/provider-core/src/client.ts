@@ -41,6 +41,8 @@ export interface ProviderClientDefinition {
   readonly environmentFields?: ReadonlyArray<ProviderEnvironmentField>;
   readonly hasDefaultInstance?: boolean;
   readonly badgeLabel?: string;
+  /** Registry entries for this same agent are omitted from the Add provider search. */
+  readonly acpRegistryAgentIds?: ReadonlyArray<string>;
 }
 
 export function defineProviderClient<const Definition extends ProviderClientDefinition>(

@@ -322,10 +322,26 @@ export const GuestMessageAttribution = Schema.Struct({
 });
 export type GuestMessageAttribution = typeof GuestMessageAttribution.Type;
 
+export const REMOTE_SENDER_TITLE_MAX_LENGTH = 200;
+export const REMOTE_SENDER_LABEL_MAX_LENGTH = 64;
+
+/**
+ * The thread on another machine that sent this message, as that machine described it. A label for
+ * finding and opening the sender, never authority: it can be claimed by any outside caller.
+ */
+export const RemoteSenderAttribution = Schema.Struct({
+  environmentId: EnvironmentId,
+  environmentLabel: Schema.String.check(Schema.isMaxLength(REMOTE_SENDER_LABEL_MAX_LENGTH)),
+  threadId: ThreadId,
+  title: Schema.String.check(Schema.isMaxLength(REMOTE_SENDER_TITLE_MAX_LENGTH)),
+});
+export type RemoteSenderAttribution = typeof RemoteSenderAttribution.Type;
+
 /** Structured context riding on a user message. Undecodable records are dropped, not fatal. */
 export const OrchestrationMessageContext = Schema.Struct({
   version: Schema.Literal(1),
   guest: Schema.optional(GuestMessageAttribution),
+  remoteSender: Schema.optional(RemoteSenderAttribution),
   records: Schema.Array(Schema.Unknown)
     .check(
       Schema.isMaxLength(COMPOSER_CONTEXT_MAX_RECORDS),

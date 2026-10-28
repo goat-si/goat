@@ -12,7 +12,12 @@ import {
   type EnvironmentId,
   type ServerProvider,
 } from "@goat/contracts";
-import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import * as Effect from "effect/Effect";
+import {
+  settleAsyncResult,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
@@ -37,9 +42,9 @@ import { SettingsSection } from "./components/SettingsSection";
 import {
   canMaintainEnvironment,
   canUpdateEnvironmentProvider,
-  findEnvironmentUpdate,
   supportsEnvironmentUpdate,
 } from "./environment-maintenance";
+import { checkEnvironmentUpdate } from "./environmentUpdateCheck";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsEnvironmentDetailRouteScreen({
@@ -292,12 +297,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       void run("check", async () => {
                         const controller = new AbortController();
                         checkController.current = controller;
-                        const timeout = setTimeout(() => controller.abort(), 20_000);
                         const fromVersion = config.environment.serverVersion;
-                        const result = await settlePromise(() =>
-                          findEnvironmentUpdate(fromVersion, controller.signal),
+                        const result = await settleAsyncResult(() =>
+                          Effect.runPromiseExit(checkEnvironmentUpdate(fromVersion), {
+                            signal: controller.signal,
+                          }),
                         );
-                        clearTimeout(timeout);
                         checkController.current = null;
                         // `run` owns the error message, so a failed lookup rethrows to it.
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);

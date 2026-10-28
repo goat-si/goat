@@ -357,6 +357,30 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
       }),
   );
+
+  it.effect(
+    "holds only the control whose agent asked a person, while others keep acting (#1218)",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.stopAll;
+        const mine = yield* leases.control(thread, Option.none());
+        const bots = yield* leases.control(other, Option.none());
+        yield* leases.hold(mine.controlId, true);
+        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+          _tag: "paused",
+          reason: "takeover",
+        });
+        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
+        // A person's own takeover and its hand back leave the request's hold in place.
+        yield* leases.pause("takeover");
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "paused");
+        yield* leases.hold(mine.controlId, false);
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
+      }),
+  );
 });
 
 it.effect(

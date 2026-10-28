@@ -25,6 +25,8 @@ export interface PanelLayoutControlsProps {
   rightPanelOpen: boolean;
   rightPanelShortcutLabel: string | null;
   rightPanelUnavailableLabel?: string;
+  rightPanelMaximized?: boolean;
+  onToggleMaximized?: (() => void) | undefined;
   onToggleTerminal: () => void;
   onToggleThreadPanel: () => void;
   onToggleRightPanel: () => void;
@@ -45,6 +47,8 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelOpen,
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
+  rightPanelMaximized = false,
+  onToggleMaximized,
   onToggleTerminal,
   onToggleThreadPanel,
   onToggleRightPanel,
@@ -129,6 +133,9 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               : rightPanelUnavailableLabel}
           </TooltipPopup>
         </Tooltip>
+      ) : null}
+      {rightPanelOpen && onToggleMaximized ? (
+        <RightPanelMaximizeControl maximized={rightPanelMaximized} onToggle={onToggleMaximized} />
       ) : null}
     </div>
   );

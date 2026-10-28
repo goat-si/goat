@@ -55,7 +55,13 @@ const SHOWN =
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
-const refused = (message: string) => new ServerBrowserOperationError(REFUSED, message);
+/** A refusal before anything was typed; only UNCERTAIN may have typed the value. */
+const refused = (message: string) =>
+  new ServerBrowserOperationError(
+    REFUSED,
+    message,
+    message === UNCERTAIN ? undefined : { beforeInput: true },
+  );
 const decodeInput = Schema.decodeUnknownOption(PreviewAutomationFillSecretInput);
 
 /** Playwright's protocol log would carry the CDP arguments, so any pattern that could enable it refuses. */
@@ -99,16 +105,36 @@ const FILL = `function (value, origin) {
   return true;
 }`;
 // Any value left in the field counts: an edit must not lift the fence on most of the password.
-// An empty or detached field keeps its entry until its document goes, so a page that puts the
-// value or the node back is fenced again. Revealed, even unchanged, it shows as plain text.
-const STILL_FILLED = `function () {
-  if (!this.isConnected || this.value === "") return "empty";
-  return this.type === "password" ? "hidden" : "shown";
+// An empty or detached field keeps its entry until its document goes, and then any text field of
+// that document holding the value, or four or more characters of it, holds the fence instead.
+const STILL_FILLED = `function (value) {
+  if (this.isConnected && this.value !== "") return this.type === "password" ? "hidden" : "shown";
+  const root = this.ownerDocument;
+  if (!root || typeof value !== "string") return "empty";
+  const typed = new Set(["text", "password", "search", "email", "tel", "url", "hidden"]);
+  let state = "empty";
+  const visit = (scope) => {
+    for (const field of scope.querySelectorAll("input, textarea")) {
+      const area = field.localName === "textarea";
+      const held = field.value;
+      if (!held || (!area && !typed.has(field.type))) continue;
+      if (!held.includes(value) && !(held.length >= 4 && value.includes(held))) continue;
+      if (area || (field.type !== "password" && field.type !== "hidden")) state = "shown";
+      else if (state === "empty") state = "hidden";
+    }
+    for (const element of scope.querySelectorAll("*")) if (element.shadowRoot) visit(element.shadowRoot);
+  };
+  visit(root);
+  return state;
 }`;
 
 interface Target {
   readonly session: CDPSession;
   readonly objectId: string;
+}
+
+interface Fence extends Target {
+  readonly value: string;
 }
 
 const isWebOrigin = (origin: unknown): origin is string =>
@@ -304,7 +330,26 @@ export const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const filledValues = new Map<ThreadId, Set<string>>();
-  const fences = new WeakMap<Page, Array<Target>>();
+  const fences = new WeakMap<Page, Array<Fence>>();
+  // A frame's session closes with its document: whatever it filled there is gone.
+  const closedSessions = new WeakSet<CDPSession>();
+  const watchedSessions = new WeakSet<CDPSession>();
+  const watch = (session: CDPSession) => {
+    if (watchedSessions.has(session)) return;
+    watchedSessions.add(session);
+    session.on("close", () => closedSessions.add(session));
+  };
+  // Compiled once per thread and dropped when the thread fills another value.
+  const maskers = new Map<ThreadId, ReturnType<typeof maskWith>>();
+  const maskerFor = (threadId: ThreadId) => {
+    const values = filledValues.get(threadId);
+    if (values === undefined || values.size === 0) return undefined;
+    const known = maskers.get(threadId);
+    if (known !== undefined) return known;
+    const compiled = maskWith(values);
+    maskers.set(threadId, compiled);
+    return compiled;
+  };
 
   const consume = (input: {
     readonly ref: PreviewAutomationFillSecretInput["secretRef"];
@@ -358,11 +403,13 @@ export const make = Effect.gen(function* () {
             const values = filledValues.get(request.threadId) ?? new Set<string>();
             values.add(value);
             filledValues.set(request.threadId, values);
+            maskers.delete(request.threadId);
             rememberSecret(tab.page, value);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
-            const entry: Target = { ...target };
+            const entry: Fence = { ...target, value };
+            watch(target.session);
             const outstanding = fences.get(tab.page) ?? [];
             outstanding.push(entry);
             fences.set(tab.page, outstanding);
@@ -377,7 +424,9 @@ export const make = Effect.gen(function* () {
               .catch(() => {
                 throw refused(UNCERTAIN);
               });
+            // Only FILL's explicit early false proves the value was never set.
             if (typed.exceptionDetails || typed.result.value !== true) {
+              if (typed.exceptionDetails || typed.result.value !== false) throw refused(UNCERTAIN);
               fences.set(
                 tab.page,
                 (fences.get(tab.page) ?? []).filter((each) => each !== entry),
@@ -420,18 +469,21 @@ export const make = Effect.gen(function* () {
     let unconfirmed = false;
     let shown = false;
     let holding = false;
-    const kept: Array<Target> = [];
+    const kept: Array<Fence> = [];
     for (const entry of outstanding) {
-      const state = await entry.session
-        .send("Runtime.callFunctionOn", {
-          objectId: entry.objectId,
-          functionDeclaration: STILL_FILLED,
-          returnByValue: true,
-        })
-        .then(
-          (answer): unknown => (answer.exceptionDetails ? "unknown" : answer.result.value),
-          (cause: unknown) => (GONE.test(String(cause)) ? "gone" : "unknown"),
-        );
+      const state = closedSessions.has(entry.session)
+        ? "gone"
+        : await entry.session
+            .send("Runtime.callFunctionOn", {
+              objectId: entry.objectId,
+              functionDeclaration: STILL_FILLED,
+              arguments: [{ value: entry.value }],
+              returnByValue: true,
+            })
+            .then(
+              (answer): unknown => (answer.exceptionDetails ? "unknown" : answer.result.value),
+              (cause: unknown) => (GONE.test(String(cause)) ? "gone" : "unknown"),
+            );
       if (state === "gone") void release(entry);
       else kept.push(entry);
       if (state === "gone" || state === "empty") continue;
@@ -450,9 +502,8 @@ export const make = Effect.gen(function* () {
   const mask =
     (request: PreviewAutomationRequest) =>
     <O extends Outcome>(outcome: O): O => {
-      const values = filledValues.get(request.threadId);
-      if (values === undefined || values.size === 0) return outcome;
-      const text = maskWith(values);
+      const text = maskerFor(request.threadId);
+      if (text === undefined) return outcome;
       return (
         outcome.ok
           ? { ...outcome, result: maskResult(request.operation, outcome.result, text) }
@@ -460,15 +511,13 @@ export const make = Effect.gen(function* () {
       ) as O;
     };
 
-  /** Masks the thread's filled values in one text, for collectors that cut what they keep. */
   /**
    * Masks the thread's filled values in one text. With `limit`, a text the caller will cut there is
    * cut first a little past it and masked as cut, so a huge page text is never scanned whole.
    */
   const maskText = (threadId: string) => (text: string, limit?: number) => {
-    const values = filledValues.get(ThreadId.make(threadId));
-    if (values === undefined || values.size === 0) return text;
-    const masker = maskWith(values);
+    const masker = maskerFor(ThreadId.make(threadId));
+    if (masker === undefined) return text;
     if (limit === undefined || text.length <= limit + masker.slack) return masker(text);
     return masker(text.slice(0, limit + masker.slack), true);
   };

@@ -1,10 +1,30 @@
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
-import { act, useEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, render, type Screen } from "../../test/render";
 
 vi.mock("~/state/session", () => ({ readPreparedConnection: () => null }));
+vi.mock("~/state/entities", () => ({
+  readThreadShell: () => null,
+  readProject: () => null,
+  readProjects: () => [],
+  useProjects: () => [],
+  useQuietThreadShell: () => null,
+}));
+vi.mock("./useSettings", async () => {
+  const { DEFAULT_CLIENT_SETTINGS } = await import("@goat/contracts/settings");
+  return {
+    getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
+    useClientSettings: () => DEFAULT_CLIENT_SETTINGS,
+    isClientSettingsHydrated: () => true,
+    ensureClientSettingsHydrated: () => Promise.resolve(),
+  };
+});
+vi.mock("~/state/environments", () => ({
+  readPrimaryEnvironmentId: () => null,
+  usePrimaryEnvironmentId: () => null,
+}));
 
 import {
   type BrowserHistoryEntry,
@@ -46,54 +66,38 @@ const input: Parameters<typeof useBrowserHistoryProject>[0] = {
   clientSettingsHydrated: true,
 };
 
-let root: Root | null = null;
-let recent: ReadonlyArray<BrowserHistoryEntry> = [];
-
 function Probe(props: typeof input) {
   useBrowserHistoryProject(props);
   const entries = useThreadRecentHistory(props.threadRef ?? threadRef, 10);
-  useEffect(() => {
-    recent = entries;
-  }, [entries]);
-  return null;
+  return <output>{JSON.stringify(entries)}</output>;
 }
 
-async function render(overrides: Partial<typeof input> = {}) {
-  await act(() => {
-    const element = <Probe {...input} {...overrides} />;
-    root ??= createRoot(document.createElement("div"));
-    root.render(element);
-  });
+function expectHistory(screen: Screen, entries: ReadonlyArray<BrowserHistoryEntry>) {
+  return expect.element(screen.getByRole("status")).toHaveTextContent(JSON.stringify(entries));
 }
 
-beforeEach(() => {
+function setup(): Disposable {
   resetBrowserHistoryForTests();
-  recent = [];
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-});
-
-afterEach(async () => {
-  await act(() => root?.unmount());
-  root = null;
-  resetBrowserHistoryForTests();
-  vi.unstubAllGlobals();
-});
+  return { [Symbol.dispose]: resetBrowserHistoryForTests };
+}
 
 describe("useBrowserHistoryProject", () => {
   it.each(["server-thread", "draft-thread"])(
     "makes queued and subsequent visits visible and persistent for a %s",
     async (threadId) => {
+      using _state = setup();
       const ref = { environmentId, threadId: ThreadId.make(threadId) };
       recordVisitForThread(ref, "https://example.com/queued", 1);
-      await render({ threadRef: ref });
-      expect(recent).toEqual([{ url: "https://example.com/queued", lastVisitedAt: 1 }]);
+      await using screen = await render(<Probe {...input} threadRef={ref} />);
+      await expectHistory(screen, [{ url: "https://example.com/queued", lastVisitedAt: 1 }]);
       expect(useBrowserHistoryStore.getState().pendingVisitsByThreadKey).toEqual({});
 
       await act(() => recordVisitForThread(ref, "https://example.com/next", 2));
-      expect(recent.map((entry) => entry.url)).toEqual([
-        "https://example.com/next",
-        "https://example.com/queued",
-      ]);
+      const recent = [
+        { url: "https://example.com/next", lastVisitedAt: 2 },
+        { url: "https://example.com/queued", lastVisitedAt: 1 },
+      ];
+      await expectHistory(screen, recent);
       const storage = useBrowserHistoryStore.persist.getOptions().storage;
       expect((await storage?.getItem("goat:browser-history:v1"))?.state).toMatchObject({
         byProjectKey: { [repositoryIdentity.canonicalKey]: recent },
@@ -103,19 +107,21 @@ describe("useBrowserHistoryProject", () => {
   );
 
   it("waits for client settings hydration before assigning or flushing history", async () => {
+    using _state = setup();
     recordVisitForThread(threadRef, "https://example.com/", 1);
-    await render({ clientSettingsHydrated: false });
-    expect(recent).toEqual([]);
+    await using screen = await render(<Probe {...input} clientSettingsHydrated={false} />);
+    await expectHistory(screen, []);
     expect(useBrowserHistoryStore.getState().projectKeyByThreadKey).toEqual({});
     expect(
       useBrowserHistoryStore.getState().pendingVisitsByThreadKey[scopedThreadKey(threadRef)],
     ).toHaveLength(1);
 
-    await render();
-    expect(recent).toEqual([{ url: "https://example.com/", lastVisitedAt: 1 }]);
+    await screen.rerender(<Probe {...input} />);
+    await expectHistory(screen, [{ url: "https://example.com/", lastVisitedAt: 1 }]);
   });
 
   it("uses the sidebar identity borrowed from a duplicate physical project's sibling", async () => {
+    using _state = setup();
     const staleProject = {
       ...project,
       id: ProjectId.make("stale-project"),
@@ -123,55 +129,65 @@ describe("useBrowserHistoryProject", () => {
       updatedAt: "2025-01-01T00:00:00.000Z",
     };
     recordVisitForThread(threadRef, "https://example.com/", 1);
-    await render({ project: staleProject, projects: [staleProject, project] });
+    await using screen = await render(
+      <Probe {...input} project={staleProject} projects={[staleProject, project]} />,
+    );
     expect(useBrowserHistoryStore.getState().byProjectKey).toEqual({
       [repositoryIdentity.canonicalKey]: [{ url: "https://example.com/", lastVisitedAt: 1 }],
     });
-    expect(recent).toHaveLength(1);
+    await expectHistory(screen, [{ url: "https://example.com/", lastVisitedAt: 1 }]);
   });
 
   it("derives the project key when a draft's project is not in the project list yet", async () => {
+    using _state = setup();
     recordVisitForThread(threadRef, "https://example.com/", 1);
-    await render({ projects: [] });
-    expect(recent).toEqual([{ url: "https://example.com/", lastVisitedAt: 1 }]);
+    await using screen = await render(<Probe {...input} projects={[]} />);
+    await expectHistory(screen, [{ url: "https://example.com/", lastVisitedAt: 1 }]);
     expect(
       useBrowserHistoryStore.getState().projectKeyByThreadKey[scopedThreadKey(threadRef)],
     ).toBe(repositoryIdentity.canonicalKey);
   });
 
   it("leaves a projectless thread queued and binds once its project resolves", async () => {
+    using _state = setup();
     recordVisitForThread(threadRef, "https://example.com/", 1);
-    await render({ project: null });
-    expect(recent).toEqual([]);
+    await using screen = await render(<Probe {...input} project={null} />);
+    await expectHistory(screen, []);
     expect(useBrowserHistoryStore.getState().projectKeyByThreadKey).toEqual({});
 
-    await render();
-    expect(recent).toEqual([{ url: "https://example.com/", lastVisitedAt: 1 }]);
+    await screen.rerender(<Probe {...input} />);
+    await expectHistory(screen, [{ url: "https://example.com/", lastVisitedAt: 1 }]);
   });
 
   it("does not bind without an active thread", async () => {
-    await render({ threadRef: null });
+    using _state = setup();
+    await using screen = await render(<Probe {...input} threadRef={null} />);
+    await expectHistory(screen, []);
     expect(useBrowserHistoryStore.getState().projectKeyByThreadKey).toEqual({});
   });
 
   it("rebinds when grouping settings change and isolates the same thread id on another host", async () => {
+    using _state = setup();
     recordVisitForThread(threadRef, "https://example.com/local", 1);
-    await render();
+    await using screen = await render(<Probe {...input} />);
     const separateSettings = { ...input.settings, sidebarProjectGroupingMode: "separate" as const };
-    await render({ settings: separateSettings });
+    await screen.rerender(<Probe {...input} settings={separateSettings} />);
     await act(() => recordVisitForThread(threadRef, "https://example.com/separate", 2));
-    expect(recent).toEqual([{ url: "https://example.com/separate", lastVisitedAt: 2 }]);
+    await expectHistory(screen, [{ url: "https://example.com/separate", lastVisitedAt: 2 }]);
     const remoteRef = { ...threadRef, environmentId: EnvironmentId.make("env-remote") };
     const remoteProject = { ...project, environmentId: remoteRef.environmentId };
     recordVisitForThread(remoteRef, "https://example.com/remote", 3);
-    await render({
-      threadRef: remoteRef,
-      project: remoteProject,
-      projects: [project, remoteProject],
-      settings: separateSettings,
-      primaryEnvironmentId: null,
-    });
-    expect(recent).toEqual([{ url: "https://example.com/remote", lastVisitedAt: 3 }]);
+    await screen.rerender(
+      <Probe
+        {...input}
+        threadRef={remoteRef}
+        project={remoteProject}
+        projects={[project, remoteProject]}
+        settings={separateSettings}
+        primaryEnvironmentId={null}
+      />,
+    );
+    await expectHistory(screen, [{ url: "https://example.com/remote", lastVisitedAt: 3 }]);
     expect(
       useBrowserHistoryStore.getState().projectKeyByThreadKey[scopedThreadKey(threadRef)],
     ).toBe("env-primary:/tmp/browser-history");

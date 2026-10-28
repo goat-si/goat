@@ -1,3 +1,5 @@
+import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { RestoreConnectAccessButton } from "./RestoreConnectAccessButton";
 import { findErrorTraceId } from "@goat/client-runtime/errors";
 import {
   type EnvironmentConnectionPresentation,
@@ -68,7 +70,22 @@ function RemoteEnvironmentRowsSkeleton() {
   );
 }
 
-export function CloudEnvironmentConnectRows({
+export function CloudEnvironmentConnectRows(
+  props: Parameters<typeof CloudEnvironmentConnectRowsContent>[0],
+) {
+  const discovery = useRelayEnvironmentDiscovery();
+  const failed =
+    Option.isSome(discovery.error) ||
+    [...discovery.environments.values()].some((entry) => Option.isSome(entry.error));
+  return (
+    <>
+      <CloudEnvironmentConnectRowsContent {...props} />
+      {failed && hasCloudPublicConfig() ? <RestoreConnectAccessButton /> : null}
+    </>
+  );
+}
+
+function CloudEnvironmentConnectRowsContent({
   primaryEnvironmentId,
   savedEnvironments,
   showSavedEnvironments = false,

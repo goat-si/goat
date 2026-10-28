@@ -19,6 +19,7 @@ import {
 } from "@goat/shared/toolOutput";
 
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
+import * as WindowsTaskkill from "@goat/provider-core/server/windowsTaskkill";
 
 export class PiRpcError extends Schema.TaggedError<PiRpcError>()("PiRpcError", {
   operation: Schema.String,
@@ -219,11 +220,8 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
   // Windows process.kill leaves extension children and pipes alive; taskkill /T reaps the tree.
   const terminateWindowsTree = Effect.gen(function* () {
     if (hasExited()) return;
-    const taskkill = yield* spawner.spawn(
-      ChildProcess.make("taskkill", ["/PID", String(child.pid), "/T", "/F"]),
-    );
-    yield* taskkill.exitCode;
-  }).pipe(Effect.scoped, Effect.ignore);
+    yield* WindowsTaskkill.terminateWindowsTree(Number(child.pid));
+  }).pipe(Effect.ignore({ log: true }));
 
   const terminateProcess =
     platform === "win32" ? terminateWindowsTree : terminatePiProcess(killProcessGroup, hasExited);

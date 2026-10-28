@@ -14,6 +14,7 @@ import {
   primaryKey,
   text,
   uniqueIndex,
+  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -67,6 +68,7 @@ export const relayEnvironmentLinks = pgTable(
   {
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    connectAuthPolicyVersion: integer("connect_auth_policy_version"),
     environmentLabel: text("environment_label").notNull().default("T3 Environment"),
     environmentPublicKey: text("environment_public_key").notNull(),
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
@@ -92,6 +94,7 @@ export const relayManagedEndpointAllocations = pgTable(
   {
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    incarnationId: uuid("incarnation_id").notNull().defaultRandom(),
     hostname: text("hostname").notNull(),
     tunnelId: varchar("tunnel_id", { length: 191 }),
     tunnelName: text("tunnel_name").notNull(),
@@ -204,4 +207,39 @@ export const relayDpopProofs = pgTable(
     primaryKey({ columns: [table.thumbprint, table.jti] }),
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
+);
+
+export const relayClientKeys = pgTable(
+  "relay_client_keys",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    clientId: varchar("client_id", { length: 64 }).notNull(),
+    thumbprint: varchar("thumbprint", { length: 191 }).notNull(),
+    admittedAt: integer("admitted_at").notNull(),
+    admissionId: varchar("admission_id", { length: 64 }),
+    policyVersion: integer("policy_version").notNull(),
+    authGeneration: integer("auth_generation").notNull(),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.clientId, table.thumbprint] })],
+);
+
+export const relayConnectAccounts = pgTable("relay_connect_accounts", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  generation: integer("generation").notNull(),
+  status: varchar("status", { length: 32 }).notNull().$type<"active" | "suspended" | "deleted">(),
+});
+
+export const relayConnectLinkReservations = pgTable(
+  "relay_connect_link_reservations",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    challengeId: varchar("challenge_id", { length: 255 }).notNull(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    proof: text("proof").notNull(),
+    attemptId: varchar("attempt_id", { length: 64 }),
+    status: varchar("status", { length: 32 }).notNull(),
+    outcome: text("outcome"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.challengeId] })],
 );

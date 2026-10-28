@@ -300,12 +300,19 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   goat_queue_promote_to_steer: McpToolAccess.destructive(
     writesThread((input) =>
-      dispatch(input.threadId, (common) => ({
-        ...common,
-        type: "queued-message.promote-to-steer",
-        queuedRunId: input.queuedRunId,
-        targetRunId: input.targetRunId,
-      })),
+      Effect.gen(function* () {
+        const { threads, projection } = yield* readThread(input.threadId);
+        const result = yield* threads
+          .promoteQueuedToSteer({
+            type: "queued-message.promote-to-steer",
+            commandId: yield* newCommandId(),
+            threadId: projection.thread.id,
+            queuedRunId: input.queuedRunId,
+            targetRunId: input.targetRunId,
+          })
+          .pipe(Effect.mapError(dispatchFailure));
+        return { sequence: result.sequence };
+      }),
     ),
   ),
   goat_thread_organize: McpToolAccess.destructive(

@@ -1,11 +1,16 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, expect, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert, describe, expect } from "vite-plus/test";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
+import * as Tracer from "effect/Tracer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
@@ -14,6 +19,8 @@ import type { EffectTraceRecord } from "@goat/shared/observability";
 import * as ServerConfig from "../config.ts";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import * as Observability from "./Observability.ts";
+import * as Metrics from "./Metrics.ts";
+import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 
 // Synthetic canaries; neither is a real credential.
 const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktc3Bhbi1leGl0In0.Y2FuYXJ5LXNwYW4tZXhpdA";
@@ -23,20 +30,71 @@ class UpstreamError extends Error {
   override readonly name = "UpstreamError";
 }
 
-interface OtlpAttribute {
-  readonly key: string;
-  readonly value: { readonly stringValue?: string; readonly boolValue?: boolean };
-}
-
-interface OtlpSpan {
-  readonly name: string;
-  readonly attributes: ReadonlyArray<OtlpAttribute>;
-  readonly events: ReadonlyArray<{
-    readonly name: string;
-    readonly attributes: ReadonlyArray<OtlpAttribute>;
-  }>;
-  readonly status: { readonly code: number; readonly message?: string };
-}
+const OtlpAttribute = Schema.Struct({
+  key: Schema.String,
+  value: Schema.Struct({
+    stringValue: Schema.optional(Schema.String),
+    boolValue: Schema.optional(Schema.Boolean),
+  }),
+});
+type OtlpAttribute = typeof OtlpAttribute.Type;
+const OtlpSpan = Schema.Struct({
+  name: Schema.String,
+  attributes: Schema.Array(OtlpAttribute),
+  events: Schema.Array(
+    Schema.Struct({ name: Schema.String, attributes: Schema.Array(OtlpAttribute) }),
+  ),
+  status: Schema.Struct({ code: Schema.Number, message: Schema.optional(Schema.String) }),
+});
+type OtlpSpan = typeof OtlpSpan.Type;
+const decodeOtlp = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      resourceSpans: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            scopeSpans: Schema.Array(Schema.Struct({ spans: Schema.Array(OtlpSpan) })),
+          }),
+        ),
+      ),
+    }),
+  ),
+);
+const TraceAttributes = Schema.Record(Schema.String, Schema.Unknown);
+const TraceRecordJson = Schema.fromJsonString(
+  Schema.Struct({
+    type: Schema.Literal("effect-span"),
+    name: Schema.String,
+    traceId: Schema.String,
+    spanId: Schema.String,
+    parentSpanId: Schema.optionalKey(Schema.String),
+    sampled: Schema.Boolean,
+    kind: Schema.String,
+    startTimeUnixNano: Schema.String,
+    endTimeUnixNano: Schema.String,
+    durationMs: Schema.Number,
+    attributes: TraceAttributes,
+    resourceAttributes: Schema.optionalKey(TraceAttributes),
+    events: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        timeUnixNano: Schema.String,
+        attributes: TraceAttributes,
+      }),
+    ),
+    links: Schema.Array(
+      Schema.Struct({ traceId: Schema.String, spanId: Schema.String, attributes: TraceAttributes }),
+    ),
+    exit: Schema.Union([
+      Schema.TaggedStruct("Success", {}),
+      Schema.TaggedStruct("Failure", { cause: Schema.String }),
+      Schema.TaggedStruct("Interrupted", { cause: Schema.String }),
+    ]),
+  }),
+);
+const decodeTraceRecordJson = Schema.decodeSync(TraceRecordJson);
+const decodeTraceRecord = (line: string) => decodeTraceRecordJson(line);
+const encodeTraceRecord = Schema.encodeSync(TraceRecordJson);
 
 const layerTraceCollector = (bodies: Array<string>) =>
   Layer.succeed(
@@ -52,11 +110,7 @@ const layerTraceCollector = (bodies: Array<string>) =>
 
 const exportedSpans = (bodies: ReadonlyArray<string>): ReadonlyArray<OtlpSpan> =>
   bodies.flatMap((body) => {
-    const payload = JSON.parse(body) as {
-      readonly resourceSpans?: ReadonlyArray<{
-        readonly scopeSpans: ReadonlyArray<{ readonly spans: ReadonlyArray<OtlpSpan> }>;
-      }>;
-    };
+    const payload = decodeOtlp(body);
     return (payload.resourceSpans ?? []).flatMap((resource) =>
       resource.scopeSpans.flatMap((scope) => scope.spans),
     );
@@ -121,7 +175,7 @@ const traceThroughServer = (otlpTracesUrl: string | undefined) =>
     const records = traceText
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as EffectTraceRecord)
+      .map(decodeTraceRecord)
       .filter((record) => record.name.startsWith("observability-"));
     const record = (name: string) => {
       const found = records.find((entry) => entry.name === name);
@@ -217,3 +271,145 @@ describe("Observability.layer", () => {
       }),
   );
 });
+
+it.effect.each(["Info", "Debug", "Trace"] as const)(
+  "applies the local SQL policy at %s while preserving OTLP spans",
+  (traceMinLevel) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sql-policy-" });
+      const bodies: string[] = [];
+      const layerConfig = Layer.effect(
+        ServerConfig.ServerConfig,
+        Effect.gen(function* () {
+          const base = yield* ServerConfig.ServerConfig;
+          return ServerConfig.make({
+            ...base,
+            traceMinLevel,
+            otlpTracesUrl: "http://otlp.test/v1/traces",
+          });
+        }),
+      ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
+      const tracePath = yield* Effect.gen(function* () {
+        const tracer = yield* Tracer.Tracer;
+        const parent = Tracer.externalSpan({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
+        for (let index = 0; index < 1_000; index++) {
+          const span = tracer.span({
+            name: "sqlite",
+            parent: Option.some(parent),
+            annotations: Context.empty(),
+            links: [],
+            startTime: 0n,
+            kind: "client",
+            root: false,
+            sampled: true,
+          });
+          span.attribute("db.lock_wait_ms", 0);
+          span.attribute("fixture.id", index);
+          span.end(1_000_000n, Exit.void);
+        }
+        const eventful = tracer.span({
+          name: "sqlite",
+          parent: Option.some(parent),
+          annotations: Context.empty(),
+          links: [],
+          startTime: 0n,
+          kind: "client",
+          root: false,
+          sampled: true,
+        });
+        eventful.attribute("db.lock_wait_ms", 0);
+        eventful.attribute("fixture.id", "eventful");
+        eventful.event("warning", 0n);
+        eventful.end(1_000_000n, Exit.void);
+        yield* Effect.void.pipe(Effect.withSpan("policy-fixture"));
+        return (yield* ServerConfig.ServerConfig).serverTracePath;
+      }).pipe(
+        Effect.provide(
+          Observability.layer.pipe(
+            Layer.provideMerge(layerConfig),
+            Layer.provide(ResourceAttribution.layer),
+            Layer.provide(layerTraceCollector(bodies)),
+          ),
+        ),
+      );
+      const sqlRecords = (yield* fs.readFileString(tracePath))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map(decodeTraceRecord)
+        .filter((record) => record.name === "sqlite");
+      const diagnostic = sqlRecords.filter(
+        (record) => record.attributes["fixture.id"] === "eventful",
+      );
+      assert.equal(diagnostic.length, 1);
+      assert.equal(diagnostic[0]?.events[0]?.name, "warning");
+      const records = sqlRecords.filter((record) => record.attributes["fixture.id"] !== "eventful");
+      const expectedIds =
+        traceMinLevel === "Info" ? [] : Array.from({ length: 1_000 }, (_, i) => i);
+      assert.deepEqual(
+        records.map((record) => record.attributes["fixture.id"]),
+        expectedIds,
+      );
+      const bytes = records.reduce(
+        (total, record) => total + Buffer.byteLength(`${encodeTraceRecord(record)}\n`),
+        0,
+      );
+      if (traceMinLevel === "Info") assert.equal(bytes, 0);
+      else assert.isAbove(bytes, 0);
+      assert.equal(exportedSpans(bodies).filter((span) => span.name === "sqlite").length, 1_001);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps browser SQL records and counts server sink loss with a fixed reason", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-trace-metric-" });
+    const metric = Metric.withAttributes(Metrics.serverTraceDroppedRecords, { reason: "oversize" });
+    const before = yield* Metric.value(metric);
+    const layerConfig = Layer.effect(
+      ServerConfig.ServerConfig,
+      Effect.gen(function* () {
+        const base = yield* ServerConfig.ServerConfig;
+        return ServerConfig.make({ ...base, traceMinLevel: "Info", traceMaxBytes: 1024 });
+      }),
+    ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
+    const record: EffectTraceRecord = {
+      type: "effect-span",
+      name: "sqlite",
+      traceId: "browser",
+      spanId: "browser-sql",
+      parentSpanId: "browser-parent",
+      sampled: true,
+      kind: "client",
+      startTimeUnixNano: "0",
+      endTimeUnixNano: "1000000",
+      durationMs: 1,
+      attributes: { "db.lock_wait_ms": 0, "fixture.browser": true },
+      events: [],
+      links: [],
+      exit: { _tag: "Success" },
+    };
+    const tracePath = yield* Effect.gen(function* () {
+      const collector = yield* BrowserTraceCollector.BrowserTraceCollector;
+      yield* collector.record([record, { ...record, name: "x".repeat(2048) }]);
+      return (yield* ServerConfig.ServerConfig).serverTracePath;
+    }).pipe(
+      Effect.provide(
+        Observability.layer.pipe(
+          Layer.provideMerge(layerConfig),
+          Layer.provide(ResourceAttribution.layer),
+          Layer.provide(layerTraceCollector([])),
+        ),
+      ),
+    );
+    const after = yield* Metric.value(metric);
+    assert.equal(after.count - before.count, 1);
+    assert.isTrue(after.incremental);
+    const records = (yield* fs.readFileString(tracePath)).trim().split("\n").map(decodeTraceRecord);
+    assert.deepEqual(
+      records.filter((entry) => entry.name === "sqlite"),
+      [record],
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

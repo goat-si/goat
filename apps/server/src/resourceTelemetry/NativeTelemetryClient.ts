@@ -587,7 +587,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
               (cause) => new NativeTelemetrySpawnFailed({ path: executablePath, cause }),
             ),
           ),
-        (child) => child.kill().pipe(Effect.ignore),
+        (child) => child.kill({ forceKillAfter: Duration.seconds(2) }).pipe(Effect.ignore),
       );
       yield* Ref.update(state, (current) => ({
         ...current,

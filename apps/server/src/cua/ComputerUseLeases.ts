@@ -260,6 +260,8 @@ export class ComputerUseLeases extends Context.Service<
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
     readonly resume: Effect.Effect<void>;
+    /** Holds one control for the person its agent asked; the others keep acting. */
+    readonly hold: (controlId: string, held: boolean) => Effect.Effect<void>;
     /** Every thread's latest control with where it stands, for the preview session list. */
     readonly sessions: Effect.Effect<
       ReadonlyArray<{
@@ -337,6 +339,8 @@ const make = Effect.gen(function* () {
   const blockedTurns = new Map<ThreadId, CuaAgentBlock>();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
+  const forPerson = new Set<string>();
+  const holdFor = (id: string, on: boolean) => void forPerson[on ? "add" : "delete"](id);
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
   const { settle, openWork, turnEnded } = makeRunEnd({
     sql,
@@ -489,6 +493,7 @@ const make = Effect.gen(function* () {
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    if (forPerson.has(controlId)) return { _tag: "paused", reason: "takeover" };
     const own = stoppedCards.own(grants, threadId);
     yield* settle(threadId);
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
@@ -825,6 +830,7 @@ const make = Effect.gen(function* () {
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),
+    hold: (id, on) => Effect.sync(() => holdFor(id, on)).pipe(Effect.andThen(changed)),
     // Suspended: the controls are read each time it runs, never once when the service is built.
     sessions: Effect.suspend(() =>
       Effect.forEach([...controls.values()], (record) =>

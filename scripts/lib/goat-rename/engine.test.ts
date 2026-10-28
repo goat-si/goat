@@ -8,6 +8,30 @@ const rules: readonly TextRule[] = [
 ];
 
 describe("applyTextRules", () => {
+  it("keeps legacy markers and held text protected from multiline rules", () => {
+    const pair = 'owner: "pingdotgg",\nname: "t3code"';
+    const multilineRules = [
+      {
+        id: "pair",
+        category: "samples",
+        find: /owner: "pingdotgg",\s*name: "t3code"/g,
+        replace: 'owner: "goat-si",\nname: "goat"',
+        multiline: true,
+      },
+    ];
+    expect(applyTextRules("a.ts", pair, multilineRules).text).toBe(
+      'owner: "goat-si",\nname: "goat"',
+    );
+    for (const protectedPair of [
+      `${pair} // goat-rename: legacy`,
+      `// goat-rename: legacy-begin\n${pair}\n// goat-rename: legacy-end`,
+    ]) {
+      expect(applyTextRules("a.ts", protectedPair, multilineRules).text).toBe(protectedPair);
+    }
+    const keeps = [{ id: "legacy", pattern: /t3code/g, reason: "legacy name", holdsOnApply: true }];
+    expect(applyTextRules("a.ts", pair, multilineRules, keeps).text).toBe(pair);
+  });
+
   it("is a no-op on its own output", () => {
     const source = 'import { x } from "@t3tools/contracts";\nconst home = env.T3CODE_HOME;\n';
     const once = applyTextRules("a.ts", source, rules);
