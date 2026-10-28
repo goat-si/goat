@@ -20,7 +20,9 @@ import {
   type ChannelTaskEventId,
   type ChannelTaskId,
   CommandId,
+  GOAT_BOT_SESSION_THREAD_PREFIX,
   MessageId,
+  type RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -85,6 +87,24 @@ export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) =>
  */
 export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
 
+/** One generation of a conversation's GOAT Bot session thread. */
+export const goatBotSessionThreadIdFor = (
+  conversationId: ChannelConversationId,
+  generation: number,
+) => ThreadId.make(GOAT_BOT_SESSION_THREAD_PREFIX + digest([conversationId, String(generation)]));
+
+/** The launch of a session generation, carried by the task generation it was started for. */
+export const sessionLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
+  commandId: CommandId.make(stableId("channel-session-launch", [taskId, String(generation)])),
+  messageId: MessageId.make(stableId("channel-session-message", [taskId, String(generation)])),
+});
+
+/** A task generation queued into a session that already exists. */
+export const sessionSendIdsFor = (taskId: ChannelTaskId, generation: number) => ({
+  commandId: CommandId.make(stableId("channel-session-send", [taskId, String(generation)])),
+  messageId: MessageId.make(stableId("channel-session-send-message", [taskId, String(generation)])),
+});
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
   messageId: MessageId.make(stableId("channel-answer-message", [eventId])),
@@ -145,9 +165,18 @@ export const childWorkPromptDigestFor = (prompt: string) => digest([prompt]);
 export const childWorkKeylessRequestKeyFor = (input: {
   readonly surface: string;
   readonly callerThreadId: string;
+  /** Set for a session caller, so the same request from two runs of one task is two requests. */
+  readonly callerRunId?: RunId | undefined;
   readonly destinationKey: string;
   readonly promptDigest: string;
-}) => digest([input.surface, input.callerThreadId, input.destinationKey, input.promptDigest]);
+}) =>
+  digest([
+    input.surface,
+    input.callerThreadId,
+    ...(input.callerRunId === undefined ? [] : [input.callerRunId]),
+    input.destinationKey,
+    input.promptDigest,
+  ]);
 
 /** One admission under one task generation; the same request in the same run finds its record. */
 export const childWorkIdFor = (taskId: ChannelTaskId, generation: number, requestKey: string) =>

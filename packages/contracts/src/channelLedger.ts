@@ -135,6 +135,8 @@ export const ChannelWorkerRef = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   host: Schema.optional(TrimmedNonEmptyString),
+  /** The run serving this task when its thread is shared, such as a GOAT Bot session. */
+  runId: Schema.optional(RunId),
 });
 export type ChannelWorkerRef = typeof ChannelWorkerRef.Type;
 
