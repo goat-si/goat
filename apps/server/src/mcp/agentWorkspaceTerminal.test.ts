@@ -18,6 +18,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Config from "../config.ts";
+import * as Stream from "effect/Stream";
+import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
+import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -815,4 +819,44 @@ it.effect("#2059 retains committed provider credentials when Hub withdrawal fail
       expect(current.providerInstances[instanceId]?.environment?.[0]?.value).toBe("fixture-after");
     }).pipe(Effect.provideContext(runtime.context));
   }).pipe(Effect.scoped, Effect.provide(ConnectRuntime.storage)),
+);
+
+it.effect("#2059 the generic settings tool refuses to enable workspace or terminal authority", () =>
+  Effect.gen(function* () {
+    const toolkit = yield* EnvironmentToolkit;
+    for (const patch of [
+      { agentWorkspaceAccess: "read_write" },
+      { agentTerminalAccess: "operate" },
+    ]) {
+      const results = yield* toolkit
+        .handle("goat_environment_settings_update", { patch })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      expect(results.at(-1)?.result).toMatchObject({ code: "capability_denied" });
+    }
+    const settings = yield* (yield* Settings.ServerSettingsService).getSettings;
+    expect(settings.agentWorkspaceAccess).toBe("off");
+    expect(settings.agentTerminalAccess).toBe("off");
+  }).pipe(
+    Effect.provide(
+      McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+        Layer.provideMerge(Layer.mergeAll(dependencies, Settings.layerTest())),
+        Layer.provideMerge(
+          Layer.succeed(McpInvocationContext, {
+            environmentId: EnvironmentId.make("fixture-environment"),
+            requestNamespace: "fixture-settings-client",
+            issuedAt: 0,
+            capabilities: new Set(["orchestration"] as const),
+            thread: undefined,
+            client: {
+              sessionId: "fixture-settings-client",
+              label: "Fixture",
+              access: "full-access",
+            },
+            grantedScopes: ["settings:write"],
+            reauthorize: () => Effect.void,
+          }),
+        ),
+      ),
+    ),
+  ),
 );
