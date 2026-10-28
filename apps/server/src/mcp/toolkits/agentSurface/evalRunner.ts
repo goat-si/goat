@@ -128,7 +128,7 @@ const sameJson = (a: Json, b: Json): boolean => {
     const keys = Object.keys(a);
     return (
       keys.length === Object.keys(b).length &&
-      keys.every((key) => key in b && sameJson(a[key] as Json, b[key] as Json))
+      keys.every((key) => Object.hasOwn(b, key) && sameJson(a[key] as Json, b[key] as Json))
     );
   }
   return a === b;

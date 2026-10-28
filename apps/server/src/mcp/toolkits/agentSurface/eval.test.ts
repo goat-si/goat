@@ -448,3 +448,12 @@ it.effect("settles a run whose call was interrupted so it can be resumed", () =>
     expect((yield* probed).writes).toEqual(["park"]);
   }).pipe(Effect.provide(served)),
 );
+
+it.effect("compares maps by their own keys only", () =>
+  Effect.gen(function* () {
+    expect(yield* evaluate({ program: '(eq {"__proto__" {}} {"other" 1})' })).toMatchObject({
+      status: "ok",
+      value: false,
+    });
+  }).pipe(Effect.provide(served)),
+);

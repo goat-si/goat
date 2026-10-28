@@ -113,13 +113,15 @@ export const makeEvalJournal = (sql: SqlClient.SqlClient, bootId: string) => {
   ) {
     const at = yield* DateTime.now;
     const [unknown] = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS count
-      FROM mcp_eval_steps WHERE eval_run_id = ${evalRunId} AND state = 'unknown'`;
-    // A run that holds an unknown step stays, as an unknown reservation does.
+      FROM mcp_eval_steps WHERE eval_run_id = ${evalRunId} AND effect != 'read'
+        AND state IN ('running', 'unknown')`;
+    // A write whose outcome was never recorded keeps its run, as an unknown reservation stays;
+    // a write left running counts too, since recording its uncertainty may itself have failed.
     const expiresAt =
-      state === "completed"
-        ? DateTime.formatIso(DateTime.add(at, { hours: COMPLETED_RUN_HOURS }))
-        : (unknown?.count ?? 0) > 0
-          ? null
+      (unknown?.count ?? 0) > 0
+        ? null
+        : state === "completed"
+          ? DateTime.formatIso(DateTime.add(at, { hours: COMPLETED_RUN_HOURS }))
           : DateTime.formatIso(DateTime.add(at, { days: HALTED_RUN_DAYS }));
     yield* sql`UPDATE mcp_eval_runs SET state = ${state}, updated_at = ${DateTime.formatIso(at)},
       expires_at = ${expiresAt}
