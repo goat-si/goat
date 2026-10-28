@@ -1035,7 +1035,6 @@ export const scroll = async (
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
   if (input.x !== undefined && input.y !== undefined) {
     gate();
-    // A real wheel goes to whatever is under the point, which page script can zoom on.
     await page.mouse.move(input.x, input.y);
     await page.mouse.wheel(delta[0], delta[1]);
     return;
