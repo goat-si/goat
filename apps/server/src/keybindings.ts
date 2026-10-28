@@ -33,6 +33,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "./config.ts";
+import { supervise } from "./backgroundSupervision.ts";
+import { fileWatchResync } from "./fileWatchResync.ts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -602,25 +604,19 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
-
-    // Saves emit multiple events; fs.watch may fire before content is flushed.
-    const debouncedKeybindingsEvents = fs.watch(keybindingsConfigDir).pipe(
-      Stream.filter((event) => {
-        return (
-          event.path === keybindingsConfigFile ||
-          event.path === keybindingsConfigPath ||
-          path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved
-        );
-      }),
-      Stream.debounce(Duration.millis(100)),
-    );
-
-    yield* Stream.runForEach(debouncedKeybindingsEvents, () => revalidateAndEmitSafely).pipe(
-      Effect.ignoreCause({ log: true }),
-      Effect.forkIn(watcherScope),
-      Effect.asVoid,
-    );
+    yield* supervise("Keybindings.watch", () =>
+      fileWatchResync(keybindingsConfigDir).pipe(
+        Stream.filter(
+          (event) =>
+            event === undefined ||
+            event.path === keybindingsConfigFile ||
+            event.path === keybindingsConfigPath ||
+            path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved,
+        ),
+        Stream.debounce(Duration.millis(100)),
+        Stream.runForEach(() => revalidateAndEmit),
+      ),
+    ).pipe(Effect.forkIn(watcherScope), Effect.asVoid);
   });
 
   const start = Effect.gen(function* () {

@@ -25,6 +25,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "./config.ts";
+import { supervise } from "./backgroundSupervision.ts";
+import { fileWatchResync } from "./fileWatchResync.ts";
 
 const decodeEnvironmentThemeFileJsonExit = Schema.decodeUnknownExit(
   Schema.fromJsonString(EnvironmentThemeFile),
@@ -186,15 +188,13 @@ const make = Effect.gen(function* () {
     .makeDirectory(environmentThemesDir, { recursive: true })
     .pipe(Effect.ignoreCause({ log: true }));
 
-  // A save emits several events, and fs.watch can fire before content is flushed.
-  const watchEvents = fs.watch(environmentThemesDir).pipe(Stream.debounce(Duration.millis(100)));
-
   yield* refresh;
-  yield* Stream.runForEach(watchEvents, () => refresh.pipe(Effect.ignoreCause({ log: true }))).pipe(
-    Effect.ignoreCause({ log: true }),
-    Effect.forkIn(watcherScope),
-    Effect.asVoid,
-  );
+  yield* supervise("EnvironmentTheme.watch", () =>
+    fileWatchResync(environmentThemesDir).pipe(
+      Stream.debounce(Duration.millis(100)),
+      Stream.runForEach(() => refresh),
+    ),
+  ).pipe(Effect.forkIn(watcherScope), Effect.asVoid);
 
   return {
     current: Effect.map(refresh, (state) => state.themes),

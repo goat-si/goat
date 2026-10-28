@@ -2,13 +2,17 @@ import { EnvironmentThemeFile } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "./config.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -67,6 +71,102 @@ const currentThemes = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("environment theme", (it) => {
+  it.effect("reattaches themes before resyncing and stops watching when its scope closes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fail = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      const attach = yield* Deferred.make<void>();
+      const failAgain = yield* Deferred.make<void>();
+      const closedAgain = yield* Deferred.make<void>();
+      const scope = yield* Scope.make();
+      let attachments = 0;
+      let active = 0;
+      const controlledFs = FileSystem.FileSystem.of({
+        ...fs,
+        watch: (_directory, options) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              attachments++;
+              active++;
+              const first = attachments === 1;
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  active--;
+                }),
+              );
+              if (!first) yield* Deferred.await(attach);
+              options?.onReady?.();
+              return first
+                ? Stream.fromEffect(
+                    Effect.gen(function* () {
+                      yield* Deferred.await(fail);
+                      return yield* PlatformError.systemError({
+                        _tag: "Unknown",
+                        module: "FileSystem",
+                        method: "watch",
+                      });
+                    }),
+                  ).pipe(Stream.ensuring(Deferred.succeed(closed, undefined)))
+                : Stream.fromEffect(
+                    Effect.gen(function* () {
+                      yield* Deferred.await(failAgain);
+                      return yield* PlatformError.systemError({
+                        _tag: "Unknown",
+                        module: "FileSystem",
+                        method: "watch",
+                      });
+                    }),
+                  ).pipe(Stream.ensuring(Deferred.succeed(closedAgain, undefined)));
+            }),
+          ),
+      });
+      yield* withEnvironmentThemes(
+        {},
+        Effect.gen(function* () {
+          const service = yield* EnvironmentTheme.EnvironmentThemeService;
+          const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
+          const seen = yield* Queue.unbounded<ReadonlyArray<{ readonly id: string }>>();
+          yield* service.streamChanges.pipe(
+            Stream.runForEach((themes) => Queue.offer(seen, themes)),
+            Effect.forkScoped,
+          );
+          assert.deepEqual(yield* Queue.take(seen), []);
+          yield* TestClock.adjust("100 millis");
+          yield* Deferred.succeed(fail, undefined);
+          yield* Deferred.await(closed);
+          yield* fs.writeFileString(
+            `${environmentThemesDir}/nightfall.json`,
+            encodeThemeFile(NIGHTFALL_THEME),
+          );
+          yield* TestClock.adjust("1100 millis");
+          assert.equal(attachments, 2);
+          assert.equal(active, 1);
+          assert.equal(yield* Queue.size(seen), 0);
+          yield* fs.writeFileString(
+            `${environmentThemesDir}/shared-light.json`,
+            encodeThemeFile(SHARED_THEME),
+          );
+          yield* Deferred.succeed(attach, undefined);
+          yield* TestClock.adjust("100 millis");
+          assert.deepEqual(
+            (yield* Queue.take(seen)).map((theme) => theme.id),
+            ["nightfall", "shared-light"],
+          );
+          yield* Deferred.succeed(failAgain, undefined);
+          yield* Deferred.await(closedAgain);
+        }),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, controlledFs),
+        Scope.provide(scope),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+      );
+      assert.equal(active, 0);
+      yield* TestClock.adjust("60 seconds");
+      assert.equal(attachments, 2);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("follows the directory rather than the set read at start", () =>
     withEnvironmentThemes(
       { "nightfall.json": encodeThemeFile(NIGHTFALL_THEME) },
