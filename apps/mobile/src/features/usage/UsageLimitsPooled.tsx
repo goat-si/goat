@@ -3,8 +3,6 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { EnvironmentId } from "@goat/contracts";
 import {
   collectExternalUsageLinks,
-  collectLimitAccounts,
-  collectLimitPools,
   cursorUsageWindowDetails,
   formatDuration,
   formatResetsIn,
@@ -129,7 +127,7 @@ function LimitRow({
   );
   const first = cells[0];
   const account = row.account;
-  if (!account || !first) return body;
+  if (!account) return body;
   return (
     <Pressable
       accessibilityRole="button"
@@ -138,8 +136,7 @@ function LimitRow({
       onPress={() =>
         navigation.navigate("SettingsUsageAccount", {
           accountKey: account.key,
-          windowId: first.pool.id,
-          windowKind: first.pool.kind,
+          ...(first ? { windowId: first.pool.id, windowKind: first.pool.kind } : {}),
           environmentIds,
           now,
         })
@@ -173,6 +170,11 @@ function LimitGroupCard({
         <Text className="text-sm font-goat-medium text-foreground">{group.title}</Text>
       </View>
       {group.detail ? <Text className="text-xs text-foreground-muted">{group.detail}</Text> : null}
+      {group.poolReadings ? (
+        <Text className="text-xs tabular-nums text-foreground-muted">
+          OpenCodex reports {group.poolReadings}
+        </Text>
+      ) : null}
       {group.windows.length > 0 ? (
         <Text className="text-xs tabular-nums text-foreground-muted">
           {group.windows
@@ -343,8 +345,8 @@ export function UsageLimitsSection({
 
 type AccountScreenProps = StaticScreenProps<{
   accountKey: string;
-  windowId: string;
-  windowKind: LimitPoolWindow["kind"];
+  windowId?: string;
+  windowKind?: LimitPoolWindow["kind"];
   environmentIds: readonly string[] | null;
   now: number;
 }>;
@@ -359,11 +361,14 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
     selectedIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedIds.has(id)));
-  const accounts = collectLimitAccounts(selected);
-  const account = accounts.find((candidate) => candidate.key === accountKey);
-  const pool = collectLimitPools(accounts, now)
-    .find((candidate) => candidate.driver === account?.driver)
-    ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
+  // The same group the Limits row came from, so its columns match what the row showed.
+  const group = limitBoard(selected, now)
+    .sections.flatMap((section) => section.groups)
+    .find((candidate) => candidate.rows.some((row) => row.account?.key === accountKey));
+  const account = group?.rows.find((row) => row.account?.key === accountKey)?.account ?? undefined;
+  const pool = group?.windows.find(
+    (candidate) => candidate.id === windowId && candidate.kind === windowKind,
+  );
   const window =
     pool?.columns.find((member) => member.account.key === accountKey)?.window ?? undefined;
   const evenPace = window ? paceRemainingPercent(window, now) : null;
@@ -376,7 +381,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
         contentContainerClassName="gap-5 p-5"
         contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
       >
-        {!account || !window ? (
+        {!account ? (
           <Text className="text-base text-foreground-muted">
             This account is no longer reporting limits on the selected environments.
           </Text>
@@ -410,31 +415,33 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
-            <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
-              <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>
-              <Text className="text-3xl font-goat-bold tabular-nums text-foreground">
-                {remainingPercent(window)}% left
-              </Text>
-              {window.resetsAt ? (
-                <Text selectable className="text-sm text-foreground-muted">
-                  Resets{" "}
-                  {new Date(window.resetsAt).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
+            {window ? (
+              <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
+                <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>
+                <Text className="text-3xl font-goat-bold tabular-nums text-foreground">
+                  {remainingPercent(window)}% left
                 </Text>
-              ) : null}
-              {evenPace !== null ? (
-                <Text className="text-sm text-foreground-muted">
-                  Even pace: {evenPace}% left by now
-                </Text>
-              ) : null}
-              {reset && reset.restoresPercent > 0 ? (
-                <Text className="text-sm text-foreground-muted">
-                  Restores {reset.restoresPercent}% of the pool
-                </Text>
-              ) : null}
-            </View>
+                {window.resetsAt ? (
+                  <Text selectable className="text-sm text-foreground-muted">
+                    Resets{" "}
+                    {new Date(window.resetsAt).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </Text>
+                ) : null}
+                {evenPace !== null ? (
+                  <Text className="text-sm text-foreground-muted">
+                    Even pace: {evenPace}% left by now
+                  </Text>
+                ) : null}
+                {reset && reset.restoresPercent > 0 ? (
+                  <Text className="text-sm text-foreground-muted">
+                    Restores {reset.restoresPercent}% of the pool
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-goat-medium text-foreground">
                 {account.environments.length ? "Signed in" : "Source"}

@@ -181,6 +181,36 @@ describe("Usage limits board", () => {
     });
   });
 
+  it("lists a login without a reading once, and not at all when another login reads the same account", () => {
+    const failed = (instance: string, email: string) =>
+      provider({
+        instanceId: ProviderInstanceId.make(instance),
+        auth: { status: "authenticated", email },
+        usageLimits: {
+          checkedAt: at(-1),
+          windows: [],
+          unavailable: { reason: "probeFailed", message: "Could not read limits." },
+        },
+      });
+    const { sections } = limitBoard(
+      presentations(
+        [
+          failed("a", "Solo@example.com"),
+          failed("b", "solo@example.com"),
+          failed("c", "me@example.com"),
+          localLogin,
+        ],
+        [],
+      ),
+      now,
+    );
+    const rows = sections[0]?.groups.flatMap((group) => group.rows) ?? [];
+    expect(rows.map((row) => [row.email, row.status, row.note])).toEqual([
+      ["me@example.com", "ready", undefined],
+      ["Solo@example.com", "unknown", "Could not read limits."],
+    ]);
+  });
+
   it("shows an unreadable hub pool in its own group and keeps unrelated notices", () => {
     const message =
       "OpenCodex pool unavailable (OpenCodex 2.40.0): this OpenCodex has no quota-pool API.";

@@ -257,6 +257,11 @@ function LimitGroup({
           <span className="text-xs text-muted-foreground">{group.detail}</span>
         ) : null}
       </div>
+      {group.poolReadings ? (
+        <p className="px-4 text-xs text-muted-foreground tabular-nums">
+          OpenCodex reports {group.poolReadings}
+        </p>
+      ) : null}
       {group.unreadable ? (
         <p className="flex items-start gap-2 px-4 py-3 text-xs text-warning-foreground">
           <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />

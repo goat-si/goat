@@ -6,6 +6,7 @@ import {
   collectLimitPools,
   displayLimitWindows,
   formatDuration,
+  limitAccountKeys,
   limitsNotice,
   localLimits,
   providersWithLimits,
@@ -45,6 +46,8 @@ export interface LimitBoardGroup {
   readonly detail: string | undefined;
   /** Why GOAT could not read this pool; the group has no rows then. */
   readonly unreadable: string | undefined;
+  /** The pool's own readings as OpenCodex reports them, as quota left. */
+  readonly poolReadings: string | undefined;
   /** Pool-wide blocks for this pool only. */
   readonly blocks: readonly string[];
   readonly windows: readonly LimitPoolWindow[];
@@ -231,18 +234,45 @@ function newestSources(presentations: LimitPresentations) {
 }
 
 /** Rows and pool states collectLimitAccounts leaves out because they carry no reading. */
-function withoutReadings(presentations: LimitPresentations, shown: readonly LimitAccount[]) {
+function withoutReadings(presentations: LimitPresentations) {
   const pending: Pending[] = [];
   const unreadable = new Map<ServerProvider["driver"], { messages: Set<string>; via: string[] }>();
-  const known = new Set(
-    shown.flatMap((account) =>
-      account.email ? [`${account.driver}:${account.email.trim().toLowerCase()}`] : [],
-    ),
-  );
-  const seen = (driver: string, email: string | undefined) =>
-    email !== undefined && known.has(`${driver}:${email.trim().toLowerCase()}`);
-  const login = (environmentLabel: string, provider: ServerProvider, key: string, note: string) => {
-    if (seen(provider.driver, provider.auth.email)) return;
+  // Same identity as collectLimitAccounts: an account with a reading anywhere, or one already
+  // listed without one, is not listed again.
+  const resolveKey = limitAccountKeys(presentations);
+  const known = new Set<string>();
+  const newest = newestSources(presentations);
+  const nativeLimits = (limits: NonNullable<ServerProvider["usageLimits"]>) =>
+    routedThroughOpenCodex(limits) ? localLimits(limits)?.limits : limits;
+  for (const presentation of presentations.values()) {
+    for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
+      const limits = provider.usageLimits && nativeLimits(provider.usageLimits);
+      if (limits === undefined || limitsNotice(limits) !== null) continue;
+      const key = resolveKey({ ...provider.auth, driver: provider.driver, usageLimits: limits });
+      if (key !== null) known.add(key);
+    }
+    for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      for (const account of source.accounts) {
+        const key = limitsNotice(account.usageLimits) === null ? resolveKey(account) : null;
+        if (key !== null) known.add(key);
+      }
+    }
+  }
+  const fresh = (key: string | null) => {
+    if (key === null) return true;
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  };
+  const login = (
+    environmentLabel: string,
+    provider: ServerProvider,
+    limits: NonNullable<ServerProvider["usageLimits"]>,
+    key: string,
+    note: string,
+  ) => {
+    if (!fresh(resolveKey({ ...provider.auth, driver: provider.driver, usageLimits: limits })))
+      return;
     pending.push({
       origin: { kind: "login" },
       environments: [environmentLabel],
@@ -259,7 +289,6 @@ function withoutReadings(presentations: LimitPresentations, shown: readonly Limi
       ),
     });
   };
-  const newest = newestSources(presentations);
   for (const [environmentId, presentation] of presentations) {
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
@@ -274,19 +303,25 @@ function withoutReadings(presentations: LimitPresentations, shown: readonly Limi
         }
         const own = localLimits(limits);
         const notice = own === undefined ? null : limitsNotice(own.limits);
-        if (notice !== null)
-          login(label, provider, `${environmentId}:${provider.instanceId}:login`, notice);
+        if (own !== undefined && notice !== null)
+          login(
+            label,
+            provider,
+            own.limits,
+            `${environmentId}:${provider.instanceId}:login`,
+            notice,
+          );
         continue;
       }
       const notice = limitsNotice(limits);
       if (notice !== null)
-        login(label, provider, `${environmentId}:${provider.instanceId}`, notice);
+        login(label, provider, limits, `${environmentId}:${provider.instanceId}`, notice);
     }
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
       if (source.homeId !== undefined && newest.get(source.homeId) !== source) continue;
       for (const account of source.accounts) {
         const notice = limitsNotice(account.usageLimits);
-        if (notice === null || seen(account.driver, account.email)) continue;
+        if (notice === null || !fresh(resolveKey(account))) continue;
         pending.push({
           origin:
             source.kind === "opencodex"
@@ -338,7 +373,7 @@ function groupWindows(accounts: readonly LimitAccount[], now: number) {
 /** The whole Limits view; notices are only what no group or row already shows. */
 export function limitBoard(presentations: LimitPresentations, now: number) {
   const accounts = collectLimitAccounts(presentations);
-  const { pending, unreadable } = withoutReadings(presentations, accounts);
+  const { pending, unreadable } = withoutReadings(presentations);
   const all = [...accounts.map((account) => readingRow(account, now)), ...pending];
   const lines = collectOpenCodexPools(presentations);
   const drivers = [
@@ -407,6 +442,11 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
               ? "CLI Proxy"
               : undefined,
         unreadable: undefined,
+        poolReadings: line
+          ? freshWindows(line.windows, line.checkedAt, now)
+              .map((window) => `${window.label} ${Math.round(100 - window.usedPercent)}% left`)
+              .join(" · ") || undefined
+          : undefined,
         blocks: line
           ? freshWindows(line.availability, line.checkedAt, now)
               .filter((block) => block.exhausted)
@@ -427,6 +467,7 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
         title: "OpenCodex pool",
         detail: `Routed: ${missing.via.join(", ")}`,
         unreadable: [...missing.messages].join(" "),
+        poolReadings: undefined,
         blocks: [],
         windows: [],
         rows: [],
