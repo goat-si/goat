@@ -151,3 +151,4 @@ export const PREVIEW_SESSION_STACK_CHANNEL = "desktop:preview-session-stack";
 
 export const GET_WINDOW_MATERIAL_STATE_CHANNEL = "desktop:get-window-material-state";
 export const WINDOW_MATERIAL_STATE_CHANNEL = "desktop:window-material-state-changed";
+export const RELAUNCH_FOR_WINDOW_MATERIAL_CHANNEL = "desktop:relaunch-for-window-material";

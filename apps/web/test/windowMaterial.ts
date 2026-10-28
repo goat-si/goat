@@ -33,6 +33,7 @@ export function materialBridge(initial = materialState(), platform = "win32") {
       saved = settings;
     }),
     getWindowMaterialState: vi.fn(async () => current),
+    relaunchForWindowMaterial: vi.fn(async () => undefined) as (() => Promise<void>) | undefined,
     onWindowMaterialStateChanged: (listener: (next: DesktopWindowMaterialState) => void) => {
       listeners.add(listener);
       return () => {

@@ -94,4 +94,6 @@ export interface DesktopWindowMaterialBridge {
   onWindowMaterialStateChanged?: (
     listener: (state: DesktopWindowMaterialState) => void,
   ) => () => void;
+  /** Quits and reopens the app so a new window can be created transparent for macOS glass. */
+  relaunchForWindowMaterial?: () => Promise<void>;
 }

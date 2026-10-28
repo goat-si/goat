@@ -1,6 +1,12 @@
 import type { DesktopWindowMaterialState } from "@goat/contracts";
+import { useState } from "react";
 import { useDesktopWindowMaterial } from "../../desktop/useDesktopWindowMaterial";
+import {
+  canRelaunchForWindowMaterial,
+  WindowMaterialRestartDialog,
+} from "../../desktop/WindowMaterialRestartPrompt";
 import { useClientSettings } from "../../hooks/useSettings";
+import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -41,6 +47,7 @@ export function DesktopWindowMaterialSetting() {
   const enabled = useScopedSettings((settings) => settings.desktopSystemMaterialEnabled);
   const appearancePreset = useClientSettings((settings) => settings.appearancePreset);
   const updateSettings = useUpdateScopedSettings();
+  const [restartOpen, setRestartOpen] = useState(false);
   if (!available) return null;
   const presetForcesMaterial = appearancePreset === "liquid-glass";
   const statusTakesPriority =
@@ -52,25 +59,38 @@ export function DesktopWindowMaterialSetting() {
     state.reason === "opaque" ||
     state.reason === "native-failed" ||
     state.reason === "fullscreen";
+  const canRestart = state?.reason === "restart" && canRelaunchForWindowMaterial();
 
   return (
-    <SettingsRow
-      {...searchableSetting("desktop-system-material")}
-      description={
-        presetForcesMaterial && !statusTakesPriority
-          ? "On while the Liquid Glass style is selected."
-          : materialStatus(state)
-      }
-      control={
-        <Switch
-          aria-label="System glass"
-          checked={enabled || presetForcesMaterial}
-          disabled={presetForcesMaterial || !state?.capability.supported}
-          onCheckedChange={(checked) =>
-            updateSettings({ desktopSystemMaterialEnabled: Boolean(checked) })
-          }
-        />
-      }
-    />
+    <>
+      <SettingsRow
+        {...searchableSetting("desktop-system-material")}
+        description={
+          presetForcesMaterial && !statusTakesPriority
+            ? "On while the Liquid Glass style is selected."
+            : materialStatus(state)
+        }
+        control={
+          <div className="flex items-center gap-2">
+            {canRestart ? (
+              <Button size="xs" variant="outline" onClick={() => setRestartOpen(true)}>
+                Restart
+              </Button>
+            ) : null}
+            <Switch
+              aria-label="System glass"
+              checked={enabled || presetForcesMaterial}
+              disabled={presetForcesMaterial || !state?.capability.supported}
+              onCheckedChange={(checked) =>
+                updateSettings({ desktopSystemMaterialEnabled: Boolean(checked) })
+              }
+            />
+          </div>
+        }
+      />
+      {canRestart ? (
+        <WindowMaterialRestartDialog open={restartOpen} onOpenChange={setRestartOpen} />
+      ) : null}
+    </>
   );
 }

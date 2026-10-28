@@ -394,6 +394,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () =>
       ipcRenderer.removeListener(IpcChannels.WINDOW_MATERIAL_STATE_CHANNEL, wrappedListener);
   },
+  relaunchForWindowMaterial: () =>
+    ipcRenderer.invoke(IpcChannels.RELAUNCH_FOR_WINDOW_MATERIAL_CHANNEL, undefined),
   getWindowFullscreenState: () =>
     ipcRenderer.sendSync(IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL) === true,
   getWindowZoomFactor: () => webFrame.getZoomFactor(),
