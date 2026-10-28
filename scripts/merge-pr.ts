@@ -126,22 +126,22 @@ function main(argv: ReadonlyArray<string>): number {
     return 1;
   }
   const head = view.headRefOid;
+  // Every page: a failed full run can sit behind a hundred newer ignored-event runs.
+  const list = (path: string, key: string): ReadonlyArray<Run> =>
+    gh(["api", "--paginate", path, "--jq", `.${key}[]`])
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as Run);
   const governing = () =>
     governingRuns(
-      JSON.parse(
-        gh([
-          "api",
-          `repos/${repo}/actions/workflows/goat-ci.yml/runs?head_sha=${head}&per_page=100`,
-          "--jq",
-          ".workflow_runs",
-        ]),
-      ) as ReadonlyArray<Run>,
+      list(
+        `repos/${repo}/actions/workflows/goat-ci.yml/runs?head_sha=${head}&per_page=100`,
+        "workflow_runs",
+      ),
       Number(pr),
     );
   const jobsOf = (run: Run) =>
-    JSON.parse(
-      gh(["api", `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "--jq", ".jobs"]),
-    ) as ReadonlyArray<Run>;
+    list(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "jobs");
   const runs = governing();
   const verdict = mergeVerdict(runs, jobsOf, head, values["known-failure"]);
   if (!verdict.merge) {
