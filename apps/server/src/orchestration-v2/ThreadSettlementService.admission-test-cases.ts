@@ -64,7 +64,7 @@ export const settledEvent = (thread: OrchestrationV2AppThread): OrchestrationV2D
   payload: thread,
 });
 
-const terminalEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
+export const terminalEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
   type: "run.background-work-cancelled",
   id: EventId.make(`ended:${threadId}`),
   threadId,
@@ -72,7 +72,7 @@ const terminalEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
   payload: { runId: RunId.make(`run:${threadId}`), restartCancelledBackgroundWork: [] },
 });
 
-const shellMergeEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
+export const shellMergeEvent = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
   type: "turn-item.updated",
   id: EventId.make(`shell:${threadId}`),
   threadId,
@@ -253,63 +253,60 @@ export function settlementAdmissionTests({
     ),
   );
 
-  it.effect(
-    "shell hint capacity reconciles idle admission and refreshes when background work ends",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          yield* TestClock.setTime(Date.parse(NOW));
-          const marker = appThread("hint-capacity-marker", "settled");
-          const threads = Array.from({ length: 257 }, (_, index) =>
-            makeThread(`hint-capacity-${index}`, {
-              branch: `branch-${index}`,
-              pendingBackgroundTasks: [
-                { taskId: "active", kind: "subagent", description: "Review" },
-              ],
-            }),
+  it.effect("retains more than 256 shell hints until background work ends", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const marker = appThread("hint-capacity-marker", "settled");
+        const threads = Array.from({ length: 257 }, (_, index) =>
+          makeThread(`hint-capacity-${index}`, {
+            branch: `branch-${index}`,
+            pendingBackgroundTasks: [{ taskId: "active", kind: "subagent", description: "Review" }],
+          }),
+        );
+        const overflow = makeThread("hint-capacity-256", { branch: "branch-256" });
+        const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([overflow]),
+          currentThreads: [marker],
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+          branchPullRequest: (input, options) =>
+            Ref.update(refreshes, (values) => [...values, options?.refresh === true]).pipe(
+              Effect.as(branchResult(input.branch, options?.refresh)),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          assert.deepStrictEqual(yield* Ref.get(refreshes), [false]);
+          yield* Ref.set(fixture.snapshots, makeSnapshot(threads));
+          for (const thread of threads.slice(0, 256)) {
+            yield* fixture.publishEvent(shellMergeEvent(thread.id));
+            yield* fixture.publishEvent(settledEvent(marker));
+            yield* Queue.take(fixture.closedIdle);
+            yield* service.drain;
+          }
+          yield* Ref.set(fixture.candidateReads, []);
+          yield* fixture.publishEvent(shellMergeEvent(ThreadId.make("hint-capacity-256")));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* service.drain;
+          yield* TestClock.adjust("1 minute");
+          yield* service.drain;
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+          yield* Ref.set(fixture.snapshots, makeSnapshot([overflow]));
+          yield* fixture.publishEvent(terminalEvent(overflow.id));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* service.drain;
+          assert.deepStrictEqual(yield* Ref.get(refreshes), [false, true]);
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [overflow.id],
           );
-          const overflow = makeThread("hint-capacity-256", { branch: "branch-256" });
-          const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
-          const fixture = yield* makeHarness({
-            snapshot: makeSnapshot([overflow]),
-            currentThreads: [marker],
-            settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
-            branchPullRequest: (input, options) =>
-              Ref.update(refreshes, (values) => [...values, options?.refresh === true]).pipe(
-                Effect.as(branchResult(input.branch, options?.refresh)),
-              ),
-          });
-          yield* Effect.gen(function* () {
-            const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
-            yield* startHarness(service, fixture.activation, fixture.snapshotReads);
-            assert.deepStrictEqual(yield* Ref.get(refreshes), [false]);
-            yield* Ref.set(fixture.snapshots, makeSnapshot(threads));
-            for (const thread of threads.slice(0, 256)) {
-              yield* fixture.publishEvent(shellMergeEvent(thread.id));
-              yield* fixture.publishEvent(settledEvent(marker));
-              yield* Queue.take(fixture.closedIdle);
-              yield* service.drain;
-            }
-            yield* Ref.set(fixture.candidateReads, []);
-            yield* fixture.publishEvent(shellMergeEvent(ThreadId.make("hint-capacity-256")));
-            yield* fixture.publishEvent(settledEvent(marker));
-            yield* Queue.take(fixture.closedIdle);
-            yield* service.drain;
-            assert.include(yield* Ref.get(fixture.candidateReads), undefined);
-            assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
-            yield* Ref.set(fixture.snapshots, makeSnapshot([overflow]));
-            yield* fixture.publishEvent(terminalEvent(overflow.id));
-            yield* fixture.publishEvent(settledEvent(marker));
-            yield* Queue.take(fixture.closedIdle);
-            yield* service.drain;
-            assert.deepStrictEqual(yield* Ref.get(refreshes), [false, true]);
-            assert.deepStrictEqual(
-              (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
-              [overflow.id],
-            );
-          }).pipe(Effect.provide(fixture.layer));
-        }),
-      ),
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
   );
 
   it.effect(
