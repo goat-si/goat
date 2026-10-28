@@ -95,8 +95,7 @@ links (`apps/web/src/legalLinks.ts`) and the `goat.json` schema URL
 `/95` (an upstream easter egg) is removed and falls through to the 404 page.
 
 Legal content describes the invite-only Connect beta and remains explicit about implementation
-gaps, including account-wide deletion and retention. It never republishes upstream T3 Tools Inc.
-text or adopts the upstream contact in `.github/SECURITY.md` as GOAT's. Policy publication does not
+gaps, including account-wide deletion and retention. It never republishes upstream legal text or adopts the upstream contact in `.github/SECURITY.md` as GOAT's. Policy publication does not
 mean the beta's planned security controls are deployed.
 
 ## Content rules
