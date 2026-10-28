@@ -117,7 +117,7 @@ const enforcing = (goatclaw: { readonly enabled: boolean; readonly defaultProfil
   );
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
-  "goat_describe and tools/list withhold exactly the tools a %s thread's profile refuses at call time",
+  "goat_describe and tools/list withhold tools for missing explicit grants or a %s thread's profile",
   (id) =>
     Effect.gen(function* () {
       yield* seedCaller;
@@ -133,6 +133,13 @@ it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
           mismatches.push(
             `${row.path}: listed ${listed.has(row.name)}, available ${row.available.now}`,
           );
+        if (entry.resource === "workspace" || entry.resource === "terminal") {
+          expect(row.available, row.path).toEqual({
+            now: false,
+            reason: expect.stringContaining("Needs an explicit "),
+          });
+          continue;
+        }
         // Client-only tools are refused to every thread before any profile is consulted.
         if (entry.requires === "client") continue;
         // Screen attachment, not the profile, gates goat_screen_run; its own test covers it.
