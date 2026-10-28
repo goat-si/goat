@@ -35,6 +35,7 @@ import {
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { stageScreenWasmAsset } from "./lib/screen-wasm-asset.ts";
 import { signWithJsign } from "./lib/windows-jsign.ts";
+import { stageManifestShell } from "./lib/stage-manifest-shell.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { isMachO } from "./lib/release-verify.ts";
@@ -658,6 +659,9 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   if (input.platform !== "win") {
     yield* fs.chmod(executablePath, 0o755);
   }
+
+  if (input.platform === "win")
+    yield* stageManifestShell(contentDir, executablePath, input.version);
 
   yield* fs.makeDirectory(input.outputDir, { recursive: true });
   const archivePath = path.join(

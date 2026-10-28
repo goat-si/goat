@@ -33,7 +33,7 @@ import {
   SSH_RUNTIME_PROTOCOL_VERSION,
 } from "@goat/shared/sshRuntimeProtocol";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
-import { ownRuntimeManifest } from "@goat/shared/runtimeManifest";
+import { ownRuntimeManifest, RuntimeManifest } from "@goat/shared/runtimeManifest";
 import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -277,9 +277,12 @@ export const readLiveSshRuntimeProtocol = async (
 
 declare const __GOAT_BUILD_COMMIT__: string | undefined;
 
-export const runtimeManifest = Command.make("runtime-manifest").pipe(
+const encodeRuntimeManifest = Schema.encodeSync(Schema.fromJsonString(RuntimeManifest));
+export const runtimeManifest = Command.make("runtime-manifest", {
+  shell: Flag.Boolean("shell").pipe(Flag.withDefault(false)),
+}).pipe(
   Command.unlisted,
-  Command.withHandler(() =>
+  Command.withHandler(({ shell }) =>
     Effect.sync(() => {
       const manifest = ownRuntimeManifest({
         version: packageJson.version,
@@ -289,8 +292,21 @@ export const runtimeManifest = Command.make("runtime-manifest").pipe(
             : undefined,
         commitTime: BUILD_COMMIT_TIME,
       });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - internal helper JSON output.
-      process.stdout.write(JSON.stringify(manifest) + "\n");
+      if (shell) {
+        const own = ownSshRuntimeProtocol();
+        const scopes = manifest.capabilities.includes("memory-scopes") ? "has" : "lacks";
+        process.stdout.write(
+          [
+            manifest.version,
+            own.sshRuntimeProtocolVersion,
+            own.orchestrationProtocolVersion,
+            manifest.commitTime ?? 0,
+            scopes,
+          ].join(" ") + "\n",
+        );
+      } else {
+        process.stdout.write(encodeRuntimeManifest(manifest) + "\n");
+      }
     }),
   ),
 );

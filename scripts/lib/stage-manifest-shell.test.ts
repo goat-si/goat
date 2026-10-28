@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import { it } from "@effect/vitest";
 import { assert } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -18,7 +18,7 @@ it.effect("capability marker binds the final signed executable bytes", () =>
     yield* stageManifestShell(folder, exe, "1.2.3");
     assert.equal(
       yield* fs.readFileString(path.join(folder, "goat-manifest-shell-v1.sha256")),
-      `1.2.3 ${createHash("sha256").update(bytes).digest("hex")}\n`,
+      `1.2.3 ${NodeCrypto.createHash("sha256").update(bytes).digest("hex")}\n`,
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

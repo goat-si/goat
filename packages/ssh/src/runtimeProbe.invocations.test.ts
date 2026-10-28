@@ -1,15 +1,16 @@
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, rename } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import { it } from "@effect/vitest";
 import { assert } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { buildRemoteRuntimeProbeScript } from "./runtimeProbe.ts";
 
-const exec = promisify(execFile);
+const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const version = "1.2.3";
 
 const fixture = Effect.fn("runtimeProbe.fixture")(function* (
@@ -23,14 +24,16 @@ const fixture = Effect.fn("runtimeProbe.fixture")(function* (
     keyed?: boolean;
   } = {},
 ) {
-  const home = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "goat-probe-count-")));
-  yield* Effect.addFinalizer(() =>
-    Effect.promise(() => rm(home, { recursive: true, force: true })),
+  const home = yield* Effect.promise(() =>
+    NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-probe-count-")),
   );
-  const dir = join(home, ".goat/runtime/goat/versions", version);
-  const exe = join(dir, "goat");
-  const marker = join(dir, "goat-manifest-shell-v1.sha256");
-  const calls = join(home, "calls");
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => NodeFSP.rm(home, { recursive: true, force: true })),
+  );
+  const dir = NodePath.join(home, ".goat/runtime/goat/versions", version);
+  const exe = NodePath.join(dir, "goat");
+  const marker = NodePath.join(dir, "goat-manifest-shell-v1.sha256");
+  const calls = NodePath.join(home, "calls");
   let bytes = `#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/calls"
 case "$*" in
@@ -54,15 +57,18 @@ case "$*" in
 esac
 `;
   const advertise = async () => {
-    const hash = createHash("sha256").update(bytes).digest("hex");
-    await writeFile(marker, `${version} ${hash}\n`);
-    await writeFile(join(dir, ".install-record"), `${version} ${"a".repeat(64)} ${hash} cache\n`);
+    const hash = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+    await NodeFSP.writeFile(marker, `${version} ${hash}\n`);
+    await NodeFSP.writeFile(
+      NodePath.join(dir, ".install-record"),
+      `${version} ${"a".repeat(64)} ${hash} cache\n`,
+    );
   };
   yield* Effect.promise(async () => {
-    await mkdir(dir, { recursive: true });
-    await writeFile(exe, bytes, { mode: 0o700 });
-    await writeFile(join(dir, ".install-complete"), `${version}\n`);
-    await writeFile(calls, "");
+    await NodeFSP.mkdir(dir, { recursive: true });
+    await NodeFSP.writeFile(exe, bytes, { mode: 0o700 });
+    await NodeFSP.writeFile(NodePath.join(dir, ".install-complete"), `${version}\n`);
+    await NodeFSP.writeFile(calls, "");
     if (modern) await advertise();
   });
   const generated = buildRemoteRuntimeProbeScript(version);
@@ -79,19 +85,21 @@ ${generated.slice(0, boundary)}
       return out.stdout;
     });
   const asks = () =>
-    Effect.promise(async () => (await readFile(calls, "utf8")).trim().split("\n").filter(Boolean));
+    Effect.promise(async () =>
+      (await NodeFSP.readFile(calls, "utf8")).trim().split("\n").filter(Boolean),
+    );
   return {
     home,
     exe,
     marker,
-    record: join(dir, ".install-record"),
+    record: NodePath.join(dir, ".install-record"),
     run,
     asks,
     advertise: () => Effect.promise(advertise),
     replace: () =>
       Effect.promise(async () => {
         bytes += "\n# replacement has different size and digest\n";
-        await writeFile(exe, bytes, { mode: 0o700 });
+        await NodeFSP.writeFile(exe, bytes, { mode: 0o700 });
       }),
   };
 });
@@ -163,9 +171,9 @@ it.effect("Windows replacement cannot reuse a stale capability marker", () =>
 it.effect("a replaced POSIX runner invalidates facts even with the same executable", () =>
   Effect.gen(function* () {
     const f = yield* fixture(false, false);
-    const runner = join(f.home, "runner.sh");
+    const runner = NodePath.join(f.home, "runner.sh");
     const bytes = `#!/bin/sh\nGOAT_ARCHIVE_VERSION='${version}'\nexec '${f.exe}' "$@"\n`;
-    yield* Effect.promise(() => writeFile(runner, bytes, { mode: 0o700 }));
+    yield* Effect.promise(() => NodeFSP.writeFile(runner, bytes, { mode: 0o700 }));
     const pair = `exec_fact version '${runner}' --version
 exec_fact own '${runner}' __ssh-helper protocol --shell`;
     yield* f.run(pair);
@@ -173,7 +181,9 @@ exec_fact own '${runner}' __ssh-helper protocol --shell`;
     assert.deepEqual(first, ["--version", "__ssh-helper protocol --shell"]);
     yield* f.run(pair);
     assert.deepEqual(yield* f.asks(), first);
-    yield* Effect.promise(() => writeFile(runner, bytes + "# runner replaced\n", { mode: 0o700 }));
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(runner, bytes + "# runner replaced\n", { mode: 0o700 }),
+    );
     yield* f.run(pair);
     assert.deepEqual(yield* f.asks(), [...first, ...first]);
     yield* f.run(pair);
@@ -225,9 +235,9 @@ it.effect.each(["marker", "record"] as const)(
       const f = yield* fixture(true, true);
       const file = f[metadata];
       const original = file + ".original";
-      yield* Effect.promise(() => rename(file, original));
+      yield* Effect.promise(() => NodeFSP.rename(file, original));
       yield* f.run();
-      yield* Effect.promise(() => symlink(original, file));
+      yield* Effect.promise(() => NodeFSP.symlink(original, file));
       yield* f.run();
       assert.deepEqual(yield* f.asks(), [
         "--version",
@@ -250,7 +260,7 @@ it.effect.each([true, false])(
         assert.deepEqual(JSON.parse(yield* f.run()), { serverVersion: version });
         assert.deepEqual(yield* f.asks(), ["--version", "__ssh-helper protocol --shell"]);
       } else {
-        yield* f.run().pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(yield* f.run().pipe(Effect.exit)));
         assert.deepEqual(yield* f.asks(), ["--version"]);
       }
     }).pipe(Effect.scoped),
@@ -262,5 +272,28 @@ it.effect("keyable legacy Windows keeps its existing warm facts cache", () =>
     yield* f.run();
     yield* f.run();
     assert.deepEqual(yield* f.asks(), ["--version", "__ssh-helper protocol --shell"]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keyable modern Windows probes warm the existing facts cache", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(true, true, { keyed: true });
+    const first = yield* f.run();
+    assert.deepEqual(yield* f.asks(), ["__ssh-helper runtime-manifest --shell"]);
+    assert.equal(yield* f.run(), first);
+    assert.deepEqual(yield* f.asks(), ["__ssh-helper runtime-manifest --shell"]);
+    yield* f.replace();
+    assert.equal(yield* f.run(), first);
+    assert.deepEqual(yield* f.asks(), [
+      "__ssh-helper runtime-manifest --shell",
+      "--version",
+      "__ssh-helper protocol --shell",
+    ]);
+    yield* f.run();
+    assert.deepEqual(yield* f.asks(), [
+      "__ssh-helper runtime-manifest --shell",
+      "--version",
+      "__ssh-helper protocol --shell",
+    ]);
   }).pipe(Effect.scoped),
 );
