@@ -249,27 +249,29 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
 });
 
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
-  it.effect.each(["-tzf", "-tvzf", "-xzf"])(
-    "expires tar %s without publishing and releases installation for retry",
-    (hang) =>
-      Effect.gen(function* () {
-        const fixture = yield* makeTarFixture({ hang });
-        const h = yield* makeHarness(releases[0]).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
-        );
-        const pending = yield* h.installation.executable.pipe(Effect.result, Effect.forkChild);
-        yield* Deferred.await(fixture.started);
-        yield* TestClock.adjust("60 seconds");
-        expect(yield* Deferred.isDone(fixture.interrupted)).toBe(true);
-        const result = yield* Fiber.join(pending);
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
-        expect(yield* Deferred.isDone(fixture.stopped)).toBe(true);
-        yield* h.expectUnpublished;
-        expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
-        expect(h.publications).toEqual([h.destination]);
-      }).pipe(Effect.scoped),
-  );
+  for (const hang of ["-tzf", "-tvzf", "-xzf"] as const)
+    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
+    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+      `expires tar ${hang} without publishing and releases installation for retry`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeTarFixture({ hang });
+          const h = yield* makeHarness(releases[0]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
+          );
+          const pending = yield* h.installation.executable.pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(fixture.started);
+          yield* TestClock.adjust("60 seconds");
+          expect(yield* Deferred.isDone(fixture.interrupted)).toBe(true);
+          const result = yield* Fiber.join(pending);
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
+          expect(yield* Deferred.isDone(fixture.stopped)).toBe(true);
+          yield* h.expectUnpublished;
+          expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
+          expect(h.publications).toEqual([h.destination]);
+        }).pipe(Effect.scoped),
+    );
 
   for (const oversized of ["-tzf", "-tvzf"] as const)
     // quarantine: #2120 Its tar fixtures fail during extract on Windows.

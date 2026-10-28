@@ -134,11 +134,11 @@ async function scriptedServer(
 const display = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
 const bounds = { x: 0, y: 0, width: 100, height: 80 };
 
-// quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-  "X11 window placement (#1358)",
-  () => {
-    it("windows on the display, owned by the pid the driver named, are on it", async () => {
+describe("X11 window placement (#1358)", () => {
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "windows on the display, owned by the pid the driver named, are on it",
+    async () => {
       await using server = await scriptedServer(
         new Map([
           [20, { pid: 10 }],
@@ -155,9 +155,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           { pid: 11, windowId: 21 },
         ]),
       ).toBe("same");
-    });
+    },
+  );
 
-    it("one window whose owner cannot be read leaves the whole answer unknown", async () => {
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "one window whose owner cannot be read leaves the whole answer unknown",
+    async () => {
       await using server = await scriptedServer(
         new Map([
           [20, { pid: 10 }],
@@ -172,9 +176,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           { pid: 11, windowId: 21 },
         ]),
       ).toBe("unknown");
-    });
+    },
+  );
 
-    it("a window the display lacks, another process owns, or that sits elsewhere is elsewhere", async () => {
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a window the display lacks, another process owns, or that sits elsewhere is elsewhere",
+    async () => {
       await using server = await scriptedServer(new Map([[20, { pid: 10 }]]));
       const placement = makeX11WindowPlacement(display, server.path);
       expect(
@@ -193,16 +201,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       expect(await placement([{ pid: 10, windowId: 20, bounds: { ...bounds, x: 300 } }])).toBe(
         "other",
       );
-    });
+    },
+  );
 
-    it("a display that cannot be read is unknown, never the same", async () => {
-      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
-      const placement = makeX11WindowPlacement(display, NodePath.join(dir, "missing"));
-      expect(await placement([{ pid: 10, windowId: 20 }])).toBe("unknown");
-      expect(await makeX11WindowPlacement({ DISPLAY: "remote:0" })([{ pid: 1, windowId: 2 }])).toBe(
-        "unknown",
-      );
-      NodeFS.rmSync(dir, { recursive: true, force: true });
-    });
-  },
-);
+  it("a display that cannot be read is unknown, never the same", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
+    const placement = makeX11WindowPlacement(display, NodePath.join(dir, "missing"));
+    expect(await placement([{ pid: 10, windowId: 20 }])).toBe("unknown");
+    expect(await makeX11WindowPlacement({ DISPLAY: "remote:0" })([{ pid: 1, windowId: 2 }])).toBe(
+      "unknown",
+    );
+    NodeFS.rmSync(dir, { recursive: true, force: true });
+  });
+});
