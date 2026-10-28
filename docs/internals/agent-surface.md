@@ -441,7 +441,8 @@ asking `goat_describe` before a first call, so the core listing carries the argu
 common paths. `goat_call`'s listed description ends with one line per path, such as
 `(thread.read :threadId :host? ...)`, kept on its registry entry's `signatures`; a test renders each
 line again from the schema the server serves, so a line cannot name an argument the path lacks or
-omit a required one ([signature.ts](../../packages/contracts/src/agentSurface/signature.ts),
+omit a required key at a level it spells out. Deeper objects show as `{}` and lists as `[]`, with
+their fields left to `goat_describe`; keys only `anyOf` branches declare show as optional ([signature.ts](../../packages/contracts/src/agentSurface/signature.ts),
 [discovery test](../../apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts)).
 Search and resource entries carry the same `signature`, and a `goat_call` refused for an argument
 the path does not take or cannot decode returns it as `details.expectedSignature`.

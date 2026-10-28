@@ -173,7 +173,7 @@ Only 15% of input parameters carry a description. 159 tools describe none of the
 
 | Tool                     | Characters | Declared at                                             |
 | ------------------------ | ---------- | ------------------------------------------------------- |
-| `goat_call`              | 1629       | packages/contracts/src/agentSurface/surfaceEntries.ts   |
+| `goat_call`              | 1688       | packages/contracts/src/agentSurface/surfaceEntries.ts   |
 | `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts     |
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
 | `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
@@ -252,5 +252,5 @@ The server's `/llms.txt` lists every registry path with its summary. `goat_descr
 9. **`--json` on every listed leaf command.** Only 11 of 47 offer it; agents parse human tables otherwise.
 10. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 4 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 11. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
-12. **Move routing policy out of tool descriptions.** The longest description is 1629 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+12. **Move routing policy out of tool descriptions.** The longest description is 1688 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 13. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.
