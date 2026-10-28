@@ -15,15 +15,32 @@ export interface SnapshotRetryInput<A> {
   readonly tooBusy: () => Error;
 }
 
-/** Captures once and, when the page interrupted it, once more if the deadline allows. */
-export const snapshotRetry = <A>(input: SnapshotRetryInput<A>): Promise<A> =>
-  input
-    .capture()
-    .catch((cause: unknown) =>
-      input.now() < input.deadline && input.current() && input.retryable(cause)
-        ? input.capture()
-        : Promise.reject(cause),
-    );
+/** Time kept back from the deadline for the capture that follows a wait. */
+const CAPTURE_RESERVE_MS = 500;
+/** The shortest wait for load worth starting; Playwright treats a timeout of 0 as none. */
+const MIN_WAIT_MS = 250;
+/** A loaded page whose content still moves gets this long before the next capture. */
+const SETTLE_MS = 250;
+const MAX_RETRIES = 2;
+
+/**
+ * Captures and, when the page interrupted the capture (often because it is still loading), waits
+ * for `load` and a short settle, then captures again: at most twice, and only with time left.
+ */
+export const snapshotRetry = async <A>(input: SnapshotRetryInput<A>): Promise<A> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await input.capture();
+    } catch (cause) {
+      if (!input.current() || !input.retryable(cause)) throw cause;
+      const wait = input.deadline - input.now() - CAPTURE_RESERVE_MS;
+      if (attempt >= MAX_RETRIES || wait < MIN_WAIT_MS) throw input.tooBusy();
+      await input.waitForLoad(wait).catch(() => undefined);
+      await input.sleep(Math.min(SETTLE_MS, Math.max(0, input.deadline - input.now())));
+      if (input.now() >= input.deadline || !input.current()) throw input.tooBusy();
+    }
+  }
+};
 
 /** Snapshots begun per page; observers' snapshots aren't queued, so two can overlap. */
 const snapshotTurns = new WeakMap<Page, number>();
