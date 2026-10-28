@@ -253,6 +253,9 @@ jobs:
       # slow server shard does not block them. `check` above is still the aggregate.
       - name: Test
         if: matrix.task == 'test'
+        # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
+        env:
+          VITEST_PW_DEBUG: "1"
         run: vp run --filter @goat/web test
 
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
@@ -265,6 +268,7 @@ jobs:
         env:
           CHANGED_TESTS: ${{ needs.scope.outputs.changed_tests }}
           CHANGED_NODE_TESTS: ${{ needs.scope.outputs.changed_node_tests }}
+          VITEST_PW_DEBUG: "1"
         run: |
           mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS || "[]")) console.log(file)')
           mapfile -t node_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_NODE_TESTS || "[]")) console.log(file)')
@@ -365,7 +369,7 @@ jobs:
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts goat-workflow-guard-matrix.test.ts
           lib/release-notices.test.ts
           lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
-          pr-assets.test.ts
+          pr-assets.test.ts merge-pr.test.ts
           lib/desktop-launch-fixture.test.ts
           smoke-desktop-app.test.ts
 
