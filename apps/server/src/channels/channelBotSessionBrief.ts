@@ -1,11 +1,6 @@
 /**
- * channelBotSessionBrief - what a GOAT Bot session is told once, when it starts.
- *
- * The prefix is frozen in a fixed order so the provider's prompt cache keeps it: standing
- * instructions, standing notes, journal, recent conversation, open work, then the message that
- * started the session. Later tasks in the same session send only their own message.
- *
- * @module channelBotSessionBrief
+ * What a GOAT Bot session is told once, when it starts, frozen in a fixed order so the provider's
+ * prompt cache keeps it. Later tasks in the same session send only their own message.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a revision is a content hash.
 import * as NodeCrypto from "node:crypto";

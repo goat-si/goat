@@ -382,7 +382,7 @@ describe("GOAT Bot sessions", () => {
               },
             } as never),
             Effect.as("accepted"),
-            Effect.catchTag("ChannelGatewayError", (error) => Effect.succeed(error.reason)),
+            Effect.catchTags({ ChannelGatewayError: (error) => Effect.succeed(error.reason) }),
           );
       assert.strictEqual(yield* reportAs(b.worker!.runId!, "r-b"), "forbidden");
       assert.strictEqual(yield* reportAs(a.worker!.runId!, "r-a"), "accepted");

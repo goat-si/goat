@@ -1,17 +1,7 @@
 /**
- * ChannelBotSession - GOAT Bot's warm session per conversation and requester.
- *
- * A GOAT Bot turn runs as one run in its conversation's session thread instead of a thread of its
- * own. Independent tasks queue as their own runs, a follow-up steers its own task's run by id, and
- * the session is replaced only when its prompt cache is known to have expired or its context is
- * near the budget, never while work it started is still in flight. Every message sent into a
- * session is recorded before the send, so a run maps to the task it serves as soon as it exists;
- * child work, reports, observation and stops are routed through that record.
- *
- * The first reply still comes from reception before the session sees the message: no provider
- * can yet hold its native tools until that reply is delivered.
- *
- * @module ChannelBotSession
+ * ChannelBotSession - GOAT Bot's warm session per conversation and requester: each task is its own
+ * run there, follow-ups steer their task's run, and the session rotates only on a cold cache or a
+ * full context. Reception still writes the first reply, since no provider can hold its tools yet.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- binding keys are content hashes.
 import * as NodeCrypto from "node:crypto";
@@ -19,6 +9,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelConversationId,
+  type ChannelDispatchTarget,
   ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
@@ -94,6 +85,16 @@ const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 
+const requireTarget = (task: ChannelTask) =>
+  task.target === undefined
+    ? Effect.fail(
+        new ChannelLedger.ChannelLedgerError({
+          reason: "version_conflict",
+          detail: "A GOAT Bot turn needs its dispatch target.",
+        }),
+      )
+    : Effect.succeed(task.target);
+
 interface SessionRow {
   readonly conversation_id: string;
   readonly generation: number;
@@ -159,8 +160,12 @@ const make = Effect.gen(function* () {
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-  const bindingKeyFor = (task: ChannelTask, sharing: string, requester: ChannelRequester) => {
-    const target = task.target!;
+  const bindingKeyFor = (
+    task: ChannelTask,
+    target: ChannelDispatchTarget,
+    sharing: string,
+    requester: ChannelRequester,
+  ) => {
     const parts = [
       task.conversationId,
       requester.ownerId,
@@ -247,21 +252,23 @@ const make = Effect.gen(function* () {
     run: RunId,
     owner: string,
   ) =>
-    commitTransition(
-      ledger,
-      stored,
-      {
-        type: "task.worker.bound",
-        payload: {
-          worker: {
-            environmentId: stored.task.target!.environmentId,
-            threadId,
-            runId: run,
-            generation: stored.task.generation,
+    Effect.flatMap(requireTarget(stored.task), (target) =>
+      commitTransition(
+        ledger,
+        stored,
+        {
+          type: "task.worker.bound",
+          payload: {
+            worker: {
+              environmentId: target.environmentId,
+              threadId,
+              runId: run,
+              generation: stored.task.generation,
+            },
           },
         },
-      },
-      { owner },
+        { owner },
+      ),
     );
 
   /** Whether the session still has work in flight that a replacement would orphan. */
@@ -308,8 +315,8 @@ const make = Effect.gen(function* () {
     message: string,
   ) {
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    const standing = resolveProjectSettings(settings, task.target!.projectId).settings
-      .standingInstructions;
+    const standing = resolveProjectSettings(settings, (yield* requireTarget(task)).projectId)
+      .settings.standingInstructions;
     const notes = yield* readChannelBotNotes(fileSystem, botFiles);
     const visible = yield* ledger
       .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
@@ -335,14 +342,16 @@ const make = Effect.gen(function* () {
       standing: prependStandingInstructions(standing, GOAT_BOT_SESSION_RULES).text,
       notes,
       journal: journalFor(visible),
-      tail: tail
-        .filter((entry) => entry.inputId !== task.originInputId)
-        .flatMap((entry) => [
-          { role: "user" as const, text: entry.text },
-          ...(entry.replyText === undefined
-            ? []
-            : [{ role: "assistant" as const, text: entry.replyText }]),
-        ]),
+      tail: tail.flatMap((entry) =>
+        entry.inputId === task.originInputId
+          ? []
+          : [
+              { role: "user" as const, text: entry.text },
+              ...(entry.replyText === undefined
+                ? []
+                : [{ role: "assistant" as const, text: entry.replyText }]),
+            ],
+      ),
       openWork: open.map((other) => ({ title: other.title, status: other.status })),
       message,
     });
@@ -362,7 +371,7 @@ const make = Effect.gen(function* () {
     requester: ChannelRequester,
   ) {
     const task = stored.task;
-    const target = task.target!;
+    const target = yield* requireTarget(task);
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     // Only a requester at full access may act through the supervisor's owner profile.
@@ -429,11 +438,12 @@ const make = Effect.gen(function* () {
   ) {
     const task = stored.task;
     const ids = sessionSendIdsFor(task.taskId, task.generation);
+    const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
     yield* writeIntent(threadId, ids.messageId, task, "task");
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const sent = yield* threads
       .sendToThread({
-        projectId: ProjectId.make(task.target!.projectId),
+        projectId,
         commandId: ids.commandId,
         threadId,
         messageId: ids.messageId,
@@ -466,7 +476,7 @@ const make = Effect.gen(function* () {
     driver: string | undefined,
     prefix: string,
   ) {
-    const target = task.target!;
+    const target = yield* requireTarget(task);
     const now = yield* nowIso;
     return yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -497,7 +507,7 @@ const make = Effect.gen(function* () {
     initial: ChannelLedger.ChannelStoredTask,
     owner: string,
   ) {
-    const target = initial.task.target!;
+    const target = yield* requireTarget(initial.task);
     const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
     // The requester as they stand now: a Slack grant lowered since the message arrived counts.
@@ -505,7 +515,7 @@ const make = Effect.gen(function* () {
       (yield* requesterForDispatch(initial.task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       )) ?? initial.task.requester;
-    const key = bindingKeyFor(initial.task, sharing, requester);
+    const key = bindingKeyFor(initial.task, target, sharing, requester);
     let row = yield* currentRow(key);
     const records =
       row === undefined
@@ -604,6 +614,7 @@ const make = Effect.gen(function* () {
     },
   ) {
     const task = stored.task;
+    const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
     const records = yield* readRecords(threads, threadId);
     const own = yield* sessionTaskRuns(sql, threadId, records, task);
     const current = own.at(-1);
@@ -624,7 +635,7 @@ const make = Effect.gen(function* () {
         Effect.andThen(
           threads
             .sendToThread({
-              projectId: ProjectId.make(task.target!.projectId),
+              projectId,
               commandId: which.commandId,
               threadId,
               messageId: which.messageId,

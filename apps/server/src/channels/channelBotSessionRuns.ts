@@ -1,11 +1,6 @@
 /**
- * channelBotSessionRuns - which task a GOAT Bot session run serves.
- *
- * Every message GOAT sends into a session is recorded before the send. A run belongs to the task
- * its own message was recorded for; a delegated completion or restart continuation belongs to the
- * task of the run it continues. Channel services route reports, child work and stops by this.
- *
- * @module channelBotSessionRuns
+ * Which task a GOAT Bot session run serves: the task its own message was recorded for before the
+ * send, or for a delegated completion or restart continuation, the task of the run it continues.
  */
 import {
   type ChannelTask,
@@ -41,7 +36,7 @@ type Records = {
 };
 
 /** The intent row a message was recorded under, if GOAT sent it into a session. */
-export const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
+const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
   sql<SessionIntent>`
     SELECT * FROM channel_bot_session_runs WHERE thread_id = ${threadId} AND message_id = ${messageId}
   `.pipe(Effect.map((rows) => rows[0]));
