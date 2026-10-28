@@ -70,7 +70,8 @@ once after the lease expires, and left out of every score.
 Before and after each run the runner lists on-screen windows, Chrome's tabs and, for Aside arms,
 Aside's tabs. Anything new that remains is a leftover. GOAT's preview tabs belong to the eval thread
 and no outside caller can list them, so a GOAT web run's tab cleanup is unobserved: it shows as
-`tabs ?` and counts toward coexistence only when something else was left. The runner reports
+`tabs ?` and counts toward coexistence only when something else was left or a violation was seen.
+The runner reports
 leftovers and does not
 close them, because it has no admitted way to operate another product's windows; the operator
 closes them.

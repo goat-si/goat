@@ -115,8 +115,10 @@ export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores>
     });
     const web = mine.filter((row) => row.surface === "web");
     // A run whose end was not observed cannot count as clean.
-    // Cleanup that could not be observed counts against coexistence only when something was left.
-    const judged = whole.filter((row) => !cleanupUnobserved(row) || row.leftovers.length > 0);
+    // Unobserved cleanup is scored only when the run is already known not to be clean.
+    const judged = whole.filter(
+      (row) => !cleanupUnobserved(row) || row.leftovers.length > 0 || row.violations.length > 0,
+    );
     const clean = judged.filter(
       (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
     );

@@ -913,3 +913,56 @@ describe("older rows", () => {
     expect(scoreArms([{ ...base, arm: "codex-cua" }])[0]?.coexistence).toBe(1);
   });
 });
+
+describe("unobserved cleanup with a violation", () => {
+  it("still counts the violation against coexistence", () => {
+    const base = {
+      kind: "run",
+      campaignId: "c",
+      at: "",
+      goatVersion: "v",
+      taskSetVersion: 3,
+      task: "web-form",
+      surface: "web",
+      arm: "goat-direct",
+      model: "m",
+      status: "ran",
+      contended: false,
+      error: null,
+      claimed: "failed",
+      answerError: null,
+      actual: "failed",
+      outcome: "fail",
+      misreport: null,
+      valueErrors: [],
+      violations: [],
+      leftovers: [],
+      notes: [],
+      metrics: {
+        toolCalls: 1,
+        surfaceCalls: 1,
+        offSurfaceCalls: 0,
+        failedCalls: 0,
+        modelTurns: { min: 2, max: 2 },
+        contamination: [],
+      },
+      tokens: null,
+      wallMs: 1000,
+      ref: null,
+    } as const;
+    const desktop = {
+      ...base,
+      task: "finder-sidebar",
+      surface: "desktop",
+      claimed: "done",
+      actual: "done",
+      outcome: "pass",
+    } as const;
+    const submitted = {
+      ...base,
+      cleanupUnobserved: true,
+      violations: ["submitted the form (httpbin echoed it)"],
+    };
+    expect(scoreArms([desktop, submitted])[0]?.coexistence).toBe(0.5);
+  });
+});
