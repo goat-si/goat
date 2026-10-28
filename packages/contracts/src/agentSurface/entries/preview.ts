@@ -8,9 +8,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Read a web page's rendered text",
     description:
-      "Read rendered page text as Markdown after the page settles, for articles, docs and script-rendered pages. Page with offset, revision and nextOffset. With network unknown, settled means DOM quiet only. To act, use preview.snapshot refs. Older hosts: use goat_preview_snapshot.",
+      "Read rendered page text as Markdown after the page settles, for articles, docs and script-rendered pages. Page with offset, revision and nextOffset. With network unknown, settled means DOM quiet only.",
     guide:
-      "Requires the thread's preview capability. Reads allow observation of human-controlled tabs and other agents' tabs without taking control. Private periods withhold the result. Scope selects one subtree. Keep revision when continuing at nextOffset; changed restarts at zero. maxBytes bounds the entire encoded result. Narrow scope when metadata exceeds the budget.",
+      "Private periods withhold the result. Scope selects one subtree. Keep revision when continuing at nextOffset; changed restarts at zero. maxBytes bounds the entire encoded result. Narrow scope when metadata exceeds the budget.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -25,7 +25,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Read web page state in GOAT browser",
     description:
-      "Read web page state and action refs in GOAT's browser. Start with interactiveOnly, expand to full context, wait and observe again, then inspect annotated or raw screenshots. Use goat_preview_read for page text; diff:true after actions. Refresh stale refs. Save the final screenshot as evidence.",
+      "Read web page state, action refs and browser diagnostics. Supports scoped or interactive-only trees, diffs and optional screenshots.",
     guide:
       "Requires the thread's preview MCP capability. Inspect the page before interacting. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. Server snapshots provide visible text, an accessibility tree, console errors and failed requests (goat_preview_logs reads every entry), action history, and screenshot dimensions. Pass a ref from the latest snapshot as locator (bare or as aria-ref=<ref>) to target an exact element, including in frames. Text is bounded near 20,000 bytes and reports omissions. Set includeImage=true only when visual inspection is necessary because inline images remain in tool history. The default capture is the viewport; fullPage=true captures a bounded document image and reports clipping. Set save=true to write a PNG and receive screenshotPath; unless includeImage=true, saved results omit the page dump, retaining full-page dimensions and clipping metadata when applicable. A saved path can be embedded as ![alt](screenshotPath) in a reply. Server hosts allow observation of another agent's tab or any human-controlled tab, including the caller's own, but refuse a snapshot while a browser dialog is open.",
     effect: "read",
@@ -47,7 +47,7 @@ export const previewEntries = {
     summary: "Resolve browser dialog",
     description: "Accept or dismiss a pending browser alert, confirmation, or prompt.",
     guide:
-      "Requires the thread's preview MCP capability. Read goat_preview_status to identify the pending dialog. Supply promptText when accepting a prompt. Desktop-rendered tabs do not support window.prompt(): the page gets an error and no dialog opens. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Resolving a dialog invalidates snapshot refs; take a new snapshot before reusing an element ref.",
+      "Read goat_preview_status to identify the pending dialog. Supply promptText when accepting a prompt. Desktop-rendered tabs do not support window.prompt(): the page gets an error and no dialog opens. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Resolving a dialog invalidates snapshot refs.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -70,9 +70,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Get preview status",
     description:
-      "Report GOAT browser availability, tab ownership, loading, dialogs, server tabs and profiles. No tab: goat_preview_open. A closed preview alone is no reason to switch browsers.",
+      "Report GOAT browser availability, tab ownership, loading, dialogs, server tabs and profiles.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The selected tab reports its URL, title, loading state, visibility, control owner, pending dialog and file chooser, viewport mode, and measured CSS-pixel size. Server hosts list every live tab in the thread with its owner, including user-opened tabs, and profiles accepted by goat_preview_open. With no tab, available is false and the server browser adds browser {state, reason}: it needs no desktop app; installed or installs_on_open means call goat_preview_open, installing means check again in a minute, install_failed means goat_preview_open retries the install, and blocked or unsupported means report the reason. goat_host_status reports the same per host. Status itself remains available during human control. Snapshot, logs, and wait can read another agent's tab or any human-driven tab, including the caller's own. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only.",
+      "The selected tab reports its URL, title, loading state, visibility, control owner, pending dialog and file chooser, viewport mode, and measured CSS-pixel size. Server hosts list every live tab in the thread with its owner, including user-opened tabs, and profiles accepted by goat_preview_open. With no tab, available is false and the server browser adds browser {state, reason}: it needs no desktop app; installed or installs_on_open means call goat_preview_open, installing means check again in a minute, install_failed means goat_preview_open retries the install, and blocked or unsupported means report the reason. goat_host_status reports the same per host. Status itself remains available during human control.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -91,9 +91,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Open browser preview",
     description:
-      "Open or reuse a GOAT browser tab. Use a supplied or discovered URL; do not guess URLs beyond well-known sites. If a tab already shows the page, read it instead of reloading. Parallel agents each need a separate tabId. Profiles apply only to new tabs. Retry with the same clientRequestId to avoid duplicates.",
+      "Open or reuse a GOAT browser tab. Profiles apply only to new tabs. Retry with the same clientRequestId to avoid duplicates.",
     guide:
-      "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. profileId accepts an id or case-insensitive name from goat_preview_status. A reused tab keeps its original profile and ignores profileId. With a reported default profile, omission uses it; without one, a new headless agent tab uses an isolated context rather than inheriting saved logins. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
+      "An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. profileId accepts an id or case-insensitive name from goat_preview_status. A reused tab keeps its original profile and ignores profileId. With a reported default profile, omission uses it; without one, a new headless agent tab uses an isolated context rather than inheriting saved logins. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -115,10 +115,9 @@ export const previewEntries = {
     name: "preview_navigate",
     toolkit: "preview",
     summary: "Navigate browser preview",
-    description:
-      "Navigate a GOAT browser tab to a supplied or discovered URL; do not guess URLs beyond well-known sites. Prefer the site's search and filters; use an archived copy only when the live page is gone. For a dev server, use an environment-port target so localhost names the browser host.",
+    description: "Navigate a GOAT browser tab to a URL or an environment-port target.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Supply exactly one of url for a directly reachable website or target for an environment-relative destination. An environment-port target resolves to localhost on the browser host, with the supplied port, path, and protocol. For a local dev server, target={kind:'environment-port',port:5173} avoids referring to a different device's localhost.",
+      "Supply exactly one of url for a directly reachable website or target for an environment-relative destination. An environment-port target resolves to localhost on the browser host, with the supplied port, path, and protocol. For a local dev server, target={kind:'environment-port',port:5173} avoids referring to a different device's localhost.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -143,7 +142,7 @@ export const previewEntries = {
     description:
       "Resize a collaborative browser viewport. Device presets change CSS layout dimensions while retaining the desktop browser user agent.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Fill mode follows the preview panel; freeform mode uses explicit width and height; preset mode uses a named device size and optional orientation. For example, freeform width 1024 and height 768 sets that CSS-pixel viewport, and the iphone-12-pro preset accepts portrait orientation. The operation updates the tab's viewport setting; native desktop rendering applies the setting through the host.",
+      "Fill mode follows the preview panel; freeform mode uses explicit width and height; preset mode uses a named device size and optional orientation. For example, freeform width 1024 and height 768 sets that CSS-pixel viewport, and the iphone-12-pro preset accepts portrait orientation. The operation updates the tab's viewport setting; native desktop rendering applies the setting through the host.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -168,7 +167,7 @@ export const previewEntries = {
     description:
       "Emulate a light or dark prefers-color-scheme in a collaborative browser tab, or clear the override to follow the OS appearance.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. colorScheme accepts dark, light, or system. The system value removes the media override rather than forcing either palette.",
+      "colorScheme accepts dark, light, or system. The system value removes the media override rather than forcing either palette.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -216,9 +215,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Type into preview page",
     description:
-      "Insert literal text into a browser text field or editable element once it can take input. Passwords only through goat_preview_fill_secret.",
+      "Insert literal text into a browser text field or editable element once it can take input.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Prefer a unique Playwright locator. Without a locator or selector, text goes to the currently focused editable element. clear=true replaces existing text; otherwise text is inserted at the current caret or selection.",
+      "Prefer a unique Playwright locator. Without a locator or selector, text goes to the currently focused editable element. clear=true replaces existing text; otherwise text is inserted at the current caret or selection.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -267,7 +266,7 @@ export const previewEntries = {
     description:
       "Move the mouse over a browser-page element or point to reveal hover menus and tooltips.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The page decides whether hovering reveals any menu or tooltip.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The page decides whether hovering reveals any menu or tooltip.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -292,7 +291,7 @@ export const previewEntries = {
     description:
       "Choose options in a native HTML select element by value or visible label. For custom dropdowns, click the control and then its option.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Option values match first; otherwise the implementation matches a trimmed visible label. It returns the values selected by the browser.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Option values match first; otherwise the implementation matches a trimmed visible label. It returns the values selected by the browser.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -316,7 +315,7 @@ export const previewEntries = {
     summary: "Drag in preview page",
     description: "Drag a browser-page element onto another element.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Source and target resolve as Playwright locators; the source is dragged onto the target.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -341,7 +340,7 @@ export const previewEntries = {
     description:
       "Give files from the environment to a browser page through its file picker or a file input.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. After clicking an upload control, goat_preview_status reports fileChooser. Supply absolute environment paths to answer the picker, or an empty list to cancel it. A locator for an input of type file sets its files directly without first opening the picker. An empty list with a file-input locator clears that input instead of cancelling an unrelated picker.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. After clicking an upload control, goat_preview_status reports fileChooser. Supply absolute environment paths to answer the picker, or an empty list to cancel it. A locator for an input of type file sets its files directly without first opening the picker. An empty list with a file-input locator clears that input instead of cancelling an unrelated picker.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -365,7 +364,7 @@ export const previewEntries = {
     summary: "Press key in preview page",
     description: "Press a keyboard key or shortcut in a browser tab.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. The key goes to the page's current keyboard focus. Examples include key='Enter', key='Escape', or key='a' with modifiers=['Meta'].",
+      "The key goes to the page's current keyboard focus. Examples include key='Enter', key='Escape', or key='a' with modifiers=['Meta'].",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -389,7 +388,7 @@ export const previewEntries = {
     summary: "Scroll preview page",
     description: "Scroll a browser page or a selected scroll container.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls.",
+      "Positive deltaY scrolls down; positive deltaX scrolls right. A locator or selector scrolls that element; without one, the page scrolls.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -412,9 +411,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Evaluate JavaScript in preview",
     description:
-      "Evaluate only read-only JavaScript with a known exact selector; never read cookies, tokens, storage or site-internal APIs. Prefer goat_preview_read for page text and goat_preview_snapshot for action refs. Evaluation still requires tab control, just like a click.",
+      "Evaluate only read-only JavaScript with a known exact selector; never read cookies, tokens, storage or site-internal APIs.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null.",
+      "Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -439,7 +438,7 @@ export const previewEntries = {
     description:
       "Wait until all supplied browser-page conditions hold together. A successful wait proves those conditions, not application success.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. Locator state defaults to attached; visible, hidden, and detached support transitions, and hidden also matches absence. load or domContentLoaded waits for document readiness. networkIdle is opt-in and may time out on busy pages. Text is a case-sensitive visible-text substring, and urlIncludes observes the current URL, including same-document changes. Conditions share one timeoutMs, default 15,000 and maximum 60,000. Human takeover interrupts an active wait on the caller's own tab. A new wait on a human-driven tab or another agent's tab observes without taking control, but a pending dialog blocks it.",
+      "Locator state defaults to attached; visible, hidden, and detached support transitions, and hidden also matches absence. load or domContentLoaded waits for document readiness. networkIdle is opt-in and may time out on busy pages. Text is a case-sensitive visible-text substring, and urlIncludes observes the current URL, including same-document changes. Conditions share one timeoutMs, default 15,000 and maximum 60,000. Human takeover interrupts an active wait on the caller's own tab. A new wait on a human-driven tab or another agent's tab observes without taking control, but a pending dialog blocks it.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -459,8 +458,7 @@ export const previewEntries = {
     summary: "Start browser recording",
     description:
       "Start recording a collaborative browser tab. Starting again on an already recording tab continues that recording.",
-    guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Finish capture with goat_preview_recording_stop to obtain an evidence file.",
+    guide: "Finish capture with goat_preview_recording_stop to obtain an evidence file.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -485,7 +483,7 @@ export const previewEntries = {
     description:
       "Stop a browser recording and save the compressed video as an evidence file in the environment. Stopping consumes the active recording; retrying after a lost response does not replay the transfer.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Without tabId, a session that owns several tabs in this thread is refused with tabRequired; otherwise, when the current tab is not recording and exactly one tab this session may act on is recording, that tab's recording is stopped instead. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. The compressed recording is limited to 50 MiB. The tool returns an environment-local path only after the attachment transfer and claim succeed. Server recording finalization clears the active recording even when encoding or size validation fails.",
+      "Without tabId, a session that owns several tabs in this thread is refused with tabRequired; otherwise, when the current tab is not recording and exactly one tab this session may act on is recording, that tab's recording is stopped instead. The compressed recording is limited to 50 MiB. The tool returns an environment-local path only after the attachment transfer and claim succeed. Server recording finalization clears the active recording even when encoding or size validation fails.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -510,7 +508,7 @@ export const previewEntries = {
     description:
       "List this thread's preview tabs. Pages reflect live state and may shift as tabs change.",
     guide:
-      "Requires the thread's preview MCP capability. Pagination slices the manager's current sessions rather than a frozen snapshot. Sessions are ordered by their update time; nextCursor is null when no further sessions remain.",
+      "Pagination slices the manager's current sessions rather than a frozen snapshot. Sessions are ordered by their update time; nextCursor is null when no further sessions remain.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -531,7 +529,7 @@ export const previewEntries = {
     description:
       "Close one preview tab in this thread through its server or host lifecycle. The response does not wait for renderer cleanup.",
     guide:
-      "Requires the thread's preview MCP capability. Server tabs can be closed only by the agent session that opened them, while no human controls them. Other preview runtimes close through the manager, which removes the session and publishes its closed event.",
+      "Server tabs can be closed only by the agent session that opened them, while no human controls them. Other preview runtimes close through the manager, which removes the session and publishes its closed event.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -555,7 +553,7 @@ export const previewEntries = {
     description:
       "Ask a person to finish a step you cannot, such as a sign-in, second factor or CAPTCHA, on your browser tab (tabId) or, without tabId, the desktop your computer use control drives. Its card says waiting for you with your reason. Your input there is refused until they hand it back. End the turn; GOAT wakes this thread when they hand back, decline or it expires.",
     guide:
-      "A browser request needs an agent tab of this thread from goat_preview_open or goat_screen_run; the tab stays open after the turn ends. A desktop request needs this thread's computer use control and pauses agents on that screen. The card shows the reason on web and desktop, and the thread shows the request on every client. A person can take control, finish the step and hand back, which completes it; Stop cancels it; they can also decline it, or answer it from the thread. Asking again for the same target while one is open returns that request. After the wake, observe again before acting: the page or window may have changed. Never ask a person to type a secret for you here; use goat_handoff_create.",
+      "A browser request needs an agent tab of this thread from goat_preview_open or goat_screen_run; the tab stays open after the turn ends. A desktop request needs this thread's computer use control and pauses agents on that screen. The card shows the reason on web and desktop, and the thread shows the request on every client. A person can take control, finish the step and hand back, which completes it; Stop cancels it; they can also decline it, or answer it from the thread. Asking again for the same target while one is open returns that request. Never ask a person to type a secret for you here; use goat_handoff_create.",
     effect: "write",
     capability: "none",
     capabilityReason: "Asks a person to act on the calling thread's own tab or control.",
@@ -576,10 +574,9 @@ export const previewEntries = {
     name: "preview_back",
     toolkit: "preview",
     summary: "Go back in browser preview",
-    description:
-      "Go back one entry in a browser tab's history. Take a fresh snapshot afterward before using element refs.",
+    description: "Go back one entry in a browser tab's history.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The operation refuses if no back entry exists. It waits for navigation to the requested readiness milestone and returns the observed page URL and status.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The operation refuses if no back entry exists. It waits for navigation to the requested readiness milestone and returns the observed page URL and status.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -601,10 +598,9 @@ export const previewEntries = {
     name: "preview_forward",
     toolkit: "preview",
     summary: "Go forward in browser preview",
-    description:
-      "Go forward one entry in a browser tab's history. Take a fresh snapshot afterward before using element refs.",
+    description: "Go forward one entry in a browser tab's history.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The operation refuses if no forward entry exists. It waits for navigation to the requested readiness milestone and returns the observed page URL and status.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. The operation refuses if no forward entry exists. It waits for navigation to the requested readiness milestone and returns the observed page URL and status.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -626,10 +622,9 @@ export const previewEntries = {
     name: "preview_reload",
     toolkit: "preview",
     summary: "Reload browser preview",
-    description:
-      "Reload a browser tab. Reloading may repeat page requests; take a fresh snapshot afterward before using element refs.",
+    description: "Reload a browser tab. Reloading may repeat page requests.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Cache bypass is opt-in with ignoreCache=true. The operation waits for the requested navigation readiness milestone and returns the observed URL and status.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Cache bypass is opt-in with ignoreCache=true. The operation waits for the requested navigation readiness milestone and returns the observed URL and status.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",
@@ -650,7 +645,7 @@ export const previewEntries = {
     description:
       "Read retained console messages, page errors and network metadata for a tab, newest first, without refreshing snapshot refs. droppedCount and omittedCount say what buffer evictions and limits left out, so an empty result is not proof nothing happened. URLs are redacted; other page text can contain secrets.",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Reads return newest entries first. Network entries hold each request's latest request, response, finished, or failed phase, with elapsed duration when its start was observed. Each stream defaults to 50 entries, at most 100, under a shared 24,000-byte entry budget. droppedCount counts buffer evictions before filtering; omittedCount counts retained matches excluded by limits. Filter console levels and console/error text, or network URL, method, status, and failed state. Console, error, and network streams default to included. URL credentials and query values are redacted and fragments removed. In free-form text, URL tokens start with scheme:// and end at whitespace, quotes, backslashes, angle brackets, or closing brackets and parentheses. Other console/error text is returned within its limits without secret scrubbing. Headers and bodies are never collected. Reading does not collect DOM or ARIA, take screenshots, clear buffers, or invalidate snapshot refs. Another agent's tab and any human-driven tab, including the caller's own, can be observed; pending dialogs block all logs requests.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Reads return newest entries first. Network entries hold each request's latest request, response, finished, or failed phase, with elapsed duration when its start was observed. Each stream defaults to 50 entries, at most 100, under a shared 24,000-byte entry budget. droppedCount counts buffer evictions before filtering; omittedCount counts retained matches excluded by limits. Filter console levels and console/error text, or network URL, method, status, and failed state. Console, error, and network streams default to included. URL credentials and query values are redacted and fragments removed. In free-form text, URL tokens start with scheme:// and end at whitespace, quotes, backslashes, angle brackets, or closing brackets and parentheses. Other console/error text is returned within its limits without secret scrubbing. Headers and bodies are never collected. Reading does not collect DOM or ARIA, take screenshots, clear buffers, or invalidate snapshot refs. Pending dialogs block all logs requests.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -665,9 +660,9 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Fetch a URL inside a browser tab without navigating",
     description:
-      "Fetch an HTTP(S) URL in a GOAT browser tab using its same-origin session, without navigating. Returns bounded, credential-redacted Markdown or text; a binary response up to 25 MiB is saved as a file (savedPath). Use goat_preview_read to read the rendered web page.",
+      "Fetch an HTTP(S) URL in a GOAT browser tab using its same-origin session, without navigating. Returns bounded, credential-redacted Markdown or text; a binary response up to 25 MiB is saved as a file (savedPath).",
     guide:
-      "Requires the thread's preview MCP capability. An explicit tabId selects that tab; otherwise the broker uses this session's current tab or a visible/recent tab in the thread. Sends cookies only to the same origin (credentials=same-origin) and follows redirects. HTML bodies are parsed with an inert DOMParser (dropping scripts, styles, templates, hidden elements, and form fields) and rendered as Markdown or plain text; non-text responses return format='raw' with empty text, and up to 25 MiB of their body is saved as an owner-only file in the browser artifacts folder, returned as savedPath with sizeBytes and kept after the tab closes until storage cleanup; a larger body is not saved and reports truncated, so open its URL with goat_preview_navigate to download it. Response headers other than content-type never leave the page, and browser cookies for the request, redirect target, or tab (including HttpOnly) plus echoed authorization headers and credential-like JSON keys are redacted before returning. Refuses when a browser dialog is open or while the tab is in private mode (or if a private period overlapped the fetch). Another agent's tab and any human-driven tab can be observed.",
+      "Sends cookies only to the same origin (credentials=same-origin) and follows redirects. HTML bodies are parsed with an inert DOMParser (dropping scripts, styles, templates, hidden elements, and form fields) and rendered as Markdown or plain text; non-text responses return format='raw' with empty text, and up to 25 MiB of their body is saved as an owner-only file in the browser artifacts folder, returned as savedPath with sizeBytes and kept after the tab closes until storage cleanup; a larger body is not saved and reports truncated, so open its URL with goat_preview_navigate to download it. Response headers other than content-type never leave the page, and browser cookies for the request, redirect target, or tab (including HttpOnly) plus echoed authorization headers and credential-like JSON keys are redacted before returning. Refuses when a browser dialog is open or while the tab is in private mode (or if a private period overlapped the fetch).",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -688,7 +683,7 @@ export const previewEntries = {
     description:
       "Wheel-scroll a browser tab and collect items from JSON array responses matching a URL substring until minItems, maxItems, maxScrolls, or two rounds without growth.",
     guide:
-      "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Each round drains pending JSON responses, checks stopping conditions (maxItems, minItems, maxScrolls, or two rounds with neither scrollHeight growth nor new items), dispatches a wheel scroll of 90% viewport height at the viewport center, and waits up to settleMs for the next matching response. Refuses and withholds all collected items if the tab enters private mode at any point during collection.",
+      "Each round drains pending JSON responses, checks stopping conditions (maxItems, minItems, maxScrolls, or two rounds with neither scrollHeight growth nor new items), dispatches a wheel scroll of 90% viewport height at the viewport center, and waits up to settleMs for the next matching response. Refuses and withholds all collected items if the tab enters private mode at any point during collection.",
     effect: "write",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",

@@ -236,7 +236,7 @@ it.effect(
 
 it.effect("desktop actions map only to allowed driver primitives", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture();
+    const { host, sent } = fixture({ get_window_state: goat2WindowState });
     const bound = yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
@@ -246,9 +246,13 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
     const elementRef = (observed.value as { elements: Array<{ ref: ScreenElementRef }> })
       .elements[0]?.ref;
     if (!elementRef) throw new Error("The observed button must have a ref");
+    const shoot = host.observe(call("screenshot", {}, ref), context);
     yield* host.invoke(call("click", { x: 10, y: 20 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("right_click", { x: 10, y: 20 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref), context);
+    yield* shoot;
     yield* host.invoke(call("scroll", { x: 10, y: 20, direction: "down" }, ref), context);
     yield* host.invoke(call("type_text", { text: "hello" }, ref), context);
     yield* host.invoke(call("press_key", { key: "Return" }, ref), context);
@@ -262,8 +266,11 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
       "list_windows",
       "get_window_state",
       "click",
+      "get_window_state",
       "right_click",
+      "get_window_state",
       "drag",
+      "get_window_state",
       "scroll",
       "type_text",
       "press_key",
@@ -277,6 +284,36 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
       y: 20,
     });
   }),
+);
+
+it.effect(
+  "a point is refused after any input until a new screenshot, whatever call form sent it",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({ get_window_state: goat2WindowState });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      yield* host.observe(call("screenshot", {}, ref), context);
+      yield* host.invoke(call("type_text", { text: "changes the window" }, ref), context);
+      for (const aimed of [
+        call("click", { x: 10, y: 10 }, ref),
+        call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref),
+        call("scroll", { x: 10, y: 10, direction: "down" }, ref),
+      ]) {
+        const refused = yield* host.invoke(aimed, context).pipe(Effect.result);
+        expect(refused._tag === "Failure" && refused.failure).toMatchObject({
+          code: "stale_reference",
+          effectStarted: false,
+        });
+      }
+      expect(sent.map((entry) => entry.tool)).not.toContain("click");
+      yield* host.observe(call("screenshot", {}, ref), context);
+      yield* host.invoke(call("click", { x: 10, y: 10 }, ref), context);
+      expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+    }),
 );
 
 type Observed = {

@@ -20,6 +20,8 @@ export interface ScreenTab {
   readonly tabId: string;
   readonly control: SessionControl;
   readonly page: { readonly url: () => string };
+  /** Moves on every main-frame navigation; absent on tabs that do not count them. */
+  readonly documentGeneration?: number;
   readonly desktop: object | null;
   readonly viewers: ReadonlySet<{ readonly push: (output: ServerBrowserViewerOutput) => void }>;
 }
@@ -140,6 +142,11 @@ export const assertScreenExpectation = (tab: ScreenTab, request: PreviewAutomati
   tab.control.assertObservedGeneration(expected.controlGeneration);
   if (originOf(tab.page.url()) !== expected.origin)
     throw new BrowserControlInterrupted("Page origin changed; bind and observe again.");
+  if (
+    expected.documentGeneration !== undefined &&
+    tab.documentGeneration !== expected.documentGeneration
+  )
+    throw new BrowserControlInterrupted("The page changed since that screenshot; observe again.");
 };
 
 /** Passes a read's result through once the tab still matches what the screen run observed. */

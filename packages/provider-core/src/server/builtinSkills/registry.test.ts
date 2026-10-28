@@ -12,6 +12,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "../developmentInstructions.ts";
 import { buildRuntimeInstructions } from "../runtimeInstructions.ts";
 import { COMPUTER_USE_PLATFORM_NOTES } from "./computerUse.ts";
+import { browserSkillFiles } from "./browserSkillFiles.ts";
+import { computerUseAppNote } from "./computerUseSkillFiles.ts";
 import {
   builtInSkillSections,
   namedBuiltInSkills,
@@ -50,7 +52,10 @@ describe("built-in skill activation", () => {
       "screen-code",
     ]);
     expect(resolveBuiltInSkills({ attached: [] }).active).toEqual([]);
-    expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual(["screen-code"]);
+    expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual([
+      "browser",
+      "screen-code",
+    ]);
   });
 
   it("keeps a skill switched off in Settings off unless this turn requests its capability", () => {
@@ -66,15 +71,18 @@ describe("built-in skill activation", () => {
     ).toEqual(["computer-use", "screen-code"]);
   });
 
-  it("browser-only attachment installs the screen-code guide", () => {
-    expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual(["screen-code"]);
+  it("browser-only attachment loads the browser skill and the screen-code guide", () => {
+    expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual([
+      "browser",
+      "screen-code",
+    ]);
     expect(builtInSkillSections(["screen-code"]).join("\n")).toContain("goat_screen_run");
   });
 
   it("a disabled screen-code guide stays absent unless an attached capability was requested", () => {
     expect(
       resolveBuiltInSkills({ attached: ["browser"], disabled: ["screen-code"] }).active,
-    ).toEqual([]);
+    ).toEqual(["browser"]);
     expect(
       resolveBuiltInSkills({ attached: [], requested: ["browser"], disabled: ["screen-code"] })
         .active,
@@ -85,7 +93,7 @@ describe("built-in skill activation", () => {
         requested: ["browser"],
         disabled: ["screen-code"],
       }).active,
-    ).toEqual(["screen-code"]);
+    ).toEqual(["browser", "screen-code"]);
   });
 
   it("reports a requested capability that is not attached instead of dropping it", () => {
@@ -93,6 +101,37 @@ describe("built-in skill activation", () => {
       active: [],
       unattached: ["computer-use", "browser"],
     });
+  });
+});
+
+describe("browser skill", () => {
+  it("keeps its resident core and the screen-code pointer within the old browser block's bytes", () => {
+    const resident = [
+      ...builtInSkillSections(["browser"]),
+      ...builtInSkillSections(["screen-code"]),
+    ];
+    expect(new TextEncoder().encode(resident.join("")).byteLength).toBeLessThanOrEqual(779);
+    for (const section of builtInSkillSections(["browser"]))
+      expect(new TextEncoder().encode(section).byteLength).toBeLessThanOrEqual(4_000);
+  });
+
+  it("writes its guide with the computer use skill's section names, so the two can merge", () => {
+    const guide = browserSkillFiles()["SKILL.md"]!;
+    for (const heading of ["## Use", "## Observe", "## Act", "## Results", "## Finish"])
+      expect(guide).toContain(`\n${heading}\n`);
+    for (const label of ["Use:", "Observe:", "Act:", "Results:"])
+      expect(builtInSkillSections(["browser"]).join("\n")).toContain(label);
+  });
+
+  it("finds an app's notes by bundle id as well as by name", () => {
+    expect(computerUseAppNote("darwin", "com.kakao.KakaoTalkMac")).toBe(
+      computerUseAppNote("darwin", "KakaoTalk"),
+    );
+    expect(computerUseAppNote("darwin", "KakaoTalk")).toContain(
+      "Opening a chat marks its messages read",
+    );
+    expect(computerUseAppNote("darwin", "com.apple.Safari")).toContain("File > Open Location");
+    expect(computerUseAppNote("darwin", "constructor")).toBeUndefined();
   });
 });
 

@@ -568,6 +568,7 @@ export class ScreenHostBridge {
       cellId: call.cellId,
       callId: call.callId,
       outcome: "ok" as const,
+      category: result.success.category,
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });
