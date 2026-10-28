@@ -191,13 +191,13 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
     if (child === undefined) continue;
     childrenByParentKey.set(parentKey, [...(childrenByParentKey.get(parentKey) ?? []), child]);
   }
-  // People first, then running work, then finished; launch order within each, so lanes keep places.
+  // People first, then running work, then finished; newest launch first within each.
   const rank = (thread: T) => STATE_RANK[stateByKey.get(keyOf(thread)) ?? "finished"];
   for (const siblings of childrenByParentKey.values()) {
     siblings.sort(
       (left, right) =>
         rank(left) - rank(right) ||
-        left.createdAt.localeCompare(right.createdAt) ||
+        right.createdAt.localeCompare(left.createdAt) ||
         keyOf(left).localeCompare(keyOf(right)),
     );
   }
