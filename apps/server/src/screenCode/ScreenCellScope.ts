@@ -242,6 +242,19 @@ export function topLevelBindings(source: string): ReadonlyArray<string> {
   return [...declaredBindings(tokenize(source)).keys()];
 }
 
+const CONTINUES_EXPRESSION = new Set("( [ . , ? : = < > & | ^ * % / + - `".split(" "));
+
+/** Whether a token after a line break carries on the expression before it, so no semicolon goes in. */
+const continuesExpression = (tokens: ReadonlyArray<Token>, index: number) => {
+  const token = tokens[index];
+  if (token === undefined) return false;
+  if (token.kind === "word") return token.value === "in" || token.value === "instanceof";
+  // A prefix ++ or -- may not continue the line before it.
+  if ((token.value === "+" || token.value === "-") && tokens[index + 1]?.value === token.value)
+    return false;
+  return CONTINUES_EXPRESSION.has(token.value);
+};
+
 /** Whether the cell opens with a "use strict" directive, after any comments and other directives. */
 function opensStrict(tokens: ReadonlyArray<Token>): boolean {
   for (let k = 0; k < tokens.length; k++) {
@@ -251,10 +264,8 @@ function opensStrict(tokens: ReadonlyArray<Token>): boolean {
     const ends =
       next === undefined ||
       next.value === ";" ||
-      (next.lineBreakBefore &&
-        (next.kind === "word"
-          ? next.value !== "in" && next.value !== "instanceof"
-          : next.kind === "value" && next.value !== "`" && next.value !== "/"));
+      next.value === "}" ||
+      (next.lineBreakBefore && !continuesExpression(tokens, k + 1));
     if (!ends) return false;
     if (token.value === "'use strict'" || token.value === '"use strict"') return true;
     if (next?.value === ";") k++;

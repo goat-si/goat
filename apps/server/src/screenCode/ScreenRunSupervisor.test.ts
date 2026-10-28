@@ -152,6 +152,16 @@ it.live(
           ),
         ).toBe(true);
         expect(yield* cell("sloppy", "'use strict' + ''; loose = 1; return loose;")).toBe(1);
+        // A var inside a nested function is not the cell's binding, even when it names an inherited one.
+        yield* cell("nested", "function f() { var toString = 1; } return 0;");
+        expect(yield* cell("inherited", "return typeof toString;")).toBe("function");
+        // A directive ends at a line break before a block, so the block runs strict.
+        const strictBlock = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("strict-block", limits) },
+          '"use strict"\n{ undeclared = 9; }\nreturn 1;',
+          false,
+        );
+        expect(strictBlock.status).toBe("failed");
       }),
     ),
 );
