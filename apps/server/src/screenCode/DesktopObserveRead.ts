@@ -175,7 +175,7 @@ export const boundedReadDetail = (limit: number) =>
   `Read stopped at ${limit} elements; observe({query:{name}}) searches up to 4,096.`;
 
 /** The next page: the read's elements from index after on that no earlier page carried. */
-export const pageRows = (pages: DesktopPages, after: number) =>
+const pageRows = (pages: DesktopPages, after: number) =>
   pages.rows.filter(
     (row) => row.index !== undefined && row.index >= after && !pages.given.has(row.index),
   );
@@ -232,7 +232,7 @@ export const tooLargeStep = (capture: boolean, query: boolean) =>
  * A filtered read's tree text, rebuilt from the driver's element list: the filter can keep a line
  * written inside another element's text and drop the real one, while each entry is one element.
  */
-export const structuredTree = (elements: ReadonlyArray<Record<string, unknown>>): string =>
+const structuredTree = (elements: ReadonlyArray<Record<string, unknown>>): string =>
   elements
     .map((entry) => {
       const index = natural(entry.element_index);
