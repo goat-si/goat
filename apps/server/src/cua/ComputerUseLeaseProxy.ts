@@ -29,7 +29,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
-import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
+import { makeProxyRelease, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -160,7 +160,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     controlId: options.controlId,
     connectionId: () => lifecycle.current?.connectionId,
     active: () => finished === undefined && paused === undefined && !idle,
-    draw: drawOverlay,
+    overlay,
+    targetClose: () => unanswered,
   });
   const providerSink: ReplySink = {
     answer: (line, _status, context) => options.output(line, context),
@@ -242,11 +243,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }, Effect.uninterruptible);
 
   // completed: the driver answered it, so its connection's earlier calls ended too (D17).
-  const release = (
-    request: { readonly reservationId?: string; readonly connectionId?: string },
-    completed?: true,
-    notSent?: boolean,
-  ) => releaseProxyCall(options, request, completed, notSent);
+  const release = makeProxyRelease(options);
 
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
@@ -422,7 +419,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const start = lifecycle.start;
   const unanswered = makeUnansweredWatch(
     { lock: lifecycleLock, scope, outstanding, lifecycle },
-    { active, interrupt, start, end },
+    { active, interrupt, start, end, fenced: (cause) => void (lastInterruption = cause) },
   );
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
@@ -801,6 +798,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const stillCurrent = () =>
       lifecycle.current === current &&
       primitiveCurrent() &&
+      !unanswered.blocks(current.connectionId) &&
       (expectedConnection === undefined || current.connectionId === expectedConnection) &&
       !idle &&
       paused === undefined &&

@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Semaphore from "effect/Semaphore";
 
-import type { Interruption } from "./ComputerUseLeaseMessages.ts";
+import { type Interruption, targetClosedInterruption } from "./ComputerUseLeaseMessages.ts";
 import { PRIMITIVE_ID } from "./ComputerUseLeaseProxyOptions.ts";
 
 /** Lets a reply already on its way land before the child is judged stuck. */
@@ -43,10 +43,14 @@ export const makeUnansweredWatch = <E>(
     readonly interrupt: (cause: Interruption) => Effect.Effect<number>;
     readonly start: (token: number) => Effect.Effect<void, E>;
     readonly end: (reason: "lost") => Effect.Effect<void>;
+    /** What a call refused at the fence is told, before the interruption itself records it. */
+    readonly fenced: (cause: Interruption) => void;
   },
 ) => {
   // Marked as each line leaves the driver, ahead of the replies GOAT is still checking in order.
   const replied = new Set<string>();
+  // The chain a private or taken-over target closed; no call reaches it until it is replaced.
+  let fenced: string | undefined;
   const replace = Effect.fn("ComputerUseLeaseProxy.replaceUnanswered")(function* (key: string) {
     if (replied.delete(key)) return;
     const call = proxy.outstanding.get(key);
@@ -55,7 +59,30 @@ export const makeUnansweredWatch = <E>(
     const token = yield* act.interrupt(DRIVER_UNANSWERED);
     if (act.active()) yield* act.start(token);
   });
+  const closeTarget = Effect.fn("ComputerUseLeaseProxy.closeTarget")(function* (
+    reason: "private" | "takeover",
+    connectionId: string,
+  ) {
+    // An overtaking restart already replaced the chain this hide was meant for.
+    if (!act.active() || proxy.lifecycle.current?.connectionId !== connectionId) {
+      if (fenced === connectionId) fenced = undefined;
+      return;
+    }
+    const token = yield* act.interrupt(targetClosedInterruption(reason));
+    fenced = undefined;
+    if (act.active()) yield* act.start(token);
+  });
   return {
+    /** Whether calls to this chain are held back while it is being replaced. */
+    blocks: (connectionId: string) => fenced === connectionId,
+    fenceTarget: (reason: "private" | "takeover", connectionId: string) => {
+      fenced = connectionId;
+      act.fenced(targetClosedInterruption(reason));
+    },
+    closeTarget: (reason: "private" | "takeover", connectionId: string) =>
+      proxy.lock
+        .withPermits(1)(closeTarget(reason, connectionId).pipe(Effect.uninterruptible))
+        .pipe(Effect.catchCause(() => act.end("lost"))),
     /** Every line the driver writes, as it arrives. */
     received: (line: string) =>
       Effect.sync(() => {

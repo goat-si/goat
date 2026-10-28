@@ -229,26 +229,26 @@ function desired(state: OverlayState): ComputerUseOverlayCommand {
 const same = (a: ComputerUseOverlayCommand | undefined, b: ComputerUseOverlayCommand) =>
   a !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
+/** Whether the overlay takes a scoped cursor event over the owner it holds. */
+export function cursorAccepted(state: OverlayState, event: AgentCursorEvent): boolean {
+  const previous = state.scoped?.identity;
+  const next = event.identity;
+  if (previous === undefined) return true;
+  const sameOwner =
+    previous.environmentId === next.environmentId &&
+    previous.runId === next.runId &&
+    previous.turnId === next.turnId &&
+    previous.targetId === next.targetId &&
+    previous.generation === next.generation;
+  return sameOwner
+    ? next.sequence > previous.sequence && !(state.scoped?.op === "hide" && event.op === "show")
+    : state.scoped?.op === "hide" || next.generation > previous.generation;
+}
+
 function apply(state: OverlayState, event: OverlayEvent): OverlayState {
   switch (event.type) {
     case "cursor": {
-      const previous = state.scoped?.identity;
-      const next = event.event.identity;
-      if (previous !== undefined) {
-        const sameOwner =
-          previous.environmentId === next.environmentId &&
-          previous.runId === next.runId &&
-          previous.turnId === next.turnId &&
-          previous.targetId === next.targetId &&
-          previous.generation === next.generation;
-        if (
-          sameOwner
-            ? next.sequence <= previous.sequence ||
-              (state.scoped?.op === "hide" && event.event.op === "show")
-            : state.scoped?.op !== "hide" && next.generation <= previous.generation
-        )
-          return state;
-      }
+      if (!cursorAccepted(state, event.event)) return state;
       return {
         ...state,
         scoped: event.event,

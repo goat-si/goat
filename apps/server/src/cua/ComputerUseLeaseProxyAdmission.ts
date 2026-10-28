@@ -72,7 +72,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
  * calls in order, so the server also ends that connection's earlier calls, whose own releases may
  * have been lost (D17).
  */
-export const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(function* (
+const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">,
   request: { readonly reservationId?: string; readonly connectionId?: string },
   completed: true | undefined,
@@ -88,3 +88,12 @@ export const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(f
     ...(notSent === true && { notSent }),
   });
 });
+
+export const makeProxyRelease =
+  (options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">) =>
+  (
+    request: { readonly reservationId?: string; readonly connectionId?: string },
+    completed?: true,
+    notSent?: boolean,
+  ) =>
+    releaseProxyCall(options, request, completed, notSent);

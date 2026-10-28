@@ -18,7 +18,12 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import { initialOverlayState, type OverlayEvent, overlayStep } from "./ComputerUseOverlay.ts";
+import {
+  cursorAccepted,
+  initialOverlayState,
+  type OverlayEvent,
+  overlayStep,
+} from "./ComputerUseOverlay.ts";
 
 /** At most four reports a second, the pace a person can follow on a thumbnail. */
 const REPORT_INTERVAL = "250 millis";
@@ -172,6 +177,8 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
       }
     }),
     view: () => ({ enabled, visible: enabled && state.shown?.op === "show" }),
+    /** Whether the next draw of this scoped cursor event would take it over the current owner. */
+    accepts: (event: AgentCursorEvent) => cursorAccepted(state, event),
     placed: () => state.shown?.op === "show" && state.shown.point !== undefined,
     setEnabled: Effect.fn("ComputerUseLeaseProxy.setCursorEnabled")(function* (next: boolean) {
       if (next === enabled) return;
