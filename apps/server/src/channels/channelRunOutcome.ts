@@ -1,8 +1,7 @@
 /**
- * How a channel task settles once its worker's current run ended `completed`. The run's status
- * stays necessary; the outcome the worker reported with goat_thread_report_result decides what
- * the requester sees, except that a successful GOAT Bot turn delivers its own final text. Local
- * and remote workers settle through this one rule.
+ * How a channel task settles once its worker's current run ended `completed`. The outcome the
+ * worker reported with goat_thread_report_result decides what the requester sees; a successful
+ * GOAT Bot turn delivers its own final text. Local and remote workers share this one rule.
  *
  * @module channelRunOutcome
  */

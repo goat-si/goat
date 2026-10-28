@@ -171,7 +171,8 @@ describe("completed run outcomes", () => {
     assert.notProperty(retried.task, "completionReport");
   });
 });
-+describe("a bot turn's answer", () => {
+
+describe("a bot turn's answer", () => {
   const longAnswer = [
     "The disk is full because Docker keeps 41 GB of old images.",
     "",

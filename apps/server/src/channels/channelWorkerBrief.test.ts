@@ -104,7 +104,8 @@ describe("channel worker brief", () => {
     assert.deepStrictEqual(skillsNamedIn("Compute a+b now", ["a+b"]), ["a+b"]);
     assert.lengthOf(skillsNamedIn("one two three four", ["one", "two", "three", "four"]), 3);
   });
-  +it.each([false, true])(
+
+  it.each([false, true])(
     "tells a bot turn its final message is the whole answer, not a short summary (supervisor: %s)",
     (supervisor) => {
       const brief = turnInstruction(task, files, supervisor);
