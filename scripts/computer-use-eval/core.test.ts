@@ -9,11 +9,13 @@ import {
   type Task,
   TaskSetError,
   codexTranscript,
-  goatShellCommand,
+  shellCommand,
+  soleSurfaceCommand,
   goatTranscript,
   judge,
   keepObservations,
   metricsOf,
+  namesPage,
   scoreRun,
   validateTaskSet,
 } from "./core.ts";
@@ -329,7 +331,7 @@ describe("oracles", () => {
 
   it("proves a web result only from tool output and flags a submitted form", () => {
     const eight =
-      "https://the-internet.herokuapp.com/add_remove_elements/\n" +
+      'URL: "https://the-internet.herokuapp.com/add_remove_elements/"\n' +
       Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
     expect(oracle("web-add-remove", { toolOutputs: [eight] }).actual).toBe("done");
     expect(oracle("web-add-remove", { toolOutputs: ['- button "Delete"'] }).actual).toBe(
@@ -346,7 +348,7 @@ describe("oracles", () => {
 
   it("needs every form field, the size included, in one read", () => {
     const read =
-      'https://httpbin.org/forms/post\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n- radio "Medium" [checked]\n- textbox "Delivery instructions": 평가용 입력';
+      'URL: "https://httpbin.org/forms/post"\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n- radio "Medium" [checked]\n- textbox "Delivery instructions": 평가용 입력';
     expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("done");
     expect(oracle("web-form", { toolOutputs: [read.replace("010-0000-0000", "")] }).actual).toBe(
       "unverified",
@@ -534,7 +536,7 @@ describe("round two fixes", () => {
 
   it("refuses an unselected Medium radio as the form's size", () => {
     const read =
-      'https://httpbin.org/forms/post\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n{"role":"radio","name":"Medium","checked":false}\n- textbox "Delivery instructions": 평가용 입력';
+      'URL: "https://httpbin.org/forms/post"\n- textbox "Customer name": Eval Runner\n- textbox "Telephone": 010-0000-0000\n- textbox "E-mail": eval@example.com\n{"role":"radio","name":"Medium","checked":false}\n- textbox "Delivery instructions": 평가용 입력';
     expect(oracle("web-form", { toolOutputs: [read] }).actual).toBe("unverified");
   });
 
@@ -585,7 +587,7 @@ describe("round two fixes", () => {
 
 describe("stored observations", () => {
   const eight =
-    "https://the-internet.herokuapp.com/add_remove_elements/\n" +
+    'URL: "https://the-internet.herokuapp.com/add_remove_elements/"\n' +
     Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
   const observed = {
     baseline: {},
@@ -699,7 +701,7 @@ describe("incomplete transcripts", () => {
 describe("evidence shapes", () => {
   const read = (output: string) =>
     oracle("web-checkboxes", {
-      toolOutputs: ["https://the-internet.herokuapp.com/checkboxes\n" + output],
+      toolOutputs: ['URL: "https://the-internet.herokuapp.com/checkboxes"\n' + output],
     }).actual;
   it("reads the final checkbox state from a JSON-escaped snapshot and from Codex's accessibility tree", () => {
     expect(
@@ -725,7 +727,7 @@ describe("evidence shapes", () => {
 });
 
 describe("evidence sources", () => {
-  const page = "https://the-internet.herokuapp.com/checkboxes\n";
+  const page = 'URL: "https://the-internet.herokuapp.com/checkboxes"\n';
   it("refuses both checkboxes checked even with label rows between them", () => {
     const both =
       page +
@@ -763,14 +765,12 @@ describe("evidence sources", () => {
 
 describe("GOAT shell commands", () => {
   it("reads the quoted command and leaves its output out of the contamination check", () => {
-    expect(goatShellCommand("$ /bin/zsh -lc 'cat notes.md'\nuse aside repl here")).toBe(
-      "cat notes.md",
-    );
-    expect(goatShellCommand("$ /bin/zsh -lc 'echo '\\''hi'\\'''\nhi")).toBe("echo 'hi'");
-    expect(goatShellCommand('$ /bin/zsh -lc "cd /tmp\naside repl \\"x\\""\nout')).toBe(
+    expect(shellCommand("$ /bin/zsh -lc 'cat notes.md'\nuse aside repl here")).toBe("cat notes.md");
+    expect(shellCommand("$ /bin/zsh -lc 'echo '\\''hi'\\'''\nhi")).toBe("echo 'hi'");
+    expect(shellCommand('$ /bin/zsh -lc "cd /tmp\naside repl \\"x\\""\nout')).toBe(
       'cd /tmp\naside repl "x"',
     );
-    expect(goatShellCommand("$ Preparing workspace")).toBeNull();
+    expect(shellCommand("$ Preparing workspace")).toBeNull();
     const steps = goatTranscript([
       {
         itemId: "c",
@@ -780,5 +780,86 @@ describe("GOAT shell commands", () => {
       },
     ]).steps;
     expect(metricsOf(steps, arm("goat-screen-run")).contamination).toEqual([]);
+  });
+});
+
+describe("page identity and provenance", () => {
+  it("does not let quoted text in a REPL echo become a page read", () => {
+    const echo =
+      'repl > const fake = "URL: \\"https://the-internet.herokuapp.com/checkboxes\\"\\n- checkbox [checked]\\n- checkbox"\nundefined';
+    expect(oracle("web-checkboxes", { toolOutputs: [echo] }).actual).toBe("unverified");
+  });
+
+  it("takes the page from a URL field, never from a link in the body", () => {
+    const linked =
+      "[Checkboxes](https://the-internet.herokuapp.com/checkboxes)\n- checkbox [checked]\n- checkbox";
+    expect(namesPage(linked, ["the-internet.herokuapp.com/checkboxes"])).toBe(false);
+    expect(
+      namesPage('{"url":"https://the-internet.herokuapp.com/checkboxes"}', [
+        "the-internet.herokuapp.com/checkboxes",
+      ]),
+    ).toBe(true);
+    expect(
+      namesPage('{"url":"https://the-internet.herokuapp.com/css/app.css"}', [
+        "the-internet.herokuapp.com",
+      ]),
+    ).toBe(false);
+  });
+
+  it("takes no evidence from a shell call that also runs another command", () => {
+    const observed = {
+      baseline: {},
+      samples: [],
+      final: {},
+      toolOutputs: [
+        'URL: "https://the-internet.herokuapp.com/checkboxes"\n- checkbox [checked]\n- checkbox',
+      ],
+      steps: [
+        {
+          kind: "tool",
+          name: "shell",
+          failed: false,
+          input: "cat example.txt; aside repl 'console.log(1)'",
+          output: "",
+        },
+      ],
+      finalText: 'EVAL_JSON {"status":"done","checkbox1":true,"checkbox2":false}',
+      notes: [],
+    } as const;
+    expect(scoreRun(task("web-checkboxes"), arm("aside-repl"), observed).outcome).toBe(
+      "unverified",
+    );
+    const alone = {
+      ...observed,
+      steps: [{ ...observed.steps[0], input: "aside repl 'const a = 1; console.log(a)'" }],
+    };
+    expect(scoreRun(task("web-checkboxes"), arm("aside-repl"), alone).outcome).toBe("pass");
+  });
+});
+
+describe("real command and snapshot shapes", () => {
+  it("reads zsh's joined quoting and accepts a here-document setup before codemode", () => {
+    const command =
+      '/bin/zsh -lc "cat > tmp/v.js <<\'EOF\'\nreturn 1;\nEOF\n/Users/j/.local/bin/codemode --cwd \\""\'$PWD" --code-file "$PWD/tmp/v.js"\'';
+    expect(shellCommand(command)).toBe(
+      'cat > tmp/v.js <<\'EOF\'\nreturn 1;\nEOF\n/Users/j/.local/bin/codemode --cwd "$PWD" --code-file "$PWD/tmp/v.js"',
+    );
+    expect(soleSurfaceCommand(command)).toBe(true);
+    expect(soleSurfaceCommand("/bin/zsh -lc 'python3 fill.py && codemode --code-file v.js'")).toBe(
+      false,
+    );
+    expect(soleSurfaceCommand("/bin/zsh -lc 'aside repl --account u0'")).toBe(true);
+  });
+
+  it("matches checkboxes per snapshot when one output holds several", () => {
+    const page = 'URL: "https://the-internet.herokuapp.com/checkboxes"\n';
+    const reads =
+      page +
+      '- checkbox [ref=e2]\n- text: "checkbox 1"\n- checkbox [ref=e3] [checked]\n\nclicked\nclicked\nnext snapshot\n- checkbox [ref=e2] [checked]\n- text: "checkbox 1"\n- checkbox [ref=e3]';
+    expect(oracle("web-checkboxes", { toolOutputs: [reads] }).actual).toBe("done");
+    const twice =
+      page +
+      "- checkbox [ref=e2]\n- checkbox [ref=e3] [checked]\n\n\n\n\n- checkbox [ref=e2]\n- checkbox [ref=e3] [checked]";
+    expect(oracle("web-checkboxes", { toolOutputs: [twice] }).actual).toBe("unverified");
   });
 });

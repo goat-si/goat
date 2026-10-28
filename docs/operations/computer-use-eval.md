@@ -58,7 +58,11 @@ violation, in any sample or the final read.
 
 No observer can see another product's browser, so a web task passes only when a result of the
 arm's own surface, never the model's text or a file it read, names the task's page and contains
-the evidence the task names. A REPL's echo of the agent's code is not evidence. Without it the run
+the evidence the task names. The page must be the one the surface reports reading, in its URL field,
+not a link in the body; a REPL's echo of the agent's code is not evidence; and a shell result counts
+only when the command was the surface call plus silent setup. The arms are not adversaries: an agent
+that deliberately prints page-shaped text from the surface could still pass, which no text oracle
+can rule out. Without it the run
 is
 unverified. The form task needs all five values, the selected size included, in one read.
 Evidence that the form was submitted is a violation.

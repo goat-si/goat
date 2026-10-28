@@ -356,30 +356,52 @@ const GOAT_BOUNDARY_TYPES = new Set(["assistant_message", "reasoning", "proposed
 
 /** A GOAT run's activity items. The activity view renders a tool call as JSON with toolName. */
 /**
- * The command of a GOAT shell item. Its activity text is "$ /bin/zsh -lc '<command>'" followed by
- * the output; the quoted argument is read exactly. Null when it is not in that form.
+ * The command inside "/bin/zsh -lc <word>", as Codex records it and as a GOAT shell item's activity
+ * text starts ("$ " first, the output after a newline). The word is read the way the shell reads
+ * it, quoted and unquoted parts joined. Null when the text is not in that form.
  */
-export const goatShellCommand = (text: string): string | null => {
-  const head = /^\$\s*\/bin\/(?:zsh|bash) -lc /u.exec(text);
+export const shellCommand = (text: string): string | null => {
+  const head = /^(?:\$\s*)?\/bin\/(?:zsh|bash) -lc /u.exec(text);
   if (head === null) return null;
   const rest = text.slice(head[0].length);
-  const quote = rest[0];
-  if (quote !== "'" && quote !== '"') return null;
   let command = "";
-  for (let index = 1; index < rest.length; index += 1) {
-    const char = rest[index];
-    if (quote === "'" && rest.startsWith("'\\''", index)) {
-      command += "'";
-      index += 3;
-    } else if (quote === '"' && char === "\\" && index + 1 < rest.length) {
-      command += rest[index + 1];
+  let index = 0;
+  while (index < rest.length) {
+    const char = rest[index] ?? "";
+    if (char === "'") {
+      const end = rest.indexOf("'", index + 1);
+      if (end === -1) return null;
+      command += rest.slice(index + 1, end);
+      index = end + 1;
+    } else if (char === '"') {
       index += 1;
-    } else if (char === quote) {
-      const after = rest[index + 1];
-      return after === undefined || after === "\n" ? command : null;
-    } else command += char;
+      for (;;) {
+        if (index >= rest.length) return null;
+        const inner = rest[index] ?? "";
+        if (inner === '"') break;
+        const next = rest[index + 1] ?? "";
+        if (inner === "\\" && /[\\"$\x60\n]/u.test(next)) {
+          command += next;
+          index += 2;
+        } else {
+          command += inner;
+          index += 1;
+        }
+      }
+      index += 1;
+    } else if (char === "\\") {
+      command += rest[index + 1] ?? "";
+      index += 2;
+    } else if (char === "\n") {
+      return command;
+    } else if (/\s/u.test(char)) {
+      return rest.slice(index).trim() === "" ? command : null;
+    } else {
+      command += char;
+      index += 1;
+    }
   }
-  return null;
+  return command;
 };
 
 export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript => {
@@ -397,7 +419,7 @@ export const goatTranscript = (items: ReadonlyArray<TimelineEntry>): Transcript 
         kind: "tool",
         name: "shell",
         failed: item.status === "failed",
-        input: goatShellCommand(text) ?? text.replace(/^\$\s*/u, ""),
+        input: shellCommand(text) ?? text.replace(/^\$\s*/u, ""),
         output: "",
       });
     } else if (GOAT_TOOL_TYPES.has(item.type)) {
@@ -527,24 +549,46 @@ const RECENTS = new Set(["recents", "최근 항목"]);
 export const canonicalEvidence = (output: string) =>
   output
     .replace(/\u001b\[[0-9;]*[A-Za-z]/gu, "")
+    // A REPL prints the agent's own code back after its prompt; that is input, not a page read.
+    // It goes before any unescaping, so text quoted in the code cannot turn into page lines.
+    .split("\n")
+    .filter((line) => !/^\s*repl\s*>/u.test(line))
+    .join("\n")
     .replace(/\\n/gu, "\n")
     .replace(/\\"/gu, '"')
     .replace(/checkbox \(settable, integer\) 1\b/gu, "checkbox [checked]")
-    .replace(/checkbox \(settable, integer\) 0\b/gu, "checkbox")
-    // A REPL prints the agent's own code back after its prompt; that is input, not a page read.
-    .split("\n")
-    .filter((line) => !/^\s*repl\s*>/u.test(line))
-    .join("\n");
+    .replace(/checkbox \(settable, integer\) 0\b/gu, "checkbox");
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^$(){}|[\]\\]/gu, "\\$&");
+
+/**
+ * Whether a result reports one of the pages as the page it read: a URL field the surfaces print
+ * for their current page, never a link in the page body.
+ */
+export const namesPage = (output: string, pages: ReadonlyArray<string>) =>
+  pages.some((page) =>
+    new RegExp(
+      '(?:"(?:url|pageUrl|finalUrl)"\\s*:\\s*"|\\bURL:\\s*"?|\\[url=|navigated to:\\s*\\[\\]\\()(?:https?://)?(?:www\\.)?' +
+        escapeRegExp(page) +
+        '/?(?=["\\]\\s)#?]|$)',
+      "iu",
+    ).test(canonicalEvidence(output)),
+  );
 
 const evidenceIn = (entry: Evidence, raw: string) => {
   const output = canonicalEvidence(raw);
   if (entry.checkboxes !== undefined) {
-    // Checkbox rows only: "- checkbox [checked]" or "8 checkbox", never a label such as "9 text checkbox 1".
-    const states = output
-      .split("\n")
-      .filter((line) => /(?:^|["':])\s*(?:-\s+|\d+\s+)checkbox\b/iu.test(line))
-      .map((line) => /\[checked\]/iu.test(line));
-    return JSON.stringify(states) === JSON.stringify(entry.checkboxes);
+    // Checkbox rows only ("- checkbox [checked]", "8 checkbox"), never a label such as
+    // "9 text checkbox 1". Rows close together form one read; any read must match on its own.
+    const reads: Array<Array<boolean>> = [];
+    let lastRow = -Infinity;
+    output.split("\n").forEach((line, row) => {
+      if (!/(?:^|["':])\s*(?:-\s+|\d+\s+)checkbox\b/iu.test(line)) return;
+      if (row - lastRow > 3) reads.push([]);
+      reads.at(-1)?.push(/\[checked\]/iu.test(line));
+      lastRow = row;
+    });
+    return reads.some((states) => JSON.stringify(states) === JSON.stringify(entry.checkboxes));
   }
   const regex = new RegExp(entry.pattern, "giu");
   return entry.count === undefined
@@ -717,9 +761,7 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
   },
 
   webEvidence: ({ task, toolOutputs: all }) => {
-    const toolOutputs = all.filter((output) =>
-      task.pages.some((page) => canonicalEvidence(output).includes(page)),
-    );
+    const toolOutputs = all.filter((output) => namesPage(output, task.pages));
     const missing = task.sameResult
       ? toolOutputs.some((output) => task.evidence.every((group) => groupHolds(group, output)))
         ? []
@@ -842,12 +884,35 @@ export const keepObservations = (observed: Observations): Observations => ({
     observed.steps.some((step) => step.input.length > INPUT_LIMIT),
 });
 
+/**
+ * Whether a shell command's output can only have come from the surface call: it holds one or more
+ * surface calls and otherwise only silent setup (cd, mkdir, touch, writing a file from a here
+ * document), with no pipe that could mix another program's output in.
+ */
+export const soleSurfaceCommand = (command: string) => {
+  const body = (shellCommand(command) ?? command)
+    .replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\2(?=\n|$)/gu, "<<here")
+    .replace(/'[^']*'|"(?:\\.|[^"\\])*"/gsu, "''");
+  const segments = body
+    .split(/&&|\|\||;|\n/u)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "");
+  if (segments.some((segment) => segment.includes("|"))) return false;
+  const surface = (segment: string) => /^(?:\S*\/)?(?:aside\s+repl|codemode)\b/u.test(segment);
+  const silent = (segment: string) => /^(?:cd|mkdir|touch)\b|^cat\s*>/u.test(segment);
+  return segments.some(surface) && segments.every((segment) => surface(segment) || silent(segment));
+};
+
 /** Results of the arm's own surface calls; documentation and files read elsewhere are not evidence. */
 const surfaceOutputs = (arm: ArmSpec, observed: Observations) => {
   const calls = observed.steps.filter((step) => step.kind === "tool");
   return observed.toolOutputs.filter((_, index) => {
     const step = calls[index];
-    return step !== undefined && arm.surfaceTool.test(labelOf(step));
+    return (
+      step !== undefined &&
+      arm.surfaceTool.test(labelOf(step)) &&
+      (step.name !== "shell" || soleSurfaceCommand(step.input))
+    );
   });
 };
 
