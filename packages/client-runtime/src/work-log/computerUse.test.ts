@@ -71,6 +71,12 @@ describe("computerUseRun", () => {
       target: "Finder",
       app: { name: "Finder" },
     });
+    // A launch by bundle id reads as the app the server named on the item.
+    const launched = {
+      ...call("cua-driver.launch_app", { bundle_id: "com.apple.calculator" }),
+      toolSource: { key: "native-app:com.apple.calculator", name: "Calculator", kind: "computer" },
+    } as OrchestrationV2TurnItem;
+    expect(computerUseRun(launched)?.summary).toBe("Open Calculator");
   });
 
   it("never repeats typed text, which can be a password", () => {

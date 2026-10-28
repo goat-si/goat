@@ -1,5 +1,6 @@
 import type { OrchestrationV2TurnItem, ToolActivityIcon } from "@goat/contracts";
 import {
+  COMPUTER_USE_TOOL_SOURCE,
   computerUseTypedTextLength,
   cuaDriverToolName,
   replaceComputerUseTypedText,
@@ -172,7 +173,7 @@ export function computerUseDisplayInput(
   return replaceComputerUseTypedText(toolName, input, characters);
 }
 
-function summary(tool: string, input: Record<string, unknown>): string {
+function summary(tool: string, input: Record<string, unknown>, appName?: string): string {
   switch (tool) {
     case "click":
     case "double_click":
@@ -204,7 +205,7 @@ function summary(tool: string, input: Record<string, unknown>): string {
       return direction === undefined ? "Scroll" : `Scroll ${direction}`;
     }
     case "launch_app":
-      return `Open ${label(input.name) ?? label(input.bundle_id) ?? "an app"}`;
+      return `Open ${label(input.name) ?? appName ?? label(input.bundle_id) ?? "an app"}`;
     default:
       return SUMMARIES[tool] ?? tool.replaceAll("_", " ");
   }
@@ -230,7 +231,14 @@ export function computerUseRun(
   const input = (raw?.server === "cua-driver" ? record(raw.arguments) : raw) ?? {};
   return {
     tool,
-    summary: summary(tool, input),
+    // The server names a call's app on the item, as a launch by bundle id learns it once it settles.
+    summary: summary(
+      tool,
+      input,
+      item.toolSource?.kind === "computer" && item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
+        ? item.toolSource.name
+        : undefined,
+    ),
     target: inputTarget(input),
     app: inputApp(input),
   };
