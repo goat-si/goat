@@ -1,4 +1,5 @@
 import * as PrepareAuthorization from "./SshHostPrepareAuthorization.ts";
+import * as SetupSettlement from "./SshSetupSettlement.ts";
 import packageJson from "../../package.json" with { type: "json" };
 import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
@@ -79,7 +80,6 @@ import {
   type SshAliasRevision,
 } from "./SshAliasEvents.ts";
 export type { SshHostCaller } from "./SshHostAuthorization.ts";
-
 type Failure = EnvironmentAuthorizationError | HandoffError;
 export class SshHostSetup extends Context.Service<
   SshHostSetup,
@@ -134,7 +134,6 @@ export class SshHostSetup extends Context.Service<
     readonly onAlias: (listener: SshAliasListener) => Effect.Effect<void>;
   }
 >()("goat/sshRemote/SshHostSetup") {}
-
 const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
   kind: "error",
   code:
@@ -197,7 +196,6 @@ const isHandoffError = Schema.is(HandoffError);
 const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 const decodeAlias = Schema.decodeUnknownEffect(SshHostAlias);
 const isAlias = Schema.is(SshHostAlias);
-
 export const make = (
   options: { readonly home?: string; readonly runPreflight?: typeof runSshPreflight } = {},
 ) =>
@@ -206,6 +204,7 @@ export const make = (
     const home = options.home ?? NodeOS.homedir();
     const audit = yield* MaintenanceAudit.MaintenanceAudit;
     const dispatch = yield* Dispatch.SshRemoteDispatch;
+    const settleJob = yield* SetupSettlement.make;
     const sessions = yield* SessionStore.SessionStore;
     const handoffs = yield* Handoffs.Handoffs;
     const providerHomeRequests = yield* Effect.serviceOption(HomeRequests.CodexHomeRequests);
@@ -1057,6 +1056,7 @@ export const make = (
             }),
           ),
           Effect.ensuring(onFinished?.pipe(Effect.ignore({ log: true })) ?? Effect.void),
+          Effect.onExit((exit) => settleJob(host, operation, first, exit)),
           Effect.ensuring(
             Effect.sync(() => {
               if (jobs.get(host)?.operation.operationId === operation.operationId)

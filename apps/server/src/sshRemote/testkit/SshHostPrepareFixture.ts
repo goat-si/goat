@@ -1,4 +1,4 @@
-import { vi } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the expected path mirrors the host's native join.
 import * as NodePath from "node:path";
 import * as HostKey from "@goat/ssh/hostKey";
@@ -105,7 +105,12 @@ export const preparePolicy = (reason?: Reason) =>
     };
   });
 
-export const prepareFixture = (reason?: Reason) =>
+export const prepareFixture = (
+  reason?: Reason,
+  beforePhase: Effect.Effect<void> = Effect.void,
+  afterPhase: Effect.Effect<void> = Effect.void,
+  beforeOutcome: Effect.Effect<void> = Effect.void,
+) =>
   Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() =>
@@ -179,22 +184,27 @@ export const prepareFixture = (reason?: Reason) =>
                   return { operationId: "prepare", generation: 1, stage: "runtime" as const };
                 }),
               publishSetupOutcome: (_host, operation, outcome) =>
-                Effect.sync(() => {
-                  if (outcome.kind === "error")
-                    snapshot = {
-                      kind: "ok",
-                      status: {
-                        ...stopped,
-                        state: "failed",
-                        setup: { ...operation, stage: "complete" },
-                        detail: outcome.message,
-                        failure: { reason: outcome.reason, fix: outcome.fix },
-                      },
-                    };
-                  return true;
-                }),
+                beforeOutcome.pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (outcome.kind === "error")
+                        snapshot = {
+                          kind: "ok",
+                          status: {
+                            ...stopped,
+                            state: "failed",
+                            setup: { ...operation, stage: "complete" },
+                            detail: outcome.message,
+                            failure: { reason: outcome.reason, fix: outcome.fix },
+                          },
+                        };
+                      return true;
+                    }),
+                  ),
+                ),
               prepareRuntime: (host, options) =>
                 Effect.gen(function* () {
+                  yield* beforePhase;
                   preparations.push(host);
                   snapshot = {
                     kind: "ok",
@@ -205,6 +215,7 @@ export const prepareFixture = (reason?: Reason) =>
                     phase: "uploading",
                   });
                   yield* Deferred.await(upload);
+                  yield* afterPhase;
                   return snapshot;
                 }),
             }),
@@ -239,5 +250,5 @@ export const prepareFixture = (reason?: Reason) =>
       ),
       Setup.SshHostSetup,
     );
-    return { setup, caller: { kind: "mcp" as const, scope }, preparations };
+    return { setup, caller: { kind: "mcp" as const, scope }, preparations, upload };
   });
