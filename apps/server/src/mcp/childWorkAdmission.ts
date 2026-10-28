@@ -10,6 +10,7 @@ import {
   type ChannelChildWorkDestination,
   OrchestratorMcpFailure,
   type SshLaunchWorkspace,
+  type RunId,
   type ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -21,7 +22,7 @@ import { childWorkCorrelationIdFor } from "../channels/channelIds.ts";
 const childWorkFailure = (error: ChannelChildWork.ChannelChildWorkError): OrchestratorMcpFailure =>
   error.reason === "at_capacity"
     ? new OrchestratorMcpFailure({ code: "capacity_exceeded", message: error.detail })
-    : error.reason === "depth_exceeded"
+    : error.reason === "depth_exceeded" || error.reason === "run_not_attributable"
       ? new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail })
       : new OrchestratorMcpFailure({ code: "orchestration_error", message: error.detail });
 
@@ -41,6 +42,7 @@ export const admitChildWork = Effect.fn("childWorkAdmission.admitChildWork")(fun
   childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
   input: {
     readonly callerThreadId: ThreadId;
+    readonly callerRunId?: RunId | undefined;
     readonly surface: "delegate_local" | "delegate_remote" | "thread_launch" | "ssh_thread_launch";
     readonly prompt: string;
     /** The launch target's canonical parts, joined in order. */
@@ -53,6 +55,7 @@ export const admitChildWork = Effect.fn("childWorkAdmission.admitChildWork")(fun
   const admission = yield* childWork.value
     .admit({
       callerThreadId: input.callerThreadId,
+      ...(input.callerRunId === undefined ? {} : { callerRunId: input.callerRunId }),
       surface: input.surface,
       prompt: input.prompt,
       destinationKey: input.destinationKey,
@@ -71,6 +74,7 @@ export const admitDelegate = Effect.fn("childWorkAdmission.admitDelegate")(funct
   childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
   input: {
     readonly callerThreadId: ThreadId;
+    readonly callerRunId?: RunId | undefined;
     readonly prompt: string;
     readonly clientRequestId?: string | undefined;
     readonly target?:
@@ -116,6 +120,7 @@ export const admitDelegate = Effect.fn("childWorkAdmission.admitDelegate")(funct
         ].join("\u0000");
   return yield* admitChildWork(childWork, {
     callerThreadId: input.callerThreadId,
+    ...(input.callerRunId === undefined ? {} : { callerRunId: input.callerRunId }),
     surface: remote === undefined ? "delegate_local" : "delegate_remote",
     prompt: input.prompt,
     destinationKey,

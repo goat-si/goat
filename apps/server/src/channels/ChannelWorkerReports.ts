@@ -33,6 +33,7 @@ import {
   type ChannelTaskNeedsYou,
   type ChannelTaskReportInput,
   type ChannelWorkerRunStatus,
+  isGoatBotSessionThreadId,
   type OrchestrationV2Run,
   type ThreadId,
 } from "@goat/contracts";
@@ -46,7 +47,9 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
+import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
@@ -342,8 +345,41 @@ const make = Effect.gen(function* () {
         ])
         .pipe(Effect.option);
       if (records._tag === "None") return false;
-      const runs = records.value.runs.toSorted((left, right) => left.ordinal - right.ordinal);
-      const pullRequestLinks = records.value.thread.pullRequests;
+      // A GOAT Bot session serves several tasks: this task sees only its own runs, children and
+      // approvals, never another task's.
+      const session = isGoatBotSessionThreadId(worker.threadId);
+      const allRuns = records.value.runs.toSorted((left, right) => left.ordinal - right.ordinal);
+      const scoped = session
+        ? yield* threads.getThreadRecords(worker.threadId, ["messages", "providerTurns"]).pipe(
+            Effect.flatMap(({ messages, providerTurns }) =>
+              sessionTaskRuns(sql, worker.threadId, { runs: allRuns, messages }, task).pipe(
+                Effect.map((own) => ({ own, providerTurns })),
+              ),
+            ),
+            Effect.option,
+          )
+        : Option.some({ own: allRuns, providerTurns: [] });
+      if (Option.isNone(scoped)) return false;
+      const runs = scoped.value.own;
+      // A request belongs to the run whose provider turn raised it; one whose turn cannot be
+      // traced to this task's runs is left out rather than shown on the wrong task.
+      const runtimeRequests = !session
+        ? records.value.runtimeRequests
+        : records.value.runtimeRequests.filter((request) => {
+            const turn = scoped.value.providerTurns.find(
+              (candidate) => candidate.id === request.providerTurnId,
+            );
+            return runs.some((run) =>
+              turn === undefined
+                ? run.rootNodeId !== null && run.rootNodeId === request.nodeId
+                : run.rootNodeId === turn.nodeId ||
+                  (turn.runAttemptId !== null && run.activeAttemptId === turn.runAttemptId),
+            );
+          });
+      const subagents = session
+        ? records.value.subagents.filter((child) => runs.some((run) => run.id === child.runId))
+        : records.value.subagents;
+      const pullRequestLinks = session ? [] : records.value.thread.pullRequests;
       const bound = runs.find((run) => run.id === worker.runId);
 
       // An answer was sent to the worker: wait for the run it starts before judging anything.
@@ -388,7 +424,7 @@ const make = Effect.gen(function* () {
           : undefined;
       if (limitRead === "unknown") return latest !== stored;
       const limit = limitRead;
-      const children = yield* scanSubagents(records.value.subagents, (threadId) =>
+      const children = yield* scanSubagents(subagents, (threadId) =>
         threads.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
       );
       const remoteNeeds = yield* Effect.forEach(
@@ -409,7 +445,7 @@ const make = Effect.gen(function* () {
         result,
         pullRequests: pullRequestsFromLinks(pullRequestLinks),
         needsYou: [
-          ...needsYouFromRuntimeRequests(records.value.runtimeRequests, () => worker.threadId),
+          ...needsYouFromRuntimeRequests(runtimeRequests, () => worker.threadId),
           // A subagent waiting on an approval or answer blocks the work as much as the worker.
           ...needsYouFromRuntimeRequests(children.requests, (request) => request.threadId),
           // A subagent on another GOAT machine: the needs-you list that machine last reported.
@@ -469,9 +505,15 @@ const make = Effect.gen(function* () {
       }
 
       // A restart continuation still to come means this terminal run is not the last word.
-      const continuationPending = yield* threads
-        .delegatedTaskResultPending(worker.threadId)
-        .pipe(Effect.orElseSucceed(() => false));
+      const continuationPending = session
+        ? subagents.some(
+            (child) =>
+              child.completionDelivery?.state === "pending" ||
+              child.completionDelivery?.state === "claimed",
+          )
+        : yield* threads
+            .delegatedTaskResultPending(worker.threadId)
+            .pipe(Effect.orElseSucceed(() => false));
       if (continuationPending) return latest !== stored;
 
       // A usage limit is a pause: the continuation run GOAT or a person starts rebinds the task.
@@ -677,6 +719,22 @@ const make = Effect.gen(function* () {
         input.generation !== stored.task.generation
       ) {
         return yield* new ChannelGatewayError({ reason: "forbidden" });
+      }
+      // In a GOAT Bot session only the task's newest run may report for it; an earlier run's
+      // delayed report, or another task's, is refused.
+      if (isGoatBotSessionThreadId(worker.threadId)) {
+        const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+        const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
+        if (runId !== undefined) {
+          const records = yield* threads
+            .getThreadRecords(worker.threadId, ["runs", "messages"])
+            .pipe(Effect.orElseSucceed(() => ({ runs: [], messages: [] })));
+          const own = yield* sessionTaskRuns(sql, worker.threadId, records, stored.task).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<OrchestrationV2Run> => []),
+          );
+          if (own.at(-1)?.id !== runId)
+            return yield* new ChannelGatewayError({ reason: "forbidden" });
+        }
       }
       if (yield* ledger.hasTaskEvent(input.eventId)) return;
       const eventId = input.eventId as ChannelTaskEventId;

@@ -41,11 +41,23 @@ delivery. An outcome that could not be delivered keeps the item open as "not del
 for a bounded time), finished, failed. A run links to the work item it serves; an item links to its
 worker and to every run that worker made for it, oldest first.
 
+**GOAT Bot session.** The bot's own turns (section 15) share one worker per conversation and
+requester: the session. Each item the bot handles itself is its own run in that session, so the
+session's runs serve several items, and every run belongs to exactly one of them.
+
 - A worker run finishing MUST NOT complete its work item. The item completes only when the result
   has been delivered to the requester.
-- A follow-up in an existing workstream MUST go to that workstream's worker: steered into its
-  running run, or started as the worker's next run when none is running. Only a new workstream
-  gets a new worker.
+- A follow-up in an existing workstream MUST go to that workstream's own run: steered into it while
+  it runs, or started as its next run when it has ended. It MUST NOT land in another item's run,
+  even in a shared session. Only a new workstream gets a new item; a new item in a session is
+  queued as its own run there.
+- A session MUST be replaced only when its prompt cache is known to have expired or its context
+  is near the provider's budget, never on time alone, and never while work it started is still
+  running, waiting on a person, or owed a child's result. The next item waits until then.
+- A session MUST NOT mix requesters: a different person, or the same person after their access
+  was lowered, gets a session of their own.
+- Stopping an item MUST stop only its own runs and the child work they started; other items in
+  the same session run on.
 - The queue MUST be reconciled on every message from the person and every worker run change.
   After reconciliation each open item is in exactly one of: queued (with the reason), in progress
   with a live or finishing run, waiting on the person, or awaiting delivery. Queued items are
@@ -61,10 +73,17 @@ Acceptance:
   the reply covering the follow-up is delivered. A follow-up to an item that is already completed,
   failed or cancelled starts a new item that links to the earlier one and reuses its worker.
 - A follow-up while the workstream's run is running joins that run; no new worker and no new run.
-- A follow-up after the workstream's run finished starts the next run on the same worker.
-- A correction the running run cannot take restarts the worker with the correction (a new run,
-  the same worker).
-- A message about a new topic creates a new item and, when dispatched, a new worker.
+- A follow-up after the workstream's run finished starts the next run on the same worker, even
+  when another item's run has started there since.
+- Two requests the bot handles itself, in one conversation while its cache is warm, run in the same
+  session as two runs; neither launches a second session.
+- A session whose cache is known to have expired, or whose context is over budget, is replaced
+  before the next request, which starts the new session with the frozen prefix (standing
+  instructions, standing notes, journal, recent conversation, open work, current message); with a
+  run still going, the replacement waits.
+- Stopping one item in a session leaves the others' runs untouched.
+- A message about a new topic creates a new item and, when dispatched, a new worker or a new run
+  in the conversation's session.
 - After a run reports finished, its item stays in progress until the result delivery is recorded
   delivered; then it is completed.
 - A delivery that fails permanently leaves the item open and visible as "not delivered".
@@ -77,10 +96,16 @@ Acceptance:
   answer.
 - The first reply MUST be committed within 60 seconds of the message being accepted, counting any
   time spent waiting for a free slot, and SHOULD be within 10 seconds. When the deadline arrives
-  without a reply, even if no slot ever freed up, the bot commits a fixed message saying it could
-  not read the message, so the person is never left without one. Running workers never delay it.
+  without a reply, even if no slot ever freed up and even if the bot's other work is stuck, the bot
+  commits a fixed message saying it could not read the message, so the person is never left
+  without one, and a late reply never arrives as a second one. Running workers never delay it.
+  The 60 seconds bound the commit and its hand-off to a healthy transport; a transport that hangs
+  on a send is outside it.
 - Work a message starts MUST NOT begin until that message's first reply has been delivered, or
   has failed to deliver, so the person hears what is happening before anything happens.
+- The first reply comes from the bot's reception for every provider today. A session could answer
+  first itself only if its provider held native tools until that reply is delivered; no provider
+  can yet, so the request reaches the session only after the reply has settled.
 - When work starts, the first reply MUST name the concrete first step ("Checking the disk usage on
   this Mac now", not "On it").
 - When the answer needs no work, the first reply is the answer.
@@ -91,9 +116,10 @@ Acceptance:
 - With a turn already running in the same conversation, a new message still gets its reply
   without waiting for that turn.
 - With four replies already being written and hung, a fifth message still gets a reply (the
-  fixed one if need be) within 60 seconds of its own acceptance.
+  fixed one if need be) within 60 seconds of its own acceptance, exactly once.
 - A model that never answers produces the fixed failure reply at the deadline.
-- No worker launch for a message happens before that message's reply delivery is settled.
+- No worker launch, and no message into a session, happens for a message before that message's
+  reply delivery is settled.
 - The reply to a message that starts work is committed in the same transaction as the work item.
 - A reply to a work request names what is being done first.
 
@@ -331,27 +357,35 @@ Acceptance:
 
 - Direct (in the bot's reply, no worker): memory, work history, task and thread status, host
   facts, earlier messages. These MUST be answered within the reply budget.
-- Bot turn (a worker run of the bot itself, with tools, never changing a repository): looking into
-  files or logs on the machine, comparing threads, web research; research fans out to subagents.
+- Bot turn (a run in the conversation's GOAT Bot session, with tools, never changing a
+  repository): looking into files or logs on the machine, comparing threads, web research. A turn
+  keeps itself short; research and anything longer than about a minute fans out to subagents,
+  which stay under the session in the sidebar lineage.
 - Coding worker (a coding thread in a project): anything that changes a repository or runs in one.
+  It is always its own visible thread, never a run in the session.
 - The bot MUST pick the cheapest of these that can answer correctly.
 - With more than one machine connected, the bot SHOULD place each lane on a machine that has
   what it needs and room to spare, by launch or delegation, instead of doing it all on its own
   machine. Lanes it starts keep its read-only rule; it never starts a paid cloud machine unless
-  asked. `GOAT_BOT_DISPATCH_RULE` in `ChannelDispatcher.ts` states this.
+  asked. `GOAT_BOT_DISPATCH_RULE` in `channelWorkerBrief.ts` states this.
 - With goatclaw on, the bot fronts the goatclaw supervisor: it plans, launches managers with a
   `goatclawRole`, and asks through the decision inbox, and it stays read-only by the same rule. The
-  managers' profiles carry the authority. A turn for a person at full access runs under the
+  managers' profiles carry the authority. A session for a person at full access runs under the
   supervisor's profile; anyone linked lower keeps the default one. `GOAT_BOT_SUPERVISOR_RULE`
   states this. Turning goatclaw off returns the bot to this front-desk behavior.
+- Child work a session starts is tied to the run that asked for it. On providers that cannot tie
+  each tool call to its run (anything but Codex and Claude today), requests do not share a
+  session: each gets its own, reused only by its follow-ups.
 
 Acceptance:
 
 - A history question launches nothing before its first answer. A "why is the disk full" question
-  launches one bot turn.
-  A "fix the bug" request launches one coding worker.
+  runs one bot turn in the conversation's session. A "fix the bug" request launches one coding
+  worker.
 - With an idle SSH host connected, a bot turn that fans research out starts a lane there and its
   answer says which machine ran what.
+- A child a turn started that reports after the next request's run began settles the turn that
+  started it, never the next one.
 
 ## Comparison with other bots
 

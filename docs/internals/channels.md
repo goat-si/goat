@@ -56,12 +56,54 @@ two generations. Reads change nothing, so a reception retried after a crash read
 
 Some messages need tools but no repository change: why a disk is full, what three threads
 concluded, a web search. Reception answers those with `run_turn`: it acknowledges at once, and a
-ledger task of kind `turn` runs as an ordinary coding thread in the bot's own workspace on this
-machine. Reusing the task path keeps every guarantee the ledger already gives work: one launch per
-generation, the chip, exactly-once narration, restarts that read state, and the requester's
-ceiling. Running a provider session on the bot thread itself would put each new message behind
-the running turn and give the bot thread runs it was built never to have.
+ledger task of kind `turn` runs in the conversation's GOAT Bot session
+([`ChannelBotSession.ts`](../../apps/server/src/channels/ChannelBotSession.ts)), a thread with
+the `goat-bot-session:` prefix in the bot's own workspace. One session serves a conversation and
+requester, so the provider's prompt cache stays warm and notes are read once per session instead
+of once per request. Each request is still a ledger task, which keeps the chip, exactly-once
+narration, restarts that read state, and the requester's ceiling. Running a provider on the bot
+thread itself would put each new message behind the running turn.
 
+- **Binding.** `channel_bot_sessions` has a row per session generation. The binding key is the
+  conversation, the requester (owner, principal, external actor, origin), their runtime and memory
+  ceilings, and the model, so a second person, or the same person after a lowered link, gets a
+  session of their own. A generation's thread id derives from the conversation and the generation,
+  so a retried launch lands on the same thread. The first message freezes six parts in a fixed
+  order ([`channelBotSessionBrief.ts`](../../apps/server/src/channels/channelBotSessionBrief.ts)):
+  standing instructions, standing notes, journal, recent conversation, open work, then the
+  request. Later requests send only their own instruction.
+- **Runs.** Each request is queued as its own run (`sendToThread` mode `queue`), never steered
+  into another request's run. Every message GOAT sends into a session is recorded in
+  `channel_bot_session_runs` before the send, so a run maps to its task the moment it exists; a
+  delegated completion or restart continuation maps to the task of the run it continues
+  ([`channelBotSessionRuns.ts`](../../apps/server/src/channels/channelBotSessionRuns.ts)). Worker
+  reconciliation, reports, child-work admission and stops all read that mapping, so on a session
+  thread a task sees only its own runs, children and approvals. Requests should stay short; work
+  of more than about a minute goes to `task.create` children so the next request is not stuck.
+- **Rotation.** Before the next request is served, the session is replaced when the newest provider
+  usage shows `promptCacheExpiresAt` has passed, or `usedTokens` plus an 8,192-token reserve
+  exceeds `autoCompactThreshold`, else `maxTokens`. An unknown expiry or budget never counts, so
+  time alone never rotates a session, and conversation activity (inbound time) is not used. While
+  the session still has a live run, a pending approval, a live subagent, an open completion
+  delivery or active child work, the next request waits as dispatching instead of orphaning it;
+  the person can stop it meanwhile.
+- **Run identity.** Tasks share a session only on drivers where every MCP call is tied to the run
+  that made it (`goatBotSessionSharingFor` in `channelIds.ts`). Codex and Claude get a fresh MCP
+  credential per run that carries the run id, and issuing it revokes the thread's earlier
+  credentials; Claude swaps it with `setMcpServers` before the turn, Codex reloads its thread, and a
+  Codex session turn whose credential cannot be installed because the thread is busy fails before
+  it starts. Child-work admission and `channel_task_report` resolve a session caller by that run:
+  an ended run, another task's run, or a call without a run is refused, never booked to the
+  session's newest task. Other drivers keep one credential for their process, so each of their
+  tasks gets its own session and only its follow-ups reuse it; inside one such task, a delayed call
+  from an earlier run cannot be told from a later run's. No provider reports its own turn on MCP
+  calls, so there is no per-call turn path.
+- **First reply.** Reception still writes it, for every provider: answering from the session would
+  need the provider to hold its native tools until that reply is delivered, and none can yet. A
+  request enters its session only once its receipt delivery has settled; a delivery state the
+  runtime cannot read keeps it waiting. A first reply is committed within 60 seconds of
+  acceptance even when every reception slot or the ordinary pass is stuck: an independent runtime
+  fiber takes over an overdue input, commits the fixed failure reply and delivers receipts.
 - **Model.** A turn runs on `goatBotModelSelection` from the home server's settings. Null follows
   the bot workspace's new-thread default, then the text generation model; a chosen model this
   machine no longer offers falls back with a warning, because the person asked a question, not
@@ -71,30 +113,30 @@ the running turn and give the bot thread runs it was built never to have.
   sandbox below full access stalled the bot on approvals for ordinary reads outside its folder.
   The bot thread itself is `full-access` too, and `ChannelBotRegistry.ensure` switches a bot made
   under the old `approval-required` mode in place. Read-only is therefore a promise of the prompt
-  alone: `GOAT_BOT_READ_ONLY_RULE` in `ChannelDispatcher.ts` is the one place it is stated, and
+  alone: `GOAT_BOT_READ_ONLY_RULE` in `channelWorkerBrief.ts` is the one place it is stated, and
   nothing in the sandbox backs it. A requester linked below full access keeps their ceiling, so
   the bot never gives a person more than they could run themselves. Work that changes things is
   a coding task.
-- **Computer use.** Full access does not reach the screen. Bot turns, channel task workers (known
-  by their `channel-worker:` thread id, so before the ledger binds them) and every thread they
-  launch or message count as unattended (`apps/server/src/cua/ComputerUseOrigin.ts`),
-  so they get no `cua-driver` until a person approves a `computer_use.grant` handoff in a GOAT
-  client session holding `settings:write`. Channel text never answers it: handoffs resolve only
-  through authenticated client RPC. See ADR-0020.
+- **Computer use.** Full access does not reach the screen. Bot sessions and channel task workers
+  (known by their `goat-bot-session:` and `channel-worker:` thread ids, so before the ledger binds
+  them) and every thread they launch or message count as unattended
+  (`apps/server/src/cua/ComputerUseOrigin.ts`), so they get no `cua-driver` until a person
+  approves a `computer_use.grant` handoff in a GOAT client session holding `settings:write`.
+  Channel text never answers it: handoffs resolve only through authenticated client RPC. See
+  ADR-0020.
 - **Answer.** The turn's final report is the bot's reply, delivered as written; it is not
   reworded by reception the way coding results are, because the turn already wrote it for the
   person on the chosen model.
-- **Follow-ups.** A message that adds to running work in its conversation (`follow_up`, or
-  `run_turn` while a turn runs there) joins that work instead of starting more, if the sender, as
-  their link stands now, may answer for its requester. Reception records a `task.followup.received`
-  event in the same commit as its reply, with a completion fence (`pendingAnswerMessageId`) and a
-  pending forward. The dispatcher's forward loop sends it with ids derived from the input: into
-  the running run when it can take steering, else as the thread's next run. It then binds the
-  task to whichever run took it and lifts the fence in one write. A crash before or after the send
-  replays the forward onto the same message, and a run that ended just before the follow-up
-  cannot settle the task, because the fence holds it until the follow-up's run is bound. This is
-  the path answers to worker questions already take. Other conversations, and messages the bot
-  answers directly, never wait on running work.
+- **Follow-ups.** A `follow_up` naming running work in its conversation joins that work, if the
+  sender, as their link stands now, may answer for its requester; a new `run_turn` is its own task.
+  Reception records a `task.followup.received` event in the same commit as its reply, with a
+  completion fence (`pendingAnswerMessageId`) and a pending forward. The forward sends it with ids
+  derived from the input into the task's own run (`sendToThread` mode `steer` with `targetRunId`;
+  the command policy refuses any other run), or, when that run has ended, as the task's next run
+  behind whatever runs now. It then binds the task to whichever run took it and lifts the fence
+  in one write. A replay after a crash finds the run its first send started. A follow-up whose
+  run a person stopped in GOAT is dropped rather than restarting it. Other conversations, and
+  messages the bot answers directly, never wait on running work.
 
 ## Work items, worker runs, and stopping
 
@@ -166,7 +208,10 @@ recorded here.
   stopped there through `goat_thread_interrupt` with `stopCascade`, the same `thread.stop` plus
   delegated-task walk, found through its report binding when its launch was still in flight. An
   older remote refuses the undeclared `stopCascade` argument before anything runs, so the stop
-  retries once without it and only interrupts the turn there.
+  retries once without it and only interrupts the turn there. A task in a GOAT Bot session is
+  stopped by its runs instead: its queued run is cancelled, its live run interrupted without
+  holding the queue, and the delegated children its runs started are stopped with their completion
+  deliveries disposed, so the session's other tasks run on.
 
 An owner has one bot, in the Scratch project, and one bot conversation keyed by the owner rather
 than the thread. Where Scratch is off because the data directory is inside a Git work tree, the bot

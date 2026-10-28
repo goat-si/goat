@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  RunId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ChannelTaskId } from "./channelCommon.ts";
 
 /**
@@ -77,6 +83,8 @@ export const ChannelChildWork = Schema.Struct({
   generation: NonNegativeInt,
   surface: ChannelChildWorkSurface,
   callerThreadId: ThreadId,
+  /** The caller's run when its thread serves several tasks, as a GOAT Bot session does. */
+  callerRunId: Schema.optional(RunId),
   /** The caller's clientRequestId, or a deterministic digest when none was passed. */
   requestKey: TrimmedNonEmptyString,
   promptDigest: TrimmedNonEmptyString,

@@ -393,6 +393,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               ? undefined
               : yield* admitChildWork(channelChildWork, {
                   callerThreadId: scope.thread.threadId,
+                  callerRunId: scope.thread.runId,
                   surface: "ssh_thread_launch",
                   prompt: input.message ?? "",
                   destinationKey: [

@@ -1,7 +1,9 @@
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
+import * as ChannelBotSession from "../ChannelBotSession.ts";
 import * as ChannelChildWork from "../ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "../ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
@@ -18,4 +20,6 @@ export const channelDispatcherIdleServices = Layer.mergeAll(
   Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
   Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
+  // No task in these tests runs in a GOAT Bot session, so every forward stays the dispatcher's.
+  Layer.mock(ChannelBotSession.ChannelBotSession)({ forward: () => Effect.succeed(false) }),
 );

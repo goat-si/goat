@@ -50,10 +50,9 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
+import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -70,7 +69,7 @@ import { choosePlacement, type PlacementCandidate, usageWindows } from "./channe
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { turnInstruction, workerInstruction } from "./channelWorkerBrief.ts";
+import { workerInstruction } from "./channelWorkerBrief.ts";
 import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -131,7 +130,7 @@ const make = Effect.gen(function* () {
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const permissions = yield* Profiles.PermissionProfiles;
+  const session = yield* ChannelBotSession.ChannelBotSession;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -498,8 +497,8 @@ const make = Effect.gen(function* () {
         );
         return;
       }
+      if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-      const supervisor = initial.task.kind === "turn" && settings.goatclaw.enabled;
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
       // channel worker follows the rules every thread in that project follows.
       const standing = resolveProjectSettings(settings, initial.task.target.projectId).settings
@@ -508,12 +507,7 @@ const make = Effect.gen(function* () {
         ledger,
         initial,
         owner,
-        prependStandingInstructions(
-          standing,
-          initial.task.kind === "turn"
-            ? turnInstruction(initial.task, botFiles, supervisor)
-            : workerInstruction(initial.task, botFiles),
-        ).text,
+        prependStandingInstructions(standing, workerInstruction(initial.task, botFiles)).text,
         {
           notesPath: botFiles.notes,
           notesRevision:
@@ -546,20 +540,6 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.asVoid);
       }
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
-      // Only a requester at full access may act through the supervisor's owner profile; anyone
-      // linked lower keeps the default profile, so the bot never gives them more than they hold.
-      if (supervisor && currentRequester.runtimeModeCeiling === "full-access")
-        yield* permissions
-          .bind(
-            ids.threadId,
-            goatclawRoleTemplate("supervisor").profileId,
-            `channel:${task.requester.ownerId}`,
-          )
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("GOAT Bot turn keeps the default profile", { cause: error }),
-            ),
-          );
       const launched = yield* launches
         .launch({
           commandId: ids.commandId,
@@ -1259,6 +1239,8 @@ const make = Effect.gen(function* () {
 
   const forward: ChannelDispatcher["Service"]["forward"] = (pending, owner) =>
     Effect.gen(function* () {
+      // GOAT Bot sessions route by run: a stop or follow-up must reach only its own task's run.
+      if (yield* session.forward(pending, owner)) return;
       const event = pending.event;
       if (event.type === "task.followup.received") {
         return yield* forwardFollowUp(pending, event, owner);
@@ -1331,4 +1313,4 @@ const make = Effect.gen(function* () {
   return ChannelDispatcher.of({ dispatch, forward });
 });
 
-export const layer = Layer.effect(ChannelDispatcher, make).pipe(Layer.provide(Profiles.layer));
+export const layer = Layer.effect(ChannelDispatcher, make);

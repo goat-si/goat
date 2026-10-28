@@ -265,6 +265,7 @@ const make = Effect.gen(function* () {
             ? undefined
             : yield* admitChildWork(channelChildWork, {
                 callerThreadId: caller.id,
+                callerRunId: scope.thread?.runId,
                 surface: "thread_launch",
                 prompt: input.message ?? "",
                 destinationKey: [

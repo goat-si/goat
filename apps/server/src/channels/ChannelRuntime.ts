@@ -9,12 +9,16 @@
  * events from worker threads only wake the loop; every pass decides from the ledger and the
  * thread projections, so restarts and missed signals change only timing.
  *
+ * A separate deadline loop commits the fixed reply for any input still unanswered 55 seconds
+ * after acceptance and delivers receipts, so a full set of reception slots or a stuck pass
+ * never leaves a person without a first reply.
+ *
  * @module ChannelRuntime
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the owner token only needs a random UUID.
 import * as NodeCrypto from "node:crypto";
 
-import type { ChannelInputId } from "@goat/contracts";
+import { ChannelReceptionId, type ChannelInputId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -23,6 +27,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -32,7 +37,9 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
 import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
+import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -44,6 +51,9 @@ const HEARTBEAT_MS = 10_000;
 const STALE_MS = 30_000;
 const SCAN_MS = 5_000;
 const RECEPTION_CONCURRENCY = 4;
+const REPLY_DEADLINE_MS = 55_000;
+const DEADLINE_SCAN_MS = 1_000;
+const isChannelLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 
 export class ChannelRuntime extends Context.Service<
   ChannelRuntime,
@@ -52,6 +62,10 @@ export class ChannelRuntime extends Context.Service<
     readonly drain: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     /** One pass, without waiting for the receptions it forks. */
     readonly runPass: Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    /** Commits timeout replies independently of reception slots and ordinary passes. */
+    readonly expireOverdue: Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    /** Delivers due receipts independently of ordinary passes, even when nothing expired. */
+    readonly deliverReceipts: Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
     /** Waits for the named inputs' receptions, if they are running. */
     readonly settle: (inputIds: ReadonlyArray<ChannelInputId>) => Effect.Effect<void>;
     /** What a new owner does first: settle deliveries a previous owner left in flight. */
@@ -110,6 +124,97 @@ const make = Effect.gen(function* () {
       return true;
     });
 
+  const expireOverdue = Effect.fn("ChannelRuntime.expireOverdue")(function* () {
+    const clock = yield* DateTime.now;
+    const now = DateTime.formatIso(clock);
+    const cutoff = DateTime.formatIso(
+      DateTime.subtractDuration(clock, Duration.millis(REPLY_DEADLINE_MS)),
+    );
+    const overdue = yield* sql<{ readonly input_id: ChannelInputId }>`
+      SELECT input_id FROM channel_inbox
+      WHERE state IN ('accepted', 'processing') AND accepted_at <= ${cutoff}
+      ORDER BY accepted_at, rowid
+    `.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ChannelLedger.ChannelLedgerError({
+            reason: "persistence",
+            detail: "list overdue channel inputs",
+            cause,
+          }),
+      ),
+    );
+    let expired = 0;
+    for (const { input_id: inputId } of overdue) {
+      const receptionId = ChannelReceptionId.make("channel-reception:" + NodeCrypto.randomUUID());
+      const taken = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const stored = yield* ledger.beginReception({
+              owner,
+              inputId,
+              receptionId,
+              readAt: now,
+            });
+            if (stored === undefined) return false;
+            const causeKey = "reply:" + inputId;
+            const deliveryId = deliveryIdFor(causeKey);
+            const destination = stored.message.replyAddress;
+            const actor = stored.message.actor.externalActorId;
+            const text = CHANNEL_COPY.receptionFailedBecause.timeout;
+            return yield* ledger.failReception({
+              owner,
+              inputId,
+              receptionId,
+              failure: { reason: "reception_failed", message: text },
+              deliveries: [
+                {
+                  deliveryId,
+                  causeKey,
+                  inputId,
+                  message: {
+                    deliveryId,
+                    destination,
+                    kind: "failure",
+                    text,
+                    inReplyToInputId: inputId,
+                    ...(destination.kind === "slack" && actor !== undefined
+                      ? { mentionActorId: actor }
+                      : {}),
+                  },
+                },
+              ],
+              now,
+            });
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            isChannelLedgerError(cause)
+              ? cause
+              : new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "expire channel input",
+                  cause,
+                }),
+          ),
+        );
+      if (!taken) continue;
+      expired += 1;
+      const fiber = (yield* Ref.get(inFlight)).get(inputId);
+      // A slow finalizer must not delay the remaining inputs' deadline commits.
+      if (fiber !== undefined) yield* Fiber.interrupt(fiber).pipe(Effect.forkIn(scope));
+    }
+    if (expired > 0) yield* wake.wake;
+    return expired;
+  });
+
+  const deliverReceipts = Effect.fn("ChannelRuntime.deliverReceipts")(function* () {
+    const delivered = yield* delivery.deliverDue(owner);
+    if (delivered > 0) yield* wake.wake;
+    return delivered;
+  });
+
   const runPass = Effect.gen(function* () {
     if ((yield* hold.current) !== null) return 0;
     // A Messages read failure must not stall other channels, but a lost owner or cursor fence
@@ -135,14 +240,28 @@ const make = Effect.gen(function* () {
     const waiting = (yield* ledger.listTasksByStatus(["received", "dispatching"])).toSorted(
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
+    let receiptReadFailed = false;
     for (const stored of waiting) {
       // The acknowledgement goes out before the work starts: while its delivery could still
       // reach the person, the task waits at received until that delivery settles.
-      if (
-        stored.task.status === "received" &&
-        (yield* hasUnsettledChannelDelivery(sql, stored.task.originInputId))
-      )
-        continue;
+      if (stored.task.status === "received") {
+        const unsettled =
+          stored.task.kind === "turn"
+            ? sql`SELECT 1 AS unsettled FROM channel_outbox
+              WHERE input_id = ${stored.task.originInputId} AND state IN ('pending', 'delivering') LIMIT 1`.pipe(
+                Effect.map((rows) => rows.length > 0),
+                Effect.catchCause((cause) => {
+                  if (receiptReadFailed) return Effect.succeed(true);
+                  receiptReadFailed = true;
+                  return Effect.logWarning(
+                    "channel turn receipt read failed; keeping turns waiting",
+                    { cause },
+                  ).pipe(Effect.as(true));
+                }),
+              )
+            : hasUnsettledChannelDelivery(sql, stored.task.originInputId);
+        if (yield* unsettled) continue;
+      }
       yield* dispatcher.dispatch(stored.task.taskId, owner);
       started += 1;
     }
@@ -203,7 +322,15 @@ const make = Effect.gen(function* () {
     }
   });
 
-  return ChannelRuntime.of({ drain, runPass, settle, recover, ownerToken: owner });
+  return ChannelRuntime.of({
+    drain,
+    runPass,
+    expireOverdue: expireOverdue(),
+    deliverReceipts: deliverReceipts(),
+    settle,
+    recover,
+    ownerToken: owner,
+  });
 });
 
 /** The runtime service alone, for tests that drive passes themselves. */
@@ -248,6 +375,16 @@ export const layerBackground = Layer.effectDiscard(
       );
     });
 
+    const deadlines = Effect.gen(function* () {
+      if (!(yield* Ref.get(owning)) || (yield* hold.current) !== null) return;
+      yield* runtime.expireOverdue;
+      yield* runtime.deliverReceipts;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel reply deadline pass failed", { cause }),
+      ),
+    );
+
     const runEvents = Stream.unwrap(
       eventSink
         .latestSequence()
@@ -277,6 +414,10 @@ export const layerBackground = Layer.effectDiscard(
       Effect.forkScoped,
     );
     yield* passes.pipe(Effect.forever, Effect.forkScoped);
+    yield* deadlines.pipe(
+      Effect.repeat(Schedule.spaced(Duration.millis(DEADLINE_SCAN_MS))),
+      Effect.forkScoped,
+    );
     yield* runEvents.pipe(Effect.forkScoped);
   }),
 );

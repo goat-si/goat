@@ -10,7 +10,12 @@
  *
  * @module ComputerUseOrigin
  */
-import type { MessageId, RunId, ThreadId } from "@goat/contracts";
+import {
+  isGoatBotSessionThreadId,
+  type MessageId,
+  type RunId,
+  type ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -141,7 +146,8 @@ const classify: (
 )(function* (reads, threadId, pick, depth) {
   if (depth > MAX_DEPTH) return unattended("unknown");
   // Known from the id the thread was created with, so it holds before the ledger binds it.
-  if (isChannelWorkerThreadId(threadId)) return unattended("channel_task");
+  if (isChannelWorkerThreadId(threadId) || isGoatBotSessionThreadId(threadId))
+    return unattended("channel_task");
   const channel = yield* reads.channelOrigin(threadId);
   if (channel !== undefined) return unattended(channel);
   const thread = yield* reads.thread(threadId);

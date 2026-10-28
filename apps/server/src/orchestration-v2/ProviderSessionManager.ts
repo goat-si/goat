@@ -24,6 +24,7 @@ import {
   ThreadId,
   type ProviderThreadId,
 } from "@goat/contracts";
+import { driverOf, sessionRunScope } from "./goatBotSessionCredential.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -712,12 +713,11 @@ export const layerWithOptions = (
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
                 const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
+                const driver = yield* driverOf(registry.get(providerInstanceId));
+                const scope = sessionRunScope(threadId, driver, preparedInput.runId);
                 const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
                   threadId,
-                  driver: yield* registry.get(providerInstanceId).pipe(
-                    Effect.map((adapter) => adapter.driver),
-                    Effect.orElseSucceed(() => undefined),
-                  ),
+                  driver,
                   interactionMode: preparedInput.interactionMode,
                   ...(usableThread
                     ? { runtimeMode: thread.value.runtimeMode, projectId: thread.value.projectId }
@@ -747,6 +747,7 @@ export const layerWithOptions = (
                   mcpSessionRegistry.urlOpener,
                 );
                 const existing = yield* mcpSessions.read(threadId);
+                let existingRun: RunId | undefined;
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
                   reserveMcpCredential(threadId, existing.providerSessionId);
@@ -761,8 +762,10 @@ export const layerWithOptions = (
                         ),
                       ),
                     );
+                  existingRun = resolved?.thread.runId;
                   if (
                     resolved !== undefined &&
+                    scope.serves(existingRun) &&
                     resolved.thread.threadId === threadId &&
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
@@ -789,12 +792,9 @@ export const layerWithOptions = (
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
                 }
-                // A provider process keeps the header it was given for its whole
-                // turn, and several harnesses for its whole life, so changed
-                // authority is replaced under the same token. Only a different
-                // provider instance, or a credential already revoked, gets a new one.
+                // Renew retained authority unless the instance changed or a per-run session moved on.
                 const renew =
-                  existing !== undefined && existing.providerInstanceId === providerInstanceId
+                  existing?.providerInstanceId === providerInstanceId && scope.serves(existingRun)
                     ? {
                         authorizationHeader: existing.authorizationHeader,
                         providerSessionId: existing.providerSessionId,
@@ -803,6 +803,7 @@ export const layerWithOptions = (
                 if (renew === undefined) yield* mcpSessionRegistry.revokeThread(threadId);
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
+                  ...scope.issue,
                   providerInstanceId,
                   browserToolsAvailable,
                   capabilities,

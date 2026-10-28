@@ -25,6 +25,8 @@ import {
   type ChannelTaskId,
   isChannelChildWorkActive,
   isChannelTaskTerminal,
+  isGoatBotSessionThreadId,
+  type RunId,
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -38,6 +40,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import {
@@ -61,7 +64,13 @@ const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =
 export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkError>()(
   "ChannelChildWorkError",
   {
-    reason: Schema.Literals(["at_capacity", "depth_exceeded", "owner_terminal", "storage"]),
+    reason: Schema.Literals([
+      "at_capacity",
+      "depth_exceeded",
+      "owner_terminal",
+      "run_not_attributable",
+      "storage",
+    ]),
     detail: Schema.String,
     cause: Schema.optional(Schema.Unknown),
   },
@@ -86,6 +95,8 @@ export type ChannelChildWorkAdmission =
     };
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+/** A caller run that can still start child work: running, or waiting on an approval or answer. */
+const LIVE_CALLER_RUN = new Set(["preparing", "starting", "running", "waiting"]);
 
 type TerminalRunStatus = "completed" | "interrupted" | "failed" | "cancelled" | "rolled_back";
 
@@ -104,6 +115,7 @@ export class ChannelChildWork extends Context.Service<
     /** Who owns this caller thread: a channel task's worker, a recorded child, or nobody. */
     readonly ownershipForCaller: (
       callerThreadId: ThreadId,
+      callerRunId?: RunId,
     ) => Effect.Effect<ChannelChildWorkOwnership, ChannelChildWorkError>;
     /**
      * The one admission path. Resolves ownership, refuses descendants of recorded children,
@@ -111,6 +123,8 @@ export class ChannelChildWork extends Context.Service<
      */
     readonly admit: (input: {
       readonly callerThreadId: ThreadId;
+      /** The caller's server-issued run, set on GOAT Bot session threads that tasks share. */
+      readonly callerRunId?: RunId | undefined;
       readonly surface: ChannelChildWorkSurface;
       readonly prompt: string;
       /** The launch target's canonical parts: host, cwd/workspace, model. */
@@ -196,9 +210,72 @@ const make = Effect.gen(function* () {
       else launching.delete(record.childWorkId);
     });
 
+  const notAttributable = (detail: string) =>
+    new ChannelChildWorkError({ reason: "run_not_attributable", detail });
+
+  /**
+   * A session thread serves several tasks, so its caller is the task of the run its credential
+   * was issued to, never the thread's latest task. Without a run id only a session dedicated to
+   * one task (providers that keep one credential per process) resolves, by that task.
+   */
+  const sessionOwnership = Effect.fn("ChannelChildWork.sessionOwnership")(function* (
+    threadId: ThreadId,
+    runId: RunId | undefined,
+  ) {
+    const unreadable = (cause: unknown) => toError("Unable to read this GOAT Bot session.", cause);
+    if (runId === undefined) {
+      const rows = yield* sql<{ readonly sharing: string; readonly task_id: string | null }>`
+        SELECT sharing, task_id FROM channel_bot_sessions WHERE thread_id = ${threadId}
+      `.pipe(Effect.mapError(unreadable));
+      const taskId = rows[0]?.sharing === "per_task" ? rows[0].task_id : null;
+      const stored =
+        taskId === null
+          ? undefined
+          : yield* ledger.getTask(taskId as ChannelTaskId).pipe(Effect.mapError(unreadable));
+      if (stored === undefined)
+        return yield* notAttributable(
+          "This GOAT Bot session call carries no run, so it cannot be tied to its work.",
+        );
+      return {
+        _tag: "worker",
+        task: stored.task,
+        ownerId: stored.ownerId,
+      } as const satisfies ChannelChildWorkOwnership;
+    }
+    const records = yield* threads
+      .getThreadRecords(threadId, ["runs", "messages"])
+      .pipe(Effect.mapError(unreadable));
+    const run = records.runs.find((candidate) => candidate.id === runId);
+    if (run === undefined || !LIVE_CALLER_RUN.has(run.status))
+      return yield* notAttributable(
+        "The run that made this call has ended, so it launches nothing new.",
+      );
+    const intent = yield* resolveSessionRun(sql, threadId, records, runId).pipe(
+      Effect.mapError(unreadable),
+    );
+    const stored =
+      intent === undefined
+        ? undefined
+        : yield* ledger.getTask(intent.task_id).pipe(Effect.mapError(unreadable));
+    if (
+      stored === undefined ||
+      intent === undefined ||
+      stored.task.generation !== intent.task_generation
+    )
+      return yield* notAttributable("This run does not serve a current GOAT Bot task.");
+    return {
+      _tag: "worker",
+      task: stored.task,
+      ownerId: stored.ownerId,
+    } as const satisfies ChannelChildWorkOwnership;
+  });
+
   const ownershipForCaller = Effect.fn("ChannelChildWork.ownershipForCaller")(function* (
     callerThreadId: ThreadId,
+    callerRunId?: RunId,
   ) {
+    if (isGoatBotSessionThreadId(callerThreadId))
+      return yield* sessionOwnership(callerThreadId, callerRunId);
     const stored = yield* ledger
       .findTaskByWorkerThread(callerThreadId)
       .pipe(
@@ -224,13 +301,14 @@ const make = Effect.gen(function* () {
 
   const admit = Effect.fn("ChannelChildWork.admit")(function* (input: {
     readonly callerThreadId: ThreadId;
+    readonly callerRunId?: RunId | undefined;
     readonly surface: ChannelChildWorkSurface;
     readonly prompt: string;
     readonly destinationKey: string;
     readonly destinationHint?: string | undefined;
     readonly clientRequestId?: string | undefined;
   }) {
-    const ownership = yield* ownershipForCaller(input.callerThreadId);
+    const ownership = yield* ownershipForCaller(input.callerThreadId, input.callerRunId);
     if (ownership._tag === "not_channel_owned") {
       return { _tag: "not_channel_owned" } as const satisfies ChannelChildWorkAdmission;
     }
@@ -260,6 +338,7 @@ const make = Effect.gen(function* () {
       childWorkKeylessRequestKeyFor({
         surface: input.surface,
         callerThreadId: input.callerThreadId,
+        callerRunId: input.callerRunId,
         destinationKey: input.destinationKey,
         promptDigest,
       });
@@ -271,6 +350,7 @@ const make = Effect.gen(function* () {
       generation: ownership.task.generation,
       surface: input.surface,
       callerThreadId: input.callerThreadId,
+      ...(input.callerRunId === undefined ? {} : { callerRunId: input.callerRunId }),
       requestKey,
       promptDigest,
       ...(input.destinationHint === undefined ? {} : { destinationHint: input.destinationHint }),
