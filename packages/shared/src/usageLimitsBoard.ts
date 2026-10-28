@@ -68,7 +68,7 @@ const STATUS_RANK: Record<LimitRowStatus, number> = {
 };
 
 /** OpenCodex Home ids are `home_<hex>`; six hex digits tell Homes apart without the full id. */
-export function homeLabel(homeId: string | undefined, sourceLabel: string): string {
+function homeLabel(homeId: string | undefined, sourceLabel: string): string {
   if (homeId === undefined) return sourceLabel.replace(/^via /, "");
   const hex = /^home_([0-9a-f]{6})/i.exec(homeId)?.[1];
   return `Home ${hex ?? homeId}`;
@@ -82,7 +82,7 @@ function originName(origin: LimitOrigin): string {
 
 function primaryOrigin(origins: readonly LimitOrigin[]): LimitOrigin {
   return (
-    origins.toSorted((left, right) => SHOWN_IN[left.kind] - SHOWN_IN[right.kind])[0] ?? {
+    [...origins].sort((left, right) => SHOWN_IN[left.kind] - SHOWN_IN[right.kind])[0] ?? {
       kind: "login",
     }
   );
@@ -92,11 +92,11 @@ function groupKey(origin: LimitOrigin, account: LimitAccount | null, environment
   if (origin.kind === "pool") return `pool:${origin.homeId ?? origin.label}`;
   if (origin.kind === "proxy") return `proxy:${origin.label}`;
   void account;
-  return `login:${environments.toSorted().join("\u0000")}`;
+  return `login:${[...environments].sort().join("\u0000")}`;
 }
 
 /** One time policy for every verdict: stale and passed readings drop out; exhaustion wins. */
-export function limitRowStatus(
+function limitRowStatus(
   account: Pick<LimitAccount, "limits" | "state">,
   now: number,
 ): Pick<LimitBoardRow, "status" | "releaseAt" | "note"> {
@@ -144,7 +144,7 @@ const compareRows = (now: number) => (left: LimitBoardRow, right: LimitBoardRow)
     : 0) ||
   (left.name ?? left.email ?? left.key).localeCompare(right.name ?? right.email ?? right.key);
 
-export function limitVerdict(rows: readonly LimitBoardRow[], now: number) {
+function limitVerdict(rows: readonly LimitBoardRow[], now: number) {
   const active = rows.filter((row) => row.active);
   const count = (status: LimitRowStatus) => active.filter((row) => row.status === status).length;
   const excluded = rows.filter((row) => row.status === "paused" || row.status === "reauth").length;
@@ -416,7 +416,7 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
           group.rows.flatMap((row) => (row.account ? [row.account] : [])),
           now,
         ),
-        rows: group.rows.toSorted(compareRows(now)),
+        rows: [...group.rows].sort(compareRows(now)),
       };
     });
     const missing = unreadable.get(driver);
@@ -431,7 +431,7 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
         windows: [],
         rows: [],
       });
-    const ordered = built.toSorted(
+    const ordered = [...built].sort(
       (left, right) =>
         ORIGIN_RANK[left.kind] - ORIGIN_RANK[right.kind] || left.title.localeCompare(right.title),
     );

@@ -99,7 +99,7 @@ function paceMarkStyles(timeLeft: number | null) {
  * Pace mark styles for the bar given the returned ref. Below 6px there is no room for the gap
  * and tick, so the bar draws neither, as the mobile bars do.
  */
-export function usePaceMark(timeLeft: number | null) {
+function usePaceMark(timeLeft: number | null) {
   const [bar, setBar] = useState<HTMLElement | null>(null);
   const [roomy, setRoomy] = useState(false);
   useLayoutEffect(() => {
@@ -233,10 +233,7 @@ const OUTCOME_TEXT: Record<ProviderConsumeResetCreditOutcome, string> = {
   alreadyRedeemed: "That credit was already redeemed.",
 };
 
-export function useResetCredit(
-  environmentId: EnvironmentId,
-  input: ProviderConsumeResetCreditInput,
-) {
+function useResetCredit(environmentId: EnvironmentId, input: ProviderConsumeResetCreditInput) {
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const consume = useAtomCommand(serverEnvironment.consumeResetCredit, { reportFailure: false });
   const [confirming, setConfirming] = useState(false);
@@ -266,7 +263,7 @@ export function useResetCredit(
 
 /** Require confirmation because redemption spends credits. Mount outside popovers, which stack above
  * dialogs and unmount on close. */
-export function ResetCreditDialog({
+function ResetCreditDialog({
   open,
   onOpenChange,
   onConfirm,

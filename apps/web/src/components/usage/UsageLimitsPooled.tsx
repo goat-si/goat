@@ -27,6 +27,7 @@ import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PaceIcon, ResetCredits, barColor } from "./UsageLimits";
 
 const ORIGIN_BADGE = {
@@ -60,18 +61,21 @@ function WindowCell({
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const remaining = remainingPercent(window);
   const resetsIn = formatResetsIn(window, now);
+  const resetLabel = resetsIn?.replace("resets in ", "↻ ") ?? "";
   return (
-    <div
-      className="flex min-w-24 flex-col gap-1"
-      title={
-        window.resetsAt
-          ? `Resets ${formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}`
-          : undefined
-      }
-    >
+    <div className="flex min-w-24 flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2 tabular-nums">
         <span className="font-medium text-foreground">{remaining}% left</span>
-        <span className="text-muted-foreground">{resetsIn?.replace("resets in ", "↻ ") ?? ""}</span>
+        {window.resetsAt ? (
+          <Tooltip>
+            <TooltipTrigger render={<span className="text-muted-foreground" />}>
+              {resetLabel}
+            </TooltipTrigger>
+            <TooltipPopup>
+              Resets {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       <div aria-hidden className="h-1 overflow-hidden rounded-full bg-muted">
         <div
@@ -166,10 +170,16 @@ function GroupTable({
                   key={`${window.kind}:${window.id}`}
                   scope="col"
                   className="px-2 py-2 font-normal"
-                  title={cursor?.description}
                 >
                   <span className="flex items-center gap-1.5 whitespace-nowrap">
-                    {cursor?.label ?? window.label}
+                    {cursor?.description ? (
+                      <Tooltip>
+                        <TooltipTrigger render={<span />}>{cursor.label}</TooltipTrigger>
+                        <TooltipPopup>{cursor.description}</TooltipPopup>
+                      </Tooltip>
+                    ) : (
+                      window.label
+                    )}
                     <span className="font-medium text-foreground tabular-nums">
                       {window.remainingPercent}% left
                     </span>
@@ -203,7 +213,7 @@ function GroupTable({
                     {member?.window ? (
                       <WindowCell window={member.window} color={color} now={now} />
                     ) : (
-                      <span className="text-muted-foreground">—</span>
+                      <span className="text-muted-foreground">Not reported</span>
                     )}
                   </td>
                 );
