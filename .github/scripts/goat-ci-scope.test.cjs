@@ -76,7 +76,7 @@ describe("selectTasks", () => {
     assert.equal(result.server.mode, "related");
     assert.ok(result.server.files.length > 0);
     for (const file of result.server.files) {
-      assert.match(file, /^(?:src|integration)\/.*\.test\.tsx?$/);
+      assert.match(file, /^(?:src|integration|scripts)\/.*\.test\.tsx?$/);
       assert.equal(result.server.reached.get(file), changed);
     }
     assert.ok(result.server.shards >= 1 && result.server.shards <= 4);
@@ -458,6 +458,22 @@ describe("planRun", () => {
     assert.equal(new Set(result.changedTests.vitest).size, result.changedTests.vitest.length);
     assert.deepEqual(result.changedTests.node, []);
     assert.equal(result.server.mode, "none");
+  });
+
+  it("shards a quick run's server tests once they outgrow one job (#1928)", async () => {
+    // Sqlite.ts selects over two hundred server tests; apps/server runs one file at a time.
+    const result = await plan(pr(), labels([]), ["apps/server/src/persistence/Sqlite.ts"]);
+    assert.equal(result.quick, true);
+    assert.equal(result.server.mode, "related");
+    assert.ok(result.server.shards > 1);
+    assert.ok(result.server.files.includes("src/persistence/Sqlite.test.ts"));
+    assert.ok(result.tasks.includes("test-server"));
+    assert.deepEqual(
+      result.changedTests.vitest.filter((file) => file.startsWith("apps/server/")),
+      [],
+    );
+    const titles = matrixFor(result.tasks, result.server).include.map((entry) => entry.title);
+    assert.ok(titles.includes("test-server related 1/" + result.server.shards));
   });
 
   it("quick PR includes cross-package importing tests (#1705)", async () => {

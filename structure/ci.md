@@ -5,7 +5,8 @@ nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to s
 ([stable promotion](../docs/internals/release-channels.md#stable-promotion)), and `close-outside-prs.yml` closes pull requests from
 forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
-holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate` and `result`, the pinned
+holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
+`refresh-republished` and `connect-auth-postgres`, the pinned
 `ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expressions below, the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
@@ -55,6 +56,10 @@ run pick the same files. Production importer chains remain in broader lanes. Exi
 suites also run: shared prompt text adds replay suites, and a changed or deleted non-test
 `.ts`/`.tsx` file under an app's `src` adds that app's `reactCompilerCoverage` suite when it has
 one (web and mobile do).
+The server suite runs one file at a time, so its selected tests stay in `test-changed` only while
+they fit one six-minute shard. More run as `test-server related` shards, one to four, or as the
+full suite when they carry half of its estimated time: one job of 248 server files hit the
+60-minute job limit (#1928).
 Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
 full suite runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.

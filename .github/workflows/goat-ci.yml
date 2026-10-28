@@ -16,6 +16,7 @@ name: goat-ci
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
 # selected by check:changed: changed, companion, and importing tests (directly or through
 # testkit/fixture files), plus special suites. Production chains belong to broader lanes.
+# Selected server tests past one shard's estimated time run as related test-server shards instead.
 # The full suite runs on request.
 # Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
 # reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
@@ -119,8 +120,9 @@ jobs:
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
       # test-mobile, test-shared, test-ingest, test-memory-growth, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
-      # one to four for the related files goat-scope picked. A quick run has check, typecheck and
-      # test-changed. Each entry carries its job title.
+      # one to four for the related files goat-scope picked. A quick run has check, typecheck,
+      # test-changed, and related server shards when its server tests outgrow one job. Each entry
+      # carries its job title.
       matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     steps:
       - name: Checkout
@@ -251,6 +253,9 @@ jobs:
       # slow server shard does not block them. `check` above is still the aggregate.
       - name: Test
         if: matrix.task == 'test'
+        # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
+        env:
+          VITEST_PW_DEBUG: "1"
         run: vp run --filter @goat/web test
 
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
@@ -263,6 +268,7 @@ jobs:
         env:
           CHANGED_TESTS: ${{ needs.scope.outputs.changed_tests }}
           CHANGED_NODE_TESTS: ${{ needs.scope.outputs.changed_node_tests }}
+          VITEST_PW_DEBUG: "1"
         run: |
           mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS || "[]")) console.log(file)')
           mapfile -t node_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_NODE_TESTS || "[]")) console.log(file)')
@@ -329,8 +335,9 @@ jobs:
         if: matrix.task == 'test-server' && !matrix.related
         run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
 
-      # goat-scope picked these files through the import graph; its job summary says which change
-      # reached each one. Shard count never exceeds the file count, so no shard runs empty.
+      # goat-scope picked these files through the import graph, or took them from a quick run's
+      # selection; its job summary says which. Shard count never exceeds the file count, so no
+      # shard runs empty.
       - name: Test related server files
         if: matrix.task == 'test-server' && matrix.related
         working-directory: apps/server
@@ -362,7 +369,7 @@ jobs:
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts goat-workflow-guard-matrix.test.ts
           lib/release-notices.test.ts
           lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
-          pr-assets.test.ts
+          pr-assets.test.ts merge-pr.test.ts
           lib/desktop-launch-fixture.test.ts
           smoke-desktop-app.test.ts
 
