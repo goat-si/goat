@@ -574,7 +574,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
       // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
-      if (point && call.method !== "click" && call.method !== "right_click")
+      if (point && !["click", "right_click", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
         );
