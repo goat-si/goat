@@ -36,7 +36,7 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences, type TakenUpdate } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
-import { captureStalled, driverExitReason } from "./ComputerUseDriverOutcome.ts";
+import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -240,7 +240,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const release = (
     request: { readonly reservationId?: string; readonly connectionId?: string },
     completed?: true,
-  ) => releaseProxyCall(options, request, completed);
+    notSent?: boolean,
+  ) => releaseProxyCall(options, request, completed, notSent);
 
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
@@ -286,7 +287,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* agentInput.ended(key);
         if (request.cancelled) {
           yield* drawOverlay({ type: "reply", id: key, failed: true });
-          yield* release(request, true);
+          yield* release(request, true, driverRefused(request.tool, message));
           if (gone() || paused !== undefined || idle) return;
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
@@ -327,7 +328,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const heldReply = () =>
             Transport.heldByTransport(options.transportHeld, request.method, request.tool);
           if (gone() || paused !== undefined || heldReply()) return;
-          yield* release(request, true);
+          yield* release(request, true, driverRefused(request.tool, message));
           const latest = outstanding.get(key);
           if (gone() || paused !== undefined || idle || latest === undefined || heldReply()) return;
           outstanding.delete(key);
@@ -860,7 +861,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       permissionDeadline = admission.deadline;
       if (!stillCurrent() || admission.refused !== undefined) {
         if (reservationId !== undefined)
-          yield* release({ reservationId, connectionId: current.connectionId });
+          yield* release({ reservationId, connectionId: current.connectionId }, undefined, true);
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(admission.refused ?? notSent(id));
       }
@@ -895,7 +896,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (!stillCurrent()) {
         yield* agentInput.ended(JSON.stringify(id));
         if (reservationId !== undefined)
-          yield* release({ reservationId, connectionId: current.connectionId });
+          yield* release({ reservationId, connectionId: current.connectionId }, undefined, true);
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(notSent(id));
       }
@@ -923,7 +924,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
       permissionDeadline = Math.min(permissionDeadline, confirmation.deadline);
       if (!stillCurrent() || confirmation.refused !== undefined) {
-        yield* release({ reservationId, connectionId: current.connectionId });
+        yield* release({ reservationId, connectionId: current.connectionId }, undefined, true);
         yield* agentInput.ended(JSON.stringify(id));
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(confirmation.refused ?? notSent(id));
@@ -960,7 +961,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (outcome !== "sent" && id !== undefined && id !== null && isRequest) {
       const key = JSON.stringify(id);
       if (reservationId !== undefined)
-        yield* release({ reservationId, connectionId: current.connectionId });
+        yield* release({ reservationId, connectionId: current.connectionId }, undefined, true);
       yield* agentInput.ended(key);
       yield* drawOverlay({ type: "reply", id: key, failed: true });
       return yield* sink.answer(

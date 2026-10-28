@@ -13,7 +13,8 @@
  * current control, so Stop, Stop all, expiry, replacement, an idle turn, leaving full access,
  * deleting the thread and a narrowed grant that drops the app all end it, and so does
  * APP_LEASE_IDLE_MS without a mutating call on it; the proxy closing its driver or losing its lease
- * stream releases it at once. A call of another control still out in the app holds it too (H2, H3
+ * stream releases it at once, and a call refused before anything reached the app gives back what
+ * its own hold took. A call of another control still out in the app holds it too (H2, H3
  * in ComputerUseCallReservations.appTicket). The PR that added D17 (#1679) states the invariants
  * and their bounds.
  *
@@ -50,6 +51,19 @@ export interface AppBusy {
   readonly app: string;
 }
 
+/** One admitted call's use of the app: its process, its app id when known, and when. */
+interface Use {
+  readonly pid: number;
+  readonly app: string | undefined;
+  readonly usedAt: number;
+}
+
+/** An admitted call not yet answered, with the driver connection that alone may settle it. */
+interface Pending extends Use {
+  readonly controlId: string;
+  readonly connectionId: string;
+}
+
 interface Lease {
   /** Every process the app was used in under this lease. */
   readonly pids: ReadonlyArray<number>;
@@ -57,7 +71,38 @@ interface Lease {
   readonly threadId: ThreadId;
   readonly controlId: string;
   readonly usedAt: number;
+  /** The calls that ran, or whose outcome GOAT never learned, as one use per process. */
+  readonly settled: ReadonlyArray<Use>;
+  /** Admitted calls whose ticket is still out, by reservation; a call never sent leaves no trace. */
+  readonly pending: ReadonlyMap<string, Pending>;
 }
+
+const makeLease = (
+  threadId: ThreadId,
+  controlId: string,
+  settled: ReadonlyArray<Use>,
+  pending: ReadonlyMap<string, Pending>,
+): Lease => {
+  const uses = [...settled, ...pending.values()];
+  return {
+    pids: [...new Set(uses.map((use) => use.pid))],
+    app: uses.find((use) => use.app !== undefined)?.app,
+    threadId,
+    controlId,
+    usedAt: Math.max(...uses.map((use) => use.usedAt)),
+    settled,
+    pending,
+  };
+};
+/** Settled uses of one process collapse into its latest, so a long-held lease does not grow. */
+const addSettled = (uses: ReadonlyArray<Use>, use: Use): ReadonlyArray<Use> => [
+  ...uses.filter((other) => other.pid !== use.pid),
+  {
+    pid: use.pid,
+    app: use.app ?? uses.find((other) => other.pid === use.pid)?.app,
+    usedAt: Math.max(use.usedAt, ...uses.filter((o) => o.pid === use.pid).map((o) => o.usedAt)),
+  },
+];
 
 // Grants and the proxy compare app ids without case (ComputerUseScope.approvedApps).
 const sameApp = (a: string | undefined, b: string | undefined) =>
@@ -102,20 +147,68 @@ export const makeAppLeases = <E>(options: {
     }
     return undefined;
   });
-  /** An admitted mutating call on one app leases it, or renews its lease, for its control. */
-  const hold = (threadId: ThreadId, controlId: string, need: AppNeed, now: number) => {
+  /**
+   * An admitted mutating call on one app leases it, or renews its lease, for its control. A
+   * confirmation under the same reservation renews that call's own use.
+   */
+  const hold = (
+    threadId: ThreadId,
+    controlId: string,
+    need: AppNeed,
+    now: number,
+    ticket?: { readonly reservationId: string; readonly connectionId: string },
+  ) => {
     if (need._tag !== "app") return;
-    const own = leases.filter((lease) => lease.threadId === threadId && meets(lease, need));
-    const app = need.app ?? own.find((lease) => lease.app !== undefined)?.app;
-    const pids = [...new Set([...own.flatMap((lease) => lease.pids), need.pid])];
+    const own = leases.filter((other) => other.threadId === threadId && meets(other, need));
+    const use: Use = { pid: need.pid, app: need.app, usedAt: now };
+    let settled = own
+      .flatMap((other) => other.settled)
+      .reduce(addSettled, [] as ReadonlyArray<Use>);
+    const pending = new Map(own.flatMap((other) => [...other.pending]));
+    if (ticket === undefined) settled = addSettled(settled, use);
+    else
+      pending.set(ticket.reservationId, { ...use, controlId, connectionId: ticket.connectionId });
     leases = [
-      ...leases.filter((lease) => !own.includes(lease)),
-      { pids, app, threadId, controlId, usedAt: now },
+      ...leases.filter((other) => !own.includes(other)),
+      makeLease(threadId, controlId, settled, pending),
     ];
+  };
+  /**
+   * The thread's ticket for this call was released. A call that ran keeps its use; one nothing of
+   * which was sent takes its use back, and the lease ends when no other use is left.
+   */
+  const settle = (
+    threadId: ThreadId,
+    call: { readonly controlId: string; readonly connectionId: string },
+    reservationId: string,
+    notSent: boolean,
+  ) => {
+    const held = leases.find(
+      (other) => other.threadId === threadId && other.pending.has(reservationId),
+    );
+    const use = held?.pending.get(reservationId);
+    // Only the driver connection that holds the call may settle what it took.
+    if (
+      held === undefined ||
+      use === undefined ||
+      use.controlId !== call.controlId ||
+      use.connectionId !== call.connectionId
+    )
+      return;
+    const pending = new Map(held.pending);
+    pending.delete(reservationId);
+    const settled = notSent
+      ? held.settled
+      : addSettled(held.settled, { pid: use.pid, app: use.app, usedAt: use.usedAt });
+    const rest = leases.filter((other) => other !== held);
+    leases =
+      settled.length === 0 && pending.size === 0
+        ? rest
+        : [...rest, makeLease(held.threadId, held.controlId, settled, pending)];
   };
   /** The control's proxy closed its driver (it exited, crashed or lost its connection). */
   const release = (threadId: ThreadId, controlId: string) => {
-    leases = leases.filter((lease) => lease.threadId !== threadId || lease.controlId !== controlId);
+    leases = leases.filter((other) => other.threadId !== threadId || other.controlId !== controlId);
   };
-  return { busy, hold, release, held: () => leases.length };
+  return { busy, hold, settle, release, held: () => leases.length };
 };

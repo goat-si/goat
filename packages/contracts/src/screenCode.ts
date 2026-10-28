@@ -23,6 +23,8 @@ const refusalFields = {
   detail: Schema.optionalKey(text(80)),
   /** The bundle id or app the refusal names, when the proxy knew it. */
   app: Schema.optionalKey(id),
+  /** The thread holding the window or app, for target_busy and app_busy. */
+  holderThreadId: Schema.optionalKey(id),
 };
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 const utf8Text = (max: number) =>

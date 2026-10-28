@@ -165,6 +165,10 @@ export function driverOutcomeSafety(
   );
 }
 
+/** Whether the driver refused a write before sending any of it, so it never reached the app. */
+export const driverRefused = (tool: string | undefined, message: unknown): boolean =>
+  driverOutcomeSafety(tool, message).code.startsWith("write_refused_");
+
 /**
  * The driver's reply with GOAT's outcome safety, and with effect "unverifiable" added when an
  * input error may have acted. A success without structuredContent gets the safety as a text block:

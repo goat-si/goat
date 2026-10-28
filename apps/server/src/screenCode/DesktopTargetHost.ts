@@ -31,8 +31,11 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-const callArgs = (args: ScreenHostCall["args"]) =>
-  object(Array.isArray(args) ? args[0] : args) ?? {};
+// The guest names its target in every call; the driver refuses arguments it does not know.
+const callArgs = (args: ScreenHostCall["args"]): Record<string, unknown> => {
+  const { targetRef: _targetRef, ...rest } = object(Array.isArray(args) ? args[0] : args) ?? {};
+  return rest;
+};
 const array = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 const integer = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -52,19 +55,37 @@ const driverValue = (reply: ComputerUsePrimitiveReply): unknown => {
 };
 const refusalOf = (structured: Record<string, unknown> | undefined) => {
   const app = string(structured?.app);
+  const holder = string(structured?.holderThreadId);
   return {
     ...(isRefusalReason(structured?.refused) ? { refused: structured.refused } : {}),
     ...(isRefusalDetail(structured?.detail) ? { detail: structured.detail } : {}),
     ...(app !== undefined && app.length <= 200 ? { app } : {}),
+    ...(holder !== undefined && holder.length <= 200 ? { holderThreadId: holder } : {}),
   };
+};
+/** What the refusal told the agent: why the call did not run and what to do instead. */
+const refusalText = (
+  result: Record<string, unknown> | undefined,
+  structured: Record<string, unknown> | undefined,
+): string | undefined => {
+  const said =
+    string(object(structured?.refusal)?.message) ??
+    string(structured?.message) ??
+    array(result?.content)
+      .map(object)
+      .map((part) => (part?.type === "text" ? string(part.text) : undefined))
+      .find((text) => text !== undefined);
+  return said === undefined || said.length <= 1000 ? said : `${said.slice(0, 999)}…`;
 };
 const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
+  const said = refusalText(result, structured);
   // GOAT refused before the driver: keep its reason so the receipt says why.
-  if (reply.status === "not_started") return { ...fail("unavailable"), ...refusalOf(structured) };
+  if (reply.status === "not_started")
+    return { ...fail("unavailable", said), ...refusalOf(structured) };
   // The lease proxy's rule: the driver's own refusal; an explicit other effect wins over a status.
   if (
     structured !== undefined &&
@@ -72,7 +93,11 @@ const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefin
       ? structured.status === "refused"
       : structured.effect === "refused")
   ) {
-    return { ...fail("permission_denied"), ...refusalOf(structured) };
+    const code = string(object(structured.refusal)?.code) ?? string(structured.code);
+    return {
+      ...fail(code === "invalid_arguments" ? "invalid_argument" : "permission_denied", said),
+      ...refusalOf(structured),
+    };
   }
   if (result?.isError === true || reply.error !== undefined)
     return structured?.effect === "unverifiable"
