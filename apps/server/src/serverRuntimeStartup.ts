@@ -20,8 +20,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
@@ -83,7 +83,10 @@ export class ServerRuntimeStartup extends Context.Service<
 
 interface QueuedCommand {
   readonly run: Effect.Effect<void, never>;
+  readonly fail: (error: ServerRuntimeStartupError) => void;
 }
+
+const MAX_PENDING_STARTUP_COMMANDS = 64;
 
 type CommandReadinessState = "pending" | "ready" | ServerRuntimeStartupError;
 
@@ -102,47 +105,106 @@ const settleQueuedCommand = <A, E>(deferred: Deferred.Deferred<A, E>, exit: Exit
     : Deferred.failCause(deferred, exit.cause);
 
 export const makeCommandGate = Effect.gen(function* () {
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const errorContext = Option.match(config, {
+    onNone: () => ({ mode: "web" as const, host: null, port: 0 }),
+    onSome: (config) => ({ mode: config.mode, host: config.host ?? null, port: config.port }),
+  });
   const commandReady = yield* Deferred.make<void, ServerRuntimeStartupError>();
-  const commandQueue = yield* Queue.unbounded<QueuedCommand>();
-  const commandReadinessState = yield* Ref.make<CommandReadinessState>("pending");
+  const pending = new Map<symbol, QueuedCommand>();
+  let readiness: CommandReadinessState = "pending";
 
-  const commandWorker = Effect.forever(
-    Queue.take(commandQueue).pipe(Effect.flatMap((command) => command.run)),
+  const awaitCommandReady = Deferred.await(commandReady).pipe(
+    Effect.andThen(Effect.suspend(() => (typeof readiness === "string" ? Effect.void : readiness))),
   );
+
+  const failCommandReady = Effect.fn("serverRuntimeStartup.failCommandReady")(
+    (error: ServerRuntimeStartupError) =>
+      Effect.sync(() => {
+        if (typeof readiness !== "string") return;
+        readiness = error;
+        const abandoned = Array.from(pending.values());
+        pending.clear();
+        Deferred.doneUnsafe(commandReady, error);
+        for (const command of abandoned) command.fail(error);
+      }),
+  );
+
+  const commandWorker = Effect.gen(function* () {
+    yield* awaitCommandReady;
+    // After readiness, new commands execute directly, so this backlog only shrinks.
+    yield* Effect.whileLoop({
+      while: () => pending.size > 0,
+      body: () =>
+        Effect.suspend(() => {
+          const first = pending.values().next();
+          if (first.done) return Effect.void;
+          return first.value.run;
+        }),
+      step: () => {},
+    });
+  }).pipe(Effect.ignore);
   yield* Effect.forkScoped(commandWorker);
+  yield* Effect.addFinalizer(() =>
+    failCommandReady(
+      new ServerRuntimeStartupError({ ...errorContext, cause: "startup-command-closed" }),
+    ),
+  );
 
   const enqueueCommand = Effect.fn("serverRuntimeStartup.enqueueCommand")(function* <A, E>(
     effect: Effect.Effect<A, E>,
   ): Effect.fn.Return<A, E | ServerRuntimeStartupError> {
-    const readinessState = yield* Ref.get(commandReadinessState);
-    if (readinessState === "ready") {
-      return yield* effect;
-    }
-    if (readinessState !== "pending") {
-      return yield* readinessState;
-    }
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        if (typeof readiness !== "string") return readiness;
+        const execute = Effect.suspend((): Effect.Effect<A, E | ServerRuntimeStartupError> =>
+          typeof readiness === "string" ? effect : readiness,
+        );
+        if (readiness === "ready") return restore(execute);
+        if (pending.size >= MAX_PENDING_STARTUP_COMMANDS) {
+          return new ServerRuntimeStartupError({
+            ...errorContext,
+            cause: "startup-command-capacity",
+          });
+        }
 
-    const result = yield* Deferred.make<A, E | ServerRuntimeStartupError>();
-    yield* Queue.offer(commandQueue, {
-      run: Deferred.await(commandReady).pipe(
-        Effect.flatMap(() => effect),
-        Effect.exit,
-        Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
-      ),
-    });
-    return yield* Deferred.await(result);
+        // Reserve and install cleanup without an interruption window or suspended producers.
+        const token = Symbol();
+        const result = Deferred.makeUnsafe<A, E | ServerRuntimeStartupError>();
+        pending.set(token, {
+          run: Effect.uninterruptibleMask((restoreExecution) =>
+            Effect.suspend(() => {
+              if (!pending.delete(token)) return Effect.void;
+              return restoreExecution(execute).pipe(
+                Effect.exit,
+                Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
+                Effect.asVoid,
+              );
+            }),
+          ),
+          fail: (error) => {
+            Deferred.doneUnsafe(result, error);
+          },
+        });
+        return restore(Deferred.await(result)).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              pending.delete(token);
+            }),
+          ),
+        );
+      }),
+    );
   });
 
   return {
-    awaitCommandReady: Deferred.await(commandReady),
-    signalCommandReady: Effect.gen(function* () {
-      yield* Ref.set(commandReadinessState, "ready");
-      yield* Deferred.succeed(commandReady, undefined).pipe(Effect.orDie);
+    awaitCommandReady,
+    signalCommandReady: Effect.sync(() => {
+      if (readiness !== "pending") return;
+      readiness = "ready";
+      Deferred.doneUnsafe(commandReady, Effect.void);
     }),
-    failCommandReady: Effect.fn("serverRuntimeStartup.failCommandReady")(function* (error) {
-      yield* Ref.set(commandReadinessState, error);
-      yield* Deferred.fail(commandReady, error).pipe(Effect.orDie);
-    }),
+    failCommandReady,
     enqueueCommand,
   } satisfies CommandGate;
 });
