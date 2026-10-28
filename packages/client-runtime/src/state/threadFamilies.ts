@@ -6,15 +6,20 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type * as EnvironmentRegistry from "../connection/registry.ts";
-import { EnvironmentRpcUnavailableError, request } from "../rpc/client.ts";
+import { request } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { arrayElementsEqual } from "./entities.ts";
+import { environmentConnectionAtoms } from "./environmentConnections.ts";
 import { createEnvironmentQueryAtomFamily, selectEnvironmentQueryData } from "./runtime.ts";
 import type { EnvironmentShellState } from "./shell.ts";
 
@@ -26,9 +31,32 @@ interface MountedRows {
   readonly count: number;
 }
 const EMPTY_MOUNTS: ReadonlyMap<string, MountedRows> = new Map();
-// Generation 0 is the cached shell from before this session's first authoritative snapshot. A read
-// for it would be thrown away once that snapshot lands, so it waits instead.
 const AWAITING_AUTHORITATIVE_SHELL = AsyncResult.initial<never, never>(true);
+
+interface FamilyReadiness {
+  readonly generation: number;
+  readonly session: RpcSession;
+}
+
+interface FamilyLane {
+  readonly semaphore: Semaphore.Semaphore;
+  generation: number;
+  session: RpcSession | null;
+  nextRefreshVersion: number;
+  readonly families: Map<ThreadId, OrchestrationV2ThreadFamily>;
+  readonly requestedRefresh: Map<
+    ThreadId,
+    { readonly ready: FamilyReadiness; readonly version: number }
+  >;
+  readonly consumedRefresh: Map<ThreadId, number>;
+}
+
+interface MergedFamilySnapshot {
+  readonly snapshot: OrchestrationV2ShellSnapshot;
+  readonly removedAt: ReadonlyMap<ThreadId, number>;
+  readonly families: ReadonlyArray<OrchestrationV2ThreadFamily>;
+  readonly merged: OrchestrationV2ShellSnapshot;
+}
 
 /** Whether a family read can decide anything yet. Only a settled read can prove a thread is gone. */
 export type ThreadFamilyRead = "pending" | "failed" | "settled";
@@ -84,44 +112,189 @@ export function createThreadFamilyAtoms<R, ER, E>(
       Atom.withLabel(`environment-shell-generation:${environmentId}`),
     ),
   );
+  const connectionAtom = environmentConnectionAtoms(runtime);
+  const readinessAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): FamilyReadiness | null => {
+      const state = shellStateValue(get(shellStateAtom(environmentId)));
+      const connection = Option.getOrNull(AsyncResult.value(get(connectionAtom(environmentId))));
+      const session = connection === null ? null : Option.getOrNull(connection[1]);
+      if (
+        state === null ||
+        state.status !== "live" ||
+        state.generation <= 0 ||
+        Option.isNone(state.snapshot) ||
+        connection?.[0].phase !== "connected" ||
+        session === null ||
+        state.authoritativeSession !== session
+      )
+        return null;
+      const previous = Option.getOrNull(get.self<FamilyReadiness | null>());
+      return previous?.generation === state.generation && previous.session === session
+        ? previous
+        : { generation: state.generation, session };
+    }).pipe(Atom.withLabel(`environment-thread-family-readiness:${environmentId}`)),
+  );
+  const lanes = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, FamilyLane>>();
+  const laneFor = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) => {
+    let environments = lanes.get(registry);
+    if (environments === undefined) {
+      environments = new Map();
+      lanes.set(registry, environments);
+    }
+    let lane = environments.get(environmentId);
+    if (lane === undefined) {
+      lane = {
+        semaphore: Semaphore.makeUnsafe(1),
+        generation: 0,
+        session: null,
+        nextRefreshVersion: 0,
+        families: new Map(),
+        requestedRefresh: new Map(),
+        consumedRefresh: new Map(),
+      };
+      environments.set(environmentId, lane);
+    }
+    return lane;
+  };
+  const readinessKeys = new WeakMap<FamilyReadiness, number>();
+  let nextReadinessKey = 0;
+  const readinessKey = (ready: FamilyReadiness) => {
+    let key = readinessKeys.get(ready);
+    if (key === undefined) {
+      key = ++nextReadinessKey;
+      readinessKeys.set(ready, key);
+    }
+    return key;
+  };
 
-  // The generation is part of the key, so a read from before the latest authoritative snapshot is
-  // never used again, even while a new read is pending or failed.
   const familyQueryAtom = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:orchestration:thread-family",
     staleTimeMs: Number.POSITIVE_INFINITY,
-    idleTtlMs: 60_000,
+    idleTtlMs: 0,
     execute: Effect.fn("ThreadFamilies.read")(function* (input: {
       readonly threadId: ThreadId;
       readonly generation: number;
+      readonly readinessKey: number;
     }) {
       const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-      const session = yield* SubscriptionRef.get(supervisor.session);
-      if (Option.isNone(session)) {
-        return yield* new EnvironmentRpcUnavailableError({
-          environmentId: supervisor.target.environmentId,
-          message: "The environment has no session.",
-        });
-      }
-      // A config failure fails the read: an empty family would read as "the thread is gone".
-      const config = yield* session.value.initialConfig;
-      // Servers without families send every child in the shell, so absent means gone.
-      if (config.shellThreadFamilies !== true) return EMPTY_FAMILY;
-      return yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadFamily, {
-        threadId: input.threadId,
+      const registry = yield* AtomRegistry.AtomRegistry;
+      const environmentId = supervisor.target.environmentId;
+      const readiness = readinessAtom(environmentId);
+      const lane = laneFor(registry, environmentId);
+      const matches = (value: FamilyReadiness | null) =>
+        value !== null &&
+        value.generation === input.generation &&
+        readinessKey(value) === input.readinessKey;
+      const captured = registry.get(readiness);
+      if (captured === null || !matches(captured)) return yield* Effect.interrupt;
+      const refresh = lane.requestedRefresh.get(input.threadId);
+      const refreshVersion =
+        refresh?.ready.generation === captured.generation &&
+        refresh.ready.session === captured.session
+          ? refresh.version
+          : 0;
+      const invalidated = yield* Deferred.make<void>();
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          registry.subscribe(
+            readiness,
+            (value) => {
+              if (!matches(value)) Deferred.doneUnsafe(invalidated, Effect.void);
+            },
+            { immediate: true },
+          ),
+        ),
+        (stop) => Effect.sync(stop),
+      );
+      const ensureCurrent = Effect.gen(function* () {
+        const state = yield* SubscriptionRef.get(supervisor.state);
+        const session = yield* SubscriptionRef.get(supervisor.session);
+        if (
+          Deferred.isDoneUnsafe(invalidated) ||
+          !matches(registry.get(readiness)) ||
+          state.phase !== "connected" ||
+          Option.isNone(session) ||
+          session.value !== captured.session
+        )
+          return yield* Effect.interrupt;
       });
-    }),
+      // Session replacement can precede the connection atom's corresponding update.
+      const supervisorChanged = SubscriptionRef.changes(supervisor.state).pipe(
+        Stream.zipLatest(SubscriptionRef.changes(supervisor.session)),
+        Stream.filter(
+          ([state, session]) =>
+            state.phase !== "connected" ||
+            Option.isNone(session) ||
+            session.value !== captured.session,
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+      );
+      const cancelled = Effect.raceFirst(Deferred.await(invalidated), supervisorChanged).pipe(
+        Effect.andThen(Effect.interrupt),
+      );
+      return yield* Effect.raceFirst(
+        lane.semaphore.withPermit(
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* ensureCurrent;
+              if (lane.generation !== input.generation || lane.session !== captured.session) {
+                lane.generation = input.generation;
+                lane.session = captured.session;
+                lane.families.clear();
+                lane.consumedRefresh.clear();
+                for (const [threadId, refresh] of lane.requestedRefresh) {
+                  if (
+                    refresh.ready.generation !== input.generation ||
+                    refresh.ready.session !== captured.session
+                  )
+                    lane.requestedRefresh.delete(threadId);
+                }
+              }
+              const cached = lane.families.get(input.threadId);
+              if (
+                cached !== undefined &&
+                (lane.consumedRefresh.get(input.threadId) ?? 0) >= refreshVersion
+              )
+                return cached;
+              // Configuration failures must not turn a missing family into an empty success.
+              const config = yield* captured.session.initialConfig;
+              yield* ensureCurrent;
+              const family =
+                config.shellThreadFamilies === true
+                  ? yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadFamily, {
+                      threadId: input.threadId,
+                    })
+                  : EMPTY_FAMILY;
+              yield* ensureCurrent;
+              lane.families.set(input.threadId, family);
+              for (const thread of family.threads) lane.families.set(thread.id, family);
+              lane.consumedRefresh.set(input.threadId, refreshVersion);
+              return family;
+            }),
+          ),
+        ),
+        cancelled,
+      );
+    }, Effect.scoped),
   });
-  const queryFor = (environmentId: EnvironmentId, threadId: ThreadId, generation: number) =>
-    familyQueryAtom({ environmentId, input: { threadId, generation } });
+  const queryFor = (environmentId: EnvironmentId, threadId: ThreadId, ready: FamilyReadiness) =>
+    familyQueryAtom({
+      environmentId,
+      input: {
+        threadId,
+        generation: ready.generation,
+        readinessKey: readinessKey(ready),
+      },
+    });
 
   const familyAtom = Atom.family((key: string) => {
     const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
     return Atom.make((get) => {
-      const generation = get(generationAtom(environmentId));
-      return generation === 0
+      const ready = get(readinessAtom(environmentId));
+      return ready === null
         ? AWAITING_AUTHORITATIVE_SHELL
-        : get(queryFor(environmentId, threadId, generation));
+        : get(queryFor(environmentId, threadId, ready));
     }).pipe(Atom.withLabel(`environment-thread-family:${key}`));
   });
   const familyKey = (environmentId: EnvironmentId, threadId: ThreadId) =>
@@ -133,8 +306,14 @@ export function createThreadFamilyAtoms<R, ER, E>(
     environmentId: EnvironmentId,
     threadId: ThreadId,
   ) => {
-    const generation = registry.get(generationAtom(environmentId));
-    if (generation !== 0) registry.refresh(queryFor(environmentId, threadId, generation));
+    const ready = registry.get(readinessAtom(environmentId));
+    if (ready === null) return;
+    const lane = laneFor(registry, environmentId);
+    lane.requestedRefresh.set(threadId, {
+      ready,
+      version: ++lane.nextRefreshVersion,
+    });
+    registry.refresh(queryFor(environmentId, threadId, ready));
   };
 
   const mountsAtom = Atom.family((environmentId: EnvironmentId) =>
@@ -196,18 +375,13 @@ export function createThreadFamilyAtoms<R, ER, E>(
     return release;
   };
 
-  const snapshotAtom = Atom.family((environmentId: EnvironmentId) => {
-    let previous: {
-      readonly snapshot: OrchestrationV2ShellSnapshot;
-      readonly removedAt: ReadonlyMap<ThreadId, number>;
-      readonly families: ReadonlyArray<OrchestrationV2ThreadFamily>;
-      readonly merged: OrchestrationV2ShellSnapshot;
-    } | null = null;
-    return Atom.make((get): OrchestrationV2ShellSnapshot | null => {
+  const mergedSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): MergedFamilySnapshot | null => {
+      const previous = Option.getOrNull(get.self<MergedFamilySnapshot | null>());
       const state = shellStateValue(get(shellStateAtom(environmentId)));
       const snapshot = state === null ? null : Option.getOrNull(state.snapshot);
       const mounts = get(mountsAtom(environmentId));
-      if (snapshot === null || state === null || mounts.size === 0) return snapshot;
+      if (snapshot === null || state === null) return null;
       // A read from before the latest authoritative snapshot can hold threads removed before it,
       // and that snapshot cleared those removals; such reads (a cached search) wait for new ones.
       const cut = snapshot.olderSettled?.asOfSequence ?? 0;
@@ -221,7 +395,7 @@ export function createThreadFamilyAtoms<R, ER, E>(
         previous.snapshot.threads === snapshot.threads &&
         previous.removedAt === state.removedAt &&
         arrayElementsEqual(previous.families, families);
-      if (unchanged && previous !== null && previous.snapshot === snapshot) return previous.merged;
+      if (unchanged && previous !== null && previous.snapshot === snapshot) return previous;
       let merged: OrchestrationV2ShellSnapshot;
       if (unchanged && previous !== null) {
         merged =
@@ -239,12 +413,18 @@ export function createThreadFamilyAtoms<R, ER, E>(
             ? snapshot
             : { ...snapshot, threads: [...snapshot.threads, ...extras] };
       }
-      previous = { snapshot, removedAt: state.removedAt, families, merged };
-      return merged;
-    }).pipe(Atom.withLabel(`environment-snapshot-with-families:${environmentId}`));
-  });
+      return { snapshot, removedAt: state.removedAt, families, merged };
+    }).pipe(Atom.withLabel(`environment-snapshot-with-families:${environmentId}`)),
+  );
+  const snapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(mergedSnapshotAtom(environmentId))?.merged ?? null),
+  );
 
   return {
+    /** Atom<number>: authoritative snapshot generation, including 0 before the first snapshot. */
+    generationAtom,
+    /** Atom<{ generation: number; session: RpcSession } | null>: current live snapshot owner. */
+    readinessAtom,
     /** The shell snapshot plus the rows of every mounted family. */
     snapshotAtom,
     /** The current generation's family read, for decisions that need a settled answer. */

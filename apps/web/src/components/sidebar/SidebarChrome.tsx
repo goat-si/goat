@@ -29,6 +29,7 @@ import {
   useNavigateToMainApp,
 } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
+import { RemoteLauncherReads } from "./RemoteLauncherReads";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
@@ -345,6 +346,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter({
 }) {
   return (
     <SidebarFooter>
+      <RemoteLauncherReads />
       {showUndoNotice ? <SidebarThreadUndoNotice /> : null}
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />

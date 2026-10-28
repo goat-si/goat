@@ -54,6 +54,8 @@ export interface EnvironmentShellState {
    * so they are read again.
    */
   readonly generation: number;
+  /** In-memory owner of the authoritative snapshot; never included in the persisted snapshot. */
+  readonly authoritativeSession: RpcSession | null;
   /** Sequences of the thread removals applied since the latest authoritative snapshot. */
   readonly removedAt: ReadonlyMap<ThreadId, number>;
 }
@@ -67,6 +69,7 @@ export const EMPTY_SHELL_STATE: EnvironmentShellState = {
   status: "empty",
   error: Option.none(),
   generation: 0,
+  authoritativeSession: null,
   removedAt: EMPTY_REMOVALS,
 };
 
@@ -229,6 +232,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     pendingLinkIds?: ReadonlySet<ThreadId>,
   ) {
     const initial = yield* SubscriptionRef.get(state);
+    const subscriptionSession = yield* Ref.get(activeSubscriptionSession);
     let waiting = yield* Ref.get(awaitingCompletion);
     /* oxlint-disable oxc/no-accumulating-spread -- This copies a fixed-shape state record, not a growing collection. */
     let next = initial;
@@ -273,6 +277,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         status: waiting ? "synchronizing" : "live",
         error: Option.none(),
         generation: authoritative ? ++lastShellGeneration : next.generation,
+        authoritativeSession: authoritative ? subscriptionSession : next.authoritativeSession,
         removedAt: authoritative
           ? EMPTY_REMOVALS
           : removal === null

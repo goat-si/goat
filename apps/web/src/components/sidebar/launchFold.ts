@@ -5,14 +5,13 @@ import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
 import {
   foldsUnderLauncher,
   type LaunchChildState,
+  type LaunchAttention,
   type LaunchLift,
   launchStateOfLift,
   moreUrgentLaunchLift,
   ownLaunchLift,
   staysFoldedUnderLauncher,
 } from "@goat/shared/threadLaunchState";
-
-import type { SidebarChildAttention } from "../Sidebar.logic";
 
 export type { LaunchChildState, LaunchLift };
 
@@ -73,7 +72,7 @@ function subagentOwnerKeyOf(thread: LaunchFoldThread): string | null {
 
 const ownLiftOf = (
   thread: LaunchFoldThread,
-  delegated: SidebarChildAttention | undefined,
+  delegated: LaunchAttention | undefined,
   unseen: boolean,
 ) =>
   ownLaunchLift(
@@ -100,7 +99,7 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   /** Projects view folds only within one project. */
   readonly sameList?: (child: T, parent: T) => boolean;
   /** Pending requests of each row's task.create subagents, by owner row key. */
-  readonly delegatedAttentionByKey?: ReadonlyMap<string, SidebarChildAttention>;
+  readonly delegatedAttentionByKey?: ReadonlyMap<string, LaunchAttention>;
   /** A finished thread that would sit in Priority on its own row; folded, it lifts its launcher. */
   readonly unseen?: (thread: T) => boolean;
 }): LaunchFold<T> {
@@ -261,9 +260,7 @@ export function liftedPriorityRank(rank: 0 | 1 | 2 | null, lift: LaunchLift | un
   return lift === "unseen" ? (rank ?? 2) : rank;
 }
 
-export function liftedChildAttention(
-  lift: LaunchLift | undefined,
-): SidebarChildAttention | undefined {
+export function liftedChildAttention(lift: LaunchLift | undefined): LaunchAttention | undefined {
   return lift === "approval" || lift === "input" ? lift : undefined;
 }
 
