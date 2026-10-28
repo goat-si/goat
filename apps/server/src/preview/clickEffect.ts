@@ -81,6 +81,14 @@ const INSTALL = `(() => {
     return target !== null && at !== document.body && at !== document.documentElement &&
       (within(at, target) || within(target, at));
   };
+  // A native disclosure or popover the click toggled, after its dispatch: the details holding the
+  // target, or the popover the target controls. Toggles elsewhere are not the click's.
+  const onToggle = (event) => {
+    const toggled = event.composedPath()[0];
+    if (target !== null && (within(target, toggled) || toggled === target.popoverTargetElement ||
+        toggled === target.commandForElement))
+      note("dom");
+  };
   const onInput = (event) => related(event) && note("input");
   const onFocus = (event) => related(event) && note("focus");
   // A link or form the click activated starts a user-initiated navigation; a handler's own
@@ -88,7 +96,8 @@ const INSTALL = `(() => {
   const onNavigate = (event) => (event.userInitiated || handled()) && note("navigation");
   const navigation = window.navigation;
   const listeners = [[document, "input", onInput], [document, "change", onInput],
-    [document, "focusin", onFocus], ...[...types].map((type) => [window, type, begin])];
+    [document, "focusin", onFocus], [document, "beforetoggle", onToggle],
+    [document, "toggle", onToggle], ...[...types].map((type) => [window, type, begin])];
   for (const [on, type, listener] of listeners) on.addEventListener(type, listener, true);
   navigation?.addEventListener("navigate", onNavigate);
   const deepest = (x, y) => {

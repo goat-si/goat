@@ -340,3 +340,22 @@ it("credits a click's synchronous change to a sibling's attribute or text", () =
       evidence: expect.arrayContaining(["dom"]),
     });
   }));
+
+it("confirms native disclosure and popover toggles, also with the trigger already focused", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<details id="d"><summary id="s">more</summary>hidden text</details>
+       <button id="p" popovertarget="pop">menu</button><div id="pop" popover>items</div>
+       <p id="still">static</p><details id="other"><summary>other</summary>x</details><script>
+         setInterval(() => { other.open = !other.open; }, 1);
+       </script>`,
+    );
+    for (const selector of ["#s", "#s", "#p", "#p"])
+      await expect(ServerBrowserPage.click(page, { selector })).resolves.toMatchObject({
+        effect: "confirmed",
+      });
+    // The other details toggles on its own meanwhile; a click on plain text is not credited.
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
