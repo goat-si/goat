@@ -584,24 +584,30 @@ ToolAdmission deduplicates it like any keyed write and changed arguments get a d
 program may not pass its own `clientRequestId` to a call, so each key is first used by its
 step.
 `mcp_eval_runs` holds the run and its program; `mcp_eval_steps` holds each step's outcome by
-`(eval_run_id, step_coord)` and the caller's grant when that step ran, recorded before it runs.
+`(eval_run_id, step_coord)` and the grant that call ran under, computed from its arguments as
+ToolAdmission computes it (a role launch's role profile and a forwarded ceiling included) and
+recorded before it runs.
 
 A retry with the same `clientRequestId`, or `resume` with an `evalRunId`, continues the run:
 
 - Only the caller that started a run sees it, and only with the same program and bindings
-  (`conflict`, `eval_program_changed` otherwise). A stored step or result is returned only while
-  the caller holds every grant a recorded step ran under, checked as ToolAdmission checks a
-  replay: modes, goatclaw profile and scopes, with a client's scopes reauthorized live. A caller
-  that lost any of it gets `permission_denied` and nothing stored.
+  (`conflict`, `eval_program_changed` otherwise). A stored step is returned only while the
+  caller holds the grant that step ran under, recomputed for the same arguments and checked as
+  ToolAdmission checks a replay, with a client's scopes reauthorized live; a caller that lost it
+  gets `permission_denied`. A completed run is answered by evaluating the program again from the
+  journal, so every step passes that check.
 - Every outcome the program's control flow saw is journaled, refusals caught by `try` included,
   and replays as recorded, so a resumed run takes the same branches. A write whose failure does
   not prove what happened (ToolAdmission would settle it unknown, as for `host_unavailable`)
   stops the run with `unknown_outcome` even inside `try`. Only a failure that stopped the program
-  and proves nothing ran is dropped, so resume tries it again. A step whose
-  arguments no longer match its record is `conflict` (`eval_step_changed`).
-- A read that started and never finished runs again. A keyed write that did is sent again with
-  its derived key, but only within the 24 hours ToolAdmission keeps that key; later, and for any
-  other write, the run stops with `unknown_outcome` naming the read that settles it.
+  and proves nothing ran is dropped, so resume tries it again. A step whose arguments no longer
+  match its record is `conflict` (`eval_step_changed`).
+- A read that started and never finished runs again. A keyed write that did is never sent
+  again: its outcome is read from ToolAdmission's reservation for its derived key, under the
+  same grant check. No reservation within 24 hours of the step proves nothing ran, because its
+  key was first used there and only completed reservations expire, so the step runs. Every
+  other case, and any other write that started, stops the run with `unknown_outcome` naming the
+  read that settles it.
 - `needs_human` ends the run. The person's action finishes that step through the handoff's own
   continuation, and calling the step again could start a second flow or apply a change twice.
   Resume returns the handoff's state: the same `needs_human` while it is pending, its settled
