@@ -203,7 +203,7 @@ it.effect("goat_call returns the path's signature with arguments it refuses befo
       },
     };
     // An undeclared key, and a declared one whose value does not decode.
-    expect(yield* call({ threadId: "t1", tail: 5 })).toMatchObject(expected);
+    expect(yield* call({ threadId: "t1", newestFirst: true })).toMatchObject(expected);
     expect(yield* call({ threadId: 5 })).toMatchObject(expected);
 
     // An accepted alias is no undeclared key, so the handler's own refusal keeps its details.
