@@ -40,6 +40,21 @@ export type Engine =
   | { readonly kind: "helper"; readonly bundle: HelperBundle }
   | { readonly kind: "embedded"; readonly driverPath: string };
 
+/** The driver a packaged build ships, or the one a development checkout names. */
+export const bundledDriverPath = (environment: {
+  readonly isPackaged: boolean;
+  readonly resourcesPath: string;
+  readonly platform: NodeJS.Platform;
+  readonly path: { readonly join: (...parts: ReadonlyArray<string>) => string };
+}) =>
+  environment.isPackaged
+    ? environment.path.join(
+        environment.resourcesPath,
+        "cua-driver",
+        environment.platform === "win32" ? "cua-driver.exe" : "cua-driver",
+      )
+    : process.env.GOAT_CUA_DRIVER_PATH?.trim();
+
 /**
  * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
  * one process no agent ever holds, so its manifest admits only GOAT, the window it reads.

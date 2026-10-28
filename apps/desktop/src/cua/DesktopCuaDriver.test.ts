@@ -106,9 +106,11 @@ describe("DesktopCuaDriver", () => {
         assert.equal((yield* test.next).status, "stopped");
         yield* test.request("after-update");
         assert.equal((yield* test.next).status, "ready");
+        // GOAT's own check before the first agent start, then each agent's helper.
         assert.deepEqual(
           test.helperLaunches.map(({ driverPath }) => driverPath),
           [
+            HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
             HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
             HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
           ],
@@ -660,7 +662,11 @@ describe("DesktopCuaDriver when the helper cannot list apps", () => {
         });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "unavailable");
-        assert.isEmpty(test.helperLaunches);
+        // Only GOAT's own readiness check ran the helper; no agent's helper started.
+        assert.deepEqual(
+          test.helperLaunches.map(({ verify }) => verify),
+          [true],
+        );
         assert.isEmpty(test.constructors);
       }),
     ),

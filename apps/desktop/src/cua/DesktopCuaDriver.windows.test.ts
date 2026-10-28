@@ -55,12 +55,13 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
         const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "ready");
+        const started = test.counts();
         yield* test.listApps([{ bundle_id: "com.example.late", name: "Late" }]);
         yield* test.approveApps(["com.example.late"]);
         assert.include(test.manifest(), "com.example.late");
         assert.isTrue(test.helperLaunches[0]?.direct);
         yield* test.approveApps(["COM.EXAMPLE.LATE"]);
-        assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+        assert.deepEqual(test.counts(), started);
         assert.deepEqual(test.helperAppListings, [HELPER_ID, HELPER_ID]);
       }),
     ),
@@ -74,6 +75,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
           const test = yield* fixture({ platform, helper: { granted: true } });
           yield* test.request("agent");
           assert.equal((yield* test.next).status, "ready");
+          const started = test.counts();
           yield* test.approveApps(["com.example.not-running"]);
           yield* test.listApps([
             { bundle_id: "com.apple.Passwords", name: "Passwords" },
@@ -82,7 +84,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
           yield* test.approveApps(["com.apple.Passwords", "codes.t3.host-test"]);
           assert.notInclude(test.manifest(), "com.apple.Passwords");
           assert.notInclude(test.manifest(), "codes.t3.host-test");
-          assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+          assert.deepEqual(test.counts(), started);
           // With no host an approval must neither list nor start one.
           yield* test.restart;
           yield* test.next;

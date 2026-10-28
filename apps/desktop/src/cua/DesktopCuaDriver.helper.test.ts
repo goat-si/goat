@@ -38,12 +38,13 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.deepEqual(test.helperProbes, [
             { bundleId: "si.goat.desktop.dev.computer-use", prompt: true },
           ]);
+          // GOAT's own readiness check, then the agent's helper.
           assert.deepEqual(
             test.helperLaunches.map(({ bundleId }) => bundleId),
-            ["si.goat.desktop.dev.computer-use"],
+            ["si.goat.desktop.dev.computer-use", "si.goat.desktop.dev.computer-use"],
           );
           assert.include(
-            test.launches[0]?.hostBundleIds ?? [],
+            test.launches.at(-1)?.hostBundleIds ?? [],
             "com.t3tools.t3code.dev.myworktree",
           );
         }),
@@ -68,19 +69,23 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         );
         assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: true }]);
         assert.isEmpty(test.constructors);
+        // GOAT's own readiness check, then the agent's helper, both the helper's.
         assert.deepEqual(
-          test.helperLaunches.map(({ bundleId, driverPath }) => ({ bundleId, driverPath })),
-          [
-            {
-              bundleId: HELPER_ID,
-              driverPath: `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
-            },
-          ],
+          test.helperLaunches.map(({ bundleId, driverPath, verify }) => ({
+            bundleId,
+            driverPath,
+            verify,
+          })),
+          [true, false].map((verify) => ({
+            bundleId: HELPER_ID,
+            driverPath: `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
+            verify,
+          })),
         );
-        assert.deepEqual(test.helperLaunches[0]?.environment, privacyEnvironment);
-        assert.deepEqual(test.launches[0]?.scope, "agents");
-        assert.include(test.launches[0]?.hostBundleIds ?? [], HELPER_ID);
-        assert.include(test.launches[0]?.hostBundleIds ?? [], "codes.t3.host-test");
+        assert.deepEqual(test.helperLaunches.at(-1)?.environment, privacyEnvironment);
+        assert.deepEqual(test.launches.at(-1)?.scope, "agents");
+        assert.include(test.launches.at(-1)?.hostBundleIds ?? [], HELPER_ID);
+        assert.include(test.launches.at(-1)?.hostBundleIds ?? [], "codes.t3.host-test");
       }),
     ),
   );
@@ -232,10 +237,10 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           yield* test.request("agent");
           assert.equal((yield* test.next).status, "ready");
           const started = test.readiness.at(-1);
-          // Running, but nothing has read a window yet.
+          // Running, and GOAT's own check before the start already read a window through it.
           assert.equal(started?.readiness.helper, "authenticated");
-          assert.equal(started?.readiness.capture, "pending");
-          assert.isFalse(started ? computerUseReady(started.readiness) : true);
+          assert.equal(started?.readiness.capture, "ready");
+          assert.isTrue(started ? computerUseReady(started.readiness) : false);
 
           assert.isTrue((yield* test.verify).verified);
           const checked = test.readiness.at(-1);
@@ -445,9 +450,10 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.deepEqual(report.status === "ready" ? report.mcp.args.slice(0, 1) : [], ["--mcp"]);
         assert.isUndefined(report.status === "ready" ? report.mcp.socketPath : "missing");
         yield* test.verify;
+        // GOAT's own check before the agent, the agent's helper, then the person's check.
         assert.deepEqual(
           test.helperLaunches.map(({ direct }) => direct),
-          [true, true],
+          [true, true, true],
         );
       }),
     ),
