@@ -264,7 +264,8 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   return { capability: "available", reason: `Uses X display ${display}.`, display, environment };
 }
 
-export const MAC_GRANTS_REASON = "Accessibility and Screen Recording must be granted at this Mac.";
+export const MAC_GRANTS_REASON =
+  "Accessibility and Screen Recording are not checked yet. GOAT checks them at this Mac when computer use starts.";
 
 /**
  * macOS grants Accessibility and Screen Recording to the app at the top of the driver's launch
@@ -329,6 +330,25 @@ export function parseMacGrants(structuredJson: string | undefined): MacGrants | 
   } catch {
     return null;
   }
+}
+
+/**
+ * The grants a desktop helper last reported, which it read itself at its last start or check;
+ * null while either is unread. Asked and still off counts as off.
+ */
+export function reportedMacGrants(
+  grants: { readonly accessibility: string; readonly screenCapture: string } | undefined,
+): MacGrants | null {
+  if (
+    grants === undefined ||
+    grants.accessibility === "unknown" ||
+    grants.screenCapture === "unknown"
+  )
+    return null;
+  return {
+    accessibility: grants.accessibility === "granted",
+    screenRecording: grants.screenCapture === "granted",
+  };
 }
 
 /** A Mac whose console this user owns is available only once the driver reports both grants. */

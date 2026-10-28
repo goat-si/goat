@@ -243,7 +243,10 @@ describe("ComputerUsePrimitiveChannel", () => {
           }),
           authority.attachmentGeneration,
         );
-        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+        const idle = yield* Effect.flip(t.request());
+        assert.equal(idle.reason, "desktop_not_ready");
+        // Waiting cannot bring back a control that is not live; the agent is told how to ask.
+        assert.include(idle.nextStep, 'goat_call {path:"computer_use.request"}');
 
         yield* t.setState({ _tag: "active" });
         const next = { ...authority, attachmentGeneration: "attachment:two" };
