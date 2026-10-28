@@ -76,7 +76,7 @@ const bounded = (value: number | undefined, fallback: number, low: number, high:
     : fallback;
 
 /** A feed's items: the response itself when it is an array, else its largest nested array. */
-export const itemsOf = (json: unknown, depth = 3): ReadonlyArray<unknown> => {
+const itemsOf = (json: unknown, depth = 3): ReadonlyArray<unknown> => {
   if (Array.isArray(json)) return json;
   if (depth === 0 || typeof json !== "object" || json === null) return [];
   let largest: ReadonlyArray<unknown> = [];
