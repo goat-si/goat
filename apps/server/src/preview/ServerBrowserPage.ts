@@ -38,6 +38,13 @@ import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffec
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
+  boundedRead,
+  deadlineExpiry,
+  probeAfter,
+  probeBefore,
+  typedEffect,
+} from "./typedEffect.ts";
+import {
   narrowTree,
   resetSnapshotDiff,
   snapshotOptionsResult,
@@ -832,41 +839,28 @@ export const type = async (
         "The target is not an enabled text field, so no text was typed.",
       );
     }
-    // A text field's value and selection just before the input predict what it should hold after.
+    // Evidence reads never outlast the action: a page that stops answering leaves the input
+    // delivered and unverifiable, and frees the tab's queue.
+    const { expired, clear } = deadlineExpiry(deadline);
+    // A text field's value and selection just before the input predict what it should hold after;
+    // a listener notes whether this input's own trusted insert reaches the field.
     const before =
       handle === null || input.text === ""
         ? undefined
-        : await handle.evaluate((element) => {
-            const field = element as unknown as {
-              readonly value?: unknown;
-              readonly selectionStart?: number | null;
-              readonly selectionEnd?: number | null;
-            };
-            return typeof field.value === "string" &&
-              typeof field.selectionStart === "number" &&
-              typeof field.selectionEnd === "number"
-              ? { value: field.value, start: field.selectionStart, end: field.selectionEnd }
-              : undefined;
-          });
+        : await boundedRead(probeBefore(handle), expired);
     remaining(deadline);
     gate();
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
       if (input.clear) await page.keyboard.press("Delete");
+      clear();
       return undefined;
     }
     await page.keyboard.insertText(input.text);
-    if (!before || !handle) return undefined;
-    const expected =
-      before.value.slice(0, before.start) + input.text + before.value.slice(before.end);
-    const after = await handle
-      .evaluate((element) => (element as unknown as { readonly value?: unknown }).value)
-      .catch(() => undefined);
-    // Confirmed only when the field now holds exactly what this text makes of it, and changed.
-    return after === expected && after !== before.value
-      ? { effect: "confirmed" as const, evidence: ["value"] as const }
-      : undefined;
+    const after = before && handle ? await boundedRead(probeAfter(handle), expired) : undefined;
+    clear();
+    return typedEffect(before, input.text, after);
   } finally {
     void handle?.dispose().catch(constVoid);
   }
