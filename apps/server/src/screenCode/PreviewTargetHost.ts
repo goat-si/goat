@@ -51,9 +51,9 @@ const stringField = (record: Record<string, unknown>, key: string) =>
   typeof record[key] === "string" ? (record[key] as string) : undefined;
 /** A wait without its own timeout gets the browser's usual one. */
 const DEFAULT_WAIT_MS = 15_000;
-// A wait ends this long before its cell, so its answer arrives and it never holds the tab's queue
-// into the next cell.
-const WAIT_ANSWER_MARGIN_MS = 500;
+// What a wait leaves of its cell: the browser answers a wait that never started 500 ms after the
+// wait's own deadline (CaptureLock.answerCall), and that answer must still travel back.
+const WAIT_ANSWER_RESERVE_MS = 1_500;
 
 interface BoundTarget {
   readonly ref: ScreenTargetRef;
@@ -711,6 +711,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const now = yield* Clock.currentTimeMillis;
         const requested =
           typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : DEFAULT_WAIT_MS;
+        const budgetMs = Math.floor(call.deadlineMillis - now - WAIT_ANSWER_RESERVE_MS);
+        // Too little of the cell is left for any answer to arrive, so nothing is sent.
+        if (budgetMs < 1)
+          return yield* Effect.fail(
+            fail(
+              "deadline",
+              "Too little of this cell is left for a wait to answer; wait in a new cell.",
+            ),
+          );
+        const waitMs = Math.max(
+          1,
+          Math.floor(Math.min(requested, context.limits.cellWallMs, budgetMs)),
+        );
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
@@ -718,19 +731,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             input,
             // A wait only reads, so it watches whatever document the tab holds, on any origin.
             exact: exact(bound.tab, false),
-            timeoutMs: Math.max(
-              1,
-              Math.min(
-                requested,
-                context.limits.cellWallMs,
-                call.deadlineMillis - now - WAIT_ANSWER_MARGIN_MS,
-              ),
-            ),
+            timeoutMs: waitMs,
           })
           .pipe(Effect.result);
-        // A condition that did not come true in time is an answer the cell can branch on; any
-        // other failure (a bad selector, a lost tab) fails the call like an action would.
-        if (waited._tag === "Failure" && waited.failure._tag !== "PreviewAutomationTimeoutError")
+        // Only the browser saying the condition did not hold in time is an answer to branch on; the
+        // broker's own timeout (the host never answered) fails the call like a lost tab.
+        const unmet =
+          waited._tag === "Failure" &&
+          waited.failure._tag === "PreviewAutomationTimeoutError" &&
+          waited.failure.remoteTag === "PreviewAutomationTimeoutError";
+        if (waited._tag === "Failure" && !unmet)
           return yield* Effect.fail(previewTargetFailure(waited.failure, "waitFor"));
         const waitStatus = waited._tag === "Success" ? "met" : "timeout";
         return {

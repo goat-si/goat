@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import type {
   EnvironmentId,
@@ -53,7 +54,7 @@ const call = (callId: number): ScreenHostCall => ({
   targetRef: tab,
   method: "click",
   args: {},
-  deadlineMillis: 1,
+  deadlineMillis: 60_000,
 });
 
 it.effect("a cut before the first host call refuses that call", () =>
@@ -584,4 +585,115 @@ it.effect("a batch group whose member is refused on admission sends none of the 
     ).toEqual(["not_run", "text_limit", "not_run"]);
     expect(sent).toBe(0);
   }),
+);
+
+it.effect(
+  "a tab wait stuck behind its tab's other call, its authorization or an unanswering browser still answers inside its cell",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const holding = yield* Deferred.make<void>();
+      const never = yield* Deferred.make<void>();
+      const interrupted: string[] = [];
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: (request) =>
+          request.method === "click"
+            ? Deferred.succeed(holding, undefined).pipe(
+                Effect.andThen(Deferred.await(never)),
+                Effect.as({ category: "confirmed" as const, evidence: ["clicked"] }),
+              )
+            : request.method === "observe"
+              ? Effect.succeed({ category: "confirmed" as const, evidence: ["seen"] })
+              : Effect.never.pipe(
+                  Effect.onInterrupt(() =>
+                    Effect.sync(() => interrupted.push(request.targetRef?.id ?? "")),
+                  ),
+                ),
+      });
+      const target = (id: string, kind: "tab" | "app" = "tab") => ({ ...tab, id, kind });
+      const inCell = (
+        cellId: string,
+        callId: number,
+        method: ScreenHostCall["method"],
+        id: string,
+        deadlineMillis: number,
+        reauthorize: () => Effect.Effect<void> = () => Effect.void,
+        kind: "tab" | "app" = "tab",
+      ) =>
+        bridge.handle(
+          { ...call(callId), cellId, method, targetRef: target(id, kind), deadlineMillis },
+          { ...context(reauthorize), cellId },
+        );
+      const receipt = (cellId: string) => bridge.takeCellImagesNow("r", "t", cellId);
+
+      // Gate: another call on the same tab holds it, so the wait never reaches the host.
+      const click = yield* inCell("gate", 1, "click", "a", 60_000).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(holding);
+      const gated = yield* inCell("gate", 2, "wait_for", "a", 1_000).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("899 millis");
+      expect(gated.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      // Answered at the boundary itself; a missing race fails here instead of hanging.
+      expect(gated.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(gated))?.error).toMatchObject({
+        code: "deadline",
+        effectStarted: false,
+      });
+      expect(click.pollUnsafe()).toBeUndefined();
+      const gateWait = receipt("gate").journal.find((entry) => entry.receipt.callId === 2);
+      expect(gateWait?.receipt).toMatchObject({ dispatched: false, evidence: [] });
+
+      // Authorization that never answers (the clock is at 900 ms now).
+      const authorizing = yield* inCell("auth", 1, "wait_for", "b", 2_900, () => Effect.never).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("1899 millis");
+      expect(authorizing.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      expect(authorizing.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(authorizing))?.error?.code).toBe("deadline");
+      expect(receipt("auth").journal[0]?.receipt.dispatched).toBe(false);
+
+      // A browser that never answers, when the broker's own timer has not fired (the clock is at 2,800 ms).
+      const unanswered = yield* inCell("browser", 1, "wait_for", "c", 5_800).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("2899 millis");
+      expect(unanswered.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      expect(unanswered.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(unanswered))?.error).toMatchObject({
+        code: "deadline",
+        effectStarted: false,
+      });
+      expect(interrupted).toEqual(["c"]);
+      // A read that failed does not stop the cell, and gives back its effect count.
+      expect((yield* inCell("browser", 2, "observe", "c", 60_000))?.outcome).toBe("ok");
+      const browser = receipt("browser");
+      expect(browser.journal[0]?.receipt).toMatchObject({
+        dispatched: false,
+        evidence: ["wait_deadline:after_dispatch"],
+      });
+      expect(browser.effectsStarted).toBe(1);
+
+      // An app wait keeps its own driver timing; the bridge does not race it.
+      const appWait = yield* inCell(
+        "app",
+        1,
+        "wait_for",
+        "d",
+        6_700,
+        () => Effect.void,
+        "app",
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust("2000 millis");
+      expect(appWait.pollUnsafe()).toBeUndefined();
+      yield* Fiber.interrupt(appWait);
+      yield* Fiber.interrupt(click);
+    }),
 );

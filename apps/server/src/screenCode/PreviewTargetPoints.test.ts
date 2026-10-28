@@ -50,7 +50,7 @@ const call = (
   callId,
   method,
   args: [args],
-  deadlineMillis: 1000,
+  deadlineMillis: 10_000,
   ...(targetRef ? { targetRef } : {}),
 });
 
@@ -151,6 +151,7 @@ it.effect(
       waitFailure = new PreviewAutomationTimeoutError({
         ...actionErrorContext,
         operation: "waitFor",
+        remoteTag: "PreviewAutomationTimeoutError",
       });
       const unmet = yield* host.dispatch(call("wait_for", 7, { text: "Done" }, ref), context);
       expect(unmet).toMatchObject({ value: { status: "timeout" }, category: "unverifiable" });
