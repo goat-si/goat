@@ -128,3 +128,22 @@ it.effect("asks a replacement driver child again before it gets a scoped batch",
     assert.equal(yield* h.driverQueued, 0);
   }),
 );
+
+it.effect("scopes an unscoped batch from the tool list the provider asked the same child for", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push(active(undefined, ["com.apple.calculator"]));
+    yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }));
+    assert.equal((yield* h.nextToDriver).method, "tools/list");
+    yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: toolList(true) }));
+    assert.equal((yield* h.nextToProvider).id, 1);
+    // No probe: that child already said its run_script keeps an app_scope.
+    yield* h.send(call(2, "run_script", { script: "click()" }));
+    const scoped = yield* h.nextToDriver;
+    assert.equal(scoped.id, 2);
+    assert.deepEqual((scoped.params as { arguments: unknown }).arguments, {
+      script: "click()",
+      app_scope: scope(["com.apple.calculator"], "background"),
+    });
+  }),
+);

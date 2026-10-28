@@ -32,14 +32,22 @@ const acceptsAppScope = (toolList: unknown, name: string): boolean => {
 
 /** grantApps: the grant's apps as it spells them, undefined for the whole screen. */
 export const makeProxyBatchScope = (
-  listTools: (send: Send) => Effect.Effect<unknown>,
+  handshake: {
+    readonly listTools: (send: Send) => Effect.Effect<unknown>;
+    readonly remember: (method: string, message: Envelope) => void;
+  },
   grantApps: () => ReadonlyArray<string> | undefined,
   current: () => Running | undefined,
 ) => {
-  /** Each child's own tool list, once it gave one. */
+  /** Each child's own tool list, once it gave one: to the provider's tools/list or a probe. */
   const listed = new WeakMap<Running, unknown>();
+  /** A handshake answer from a child, kept for the handshake and, for tools/list, for that child. */
+  const remember = (child: Running, method: string, message: Envelope) => {
+    handshake.remember(method, message);
+    if (method === "tools/list" && message.result !== undefined) listed.set(child, message.result);
+  };
   /** The call as the driver should get it, or the proxy's refusal (notSent while it has no child). */
-  return Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
+  const scope = Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
     id: JsonRpcId,
     line: string,
     message: Envelope,
@@ -59,7 +67,7 @@ export const makeProxyBatchScope = (
     // Only a batch that names a scope waits for the child's tool list; one GOAT would scope gets
     // the scope once this child has listed it, and is refused as before until then.
     if (named && !listed.has(child)) {
-      const tools = yield* listTools(child.driver.send);
+      const tools = yield* handshake.listTools(child.driver.send);
       if (tools !== undefined) listed.set(child, tools);
       // The answer speaks for the child that gave it only.
       if (current() !== child) return { refused: notSent() };
@@ -84,4 +92,5 @@ export const makeProxyBatchScope = (
       } as Envelope,
     };
   });
+  return { scope, remember };
 };

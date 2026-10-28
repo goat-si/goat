@@ -139,7 +139,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const currentChild = () => lifecycle.current;
-  const scopeBatch = makeProxyBatchScope(handshakeAnswers.listTools, () => grantApps, currentChild);
+  const batches = makeProxyBatchScope(handshakeAnswers, () => grantApps, currentChild);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -353,7 +353,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             );
           if (verdict === "proof") proven = current;
         } else {
-          handshakeAnswers.remember(request.method, message);
+          batches.remember(current, request.method, message);
           outstanding.delete(key);
         }
       }
@@ -735,7 +735,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      const batch = yield* scopeBatch(id, line, message, () => notSent(id));
+      const batch = yield* batches.scope(id, line, message, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
