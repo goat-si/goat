@@ -6,6 +6,7 @@ import * as M from "@goat/contracts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Worker from "./MemoryWorker.ts";
+import { MEMORY_GENERATION_REPORTS_MAX } from "./store/Reports.ts";
 import {
   id,
   environmentId,
@@ -19,6 +20,26 @@ import {
 } from "./MemoryWorker.testkit.ts";
 
 describe("MemoryWorker summary quality", () => {
+  it.effect("generation diagnostics keep one row per memory and never fill the report budget", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      for (let index = 0; index < 150; index++)
+        yield* sql`INSERT INTO memory_report_outbox
+          (report_id,space,memory_id,operation_id,resolution_id,attempt_id,resolving_environment_id,outcome,state,failure_code,created_at,report_kind,report_approved,attempts_known)
+          VALUES (${`synthetic-${index}`},${space},${id(20000 + index)},${id(30000 + index)},NULL,${id(30000 + index)},${environmentId},'failed','pending','generation_failed',${index},'consolidate',1,1)`;
+      yield* (yield* Worker.MemoryWorker).sweepDue();
+      const rows = yield* sql<{
+        memory_id: string;
+      }>`SELECT memory_id FROM memory_report_outbox WHERE report_kind IN ('summary','consolidate') AND state!='delivered' ORDER BY created_at DESC`;
+      assert.strictEqual(rows.length, MEMORY_GENERATION_REPORTS_MAX);
+      assert.strictEqual(
+        rows[0]?.memory_id,
+        Service.memoryStableUuid(`${environmentId}:${threadId}:summary`),
+      );
+    }).pipe(Effect.provide(live(true))),
+  );
   it.effect("forgets a summary whose consolidation reread the same run", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
