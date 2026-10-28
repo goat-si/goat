@@ -370,6 +370,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               value: { targetRef: ref, tab },
               category: "confirmed" as const,
               evidence: ["New preview tab opened"],
+              outcome: { dispatch: "confirmed", effect: "confirmed" } as const,
             };
           }),
         );

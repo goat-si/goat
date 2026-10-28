@@ -478,3 +478,36 @@ it.effect(
       }
     }),
 );
+
+it.effect(
+  "tab input a deadline collects unsettled still reports dispatch and effect as unknown",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const started = yield* Deferred.make<void>();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      yield* bridge
+        .handle(
+          call(1),
+          context(() => Effect.void),
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      yield* bridge
+        .handle(
+          call(2),
+          context(() => Effect.void),
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      bridge.markUnawaitedNow("r", "t", "c", [1, 2]);
+      const journal = bridge.takeCellImagesNow("r", "t", "c").journal;
+      expect(journal.map((entry) => [entry.receipt.dispatched, entry.receipt.outcome])).toEqual([
+        [true, { dispatch: "unknown", effect: "unknown" }],
+        [false, { dispatch: "unknown", effect: "unknown" }],
+      ]);
+      bridge.cutCellNow("r", "t", "c");
+    }),
+);

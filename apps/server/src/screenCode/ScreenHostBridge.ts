@@ -227,7 +227,7 @@ export class ScreenHostBridge {
         : [];
     // Tab input reports its dispatch and effect apart, on failures as on success.
     const axes = (dispatch: ScreenActionOutcome["dispatch"]) =>
-      call.targetRef?.kind === "tab" && !isScreenRead(call.method)
+      (call.targetRef?.kind === "tab" || call.method === "open_tab") && !isScreenRead(call.method)
         ? { outcome: { dispatch, effect: "unknown" as const } }
         : {};
     const deny = (error: ScreenRunError) => {
@@ -317,7 +317,8 @@ export class ScreenHostBridge {
         this.invalidTargets.get(turn)?.has(call.targetRef.id))
     )
       return deny(failure("stale_reference", call.callId));
-    const admittedIndex = record("unverifiable", "admitted", false);
+    // Until the call settles, neither axis is known; a deadline may collect it as it stands.
+    const admittedIndex = record("unverifiable", "admitted", false, [], undefined, axes("unknown"));
     let callDispatched = false;
     const settle = (
       category: ScreenJournalEntry["receipt"]["category"],
