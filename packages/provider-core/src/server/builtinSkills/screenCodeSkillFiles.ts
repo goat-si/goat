@@ -26,7 +26,7 @@ Batch an action and its observation in one cell when the next step does not depe
 
 Use URLs supplied by the user or found on the page; do not guess URLs beyond well-known sites. Prefer the site's search and filters; use a web archive last. Evaluate only read-only expressions with a known exact selector, never cookies, tokens, storage or site-internal APIs. Fill passwords only through \`fill_secret\`. Embed a saved screenshot in your reply as evidence.
 
-For an app window, \`await app.observe()\` reads its accessibility tree and \`await app.screenshot()\` its pixels; a screenshot keeps the tree's element refs while the app keeps that tree. Every app read returns the full tree with every element (a requested diff or query comes back \`mode:"full"\`), and it retires earlier element refs, so act on the numbers of the latest read. When the desktop refuses a call, its error and receipt carry \`refused\`, \`detail\` and, when known, \`app\`; nothing was sent, and a permission refusal needs a person before you retry.
+For an app window, \`await app.observe()\` reads its accessibility tree and \`await app.screenshot()\` its pixels; a screenshot keeps the tree's element refs while the app keeps that tree. Every app read comes back \`mode:"full"\` (a requested diff or query too; check \`complete\` and \`truncated\`), and it retires earlier element refs, so act on the numbers of the latest read. When the desktop refuses a call, its error and receipt carry \`refused\`, \`detail\` and, when known, \`app\`; nothing was sent, and a permission refusal needs a person before you retry.
 
 ## Desktop beside the person
 
