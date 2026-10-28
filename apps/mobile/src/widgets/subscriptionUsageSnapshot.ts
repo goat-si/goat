@@ -51,8 +51,13 @@ function subscriptionUsageProps(
   maxWindowsPerProvider: number,
 ): SubscriptionUsageSnapshot {
   const pools = collectLimitPools(accounts, now);
+  // Excluded accounts (paused, reauth, a routed login) never set freshness or expiry.
   const checked = accounts
-    .filter((account) => account.driver === "codex" || account.driver === "claudeAgent")
+    .filter(
+      (account) =>
+        (account.driver === "codex" || account.driver === "claudeAgent") &&
+        account.aggregated !== false,
+    )
     .map((account) => Date.parse(account.limits.checkedAt));
   return {
     checkedAt: checked.length > 0 && checked.every(Number.isFinite) ? Math.min(...checked) : 0,
@@ -72,7 +77,11 @@ function subscriptionUsageProps(
             expiresAt: 0,
             totalWindows: 0,
           };
-        const checkedAt = Math.min(...pool.accounts.map((a) => Date.parse(a.limits.checkedAt)));
+        const checkedAt = Math.min(
+          ...pool.accounts
+            .filter((account) => account.aggregated !== false)
+            .map((account) => Date.parse(account.limits.checkedAt)),
+        );
         const expiresAt = Math.min(
           checkedAt + SNAPSHOT_MAX_AGE,
           ...pool.windows.flatMap((window) => window.resets.map((reset) => reset.at)),

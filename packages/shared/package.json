@@ -483,6 +483,14 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./quotaVerdict": {
+      "types": "./src/quotaVerdict.ts",
+      "import": "./src/quotaVerdict.ts"
+    },
+    "./usageLimitsOpenCodex": {
+      "types": "./src/usageLimitsOpenCodex.ts",
+      "import": "./src/usageLimitsOpenCodex.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

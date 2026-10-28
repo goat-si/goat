@@ -362,6 +362,98 @@ describe("Fleet OpenCodex quota", () => {
     const result = fleetQuota([row("child", [unverified, quota("own-codex", 76)], pool())]);
     expect(result.quotas.map((q) => [q.label, q.peak])).toEqual([
       ["OpenCodex pool", 43],
+      ["OpenCodex pool", null],
+      ["own-codex", 76],
+    ]);
+  });
+});
+
+describe("Fleet OpenCodex pool labels", () => {
+  const routedUnavailable = (version?: string): HostStatusQuota => ({
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    displayName: "Codex",
+    fromCache: false,
+    limits: {
+      checkedAt: AT,
+      windows: [],
+      unavailable: {
+        reason: "probeFailed",
+        message: "OpenCodex pool unavailable (OpenCodex 2.86.0): it answered HTTP 401.",
+      },
+      quotaPoolRoute: {
+        provider: "openai",
+        ...(version === undefined ? {} : { openCodexVersion: version }),
+      },
+    },
+  });
+
+  it("names what +N hides", () => {
+    const base = pool();
+    const result = fleetQuota(
+      [
+        row(
+          "home",
+          [],
+          pool("home", {
+            providers: [...base.providers, { ...base.providers[0]!, provider: "anthropic" }],
+          }),
+        ),
+      ],
+      2,
+    );
+    expect(result.quotas[0]).toMatchObject({ hidden: 4, hiddenLabel: "+2 windows · 2 accounts" });
+  });
+
+  it("shows an unreadable pool on an old OpenCodex instead of the login's own quota", () => {
+    const typed = fleetQuota([row("studio", [routedUnavailable("2.86.0"), quota("direct", 40)])]);
+    expect(typed.quotas.map((q) => [q.label, q.status ?? null, q.peak])).toEqual([
+      ["OpenCodex pool", "pool unavailable (OpenCodex 2.86.0)", null],
+      ["direct", null, 40],
+    ]);
+    expect(typed.quotas[0]?.detail).toContain("it answered HTTP 401");
+    const messageOnly = fleetQuota([row("studio", [routedUnavailable()])]);
+    expect(messageOnly.quotas[0]?.status).toBe("pool unavailable");
+  });
+
+  it("lists pool-wide blocks in the detail without a percentage", () => {
+    const base = pool();
+    const blocked = pool("home", {
+      providers: [
+        {
+          ...base.providers[0]!,
+          pooled: {
+            windows: [
+              ...base.providers[0]!.pooled.windows,
+              {
+                id: "availability",
+                kind: "custom",
+                label: "Availability",
+                source: "measured",
+                observedAt: AT,
+                exhausted: true,
+                resetsAt: LATER,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = fleetQuota([row("home", [], blocked)]).quotas[0]!;
+    expect(result.windows.map((w) => w.usedPercent)).toEqual([43, 21]);
+    expect(result.detail).toContain("openai: all accounts blocked until " + LATER);
+  });
+});
+
+describe("Fleet route evidence", () => {
+  it("never guesses routing on a host that marks its routed instances", () => {
+    const base = row("studio", [quota("own-codex", 76)], pool());
+    const marked = {
+      ...base,
+      entry: { ...base.entry!, metrics: { ...base.entry!.metrics!, quotaRouteMarkers: true } },
+    };
+    expect(fleetQuota([marked]).quotas.map((q) => [q.label, q.peak])).toEqual([
+      ["OpenCodex pool", 43],
       ["own-codex", 76],
     ]);
   });

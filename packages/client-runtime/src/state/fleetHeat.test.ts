@@ -386,3 +386,60 @@ describe("fleetHostStatusNeeded", () => {
     expect(needed({ environmentId: primary })).toBe(true);
   });
 });
+
+describe("fleetHeatSignals quota verdicts", () => {
+  const at = Date.parse("2026-10-20T01:00:00.000Z");
+  const quota = (limits: Record<string, unknown>) => ({
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    displayName: "Codex",
+    fromCache: false,
+    limits: { checkedAt: "2026-10-20T00:59:00.000Z", windows: [], ...limits },
+  });
+  const future = "2099-01-01T00:00:00.000Z";
+
+  it("ignores stale, scoped and reset readings, and counts an unscoped pool block as full", () => {
+    const read = (limits: Record<string, unknown>) =>
+      fleetHeatSignals(metrics({ sampledAt: at, quotas: [quota(limits) as never] })).quota;
+    expect(
+      read({
+        checkedAt: "2026-10-20T00:00:00.000Z",
+        windows: [{ id: "w", kind: "weekly", label: "Weekly", usedPercent: 96, resetsAt: future }],
+      }),
+    ).toBeNull();
+    expect(
+      read({
+        windows: [
+          {
+            id: "o",
+            kind: "weekly",
+            label: "Opus weekly",
+            usedPercent: 100,
+            scopeModel: "family:opus",
+            resetsAt: future,
+          },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      read({
+        windows: [
+          {
+            id: "w",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 100,
+            resetsAt: "2026-10-20T00:30:00.000Z",
+          },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      read({
+        availability: [
+          { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
+        ],
+      }),
+    ).toEqual({ label: "Codex all accounts blocked", usedPercent: 100 });
+  });
+});

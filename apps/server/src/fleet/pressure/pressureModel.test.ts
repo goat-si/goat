@@ -471,3 +471,55 @@ describe("rankHosts", () => {
     ]);
   });
 });
+
+describe("rankHosts quota verdicts", () => {
+  const withQuota = (host: string, limits: Record<string, unknown>) => {
+    const base = entry(host, { load: 0.1 });
+    return {
+      ...base,
+      metrics: {
+        ...base.metrics!,
+        quotas: [
+          {
+            instanceId: "codex" as never,
+            driver: "codex" as never,
+            fromCache: false,
+            limits: { checkedAt: "2026-10-20T00:00:00.000Z", windows: [], ...limits },
+          },
+        ],
+      },
+    } as HostStatusEntry;
+  };
+
+  it("skips a host whose pool is blocked and keeps one whose full window is not exhausted", () => {
+    const future = "2099-01-01T00:00:00.000Z";
+    const ranking = rankHosts(
+      [
+        withQuota("blocked", {
+          availability: [
+            { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
+          ],
+        }),
+        withQuota("open", {
+          windows: [
+            {
+              id: "weekly",
+              kind: "weekly",
+              label: "Weekly",
+              usedPercent: 100,
+              exhausted: false,
+              resetsAt: future,
+            },
+          ],
+        }),
+      ],
+      { providerInstanceId: "codex" as never },
+      settings,
+      Date.parse("2026-10-20T00:01:00.000Z"),
+    );
+    expect(ranking.candidates.map((candidate) => [candidate.host, candidate.eligible])).toEqual([
+      ["open", true],
+      ["blocked", false],
+    ]);
+  });
+});

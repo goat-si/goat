@@ -81,6 +81,7 @@ const OPTIONAL_METRIC_SECTIONS = [
   "platform",
   "providers",
   "quotaPool",
+  "quotaRouteMarkers",
   "computerUse",
   "opencodex",
   "storage",
@@ -426,5 +427,15 @@ function quotaPoolNote(limits: ServerProviderUsageLimits): string | undefined {
               (window.source === undefined ? "" : ` (${window.source})`),
           )
           .join(", ") + ".";
-  return `OpenCodex pool for ${pool.provider} on Home ${pool.homeId}:${accounts} ${readings} These are the pool's limits, not this instance's own account.`;
+  const blocks = (limits.availability ?? [])
+    .filter((block) => block.exhausted)
+    .map(
+      (block) =>
+        " All accounts blocked" +
+        (block.scopeModel === undefined ? "" : ` for ${block.scopeModel}`) +
+        (block.resetsAt === undefined ? "" : ` until ${block.resetsAt}`) +
+        ".",
+    )
+    .join("");
+  return `OpenCodex pool for ${pool.provider} on Home ${pool.homeId}:${accounts} ${readings}${blocks} These are the pool's limits, not this instance's own account.`;
 }

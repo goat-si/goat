@@ -12,6 +12,7 @@ import { HostStatusMetrics } from "./hostStatus.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 import {
   quotaWindowToUsageWindow,
+  ServerProviderUsageLimits,
   ServerProviderUsageWindow,
   UsageLimitSourceSnapshots,
 } from "./providerUsageLimits.ts";
@@ -381,6 +382,7 @@ describe("quotaWindowToUsageWindow", () => {
         quotaKind,
         source: "header",
         scopeModel: "family:opus",
+        observedAt: at,
       });
       expect(yield* decodeUsageWindow(mapped)).toEqual(mapped);
     }),
@@ -403,6 +405,7 @@ describe("quotaWindowToUsageWindow", () => {
         usedPercent: 0,
         quotaKind: "custom",
         source: "estimated",
+        observedAt: at,
       });
     }),
   );
@@ -411,6 +414,47 @@ describe("quotaWindowToUsageWindow", () => {
     Effect.sync(() => {
       expect(quotaWindowToUsageWindow({ ...burst, windowSeconds: 90 })?.windowDurationMins).toBe(2);
       expect(quotaWindowToUsageWindow({ ...burst, windowSeconds: 0 })?.windowDurationMins).toBe(0);
+    }),
+  );
+});
+
+describe("routed usage limits across versions", () => {
+  const current = Schema.decodeUnknownEffect(Schema.toCodecJson(ServerProviderUsageLimits));
+  const legacy = Schema.decodeUnknownEffect(LegacyLimits);
+  const routed = {
+    checkedAt: "2026-10-21T03:00:00.000Z",
+    windows: [
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 100,
+        exhausted: false,
+        observedAt: "2026-10-21T02:58:00.000Z",
+      },
+    ],
+    quotaPoolRoute: { provider: "openai", openCodexVersion: "2.86.0" },
+    availability: [{ id: "availability", label: "Availability", exhausted: true }],
+    localAccount: {
+      checkedAt: "2026-10-21T03:00:00.000Z",
+      windows: [],
+      resetCredits: { availableCount: 1 },
+      redeemable: false,
+    },
+  };
+
+  it.effect("lets an older client keep the windows and a newer client read an older server", () =>
+    Effect.gen(function* () {
+      expect((yield* legacy(routed)).windows.map((window) => window.usedPercent)).toEqual([100]);
+      const decoded = yield* current(routed);
+      expect(decoded.windows[0]?.exhausted).toBe(false);
+      expect(decoded.localAccount?.redeemable).toBe(false);
+      const old = yield* current({
+        checkedAt: routed.checkedAt,
+        windows: [{ id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 40 }],
+      });
+      expect(old.availability).toBeUndefined();
+      expect(old.localAccount).toBeUndefined();
     }),
   );
 });

@@ -384,3 +384,34 @@ describe("schedulerHostStatus", () => {
     );
   });
 });
+
+describe("projected OpenCodex verdicts", () => {
+  it("places on a pool whose full window says it is not exhausted, and refuses one that is blocked", () => {
+    const open = host("open", {
+      quotas: [
+        { instanceId: codex, windows: [{ ...window(100, LATER), exhausted: false }] as never },
+      ],
+    });
+    const placed = place(goal(), [open], none, NOW);
+    assert.strictEqual(placed._tag, "Placed");
+    const blocked = host("blocked", { quotas: [{ instanceId: codex, windows: [window(10)] }] });
+    const metrics = blocked.metrics!;
+    const withBlock = {
+      ...blocked,
+      metrics: {
+        ...metrics,
+        quotas: metrics.quotas.map((quota) => ({
+          ...quota,
+          limits: {
+            ...quota.limits,
+            availability: [
+              { id: "availability", label: "Availability", exhausted: true, resetsAt: LATER },
+            ],
+          },
+        })),
+      },
+    };
+    const refused = place(goal(), [withBlock], none, NOW);
+    assert.strictEqual(refused._tag, "Refused");
+  });
+});

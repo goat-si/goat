@@ -1,4 +1,5 @@
 import type { EnvironmentId, HostStatusEntry, HostStatusMetrics } from "@goat/contracts";
+import { freshWindows, isWindowExhausted, verdictWindows } from "@goat/shared/quotaVerdict";
 
 import type { FleetMachine } from "./fleet.ts";
 import { cpuPercent, loadPerCore, memoryPercent } from "./host-metrics.ts";
@@ -46,15 +47,26 @@ export function fleetHeatSignals(
     | "availableMemoryBytes"
     | "totalMemoryBytes"
     | "quotas"
+    | "sampledAt"
   >,
 ): FleetHeatSignals {
   let quota: FleetHeatSignals["quota"] = null;
   for (const account of metrics.quotas) {
     if (account.limits.unavailable !== undefined) continue;
-    for (const window of account.limits.windows) {
-      if (quota !== null && window.usedPercent <= quota.usedPercent) continue;
-      const name = account.displayName ?? account.driver;
-      quota = { label: name + " " + window.label.toLowerCase(), usedPercent: window.usedPercent };
+    const name = account.displayName ?? account.driver;
+    // Judged at the sample's own time: unscoped, unreset and fresh readings, as placement does.
+    const readings = freshWindows(
+      verdictWindows(account.limits).filter((window) => window.scopeModel === undefined),
+      account.limits.checkedAt,
+      metrics.sampledAt,
+    );
+    for (const window of readings) {
+      const blocked = window.usedPercent === undefined;
+      if (blocked && !isWindowExhausted(window, metrics.sampledAt)) continue;
+      const usedPercent = window.usedPercent ?? 100;
+      if (quota !== null && usedPercent <= quota.usedPercent) continue;
+      const label = blocked ? "all accounts blocked" : window.label.toLowerCase();
+      quota = { label: name + " " + label, usedPercent };
     }
   }
   return {

@@ -203,6 +203,8 @@ export const HostStatusMetrics = Schema.Struct({
   /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
   providers: Schema.optional(Schema.Array(HostStatusProvider)),
   quotaPool: Schema.optional(QuotaPool),
+  /** True when this host marks OpenCodex-routed quotas; older hosts omit it. */
+  quotaRouteMarkers: Schema.optional(Schema.Boolean),
   /** Computer use on that machine. Older hosts omit it, and a malformed value decodes away. */
   computerUse: ForwardCompatibleOptional(HostComputerUse),
   /** Read-only inventory of this host's OpenCodex. Older hosts omit it. */

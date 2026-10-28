@@ -4,8 +4,10 @@ import {
   QuotaPool,
   TrimmedNonEmptyString,
   UsageLimitSourceId,
+  quotaWindowToAvailability,
   quotaWindowToUsageWindow,
   type ProviderInstanceConfig,
+  type QuotaWindow,
   type ServerProvider,
   type UsageLimitSourceSnapshot,
 } from "@goat/contracts";
@@ -59,8 +61,18 @@ const enabledFlag = (value: string | undefined) =>
 
 /** An OpenCodex that is installed here: its pool, or why GOAT could not read it. */
 export type QuotaPoolSnapshot =
-  | { readonly origin: string; readonly pool: QuotaPool; readonly unavailable?: undefined }
-  | { readonly origin: string; readonly pool?: undefined; readonly unavailable: string };
+  | {
+      readonly origin: string;
+      readonly pool: QuotaPool;
+      readonly unavailable?: undefined;
+      readonly version?: undefined;
+    }
+  | {
+      readonly origin: string;
+      readonly pool?: undefined;
+      readonly unavailable: string;
+      readonly version?: string | undefined;
+    };
 
 // The Home base (Codex, and every driver's explicit Home route) ends in /v1; Claude Code takes the origin.
 const HOME_PATHS = ["/v1", "/v1/"];
@@ -94,29 +106,63 @@ const poolProviders: Partial<Record<string, keyof typeof drivers>> = {
 };
 const UNVERIFIED = "The OpenCodex route for this instance is not verified yet.";
 
+const mapped = <A>(
+  windows: ReadonlyArray<QuotaWindow>,
+  map: (window: QuotaWindow) => A | undefined,
+) =>
+  windows.flatMap((window) => {
+    const value = map(window);
+    return value === undefined ? [] : [value];
+  });
+
+/** The routed login as its own probe saw it; GOAT-routed Codex cannot redeem on that route. */
+function localAccountOf(provider: ServerProvider) {
+  const limits = provider.usageLimits;
+  if (
+    limits === undefined ||
+    limits.unavailable !== undefined ||
+    limits.quotaPoolRoute !== undefined
+  )
+    return undefined;
+  if (limits.windows.length === 0 && limits.resetCredits === undefined) return undefined;
+  return {
+    checkedAt: limits.checkedAt,
+    windows: limits.windows,
+    ...(limits.resetCredits === undefined ? {} : { resetCredits: limits.resetCredits }),
+    ...(limits.credentialFingerprint === undefined
+      ? {}
+      : { credentialFingerprint: limits.credentialFingerprint }),
+    redeemable: !(provider.driver === "codex" && provider.codexRoute?.modelRoute === "opencodex"),
+  };
+}
+
 export function quotaPoolSource(pool: QuotaPool): UsageLimitSourceSnapshot {
   return {
     id: UsageLimitSourceId.make("opencodex"),
     kind: "opencodex",
     label: openCodexHomeLabel(pool),
     checkedAt: pool.generatedAt,
+    homeId: pool.producer.homeId,
     accounts: pool.providers.flatMap((provider) =>
       provider.accounts.flatMap((account) => {
         const driver = decodeDriver(
           account.driver ?? drivers[provider.provider as keyof typeof drivers],
         );
         if (Option.isNone(driver)) return [];
+        // The oldest reading is how fresh this account's quota is; membership follows generatedAt.
+        const observedAt =
+          account.windows.map((window) => window.observedAt).toSorted()[0] ?? pool.generatedAt;
         return [
           {
-            id: `${provider.provider}:${account.accountRef}`,
+            id: JSON.stringify([pool.producer.homeId, provider.provider, account.accountRef]),
             driver: driver.value,
             ...(account.plan === undefined ? {} : { plan: account.plan }),
+            ...(account.label === undefined ? {} : { label: account.label }),
+            state: account.state,
+            observedAt,
             usageLimits: {
               checkedAt: pool.generatedAt,
-              windows: account.windows.flatMap((window) => {
-                const mapped = quotaWindowToUsageWindow(window);
-                return mapped === undefined ? [] : [mapped];
-              }),
+              windows: mapped(account.windows, quotaWindowToUsageWindow),
             },
           },
         ];
@@ -188,6 +234,7 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
       const version = yield* readVersion(origin);
       return {
         origin,
+        version,
         unavailable:
           "OpenCodex pool unavailable" +
           (version === undefined ? "" : ` (OpenCodex ${version})`) +
@@ -257,13 +304,19 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
       if (snapshot === undefined) return providers;
       return yield* Effect.forEach(
         providers,
-        Effect.fn("OpenCodexQuotaPool.projectProvider")(function* (provider) {
+        Effect.fn("OpenCodexQuotaPool.projectProvider")(function* (provider): Effect.fn.Return<
+          ServerProvider,
+          never,
+          Path.Path
+        > {
           // Instances absent from settings are the registry's implicit defaults: just the driver.
           const instance = instances[provider.instanceId] ?? { driver: provider.driver };
           const route = yield* routeOf(provider, instance, snapshot.origin);
           if (route === undefined) return provider;
-          const quotaPoolRoute = { provider: route.provider };
+          const localAccount = localAccountOf(provider);
+          const own = localAccount === undefined ? {} : { localAccount };
           if (snapshot.pool === undefined || !route.verified) {
+            const version = route.verified ? snapshot.version : undefined;
             return {
               ...provider,
               usageLimits: {
@@ -273,21 +326,24 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
                   reason: "probeFailed" as const,
                   message: (route.verified ? snapshot.unavailable : undefined) ?? UNVERIFIED,
                 },
-                quotaPoolRoute,
+                quotaPoolRoute: {
+                  provider: route.provider,
+                  ...(version === undefined ? {} : { openCodexVersion: version }),
+                },
+                ...own,
               },
             };
           }
           const { pool } = snapshot;
           const entry = pool.providers.find((item) => item.provider === route.provider);
           const accounts = new Map(entry?.accounts.map((account) => [account.accountRef, account]));
+          const availability = mapped(entry?.pooled.windows ?? [], quotaWindowToAvailability);
           return {
             ...provider,
             usageLimits: {
               checkedAt: pool.generatedAt,
-              windows: (entry?.pooled.windows ?? []).flatMap((window) => {
-                const mapped = quotaWindowToUsageWindow(window);
-                return mapped === undefined ? [] : [mapped];
-              }),
+              windows: mapped(entry?.pooled.windows ?? [], quotaWindowToUsageWindow),
+              ...(availability.length === 0 ? {} : { availability }),
               quotaPool: {
                 provider: route.provider,
                 homeId: pool.producer.homeId,
@@ -298,7 +354,8 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
                   total: accounts.size,
                 },
               },
-              quotaPoolRoute,
+              quotaPoolRoute: { provider: route.provider },
+              ...own,
             },
           };
         }),

@@ -1,4 +1,5 @@
 import type { HostCondition, HostStatusEntry } from "@goat/contracts";
+import { verdictWindows } from "@goat/shared/quotaVerdict";
 import * as DateTime from "effect/DateTime";
 
 import { isExhausted } from "../../channels/channelPlacement.ts";
@@ -218,16 +219,13 @@ export function deriveConditions(input: {
     });
   }
   for (const quota of sample?.metrics?.quotas ?? []) {
+    // No model: a model-scoped window never makes the whole host's quota look exhausted.
     const candidate = {
       value: null,
       host: sample?.host ?? null,
       providerLabel: quota.instanceId,
       preferred: false,
-      windows: quota.limits.windows.map((window) => ({
-        label: window.label,
-        usedPercent: window.usedPercent,
-        resetsAt: window.resetsAt,
-      })),
+      windows: verdictWindows(quota.limits),
       activeTasks: 0,
     };
     if (!isExhausted(candidate, now)) continue;

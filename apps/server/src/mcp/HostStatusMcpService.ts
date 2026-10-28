@@ -180,6 +180,8 @@ const make = Effect.gen(function* () {
       quotas: hostStatusQuotas(projected, refreshed),
       providers: hostStatusProviders(providers),
       ...(quotaPool === undefined ? {} : { quotaPool }),
+      // Routed quotas carry markers here, so a reader never infers routing for this host.
+      quotaRouteMarkers: true,
     };
   });
 

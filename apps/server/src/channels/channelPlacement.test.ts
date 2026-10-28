@@ -288,3 +288,41 @@ describe("choosePlacement", () => {
     assert.strictEqual(choosePlacement([], NOW), undefined);
   });
 });
+
+describe("shared quota verdict", () => {
+  it("lets an explicit exhausted:false beat a full percentage, which still ranks at 100", () => {
+    const pooled = candidate("pooled", {
+      windows: [{ label: "Weekly", usedPercent: 100, exhausted: false, resetsAt: LATER }],
+    });
+    assert.isFalse(isExhausted(pooled, NOW));
+    assert.deepStrictEqual(busiestWindow(pooled), { label: "Weekly", usedPercent: 100 });
+    assert.strictEqual(
+      choosePlacement([pooled, candidate("other", { windows: weekly(40) })], NOW)?.chosen.value,
+      "other",
+    );
+  });
+
+  it("blocks only the scope a percentless availability window names", () => {
+    const blocked = candidate("blocked", {
+      model: "claude-opus-4-6",
+      windows: [
+        { label: "5 hours", usedPercent: 20 },
+        { label: "Opus availability", exhausted: true, scopeModel: "family:opus", resetsAt: LATER },
+      ],
+    });
+    assert.isTrue(isExhausted(blocked, NOW));
+    assert.isFalse(isExhausted({ ...blocked, model: "claude-sonnet-4-6" }, NOW));
+    assert.deepStrictEqual(busiestWindow({ ...blocked, model: "claude-sonnet-4-6" }), {
+      label: "5 hours",
+      usedPercent: 20,
+    });
+    assert.isFalse(
+      isExhausted(
+        candidate("recovered", {
+          windows: [{ label: "Availability", exhausted: true, resetsAt: EARLIER }],
+        }),
+        NOW,
+      ),
+    );
+  });
+});

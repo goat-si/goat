@@ -8,6 +8,7 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
+  type UsageLimitSourceAccount,
   type UsageLimitSourceSnapshots,
 } from "@goat/contracts";
 
@@ -70,6 +71,23 @@ function providersWithLimits(providers: readonly ServerProvider[]): readonly Ser
 /** Pool quota, or a pool GOAT could not read: never the instance's own login. */
 const routedThroughOpenCodex = (limits: ServerProviderUsageLimits) =>
   limits.quotaPool !== undefined || limits.quotaPoolRoute !== undefined;
+
+/** A routed instance's own login as usage limits, and whether its driver can redeem there. */
+function localLimits(limits: ServerProviderUsageLimits) {
+  const own = limits.localAccount;
+  if (own === undefined) return undefined;
+  return {
+    redeemable: own.redeemable,
+    limits: {
+      checkedAt: own.checkedAt,
+      windows: own.windows,
+      ...(own.resetCredits === undefined ? {} : { resetCredits: own.resetCredits }),
+      ...(own.credentialFingerprint === undefined
+        ? {}
+        : { credentialFingerprint: own.credentialFingerprint }),
+    } satisfies ServerProviderUsageLimits,
+  };
+}
 
 export type LimitPresentations = ReadonlyMap<
   EnvironmentId,
@@ -170,6 +188,10 @@ export interface LimitAccount {
     readonly input: ProviderConsumeResetCreditInput;
   } | null;
   readonly limits: ServerProviderUsageLimits;
+  /** False for accounts shown but left out of pooled math: paused, reauth, or a routed login. */
+  readonly aggregated?: boolean | undefined;
+  readonly state?: UsageLimitSourceAccount["state"];
+  readonly observedAt?: string | undefined;
 }
 
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
@@ -211,6 +233,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     const creditSource = creditSources.get(key);
     accounts.set(key, {
       ...previous,
+      aggregated: previous.aggregated !== false || next.aggregated !== false,
+      ...(winner.state === undefined ? {} : { state: winner.state }),
+      ...(winner.observedAt === undefined ? {} : { observedAt: winner.observedAt }),
       displayName: previous.displayName ?? next.displayName,
       plan: previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
@@ -238,7 +263,31 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
   for (const [environmentId, presentation] of presentations) {
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
-      if (!provider.usageLimits || limitsNotice(provider.usageLimits) !== null) continue;
+      if (!provider.usageLimits) continue;
+      // A pool total is not an account; its accounts arrive from the OpenCodex source.
+      if (routedThroughOpenCodex(provider.usageLimits)) {
+        const own = localLimits(provider.usageLimits);
+        if (own === undefined || limitsNotice(own.limits) !== null) continue;
+        const report = { ...nativeReport(provider), usageLimits: own.limits };
+        merge(resolveKey(report) ?? `${environmentId}:${provider.instanceId}:login`, {
+          key: `${environmentId}:${provider.instanceId}:login`,
+          driver: provider.driver,
+          displayName: provider.displayName?.trim() || null,
+          email: provider.auth.email,
+          plan: provider.auth.label,
+          accentColor: provider.accentColor,
+          environments: [{ environmentId, label }],
+          sourceLabel: null,
+          redeem: own.redeemable
+            ? { environmentId, input: { instanceId: provider.instanceId } }
+            : null,
+          limits: own.limits,
+          // Usually also one of the pool's accounts; counting it again would double it.
+          aggregated: false,
+        });
+        continue;
+      }
+      if (limitsNotice(provider.usageLimits) !== null) continue;
       merge(resolveKey(nativeReport(provider)) ?? `${environmentId}:${provider.instanceId}`, {
         key: `${environmentId}:${provider.instanceId}`,
         driver: provider.driver,
@@ -250,12 +299,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         sourceLabel: null,
         redeem: { environmentId, input: { instanceId: provider.instanceId } },
         limits: provider.usageLimits,
+        aggregated: true,
       });
     }
   }
   const labelEnvironment = presentations.size > 1;
+  const authoritative = newestHomeSources(presentations);
   for (const [environmentId, presentation] of presentations) {
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      if (source.homeId !== undefined && authoritative.get(source.homeId) !== source) continue;
       const sourceLabel = labelEnvironment
         ? `${presentation.entry.target.label} · ${source.label}`
         : source.label;
@@ -265,7 +317,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         merge(resolveKey(account) ?? key, {
           key,
           driver: account.driver,
-          displayName: account.email ? null : account.id.replace(/\.json$/i, ""),
+          displayName: account.email ? null : (account.label ?? account.id.replace(/\.json$/i, "")),
           email: account.email,
           plan: account.plan,
           accentColor: undefined,
@@ -282,11 +334,28 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
               }
             : null,
           limits: account.usageLimits,
+          aggregated: account.state !== "paused" && account.state !== "reauth",
+          ...(account.state === undefined ? {} : { state: account.state }),
+          ...(account.observedAt === undefined ? {} : { observedAt: account.observedAt }),
         });
       }
     }
   }
   return [...accounts.values()];
+}
+
+/** Each Home's newest snapshot decides which accounts exist and their state. */
+function newestHomeSources(presentations: LimitPresentations) {
+  const newest = new Map<string, UsageLimitSourceSnapshots[number]>();
+  for (const presentation of presentations.values()) {
+    for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
+      if (source.homeId === undefined) continue;
+      const previous = newest.get(source.homeId);
+      if (previous === undefined || Date.parse(source.checkedAt) > Date.parse(previous.checkedAt))
+        newest.set(source.homeId, source);
+    }
+  }
+  return newest;
 }
 
 export function collectLimitNotices(presentations: LimitPresentations): readonly string[] {
@@ -456,22 +525,27 @@ function poolMember(account: LimitAccount, reported: ServerProviderUsageWindow, 
 }
 
 function poolWindows(accounts: readonly LimitAccount[], now: number): readonly LimitPoolWindow[] {
-  const byKey = new Map<string, LimitPoolMember[]>();
+  // Every account is shown; only aggregated ones set the pooled percentage, pace and refills.
+  const shown = new Map<string, LimitPoolMember[]>();
   for (const account of accounts) {
     for (const reported of account.limits.windows) {
       const member = poolMember(account, reported, now);
       const { window } = member;
       const pooled = poolKey(account.driver, window);
-      const key = byKey.get(pooled)?.some((member) => member.account === account)
+      const key = shown.get(pooled)?.some((member) => member.account === account)
         ? `${window.kind}:${window.id}`
         : pooled;
-      const list = byKey.get(key);
+      const list = shown.get(key);
       if (list) list.push(member);
-      else byKey.set(key, [member]);
+      else shown.set(key, [member]);
     }
   }
-  const pools = [...byKey].map(([key, members]): LimitPoolWindow => {
-    const memberByAccount = new Map(members.map((member) => [member.account.key, member]));
+  const byKey = [...shown].flatMap(([key, all]) => {
+    const members = all.filter((member) => member.account.aggregated !== false);
+    return members.length === 0 ? [] : [[key, members, all] as const];
+  });
+  const pools = byKey.map(([key, members, all]): LimitPoolWindow => {
+    const memberByAccount = new Map(all.map((member) => [member.account.key, member]));
     const first = members[0]!.window;
     const id = members[0]!.account.driver === "codex" ? key : first.id;
     const usedPercent = members.reduce((sum, m) => sum + m.window.usedPercent, 0) / members.length;
@@ -521,7 +595,8 @@ export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
   if (limits.unavailable?.reason === "probeFailed") {
     return limits.unavailable.message ?? "Could not read limits.";
   }
-  return limits.windows.length === 0 ? "No limits reported." : null;
+  const blocks = limits.availability?.some((block) => block.exhausted) === true;
+  return limits.windows.length === 0 && !blocks ? "No limits reported." : null;
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {
@@ -762,6 +837,22 @@ export function collectProviderUsageLimits(
       ...(!routed && provider.auth.email ? { email: provider.auth.email } : {}),
       limits: !routed && shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
+    const own = routed ? localLimits(limits) : undefined;
+    if (own !== undefined) {
+      // The routed login keeps its own quota and credits; the pool row above never has credits.
+      accounts.push({
+        id: `${provider.instanceId}:login`,
+        driver: provider.driver,
+        label: `${provider.displayName?.trim() || String(provider.driver)} [${provider.instanceId}] · own login`,
+        instanceId: provider.instanceId,
+        ...(own.redeemable
+          ? { resetCreditInput: { instanceId: provider.instanceId } }
+          : { redeemable: false }),
+        ...(provider.auth.label ? { plan: provider.auth.label } : {}),
+        ...(provider.auth.email ? { email: provider.auth.email } : {}),
+        limits: own.limits,
+      });
+    }
   }
   for (const source of sources) {
     const matching = source.accounts.filter((account) => account.driver === selected.driver);
@@ -771,7 +862,7 @@ export function collectProviderUsageLimits(
       accounts.push({
         id: `${source.id}:${account.id}`,
         driver: account.driver,
-        label: `${source.label} · ${account.id}`,
+        label: `${source.label} · ${account.label ?? account.id}`,
         sourceLabel: source.kind === "opencodex" ? source.label : "CLI Proxy",
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {

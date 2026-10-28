@@ -658,13 +658,13 @@ function FleetConsoleExpanded(props: {
                       {quota.windows
                         .map((window) => window.label + " " + Math.round(window.usedPercent) + "%")
                         .join(" · ")}
-                      {quota.peak === null ? "Quota unknown" : null}
+                      {quota.peak === null ? (quota.status ?? "Quota unknown") : null}
                       {quota.hidden > 0 ? (
                         <QuotaDetails
                           detail={quota.detail}
                           label={`Show ${quota.hidden} more quota details`}
                         >
-                          {` +${quota.hidden}`}
+                          {" " + (quota.hiddenLabel ?? `+${quota.hidden}`)}
                         </QuotaDetails>
                       ) : null}
                     </span>

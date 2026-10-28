@@ -14,6 +14,11 @@ import {
   type LimitAccount,
   type LimitPoolWindow,
 } from "@goat/shared/usageLimits";
+import {
+  collectOpenCodexPools,
+  openCodexPoolText,
+  sectionsWithOpenCodex,
+} from "@goat/shared/usageLimitsOpenCodex";
 import { Fragment, type ReactNode, useId, useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
@@ -299,7 +304,11 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const pools = collectLimitPools(collectLimitAccounts(selected), now);
+  const lines = collectOpenCodexPools(selected);
+  const pools = sectionsWithOpenCodex(
+    collectLimitPools(collectLimitAccounts(selected), now),
+    lines,
+  );
   const notices = collectLimitNotices(selected);
   const externalLinks = collectExternalUsageLinks(selected);
   const colors = useProviderColors();
@@ -333,6 +342,24 @@ export function UsageLimitsSection({
                   {DRIVER_LABEL[pool.driver] ?? pool.driver}
                 </Text>
               </View>
+              {lines
+                .filter((line) => line.driver === pool.driver)
+                .map((line) => {
+                  const text = openCodexPoolText(line, now);
+                  return (
+                    <View key={line.key} className="gap-0.5 px-1">
+                      <Text className="text-sm text-foreground">{text.title}</Text>
+                      {text.readings ? (
+                        <Text className="text-xs text-foreground-muted">{text.readings}</Text>
+                      ) : null}
+                      {text.blocks.map((block) => (
+                        <Text key={block} className="text-xs text-foreground-muted">
+                          {block}
+                        </Text>
+                      ))}
+                    </View>
+                  );
+                })}
               {windows.map((window) => {
                 const details =
                   pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
