@@ -97,6 +97,7 @@ function gh(args: ReadonlyArray<string>): string {
   return NodeChildProcess.execFileSync("gh", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
+    maxBuffer: 64 * 1024 * 1024,
   });
 }
 
@@ -128,7 +129,13 @@ function main(argv: ReadonlyArray<string>): number {
   const head = view.headRefOid;
   // Every page: a failed full run can sit behind a hundred newer ignored-event runs.
   const list = (path: string, key: string): ReadonlyArray<Run> =>
-    gh(["api", "--paginate", path, "--jq", `.${key}[]`])
+    gh([
+      "api",
+      "--paginate",
+      path,
+      "--jq",
+      `.${key}[] | {id, name, event, display_title, created_at, run_attempt, status, conclusion, html_url}`,
+    ])
       .split("\n")
       .filter((line) => line.trim() !== "")
       .map((line) => JSON.parse(line) as Run);
