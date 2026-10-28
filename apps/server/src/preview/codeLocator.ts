@@ -27,7 +27,7 @@ export const codeLocator = (page: Page, text: string): Locator | null => {
   const call = CALL.exec(text);
   if (!call) throw unsupported();
   const [, kind, , rawValue, rawOptions = ""] = call;
-  const value = unescape(rawValue!);
+  const value = unescape(rawValue ?? "");
   const name = STRING_OPTION("name").exec(rawOptions)?.[2];
   const exactText = BOOLEAN_OPTION("exact").exec(rawOptions)?.[1];
   const exact = exactText === undefined ? {} : { exact: exactText === "true" };

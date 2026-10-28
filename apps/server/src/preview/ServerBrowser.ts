@@ -93,6 +93,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { type AgentInput, fillNote, popupOwner, renderedViewport } from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
@@ -135,8 +136,6 @@ const sleepUntil = (deadline: number) =>
 
 const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
-/** How long after an agent's input a popup still counts as opened by it. */
-const POPUP_ATTRIBUTION_MS = 2_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
 const ACTION_TIMELINE_LIMIT = 50;
 
@@ -323,8 +322,8 @@ interface ServerTab {
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
   agentOperating: boolean;
-  /** The agent whose input last reached this tab, and when it ended; popups it opens are its. */
-  lastAgentInput?: { readonly agentId: string; readonly at: number };
+  /** The agent whose input last reached this tab; popups it opens are its. */
+  lastAgentInput?: AgentInput;
   fileChooserIntercepted: boolean;
   readonly onFileChooser: (chooser: FileChooser) => void;
 
@@ -558,14 +557,6 @@ const make = Effect.gen(function* () {
     const size = layoutSize(tab);
     if (!size) return;
     for (const viewer of tab.viewers) viewer.push({ _tag: "viewport", ...size });
-  };
-
-  /** A desktop page's CSS layout viewport, which Playwright's viewportSize() does not know. */
-  const renderedViewport = async (tab: ServerTab) => {
-    const { cssLayoutViewport } = await tab.cdp.send("Page.getLayoutMetrics");
-    return cssLayoutViewport
-      ? { width: cssLayoutViewport.clientWidth, height: cssLayoutViewport.clientHeight }
-      : (tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT);
   };
 
   const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
@@ -1115,13 +1106,7 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    // A popup that follows an agent's input on a tab nobody owns is that agent's to use and close.
-    const recent = opener.lastAgentInput;
-    const agentId =
-      opener.control.agentId ??
-      (recent && (opener.agentOperating || Date.now() - recent.at < POPUP_ATTRIBUTION_MS)
-        ? recent.agentId
-        : null);
+    const agentId = popupOwner({ ...opener, ownerId: opener.control.agentId }, Date.now());
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;
@@ -1926,26 +1911,13 @@ const make = Effect.gen(function* () {
         await runPromise(
           manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
         );
-        const before = tab.desktop ? await renderedViewport(tab) : undefined;
+        const measure = () => renderedViewport(tab.cdp, UNATTACHED_FILL_VIEWPORT);
+        const before = tab.desktop ? await measure() : undefined;
         await applySetting(tab, setting);
         const viewport = tab.desktop
-          ? await renderedViewport(tab)
+          ? await measure()
           : (tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT);
-        // The desktop sizes a filled tab to the panel showing it; with none, the size stays.
-        const kept =
-          setting._tag === "fill" &&
-          before?.width === viewport.width &&
-          before.height === viewport.height;
-        return {
-          tabId: tab.tabId,
-          setting,
-          viewport,
-          ...(kept
-            ? {
-                next: `Fill follows the panel that shows this tab; if no panel shows it, it keeps ${viewport.width}x${viewport.height}. Show it (goat_preview_open show:true) or set a freeform size.`,
-              }
-            : {}),
-        };
+        return { tabId: tab.tabId, setting, viewport, ...fillNote(setting, before, viewport) };
       }
       case "setColorScheme": {
         const { colorScheme } = input as PreviewAutomationSetColorSchemeInput;
