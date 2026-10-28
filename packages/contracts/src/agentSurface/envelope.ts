@@ -328,6 +328,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PullRequestListFailedError: c("internal"),
   PullRequestWatchFailedError: c("internal"),
   PullRequestGuideFailedError: c("internal"),
+  PullRequestReadFailedError: c("unavailable"),
 };
 
 const TRANSIENT: ReadonlySet<AgentSurfaceErrorCode> = new Set([

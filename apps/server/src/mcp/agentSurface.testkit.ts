@@ -78,6 +78,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -160,6 +161,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
+  Layer.mock(PullRequestService.PullRequestService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
   Layer.mock(StorageReclaim.StorageReclaim)({}),
   Layer.mock(StorageConsent.StorageConsent)({}),

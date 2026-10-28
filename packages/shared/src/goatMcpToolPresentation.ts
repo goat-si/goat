@@ -85,6 +85,8 @@ export type GoatMcpToolSummaryAction =
   | "unwatch-pr"
   | "write-pr-guides"
   | "read-pr-guide"
+  | "read-pr"
+  | "read-pr-checks"
   | "browser"
   | "device"
   | "html-preview"
@@ -150,6 +152,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   read_pull_request_guide: tool(
     ["Read", "Reading", "Read", "a review guide"],
     "read-pr-guide",
+    "pull-request",
+  ),
+  goat_pull_request_read: tool(
+    ["Read", "Reading", "Read", "a pull request"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_checks: tool(
+    ["Check", "Checking", "Checked", "pull request checks"],
+    "read-pr-checks",
     "pull-request",
   ),
   orchestrator_capabilities: tool(

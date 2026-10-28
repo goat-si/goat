@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -44,6 +45,7 @@ import {
   PullRequestThreadRequiredError,
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
+  PullRequestReadFailedError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
 } from "./tools.ts";
@@ -197,6 +199,7 @@ function projectForPullRequest(
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
+  const pullRequests = yield* PullRequestService.PullRequestService;
 
   const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
@@ -356,6 +359,35 @@ const make = Effect.gen(function* () {
   const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
     handle: (params: P) => Effect.Effect<A, E, R>,
   ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
+
+  /** A target the caller named, resolved to the project checkout that can read it. */
+  const locateOne = Effect.fn("PullRequestsToolkit.locateOne")(function* (
+    input: Omit<PullRequestTargetInput, "threadId">,
+  ) {
+    const [entry] = yield* locateAll([input]);
+    if (entry !== undefined && entry.target === null)
+      return yield* new PullRequestReadFailedError({ detail: entry.failure ?? "" });
+    if (entry === undefined || entry.target === null || entry.project === undefined)
+      return yield* new PullRequestProjectNotFoundError({
+        repository: entry?.target.repository ?? input.repository ?? "",
+      });
+    return { target: entry.target, ref: guideReference(entry.project, entry.target) };
+  });
+
+  const readFailure = (error: { readonly message: string }) =>
+    new PullRequestReadFailedError({ detail: guideFailureDetail(error), cause: error });
+
+  const identityOf = (target: {
+    readonly host: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly url: string;
+  }) => ({
+    host: target.host,
+    repository: target.repository,
+    number: target.number,
+    url: target.url,
+  });
 
   return {
     link_pull_request: writesThread((input) =>
@@ -528,6 +560,20 @@ const make = Effect.gen(function* () {
             result.currentHeadSha !== null &&
             result.guide.headSha !== result.currentHeadSha,
         };
+      }),
+    ),
+    goat_pull_request_read: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const pullRequest = yield* pullRequests.detail(ref).pipe(Effect.mapError(readFailure));
+        return { ...identityOf(target), pullRequest };
+      }),
+    ),
+    goat_pull_request_checks: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const checks = yield* pullRequests.checks(ref).pipe(Effect.mapError(readFailure));
+        return { ...identityOf(target), checks };
       }),
     ),
   } satisfies McpToolAccess.Handlers<typeof PullRequestsToolkit.tools>;

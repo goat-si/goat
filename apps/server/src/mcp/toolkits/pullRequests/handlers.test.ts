@@ -7,6 +7,7 @@ import {
   PullRequestOperationError,
   type OrchestrationProjectShell,
   type PullRequestRef,
+  type PullRequestChecks,
   type PullRequestReviewGuideResult,
   type ThreadPullRequestLink,
   SourceControlProviderKind,
@@ -26,6 +27,7 @@ import {
   v2PullRequestThread,
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -146,6 +148,9 @@ interface HarnessOptions {
     PullRequestReviewGuideResult & { started: boolean },
     PullRequestOperationError
   >;
+  readonly checks?: (
+    input: PullRequestRef,
+  ) => Effect.Effect<PullRequestChecks | null, PullRequestOperationError>;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -155,6 +160,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   const guideRequests = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
+  const reads = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const thread = options.thread === undefined ? makeThread([]) : options.thread;
   const project = options.project === undefined ? makeProject() : options.project;
   const dispatch: Orchestrator.OrchestratorV2Shape["dispatch"] = (command) =>
@@ -192,6 +198,12 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
           ),
         ),
     }),
+    Layer.mock(PullRequestService.PullRequestService)({
+      checks: (input) =>
+        Ref.update(reads, (recorded) => [...recorded, input]).pipe(
+          Effect.andThen(options.checks?.(input) ?? Effect.succeed(null)),
+        ),
+    }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) =>
         Effect.succeed(id === THREAD_ID && thread ? v2PullRequestThread(thread) : null),
@@ -221,7 +233,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(layerDependencies),
     );
-  return { commands, guideRequests, call };
+  return { commands, guideRequests, reads, call };
 });
 
 describe("pull request toolkit handlers", () => {
@@ -707,5 +719,48 @@ describe("pull request guide tools", () => {
         "project-azure",
       ]);
     }),
+  );
+});
+
+describe("pull request reads", () => {
+  it.effect(
+    "reads checks through the project holding the repository and passes on the host's refusal",
+    () =>
+      Effect.gen(function* () {
+        const checks: PullRequestChecks = { state: "open", checks: [] };
+        const harness = yield* makeHarness({
+          checks: (input) =>
+            input.number === 13
+              ? Effect.fail(
+                  new PullRequestOperationError({ operation: "checks", detail: "rate limited" }),
+                )
+              : Effect.succeed(checks),
+        });
+        expect(
+          yield* harness.call("goat_pull_request_checks", {
+            url: "https://github.com/sample-tools/goat/pull/12",
+          }),
+        ).toEqual({
+          host: "github.com",
+          repository: "sample-tools/goat",
+          number: 12,
+          url: "https://github.com/sample-tools/goat/pull/12",
+          checks,
+        });
+        expect(
+          yield* harness
+            .call("goat_pull_request_checks", { repository: "sample-tools/goat", number: 13 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestReadFailedError", detail: "rate limited" });
+        expect(
+          yield* harness
+            .call("goat_pull_request_checks", { url: "https://github.com/someone/else/pull/1" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestProjectNotFoundError" });
+        expect((yield* Ref.get(harness.reads)).map((ref) => [ref.projectId, ref.number])).toEqual([
+          [PROJECT_ID, 12],
+          [PROJECT_ID, 13],
+        ]);
+      }),
   );
 });

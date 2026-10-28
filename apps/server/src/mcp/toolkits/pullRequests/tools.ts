@@ -5,6 +5,8 @@ import {
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PositiveInt,
+  PullRequestChecks,
+  PullRequestDetail,
   PullRequestReviewGuide,
   PullRequestReviewGuideRun,
   PullRequestState,
@@ -21,6 +23,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 
 const dependencies = [
@@ -186,6 +189,16 @@ export class PullRequestGuideFailedError extends Schema.TaggedError<PullRequestG
   }
 }
 
+/** The host refused or failed a fresh read; detail is its own explanation. */
+export class PullRequestReadFailedError extends Schema.TaggedError<PullRequestReadFailedError>()(
+  "PullRequestReadFailedError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export const PullRequestToolError = Schema.Union([
   OrchestratorMcpFailure,
   McpCapabilityUnavailableError,
@@ -203,6 +216,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestWatchFromSubagentError,
   PullRequestProjectNotFoundError,
   PullRequestGuideFailedError,
+  PullRequestReadFailedError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 
@@ -370,6 +384,24 @@ const ReadPullRequestGuideTool = Tool.make(agentSurfaceRegistry["pull_request_gu
   dependencies: guideDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request_guide.read"]));
 
+const readDependencies = [...dependencies, PullRequestService.PullRequestService];
+
+const ReadPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.read"].name, {
+  description: agentSurfaceRegistry["pull_request.read"].description,
+  parameters: GuideTarget,
+  success: Schema.Struct({ ...PullRequestIdentity, pullRequest: PullRequestDetail }),
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.read"]));
+
+const PullRequestChecksTool = Tool.make(agentSurfaceRegistry["pull_request.checks"].name, {
+  description: agentSurfaceRegistry["pull_request.checks"].description,
+  parameters: GuideTarget,
+  success: Schema.Struct({ ...PullRequestIdentity, checks: Schema.NullOr(PullRequestChecks) }),
+  failure: PullRequestToolError,
+  dependencies: readDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.checks"]));
+
 export const PullRequestsToolkit = Toolkit.make(
   LinkPullRequestTool,
   UnlinkPullRequestTool,
@@ -378,4 +410,6 @@ export const PullRequestsToolkit = Toolkit.make(
   UnwatchPullRequestTool,
   WritePullRequestGuidesTool,
   ReadPullRequestGuideTool,
+  ReadPullRequestTool,
+  PullRequestChecksTool,
 );

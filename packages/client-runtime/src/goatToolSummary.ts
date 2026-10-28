@@ -499,6 +499,12 @@ export function summarizeGoatToolCalls(
     case "read-pr-guide":
       label = phrase("Read", "read", quantity(selected.length, "review guide"));
       break;
+    case "read-pr":
+      label = phrase("Read", "read", quantity(selected.length, "pull request"));
+      break;
+    case "read-pr-checks":
+      label = phrase("Checked", "check", `pull request checks ${times}`);
+      break;
     case "browser":
       label = phrase("Used", "use", `browser ${times}`);
       break;

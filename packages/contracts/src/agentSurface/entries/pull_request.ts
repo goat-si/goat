@@ -88,6 +88,7 @@ export const pullRequestEntries = {
       "Read one pull request fresh from its host: title, body, state, mergeability, branches, reviewers, labels, checks and merge options. The repository must be a project checkout here. For check results alone use goat_pull_request_checks.",
     guide:
       "Pass url, or repository and number (host defaults to the matching project's). The pull request need not be linked to a thread. This asks the host each time, as the pull request view in the app does, with the project's own credential. goat_pull_request_watch wakes a thread on changes instead of reading repeatedly.",
+    parameters: { url: "The pull request's URL, such as https://github.com/owner/repo/pull/12." },
     examples: [
       {
         title: "Read a pull request by URL",
@@ -119,6 +120,7 @@ export const pullRequestEntries = {
       "Read a pull request's state and each check's status and conclusion fresh from its host. checks is null when the host reports none. The repository must be a project checkout here.",
     guide:
       "Pass url, or repository and number (host defaults to the matching project's). This asks the host each time, as the app's checks list does, with the project's own credential. To wait for checks to finish, use goat_pull_request_watch and end the turn instead of reading in a loop.",
+    parameters: { url: "The pull request's URL, such as https://github.com/owner/repo/pull/12." },
     examples: [
       {
         title: "Read the checks on a pull request",
