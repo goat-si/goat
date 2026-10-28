@@ -70,7 +70,7 @@ export const asDirectResult = (result: McpSchema.CallToolResult) => {
 
 // goat_eval's own refusals and journal failures, which say nothing about the target's access.
 const EVAL_OWN_FAILURE =
-  /^(eval_[a-z_]+|grant_[a-z_]+|storage_failed|in_progress|idempotency_mismatch|unknown_outcome)$/;
+  /^(eval_[a-z_]+|grant_[a-z_]+|storage_failed|in_progress|idempotency_mismatch|not_callable|unknown_path|unknown_outcome)$/;
 
 /**
  * The outcome a route's result stands for. The envelope turns a refusal inside a successful

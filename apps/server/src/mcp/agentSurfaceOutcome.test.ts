@@ -11,6 +11,8 @@ it("never counts goat_eval's own refusals as the target answering", () => {
     "storage_failed",
     "in_progress",
     "idempotency_mismatch",
+    "not_callable",
+    "unknown_path",
   ])
     expect(
       routeOutcome({
