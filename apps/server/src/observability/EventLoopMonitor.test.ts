@@ -207,6 +207,7 @@ it.effect("correlates native writer successes and failures with local stall evid
     yield* Effect.gen(function* () {
       const monitor = yield* EventLoopMonitor.EventLoopMonitor;
       yield* TestClock.adjust("30 seconds");
+      assert.equal(yield* Queue.size(lines), 1, "SQL evidence accompanies the startup record");
       const startup = yield* Queue.take(lines);
       assert.include(startup, '"phase":"startup"');
       assert.include(startup, '"owner":"test.nativeWriter"');
