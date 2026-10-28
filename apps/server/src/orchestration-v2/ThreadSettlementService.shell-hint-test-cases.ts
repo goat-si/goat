@@ -101,7 +101,7 @@ export function settlementShellHintTests({
     );
   }
 
-  it.effect("checks a shell hint's thread without restoring archived history", () =>
+  it.effect("reads shell-hint and settled-cleanup threads without restoring archived history", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
@@ -125,7 +125,10 @@ export function settlementShellHintTests({
           yield* fixture.publishEvent(settledEvent(marker));
           yield* Queue.take(fixture.closedIdle);
           yield* service.drain;
-          assert.notInclude(yield* Ref.get(restoringReads), thread.id);
+          const reads = yield* Ref.get(restoringReads);
+          assert.notInclude(reads, thread.id);
+          // The marker's settled event ran cleanup, which closed its idle terminals.
+          assert.notInclude(reads, marker.id);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
