@@ -88,7 +88,8 @@ export function memoryEvidenceSources(
  * The contract-shaped (still undecoded) result. Null references become absent keys; an entry takes
  * the references of the first source holding its messages (models miscopy long event ids, and a
  * consolidation rereads messages its previous summary cites), or splits into one entry per source.
- * Validation still decides whether the result cites only supplied evidence.
+ * Ids no source of the same origin holds support nothing and are dropped, and a fact left without
+ * non-model evidence becomes an inference. Validation still decides the result.
  */
 export function memoryResultFromModelOutput(
   output: MemorySummaryModelOutput | MemoryConflictModelOutput,
@@ -102,9 +103,8 @@ export function memoryResultFromModelOutput(
     ...(source.watermark ? { watermark: source.watermark } : {}),
     ...(source.importSourceId === undefined ? {} : { importSourceId: source.importSourceId }),
   });
-  return {
-    ...output,
-    evidence: output.evidence.flatMap(({ sourceThread, watermark, importSourceId, ...rest }) => {
+  const evidence = output.evidence.flatMap(
+    ({ sourceThread, watermark, importSourceId, ...rest }) => {
       const asWritten = {
         ...rest,
         ...(sourceThread === null ? {} : { sourceThread }),
@@ -120,11 +120,18 @@ export function memoryResultFromModelOutput(
       const groups = new Map<M.MemoryEvidence, string[]>();
       for (const id of rest.messageIds) {
         const source = candidates.find((candidate) => holds(candidate, id));
-        if (!source) return [asWritten];
+        if (!source) continue;
         groups.set(source, [...(groups.get(source) ?? []), id]);
       }
       return [...groups].map(([source, messageIds]) => fromSource({ ...rest, messageIds }, source));
-    }),
+    },
+  );
+  const supported = evidence.some((entry) => entry.origin !== "model");
+  return {
+    ...output,
+    assertionKind:
+      output.assertionKind === "fact" && !supported ? "inference" : output.assertionKind,
+    evidence,
   };
 }
 
