@@ -125,7 +125,10 @@ describe("selectTasks", () => {
   it("runs every dependent task for contracts", () => {
     assert.deepEqual(
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
-      TASKS.filter((task) => task !== "test-memory-growth" && task !== "test-ingest"),
+      TASKS.filter(
+        (task) =>
+          task !== "test-memory-growth" && task !== "test-ingest" && task !== "test-windows",
+      ),
     );
   });
 
