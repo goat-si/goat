@@ -1,3 +1,5 @@
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { defineConfig, type ViteUserConfig } from "vite-plus";
 import "vite-plus/test/config";
 
@@ -17,7 +19,12 @@ const config: Pick<ViteUserConfig, "root" | "test" | "run"> = defineConfig({
 });
 
 // Release builds install without this package, and their task graph still loads this file.
-const astro = await import("astro/config").catch(() => undefined);
+// Only a missing Astro is skipped; an installed one that fails to load still throws.
+const astro = NodeFS.existsSync(
+  NodePath.join(import.meta.dirname, "node_modules/astro/package.json"),
+)
+  ? await import("astro/config")
+  : undefined;
 
 // Root-level runs (CI's changed-test list) start elsewhere; Astro resolves src/pages from its root.
 export default astro ? astro.getViteConfig(config, { root: import.meta.dirname }) : config;
