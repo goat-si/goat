@@ -15,7 +15,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Link a pull request to this thread",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
     ],
     effect: "write",
@@ -92,7 +92,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Read a pull request by URL",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
       {
         title: "Read a pull request by repository and number",
@@ -124,7 +124,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Read the checks on a pull request",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
     ],
     effect: "read",
@@ -152,7 +152,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Read the conversation on a pull request",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
     ],
     effect: "read",
@@ -182,7 +182,7 @@ export const pullRequestEntries = {
       {
         title: "Read the rest of a review thread",
         args: {
-          url: "https://github.com/goat-si/goat/pull/2028",
+          url: "https://github.com/acme/app/pull/42",
           threadId: "<reviewThreadId>",
           cursor: "<nextCommentsCursor>",
         },
@@ -221,7 +221,7 @@ export const pullRequestEntries = {
       {
         title: "Read a changed file",
         args: {
-          url: "https://github.com/goat-si/goat/pull/2028",
+          url: "https://github.com/acme/app/pull/42",
           changeType: "change",
           oldPath: "apps/server/src/mcp/ToolAdmission.ts",
           newPath: "apps/server/src/mcp/ToolAdmission.ts",
@@ -290,8 +290,8 @@ export const pullRequestEntries = {
         title: "Read line counts for two pull requests",
         args: {
           pullRequests: [
-            { url: "https://github.com/goat-si/goat/pull/2028" },
-            { url: "https://github.com/goat-si/goat/pull/2055" },
+            { url: "https://github.com/acme/app/pull/42" },
+            { url: "https://github.com/acme/app/pull/43" },
           ],
         },
       },
@@ -343,7 +343,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Be woken on checks, reviews or conflicts",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
     ],
     effect: "write",
@@ -373,7 +373,7 @@ export const pullRequestEntries = {
     examples: [
       {
         title: "Stop watching a merged pull request",
-        args: { url: "https://github.com/goat-si/goat/pull/2028" },
+        args: { url: "https://github.com/acme/app/pull/42" },
       },
     ],
     effect: "write",
