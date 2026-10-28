@@ -134,7 +134,7 @@ it.effect("does not receipt a failed worker migration and reopens safely", () =>
       });
     const failed = yield* Layer.build(SqlitePersistence.layerFromPath(filename)).pipe(
       Effect.scoped,
-      Effect.result,
+      Effect.exit,
     );
     assert.equal(failed._tag, "Failure");
     assert.isNumber(before);

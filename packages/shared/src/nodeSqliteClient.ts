@@ -1,5 +1,4 @@
 import * as NodeSqlite from "node:sqlite";
-import * as NodeUtil from "node:util";
 import * as NodeWorkerThreads from "node:worker_threads";
 
 import * as Cache from "effect/Cache";
@@ -34,6 +33,9 @@ export { recentSlowSql } from "./slowSqlOperations.ts";
 
 import { readerWorkerSource, checkpointWorkerSource } from "./sqliteWorkerSources.ts";
 
+import { makeWriter } from "./nodeSqliteWriter.ts";
+import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
+
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
 export interface SqliteClientConfig {
@@ -50,6 +52,7 @@ export interface SqliteClientConfig {
   readonly readerStartupTimeout?: Duration.Input | undefined;
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
+  readonly writerWorker?: boolean | undefined;
 }
 
 // SqlClient masks transaction acquisition, so readOnly carries the caller's interruption policy.
@@ -150,11 +153,9 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
   return classifySqliteError(cause, { message, operation });
 };
 
-// WAL recovery may return SQLITE_BUSY_RECOVERY without invoking SQLite's
-// busy handler, even with busy_timeout set. It fails before the statement can
-// change data, so retry only this code, never BUSY_SNAPSHOT or a whole transaction.
-// Yield between attempts so recovery on another connection can finish without
-// blocking the main thread. Cap the wait at 500 delays of 10 ms.
+// WAL recovery can bypass SQLite's busy handler and fails before changing data.
+// Retry only SQLITE_BUSY_RECOVERY (261), never BUSY_SNAPSHOT or a whole transaction.
+// Delay on the caller's Effect clock for at most 500 attempts of 10 ms.
 const isWalRecovery = (error: SqlError) => {
   const cause = error.reason.cause;
   return Predicate.hasProperty(cause, "errcode") && cause.errcode === 261;
@@ -173,98 +174,6 @@ const waitForWalRecovery = <A, R>(effect: Effect.Effect<A, SqlError, R>) =>
       "10 millis",
     ),
   );
-
-// SQLite retains text/blob bindings until rebind or finalization; node:sqlite cannot clear them.
-const LARGE_BINDING_SIZE = 64 * 1024;
-
-const isBlob = (value: unknown): value is ArrayBufferView | ArrayBufferLike =>
-  ArrayBuffer.isView(value) || NodeUtil.types.isAnyArrayBuffer(value);
-
-// Node 24.20's `node:sqlite` (SQLite 3.53.4) binds a raw ArrayBuffer parameter as
-// NULL. A Uint8Array of the same bytes binds on that build and on later ones.
-const sqliteBlob = (value: ArrayBufferLike): Uint8Array | ArrayBufferLike => {
-  try {
-    return new Uint8Array(value);
-  } catch {
-    return value;
-  }
-};
-
-const sqliteParameter = (value: unknown): unknown => {
-  if (NodeUtil.types.isAnyArrayBuffer(value)) return sqliteBlob(value);
-  if (
-    value === null ||
-    (typeof value !== "object" && typeof value !== "function") ||
-    ArrayBuffer.isView(value)
-  ) {
-    return value;
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  let changed = false;
-  for (const descriptor of Object.values(descriptors)) {
-    if (
-      descriptor.enumerable &&
-      "value" in descriptor &&
-      NodeUtil.types.isAnyArrayBuffer(descriptor.value)
-    ) {
-      changed = true;
-      break;
-    }
-  }
-  if (!changed) return value;
-  const copy = typeof value === "function" ? function namedBinding() {} : {};
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!descriptor.enumerable) continue;
-    if ("value" in descriptor && NodeUtil.types.isAnyArrayBuffer(descriptor.value)) {
-      Object.defineProperty(copy, key, { ...descriptor, value: sqliteBlob(descriptor.value) });
-    } else {
-      Object.defineProperty(copy, key, descriptor);
-    }
-  }
-  return copy;
-};
-
-const sqliteParameters = (params: ReadonlyArray<unknown>): ReadonlyArray<unknown> => {
-  let changed = false;
-  const next = params.map((param) => {
-    const normalized = sqliteParameter(param);
-    if (normalized !== param) changed = true;
-    return normalized;
-  });
-  return changed ? next : params;
-};
-
-const bindingSize = (value: unknown): number => {
-  if (typeof value === "string") {
-    return value.length;
-  }
-  return isBlob(value) ? value.byteLength : 0;
-};
-
-const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
-  try {
-    let size = 0;
-    for (const param of params) {
-      if (
-        (typeof param === "object" || typeof param === "function") &&
-        param !== null &&
-        !isBlob(param)
-      ) {
-        // Named parameters may be callable objects; read data properties only to avoid invoking getters twice.
-        for (const property of Object.values(Object.getOwnPropertyDescriptors(param))) {
-          if (!property.enumerable) continue;
-          if (!("value" in property)) return true;
-          size += bindingSize(property.value);
-        }
-      } else {
-        size += bindingSize(param);
-      }
-    }
-    return size > LARGE_BINDING_SIZE;
-  } catch {
-    return true;
-  }
-};
 
 interface ReaderRequest {
   readonly sql: string;
@@ -1205,7 +1114,15 @@ const make = Effect.fn("makeWithDatabase")(function* (
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const connection = yield* makeConnection;
+  const workerWriter = options.writerWorker
+    ? yield* makeWriter(
+        options,
+        waitForWalRecovery,
+        () => new UnsupportedNodeSqliteOperationError(),
+        () => Fiber.getCurrent()?.getRef(TransactionAcquire)?.restore,
+      )
+    : undefined;
+  const connection = workerWriter === undefined ? yield* makeConnection : workerWriter.connection;
   const acquireReader =
     options.readerWorker && isFileDatabase ? yield* makeReader(options) : undefined;
   const readerSemaphore = yield* Semaphore.make(1);
@@ -1231,21 +1148,24 @@ const make = Effect.fn("makeWithDatabase")(function* (
 
   const writer = { name: "writer" as const, lock: semaphore, connection };
   let activeWriter: ConnectionOwner | undefined;
-  const route = Effect.withFiber<
-    {
-      readonly name: Acquired["connection"];
-      readonly lock: Semaphore.Semaphore;
-      readonly connection: Connection;
-    },
-    SqlError
-  >((fiber) =>
-    acquireReader !== undefined && Context.get(fiber.context, ReadOnly)
-      ? Effect.map(acquireReader, (readerConnection) => ({
-          name: "reader" as const,
-          lock: readerSemaphore,
-          connection: readerConnection,
-        }))
-      : Effect.succeed(writer),
+  const route = Effect.andThen(
+    workerWriter?.available ?? Effect.void,
+    Effect.withFiber<
+      {
+        readonly name: Acquired["connection"];
+        readonly lock: Semaphore.Semaphore;
+        readonly connection: Connection;
+      },
+      SqlError
+    >((fiber) =>
+      acquireReader !== undefined && Context.get(fiber.context, ReadOnly)
+        ? Effect.map(acquireReader, (readerConnection) => ({
+            name: "reader" as const,
+            lock: readerSemaphore,
+            connection: readerConnection,
+          }))
+        : Effect.succeed(writer),
+    ),
   );
 
   const acquired = (
