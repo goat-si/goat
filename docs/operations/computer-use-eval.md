@@ -75,8 +75,8 @@ closes them.
 A run's agent never outlives it. `codex exec` runs in its own process group, which the runner
 stops with TERM and then KILL and confirms gone; a GOAT thread is interrupted unless it already
 ended and confirmed terminal. When either cannot be confirmed, the campaign stops, so the next run
-never shares the screen with a live agent. Ctrl-C stops the current run's agent the same way before
-the runner exits.
+never shares the screen with a live agent. Ctrl-C stops the current run's agent and observer the same way
+before the runner exits.
 
 ## Scores
 
