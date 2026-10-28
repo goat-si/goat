@@ -163,3 +163,68 @@ describe("host conditions", () => {
     expect(types(compatible, MIN)).toEqual(["Ready"]);
   });
 });
+
+describe("quota conditions", () => {
+  const quotaSample = (limits: Record<string, unknown>) =>
+    ({
+      ...ok,
+      metrics: {
+        quotas: [
+          {
+            instanceId: "claude",
+            driver: "claudeAgent",
+            fromCache: false,
+            limits: { checkedAt: "2026-10-20T00:00:00.000Z", ...limits },
+          },
+        ],
+      },
+    }) as unknown as HostStatusEntry;
+  const conditionsFor = (limits: Record<string, unknown>) =>
+    deriveConditions({
+      contact: { ...emptyContact, lastOkAt: 0, sample: quotaSample(limits) },
+      scheduling: null,
+      now: MIN,
+    })
+      .filter((condition) => condition.type === "QuotaExhausted")
+      .map((condition) => condition.instanceId);
+
+  it("raises a host-wide quota condition only for unscoped exhaustion", () => {
+    const future = "2099-01-01T00:00:00.000Z";
+    expect(
+      conditionsFor({
+        windows: [
+          {
+            id: "opus",
+            kind: "weekly",
+            label: "Opus weekly",
+            usedPercent: 100,
+            scopeModel: "family:opus",
+            resetsAt: future,
+          },
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      conditionsFor({
+        windows: [
+          {
+            id: "weekly",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 100,
+            exhausted: false,
+            resetsAt: future,
+          },
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      conditionsFor({
+        windows: [],
+        availability: [
+          { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
+        ],
+      }),
+    ).toEqual(["claude"]);
+  });
+});

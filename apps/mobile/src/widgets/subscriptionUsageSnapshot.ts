@@ -44,6 +44,10 @@ export function createWidgetRefresher<Id>(refresh: (id: Id) => Promise<unknown>)
   };
 }
 
+/** When the quota was observed; a pool snapshot's assembly time does not make it fresh. */
+const observedAt = (account: LimitAccount) =>
+  Date.parse(account.observedAt ?? account.limits.checkedAt);
+
 function subscriptionUsageProps(
   accounts: readonly LimitAccount[],
   now: number,
@@ -51,9 +55,14 @@ function subscriptionUsageProps(
   maxWindowsPerProvider: number,
 ): SubscriptionUsageSnapshot {
   const pools = collectLimitPools(accounts, now);
+  // Excluded accounts (paused, reauth, a routed login) never set freshness or expiry.
   const checked = accounts
-    .filter((account) => account.driver === "codex" || account.driver === "claudeAgent")
-    .map((account) => Date.parse(account.limits.checkedAt));
+    .filter(
+      (account) =>
+        (account.driver === "codex" || account.driver === "claudeAgent") &&
+        account.aggregated !== false,
+    )
+    .map(observedAt);
   return {
     checkedAt: checked.length > 0 && checked.every(Number.isFinite) ? Math.min(...checked) : 0,
     providers: (["codex", "claudeAgent"] as const)
@@ -72,7 +81,9 @@ function subscriptionUsageProps(
             expiresAt: 0,
             totalWindows: 0,
           };
-        const checkedAt = Math.min(...pool.accounts.map((a) => Date.parse(a.limits.checkedAt)));
+        const checkedAt = Math.min(
+          ...pool.accounts.filter((account) => account.aggregated !== false).map(observedAt),
+        );
         const expiresAt = Math.min(
           checkedAt + SNAPSHOT_MAX_AGE,
           ...pool.windows.flatMap((window) => window.resets.map((reset) => reset.at)),

@@ -1,12 +1,13 @@
 import type { EnvironmentId, UsageLimitsReport } from "@goat/contracts";
 import { limitsNotice } from "@goat/shared/usageLimits";
+import { availabilityText } from "@goat/shared/usageLimitsOpenCodex";
 import { GaugeIcon } from "~/components/solar";
 
 import { ensureLocalApi } from "../../localApi";
 import { Button } from "../ui/button";
 import { providerClients } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
-import { LimitWindows, ResetCredits } from "../usage/UsageLimits";
+import { LimitWindows, ResetCredits, resetCreditsSummary } from "../usage/UsageLimits";
 import { ComposerBanner } from "./ComposerBanner";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 
@@ -81,10 +82,13 @@ function UsageLimitsBannerBody({
       <ComposerBanner.Body className="flex flex-col gap-2 pt-1 pb-1.5 pe-2">
         {report.accounts.map((account) => {
           const resetCreditInput =
-            account.resetCreditInput ??
-            (account.instanceId ? { instanceId: account.instanceId } : undefined);
+            account.redeemable === false
+              ? undefined
+              : (account.resetCreditInput ??
+                (account.instanceId ? { instanceId: account.instanceId } : undefined));
           const notice = limitsNotice(account.limits);
           const externalUsage = account.limits.externalUsage;
+          const blocks = (account.limits.availability ?? []).filter((block) => block.exhausted);
           return (
             <div key={account.id} className="flex min-w-0 flex-col gap-1">
               {report.accounts.length > 1 ? (
@@ -102,6 +106,11 @@ function UsageLimitsBannerBody({
                   now={now}
                 />
               )}
+              {blocks.map((block) => (
+                <span key={block.id} className="text-xs text-muted-foreground">
+                  {availabilityText(block, now)}
+                </span>
+              ))}
               {externalUsage ? (
                 <Button
                   size="sm"
@@ -119,6 +128,10 @@ function UsageLimitsBannerBody({
                   credits={account.limits.resetCredits}
                   now={now}
                 />
+              ) : account.limits.resetCredits ? (
+                <span className="text-xs text-muted-foreground">
+                  {resetCreditsSummary(account.limits.resetCredits, now)}
+                </span>
               ) : null}
             </div>
           );

@@ -11,22 +11,30 @@
  * @module channelPlacement
  */
 
-import type { QuotaPool } from "@goat/contracts";
+import type { QuotaPool, ServerProviderUsageLimits } from "@goat/contracts";
+import {
+  appliesToModel,
+  freshWindows,
+  isWindowExhausted,
+  verdictWindows,
+  type VerdictWindow,
+} from "@goat/shared/quotaVerdict";
 
 /** Assumed use of an account that reports no quota windows. */
 export const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
 export const LOAD_PENALTY = 40;
-const QUOTA_MAX_AGE_MS = 5 * 60 * 1000;
 /** Reasons are cut to this length; the chip has room for one short line. */
 const PLACEMENT_REASON_CHARS = 200;
 
-export interface PlacementWindow {
-  readonly label: string;
-  readonly usedPercent: number;
-  readonly resetsAt?: string | undefined;
-  readonly scopeModel?: string | undefined;
-}
+/** A numeric window or a percentless availability block; see quotaVerdict. */
+export type PlacementWindow = VerdictWindow;
+
+/** A report's windows and availability blocks, or null when it has none. */
+export const usageWindows = (limits: ServerProviderUsageLimits | undefined) => {
+  const windows = limits === undefined ? [] : verdictWindows(limits);
+  return windows.length === 0 ? null : windows;
+};
 
 export interface PlacementCandidate<A> {
   /** Whatever the caller needs back, such as the model selection to launch with. */
@@ -52,14 +60,6 @@ export interface Placement<A> {
   readonly reason: string | undefined;
 }
 
-/** A window at its limit counts until it resets; one whose reset time passed is stale. */
-const exhaustedWindow = (window: PlacementWindow, now: number) => {
-  if (window.usedPercent < 100) return false;
-  if (window.resetsAt === undefined) return true;
-  const resets = Date.parse(window.resetsAt);
-  return Number.isNaN(resets) || resets > now;
-};
-
 export function placementWindows(
   candidate: PlacementCandidate<unknown>,
 ): ReadonlyArray<PlacementWindow> {
@@ -71,34 +71,22 @@ export function placementWindows(
           ? pool.pooled.windows
           : (pool.accounts.find((account) => account.accountRef === candidate.accountRef)
               ?.windows ?? [])
-        ).flatMap((window) => {
-          const usedPercent = window.exhausted === true ? 100 : window.usedPercent;
-          return usedPercent === undefined ? [] : [{ ...window, usedPercent }];
-        });
-  return windows.filter((window) => {
-    if (window.scopeModel === undefined) return true;
-    const model = candidate.model?.split("/").at(-1);
-    if (window.scopeModel === model || window.scopeModel === candidate.model) return true;
-    // OpenCodex also proves Claude family scopes; versioned models in that family share the limit.
-    if (window.scopeModel.startsWith("family:")) {
-      const family = window.scopeModel.slice("family:".length);
-      return model === family || model?.startsWith(`claude-${family}-`) === true;
-    }
-    return false;
-  });
+        ).filter((window) => window.usedPercent !== undefined || window.exhausted === true);
+  return windows.filter((window) => appliesToModel(window.scopeModel, candidate.model));
 }
 
 export const isExhausted = (candidate: PlacementCandidate<unknown>, now: number) =>
-  placementWindows(candidate).some((window) => exhaustedWindow(window, now));
+  placementWindows(candidate).some((window) => isWindowExhausted(window, now));
 
-/** The busiest window, rounded, or null when none is reported. */
+/** The busiest numeric window, rounded, or null when none is reported. */
 export const busiestWindow = (candidate: PlacementCandidate<unknown>) => {
-  const windows = placementWindows(candidate);
-  if (windows.length === 0) return null;
-  const top = windows.reduce((left, right) =>
-    right.usedPercent > left.usedPercent ? right : left,
-  );
-  return { label: top.label, usedPercent: Math.round(top.usedPercent) };
+  let top: { readonly label: string; readonly usedPercent: number } | null = null;
+  for (const window of placementWindows(candidate)) {
+    if (window.usedPercent === undefined) continue;
+    if (top === null || window.usedPercent > top.usedPercent)
+      top = { label: window.label, usedPercent: window.usedPercent };
+  }
+  return top === null ? null : { label: top.label, usedPercent: Math.round(top.usedPercent) };
 };
 
 const score = (candidate: PlacementCandidate<unknown>) =>
@@ -123,15 +111,7 @@ export function choosePlacement<A>(
   now: number,
 ): Placement<A> | undefined {
   const candidates = input.map((candidate) => {
-    const stale =
-      candidate.checkedAt !== undefined &&
-      (!Number.isFinite(Date.parse(candidate.checkedAt)) ||
-        now - Date.parse(candidate.checkedAt) > QUOTA_MAX_AGE_MS);
-    const windows = placementWindows(candidate).filter(
-      (window) =>
-        (window.resetsAt === undefined || !(Date.parse(window.resetsAt) <= now)) &&
-        (!stale || exhaustedWindow(window, now)),
-    );
+    const windows = freshWindows(placementWindows(candidate), candidate.checkedAt, now);
     // Score the filtered pool reading instead of reading the original pool again.
     return { ...candidate, quotaPool: undefined, windows: windows.length ? windows : null };
   });

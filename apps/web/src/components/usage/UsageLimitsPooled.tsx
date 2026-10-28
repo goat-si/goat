@@ -15,6 +15,12 @@ import {
   remainingPercent,
 } from "@goat/shared/usageLimits";
 import {
+  collectOpenCodexPools,
+  openCodexPoolText,
+  sectionsWithOpenCodex,
+  type OpenCodexPoolLine,
+} from "@goat/shared/usageLimitsOpenCodex";
+import {
   TriangleAlertIcon as AlertTriangleIcon,
   ExternalLinkIcon,
   TicketIcon,
@@ -244,8 +250,10 @@ function ActiveSegmentPopover({
 }) {
   const available = pools.some((pool) =>
     displayLimitWindows(pool).some((window) =>
-      window.members.some(
+      // Columns include accounts left out of the pooled math, which still have segments.
+      window.columns.some(
         (member) =>
+          member.window !== null &&
           member.account.key === payload.account.key &&
           member.window.id === payload.window.id &&
           member.window.kind === payload.window.kind &&
@@ -574,7 +582,15 @@ function PoolWindowCard({
   );
 }
 
-function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+function PoolSection({
+  pool,
+  lines,
+  now,
+}: {
+  readonly pool: LimitPool;
+  readonly lines: ReadonlyArray<OpenCodexPoolLine>;
+  readonly now: number;
+}) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
@@ -590,6 +606,18 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
         />
         {label}
       </h2>
+      {lines.map((line) => {
+        const text = openCodexPoolText(line, now);
+        return (
+          <div key={line.key} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            <span className="text-foreground">{text.title}</span>
+            {text.readings ? <span>{text.readings}</span> : null}
+            {text.blocks.map((block) => (
+              <span key={block}>{block}</span>
+            ))}
+          </div>
+        );
+      })}
       {windows.map((window) => {
         const details = pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
         return (
@@ -618,7 +646,11 @@ export function UsageLimitsPooled({
 }) {
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const lines = collectOpenCodexPools(presentations);
+  const pools = sectionsWithOpenCodex(
+    collectLimitPools(collectLimitAccounts(presentations), now),
+    lines,
+  );
   const notices = collectLimitNotices(presentations);
   const externalLinks = collectExternalUsageLinks(presentations);
   const cursorPromptAt =
@@ -637,7 +669,11 @@ export function UsageLimitsPooled({
         {pools.map((pool, index) => (
           <Fragment key={pool.driver}>
             {index === cursorPromptAt ? cursorPrompt : null}
-            <PoolSection pool={pool} now={now} />
+            <PoolSection
+              pool={pool}
+              lines={lines.filter((line) => line.driver === pool.driver)}
+              now={now}
+            />
           </Fragment>
         ))}
       </SegmentPopoverContext>

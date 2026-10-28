@@ -203,7 +203,10 @@ it.effect.each([404, 401, 503, 302])(
       const [routed, kept] = yield* reader.project([routedCodex(), direct], {}, result);
       expect(routed?.usageLimits?.windows).toEqual([]);
       expect(routed?.usageLimits?.resetCredits).toBeUndefined();
-      expect(routed?.usageLimits?.quotaPoolRoute).toEqual({ provider: "openai" });
+      expect(routed?.usageLimits?.quotaPoolRoute).toEqual({
+        provider: "openai",
+        openCodexVersion: "2.86.0",
+      });
       expect(routed?.usageLimits?.unavailable?.reason).toBe("probeFailed");
       expect(routed?.usageLimits?.unavailable?.message).toContain(
         "OpenCodex pool unavailable (OpenCodex 2.86.0)",
@@ -503,4 +506,111 @@ it.effect.each([
       expect(projected).toEqual(provider);
     }
   }).pipe(Effect.provide(f.layer));
+});
+
+it.effect(
+  "keeps the routed login's own quota and credits beside the pool, redeemable only off GOAT's route",
+  () => {
+    const f = fixture();
+    return Effect.gen(function* () {
+      const reader = yield* makeOpenCodexQuotaPool;
+      const snapshot = yield* reader.read();
+      const goatRouted = native(
+        "codex",
+        {
+          codexRoute: { modelRoute: "opencodex", effectiveBaseUrl: LOCAL_CODEX },
+        },
+        "goat-routed",
+      );
+      const [config, goat] = yield* reader.project([routedCodex(), goatRouted], {}, snapshot);
+      expect(config?.usageLimits?.resetCredits).toBeUndefined();
+      expect(config?.usageLimits?.localAccount).toEqual({
+        checkedAt: pool.generatedAt,
+        windows: [{ id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 88 }],
+        resetCredits: { availableCount: 1, nextCreditId: "credit-1" },
+        redeemable: true,
+      });
+      expect(goat?.usageLimits?.localAccount?.redeemable).toBe(false);
+      const failed = yield* reader.project(
+        [routedCodex()],
+        {},
+        {
+          origin: "http://127.0.0.1:10100",
+          unavailable: "OpenCodex pool unavailable (OpenCodex 2.86.0): x.",
+          version: "2.86.0",
+        },
+      );
+      expect(failed[0]?.usageLimits?.localAccount?.resetCredits?.availableCount).toBe(1);
+      expect(failed[0]?.usageLimits?.quotaPoolRoute).toEqual({
+        provider: "openai",
+        openCodexVersion: "2.86.0",
+      });
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect("carries pool-wide availability blocks without inventing a percentage", () => {
+  const blocked = {
+    ...payload,
+    providers: payload.providers.map((entry) =>
+      entry.provider !== "anthropic"
+        ? entry
+        : {
+            ...entry,
+            pooled: {
+              windows: [
+                ...entry.pooled.windows,
+                {
+                  id: "availability:family:opus",
+                  kind: "custom",
+                  label: "Opus availability",
+                  scopeModel: "family:opus",
+                  resetsAt: "2026-10-22T00:00:00.000Z",
+                  source: "measured",
+                  observedAt: "2026-10-21T03:00:00.000Z",
+                  exhausted: true,
+                },
+              ],
+            },
+          },
+    ),
+  };
+  const f = fixture({
+    response: () => Response.json(blocked),
+    files: {
+      "/fixture-user/.claude/settings.json": JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:10100" },
+      }),
+    },
+  });
+  return Effect.gen(function* () {
+    const reader = yield* makeOpenCodexQuotaPool;
+    const [projected] = yield* reader.project([native("claudeAgent")], {}, yield* reader.read());
+    expect(projected?.usageLimits?.windows.map((window) => window.id)).toEqual([
+      "5h",
+      "family:opus",
+    ]);
+    expect(projected?.usageLimits?.availability).toEqual([
+      {
+        id: "availability:family:opus",
+        label: "Opus availability",
+        exhausted: true,
+        scopeModel: "family:opus",
+        resetsAt: "2026-10-22T00:00:00.000Z",
+        observedAt: "2026-10-21T03:00:00.000Z",
+      },
+    ]);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it("publishes pool accounts keyed by Home with their label, state and observation time", () => {
+  const source = quotaPoolSource(pool);
+  expect(source.homeId).toBe("fixture-home");
+  expect(source.accounts[0]).toMatchObject({
+    id: JSON.stringify(["fixture-home", "openai", "sha256:account-a"]),
+    label: "a***",
+    state: "available",
+    observedAt: "2026-10-21T03:00:00.000Z",
+  });
+  expect(source.accounts[1]?.observedAt).toBe(pool.generatedAt);
 });

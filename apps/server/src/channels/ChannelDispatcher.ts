@@ -66,7 +66,7 @@ import {
   turnSteerIdsFor,
   workerLaunchIdsFor,
 } from "./channelIds.ts";
-import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -291,14 +291,14 @@ const make = Effect.gen(function* () {
             !resolveProjectProviderInstanceEnabled(settings, projectId, instance.instanceId)
           )
             return [];
-          const windows = snapshot.usageLimits?.windows ?? [];
+          const windows = usageWindows(snapshot.usageLimits);
           const candidate: PlacementCandidate<ModelSelection> = {
             value: isConfigured ? selection : { ...selection, instanceId: instance.instanceId },
             host: null,
             providerLabel:
               instance.displayName ?? snapshot.displayName ?? String(instance.instanceId),
             preferred: isConfigured,
-            windows: windows.length === 0 ? null : windows,
+            windows,
             checkedAt: snapshot.usageLimits?.checkedAt,
             activeTasks: load.get(instance.instanceId) ?? 0,
             model: selection.model,

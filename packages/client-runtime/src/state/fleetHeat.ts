@@ -1,4 +1,5 @@
 import type { EnvironmentId, HostStatusEntry, HostStatusMetrics } from "@goat/contracts";
+import { freshWindows, isWindowExhausted, verdictWindows } from "@goat/shared/quotaVerdict";
 
 import type { FleetMachine } from "./fleet.ts";
 import { cpuPercent, loadPerCore, memoryPercent } from "./host-metrics.ts";
@@ -34,7 +35,12 @@ export interface FleetHeatSignals {
   readonly loadPerCore: number | null;
   readonly memoryPercent: number | null;
   /** The fullest quota window across the host's provider accounts. */
-  readonly quota: { readonly label: string; readonly usedPercent: number } | null;
+  /** usedPercent ranks the reading; a blocked pool ranks as full but has no percentage to show. */
+  readonly quota: {
+    readonly label: string;
+    readonly usedPercent: number;
+    readonly blocked?: true;
+  } | null;
 }
 
 export function fleetHeatSignals(
@@ -46,15 +52,27 @@ export function fleetHeatSignals(
     | "availableMemoryBytes"
     | "totalMemoryBytes"
     | "quotas"
+    | "sampledAt"
   >,
 ): FleetHeatSignals {
   let quota: FleetHeatSignals["quota"] = null;
   for (const account of metrics.quotas) {
     if (account.limits.unavailable !== undefined) continue;
-    for (const window of account.limits.windows) {
-      if (quota !== null && window.usedPercent <= quota.usedPercent) continue;
-      const name = account.displayName ?? account.driver;
-      quota = { label: name + " " + window.label.toLowerCase(), usedPercent: window.usedPercent };
+    const name = account.displayName ?? account.driver;
+    // Judged at the sample's own time: unscoped, unreset and fresh readings, as placement does.
+    const readings = freshWindows(
+      verdictWindows(account.limits).filter((window) => window.scopeModel === undefined),
+      account.limits.checkedAt,
+      metrics.sampledAt,
+    );
+    for (const window of readings) {
+      const blocked = window.usedPercent === undefined;
+      if (blocked && !isWindowExhausted(window, metrics.sampledAt)) continue;
+      const usedPercent = window.usedPercent ?? 100;
+      if (quota !== null && usedPercent <= quota.usedPercent) continue;
+      quota = blocked
+        ? { label: name + " all accounts blocked", usedPercent, blocked: true }
+        : { label: name + " " + window.label.toLowerCase(), usedPercent };
     }
   }
   return {
@@ -110,6 +128,7 @@ const formatSignal = (signals: FleetHeatSignals, key: SignalKey): string | null 
   if (key === "cpu") return "CPU " + value + "%";
   if (key === "load") return "load " + value.toFixed(1) + "/core";
   if (key === "memory") return "memory " + value + "%";
+  if (signals.quota?.blocked === true) return signals.quota.label;
   return signals.quota!.label + " " + Math.round(value) + "%";
 };
 
@@ -193,7 +212,8 @@ const signalsEqual = (left: FleetHeatSignals | null, right: FleetHeatSignals | n
     left.loadPerCore === right.loadPerCore &&
     left.memoryPercent === right.memoryPercent &&
     left.quota?.label === right.quota?.label &&
-    left.quota?.usedPercent === right.quota?.usedPercent);
+    left.quota?.usedPercent === right.quota?.usedPercent &&
+    left.quota?.blocked === right.quota?.blocked);
 
 /** Same tier, status, text, and readings, so a consumer showing any of them can keep the old value. */
 export function fleetMachineHeatEqual(left: FleetMachineHeat, right: FleetMachineHeat): boolean {

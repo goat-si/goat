@@ -39,7 +39,6 @@ import {
   ModelSelection as ModelSelectionSchema,
   PositiveInt,
   ProjectId,
-  QuotaPool,
   ProviderInstanceId,
   RemoteOriginReportsWaitResult,
   RemoteReport,
@@ -88,6 +87,7 @@ import {
 } from "./channelOfferedModels.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import { decodeHostQuotas, remoteQuotaFields } from "./remoteQuotaCandidates.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import {
   applyReplicaScript,
@@ -332,39 +332,6 @@ const decodeProjectProviderDiagnosis = Schema.decodeUnknownEffect(
         instanceId: Schema.String,
         ready: Schema.Boolean,
         checks: Schema.Array(Schema.Struct({ id: Schema.String, status: Schema.String })),
-      }),
-    ),
-  }),
-);
-/** The quota windows goat_host_status reports for each provider account on that machine. */
-const decodeHostQuotas = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    hosts: Schema.Array(
-      Schema.Struct({
-        metrics: Schema.optional(
-          Schema.Struct({
-            quotaPool: Schema.optional(QuotaPool),
-            quotas: Schema.Array(
-              Schema.Struct({
-                instanceId: Schema.String,
-                limits: Schema.Struct({
-                  checkedAt: Schema.optional(Schema.String),
-                  quotaPool: Schema.optional(
-                    Schema.Struct({ provider: Schema.String, homeId: Schema.String }),
-                  ),
-                  windows: Schema.Array(
-                    Schema.Struct({
-                      label: Schema.String,
-                      usedPercent: Schema.Number,
-                      resetsAt: Schema.optional(Schema.String),
-                      scopeModel: Schema.optional(Schema.String),
-                    }),
-                  ),
-                }),
-              }),
-            ),
-          }),
-        ),
       }),
     ),
   }),
@@ -1048,11 +1015,6 @@ const make = Effect.gen(function* () {
             Effect.flatMap(decodeHostQuotas),
             Effect.option,
           );
-          const quotas = new Map(
-            (Option.isSome(status) ? (status.value.hosts[0]?.metrics?.quotas ?? []) : []).map(
-              (quota) => [quota.instanceId, quota.limits] as const,
-            ),
-          );
           return offered.providers
             .filter(
               (provider) =>
@@ -1068,19 +1030,8 @@ const make = Effect.gen(function* () {
               host,
               providerLabel: provider.displayName ?? provider.providerInstanceId,
               preferred: false,
-              windows: quotas.get(provider.providerInstanceId)?.windows ?? null,
-              checkedAt: quotas.get(provider.providerInstanceId)?.checkedAt,
+              ...remoteQuotaFields(Option.getOrUndefined(status), provider.providerInstanceId),
               model: local.modelSelection.model,
-              quotaPool:
-                Option.isSome(status) &&
-                status.value.hosts[0]?.metrics?.quotaPool?.producer.homeId ===
-                  quotas.get(provider.providerInstanceId)?.quotaPool?.homeId
-                  ? status.value.hosts[0]?.metrics?.quotaPool?.providers.find(
-                      (item) =>
-                        item.provider ===
-                        quotas.get(provider.providerInstanceId)?.quotaPool?.provider,
-                    )
-                  : undefined,
               activeTasks: 0,
               value: {
                 ...local,
@@ -1149,15 +1100,8 @@ const make = Effect.gen(function* () {
         },
         authorize,
       ).pipe(Effect.flatMap(decodeHostQuotas), Effect.option);
-      const quotas = new Map(
-        (status._tag === "Some" ? (status.value.hosts[0]?.metrics?.quotas ?? []) : []).map(
-          (quota) => [quota.instanceId, quota] as const,
-        ),
-      );
       const placed = choosePlacement(
         candidates.map((provider) => {
-          const quota = quotas.get(provider.providerInstanceId);
-          const windows = quota?.limits.windows ?? [];
           return {
             value:
               provider === configured
@@ -1170,18 +1114,9 @@ const make = Effect.gen(function* () {
             host: null,
             providerLabel: provider.displayName ?? provider.providerInstanceId,
             preferred: provider === configured,
-            windows: windows.length === 0 ? null : windows,
-            checkedAt: quota?.limits.checkedAt,
+            ...remoteQuotaFields(Option.getOrUndefined(status), provider.providerInstanceId),
             activeTasks: 0,
             model: selection.model,
-            quotaPool:
-              status._tag === "Some" &&
-              status.value.hosts[0]?.metrics?.quotaPool?.producer.homeId ===
-                quota?.limits.quotaPool?.homeId
-                ? status.value.hosts[0]?.metrics?.quotaPool?.providers.find(
-                    (item) => item.provider === quota?.limits.quotaPool?.provider,
-                  )
-                : undefined,
           };
         }),
         DateTime.toEpochMillis(yield* DateTime.now),

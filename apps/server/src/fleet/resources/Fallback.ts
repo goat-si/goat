@@ -21,6 +21,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import { modelSelectionCommandType, modelSelectionsEqual } from "@goat/shared/model";
+import { verdictWindows } from "@goat/shared/quotaVerdict";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -40,6 +41,7 @@ import { FallbackSelectionSource } from "../../orchestration-v2/goat/FallbackSel
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import {
   anyThreadChain,
   decideNext,
@@ -115,6 +117,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  const usageSources = yield* Effect.serviceOption(UsageLimitSources.UsageLimitSources);
   const switches = yield* Effect.serviceOption(ProviderSwitch.ProviderSwitchServiceV2);
   const cooldownState = yield* Ref.make(new Map<string, FallbackCooldown>());
   const noticed = yield* Ref.make(new Set<string>());
@@ -138,7 +141,12 @@ export const make = Effect.gen(function* () {
   const unavailability = Effect.gen(function* () {
     const now = yield* nowMs;
     const cooling = yield* Ref.get(cooldownState);
-    const providers = Option.isSome(registry) ? yield* registry.value.getProviders : undefined;
+    const raw = Option.isSome(registry) ? yield* registry.value.getProviders : undefined;
+    // Routed instances decide on their OpenCodex pool, not their own login's quota.
+    const providers =
+      raw === undefined || Option.isNone(usageSources)
+        ? raw
+        : yield* usageSources.value.projectProviders(raw);
     return (step: FallbackChainStep, current: string, local: boolean) => {
       const cooldown = cooling.get(stepKey(step));
       if (cooldown !== undefined && Date.parse(cooldown.until) > now)
@@ -148,11 +156,12 @@ export const make = Effect.gen(function* () {
       const provider = providers.find((candidate) => candidate.instanceId === step.instanceId);
       if (provider === undefined) return "is not configured here";
       if (!provider.enabled) return "is disabled";
-      // One instance can route several accounts (opencodex routes); its windows then
-      // describe whichever account failed, so they only rule out another instance.
-      const windows = provider.usageLimits?.windows ?? [];
+      // A login's windows describe whichever account failed, so they only rule out another
+      // instance; an OpenCodex pool's verdict holds for every model on the instance.
+      const windows =
+        provider.usageLimits === undefined ? [] : verdictWindows(provider.usageLimits);
       if (
-        step.instanceId !== current &&
+        (provider.usageLimits?.quotaPoolRoute !== undefined || step.instanceId !== current) &&
         windows.length > 0 &&
         isExhausted(
           {
@@ -160,11 +169,8 @@ export const make = Effect.gen(function* () {
             host: null,
             providerLabel: step.instanceId,
             preferred: false,
-            windows: windows.map((window) => ({
-              label: window.label,
-              usedPercent: window.usedPercent,
-              ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
-            })),
+            windows,
+            model: step.model,
             activeTasks: 0,
           },
           now,

@@ -152,3 +152,82 @@ describe("widget refresh probes", () => {
     await first;
   });
 });
+
+describe("subscription widget with an OpenCodex pool", () => {
+  it("takes freshness from counted accounts, not a paused one", () => {
+    const old = new Date(now - 60 * 60_000).toISOString();
+    const input = new Map([
+      [
+        EnvironmentId.make("env"),
+        {
+          entry: { target: { label: "Remote" } },
+          serverConfig: {
+            providers: [],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("opencodex"),
+                kind: "opencodex" as const,
+                label: "via OpenCodex Home home-a",
+                checkedAt,
+                homeId: "home-a",
+                accounts: [
+                  {
+                    id: "a",
+                    driver: ProviderDriverKind.make("codex"),
+                    state: "available" as const,
+                    usageLimits: limits,
+                  },
+                  {
+                    id: "b",
+                    driver: ProviderDriverKind.make("codex"),
+                    state: "paused" as const,
+                    usageLimits: { checkedAt: old, windows: [{ ...window, usedPercent: 90 }] },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const snapshot = buildSubscriptionUsageSnapshot(input, deepLink);
+    expect(snapshot.checkedAt).toBe(now);
+    expect(snapshot.providers[0]?.windows[0]?.remaining).toBe(60);
+  });
+});
+
+describe("subscription widget freshness", () => {
+  it("expires from when quota was observed, not when the pool snapshot was assembled", () => {
+    const observed = new Date(now - 60 * 60_000).toISOString();
+    const input = new Map([
+      [
+        EnvironmentId.make("env"),
+        {
+          entry: { target: { label: "Remote" } },
+          serverConfig: {
+            providers: [],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("opencodex"),
+                kind: "opencodex" as const,
+                label: "via OpenCodex Home home-a",
+                checkedAt,
+                homeId: "home-a",
+                accounts: [
+                  {
+                    id: "a",
+                    driver: ProviderDriverKind.make("codex"),
+                    state: "available" as const,
+                    observedAt: observed,
+                    usageLimits: limits,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(buildSubscriptionUsageSnapshot(input, deepLink).checkedAt).toBe(Date.parse(observed));
+  });
+});

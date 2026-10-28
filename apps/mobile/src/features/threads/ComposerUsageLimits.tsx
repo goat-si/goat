@@ -1,4 +1,5 @@
 import type { EnvironmentId, UsageLimitsReport } from "@goat/contracts";
+import { availabilityText } from "@goat/shared/usageLimitsOpenCodex";
 import { Pressable, ScrollView, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -35,8 +36,12 @@ export function ComposerUsageLimits({
       <ScrollView bounces={false} showsVerticalScrollIndicator={false} style={{ maxHeight }}>
         {report.accounts.map((account, index) => {
           const resetCreditInput =
-            account.resetCreditInput ??
-            (account.instanceId ? { instanceId: account.instanceId } : undefined);
+            account.redeemable === false
+              ? undefined
+              : (account.resetCreditInput ??
+                (account.instanceId ? { instanceId: account.instanceId } : undefined));
+          const credits = account.limits.resetCredits;
+          const blocks = (account.limits.availability ?? []).filter((block) => block.exhausted);
           const driverLabel = DRIVER_LABEL[account.driver] ?? String(account.driver);
           return (
             <AccountLimits
@@ -58,15 +63,30 @@ export function ComposerUsageLimits({
               now={now}
               trailing={index === 0 ? close : undefined}
               footer={
-                resetCreditInput && account.limits.resetCredits ? (
-                  <ResetCredits
-                    dense
-                    environmentId={environmentId}
-                    input={resetCreditInput}
-                    credits={account.limits.resetCredits}
-                    now={now}
-                  />
-                ) : undefined
+                blocks.length === 0 && credits === undefined ? undefined : (
+                  <>
+                    {blocks.map((block) => (
+                      <Text key={block.id} className="text-xs text-foreground-muted">
+                        {availabilityText(block, now)}
+                      </Text>
+                    ))}
+                    {credits === undefined ? null : resetCreditInput ? (
+                      <ResetCredits
+                        dense
+                        environmentId={environmentId}
+                        input={resetCreditInput}
+                        credits={credits}
+                        now={now}
+                      />
+                    ) : (
+                      <Text className="text-xs text-foreground-muted">
+                        {credits.availableCount === 1
+                          ? "1 reset credit banked"
+                          : `${credits.availableCount} reset credits banked`}
+                      </Text>
+                    )}
+                  </>
+                )
               }
             />
           );

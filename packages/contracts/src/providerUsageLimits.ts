@@ -21,6 +21,9 @@ export const ServerProviderUsageWindow = Schema.Struct({
   quotaKind: Schema.optional(QuotaWindowKind),
   source: Schema.optional(QuotaSource),
   scopeModel: Schema.optional(TrimmedNonEmptyString),
+  /** The producer's own verdict for this window; false wins over a full percentage. */
+  exhausted: Schema.optional(Schema.Boolean),
+  observedAt: Schema.optional(IsoDateTime),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -44,7 +47,33 @@ export const quotaWindowToUsageWindow = (window: QuotaWindow) => {
     quotaKind: window.kind,
     source: window.source,
     ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
+    ...(window.exhausted === undefined ? {} : { exhausted: window.exhausted }),
+    observedAt: window.observedAt,
   } satisfies ServerProviderUsageWindow;
+};
+
+/** Whether every eligible pool account is blocked, optionally for one model scope; it has no percentage. */
+export const ServerProviderUsageAvailability = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  exhausted: Schema.Boolean,
+  scopeModel: Schema.optional(TrimmedNonEmptyString),
+  resetsAt: Schema.optional(IsoDateTime),
+  observedAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderUsageAvailability = typeof ServerProviderUsageAvailability.Type;
+
+export const quotaWindowToAvailability = (window: QuotaWindow) => {
+  if (window.usedPercent !== undefined) return undefined;
+  if (window.id !== "availability" && !window.id.startsWith("availability:")) return undefined;
+  return {
+    id: window.id,
+    label: window.label,
+    exhausted: window.exhausted === true,
+    ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
+    ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+    observedAt: window.observedAt,
+  } satisfies ServerProviderUsageAvailability;
 };
 
 export const ServerProviderResetCredits = Schema.Struct({
@@ -71,7 +100,25 @@ export const ServerProviderUsageLimits = Schema.Struct({
     }),
   ),
   // Present on every OpenCodex-routed report, including one whose pool could not be read.
-  quotaPoolRoute: Schema.optional(Schema.Struct({ provider: TrimmedNonEmptyString })),
+  quotaPoolRoute: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      /** Reported by OpenCodex when its pool could not be read. */
+      openCodexVersion: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  availability: Schema.optional(ForwardCompatibleArray(ServerProviderUsageAvailability)),
+  /** A routed instance's own login as its native probe saw it; the pool row never carries credits. */
+  localAccount: Schema.optional(
+    Schema.Struct({
+      checkedAt: IsoDateTime,
+      windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+      resetCredits: Schema.optional(ServerProviderResetCredits),
+      credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+      /** False when the instance's driver cannot redeem credits on this route. */
+      redeemable: Schema.Boolean,
+    }),
+  ),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
@@ -101,6 +148,12 @@ export const UsageLimitSourceAccount = Schema.Struct({
   email: Schema.optional(TrimmedNonEmptyString),
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
+  label: Schema.optional(TrimmedNonEmptyString),
+  /** OpenCodex's routing state; paused and reauth accounts are shown but not counted. */
+  state: Schema.optional(
+    Schema.Literals(["available", "exhausted", "paused", "reauth", "unknown"]),
+  ),
+  observedAt: Schema.optional(IsoDateTime),
   usageLimits: ServerProviderUsageLimits,
 });
 export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
@@ -110,6 +163,8 @@ export const UsageLimitSourceSnapshot = Schema.Struct({
   kind: Schema.Literals(["cliproxy", "opencodex"]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
+  /** The OpenCodex Home whose newest snapshot decides membership and state. */
+  homeId: Schema.optional(TrimmedNonEmptyString),
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),
   error: Schema.optional(TrimmedNonEmptyString),
 });
@@ -167,6 +222,8 @@ export const UsageLimitsReport = Schema.Struct({
       sourceLabel: Schema.optional(TrimmedNonEmptyString),
       instanceId: Schema.optional(ProviderInstanceId),
       resetCreditInput: Schema.optional(ProviderConsumeResetCreditInput),
+      /** False when credits are shown but this row cannot redeem them. */
+      redeemable: Schema.optional(Schema.Boolean),
       displayName: Schema.optional(Schema.String),
       accentColor: Schema.optional(Schema.String),
       limits: ServerProviderUsageLimits,

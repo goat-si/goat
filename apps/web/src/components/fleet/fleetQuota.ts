@@ -1,4 +1,11 @@
-import type { HostStatusMetrics, HostStatusQuota, QuotaPool, QuotaWindow } from "@goat/contracts";
+import {
+  quotaWindowToAvailability,
+  type HostStatusMetrics,
+  type HostStatusQuota,
+  type QuotaPool,
+  type QuotaWindow,
+  type ServerProviderUsageAvailability,
+} from "@goat/contracts";
 
 import { quotaRows, type FleetHostRow, type FleetQuotaRow } from "./fleetTelemetry";
 
@@ -6,6 +13,25 @@ export interface FleetConsoleQuota extends Omit<FleetQuotaRow, "driver" | "peak"
   readonly peak: number | null;
   readonly detail?: string;
   readonly hidden: number;
+  /** What the hidden count stands for, such as "+1 window · 2 accounts". */
+  readonly hiddenLabel?: string;
+  /** Replaces "Quota unknown" when the pool's state is known, such as an unreadable pool. */
+  readonly status?: string;
+}
+
+const plural = (count: number, word: string) => count + " " + word + (count === 1 ? "" : "s");
+
+/** A pool-wide block has no percentage; it reads as a sentence, never as 100%. */
+function blockDetail(prefix: string, blocks: ReadonlyArray<ServerProviderUsageAvailability>) {
+  return blocks
+    .filter((block) => block.exhausted)
+    .map(
+      (block) =>
+        prefix +
+        "all accounts blocked" +
+        (block.scopeModel === undefined ? "" : " for " + block.scopeModel) +
+        (block.resetsAt === undefined ? "" : " until " + block.resetsAt),
+    );
 }
 
 function knownWindows(windows: ReadonlyArray<QuotaWindow>) {
@@ -80,15 +106,44 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
     homeLabels.get(id)?.name ?? displayName(homes.get(id)?.producer.displayName, id);
   const viaHub = new Map<string, string | null>();
   const routed = new Map<string, Map<string, HostStatusQuota>>();
+  const unreadable: FleetConsoleQuota[] = [];
   const localRows = rows.map((row) => {
     const metrics = row.entry?.metrics;
     if (metrics === undefined) return row;
-    const explicit = metrics.quotas.some(
-      (quota) => quota.limits.quotaPool !== undefined || quota.limits.quotaPoolRoute !== undefined,
-    );
+    const explicit =
+      metrics.quotaRouteMarkers === true ||
+      metrics.quotas.some(
+        (quota) =>
+          quota.limits.quotaPool !== undefined || quota.limits.quotaPoolRoute !== undefined,
+      );
     const homeId = metrics.quotaPool?.producer.homeId;
     const quotas = metrics.quotas.filter((quota) => {
       const reference = quota.limits.quotaPool;
+      const route = quota.limits.quotaPoolRoute;
+      // A routed instance whose pool could not be read shows that, never its own login's quota.
+      if (
+        route !== undefined &&
+        reference === undefined &&
+        quota.limits.unavailable !== undefined
+      ) {
+        unreadable.push({
+          key: JSON.stringify(["opencodex-unavailable", row.key, quota.instanceId]),
+          label: "OpenCodex pool",
+          host: row.label,
+          windows: [],
+          peak: null,
+          hidden: 0,
+          status:
+            "pool unavailable" +
+            (route.openCodexVersion === undefined
+              ? ""
+              : " (OpenCodex " + route.openCodexVersion + ")"),
+          detail: [quota.displayName ?? quota.instanceId, quota.limits.unavailable.message]
+            .filter((line) => line !== undefined)
+            .join("\n"),
+        });
+        return false;
+      }
       // Hosts that predate route references publish neither marker; only their rows are guessed.
       const inferred =
         !explicit &&
@@ -134,6 +189,12 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
           detail.push(`Headroom: ${provider.pooled.headroom}`);
         if (provider.pooled.nextResetAt !== undefined)
           detail.push(`Next reset: ${provider.pooled.nextResetAt}`);
+        detail.push(
+          ...blockDetail(
+            provider.provider + ": ",
+            provider.pooled.windows.flatMap((window) => quotaWindowToAvailability(window) ?? []),
+          ),
+        );
         const accounts = new Map(provider.accounts.map((account) => [account.accountRef, account]));
         accountCount += accounts.size;
         for (const account of accounts.values()) {
@@ -154,6 +215,9 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       }
       detail.push(
         ...windows.map((window) => `${window.label}: ${Math.round(window.usedPercent)}%`),
+        ...[...(routed.get(homeId) ?? [])].flatMap(([provider, quota]) =>
+          blockDetail(provider + ": ", quota.limits.availability ?? []),
+        ),
       );
     }
     const sorted = windows.toSorted((a, b) => b.usedPercent - a.usedPercent);
@@ -166,6 +230,11 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       windows: sorted.slice(0, maxWindows),
       peak: sorted[0]?.usedPercent ?? null,
       hidden,
+      hiddenLabel:
+        "+" +
+        [hiddenWindows > 0 ? plural(hiddenWindows, "window") : "", plural(accountCount, "account")]
+          .filter((part) => part.length > 0)
+          .join(" · "),
       detail: [
         "OpenCodex pool" + (homeName(homeId) === null ? "" : ` · ${homeName(homeId)}`),
         `${hiddenWindows} more ${hiddenWindows === 1 ? "window" : "windows"} · ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`,
@@ -175,6 +244,7 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
   }
   const quotas: FleetConsoleQuota[] = [
     ...pools,
+    ...unreadable,
     ...quotaRows(localRows, maxWindows).map((row) => ({ ...row, hidden: 0 })),
   ];
   return { quotas, viaHub };

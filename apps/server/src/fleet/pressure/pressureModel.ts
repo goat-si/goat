@@ -23,6 +23,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { freshWindows, verdictWindows } from "@goat/shared/quotaVerdict";
 
 import {
   busiestWindow,
@@ -694,7 +695,10 @@ export function rankHosts(
         host: entry.host,
         providerLabel: requirements.providerInstanceId,
         preferred: false,
-        windows: quota === undefined ? null : quota.limits.windows,
+        windows:
+          quota === undefined
+            ? null
+            : freshWindows(verdictWindows(quota.limits), quota.limits.checkedAt, now),
         activeTasks: 0,
       };
       if (isExhausted(candidate, now))
