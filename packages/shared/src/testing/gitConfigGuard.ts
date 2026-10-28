@@ -14,6 +14,7 @@ import { isolatedGitEnv } from "./gitEnv.ts";
 const resolveGitPath = (flag: string): string | undefined => {
   try {
     return NodeChildProcess.execFileSync("git", ["rev-parse", "--path-format=absolute", flag], {
+      cwd: process.cwd(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -44,8 +45,32 @@ const readEntries = (file: string): ReadonlyArray<string> => {
     .map((entry) => entry.replace("\n", "="));
 };
 
+// Tests only commit as example.com (RFC 2606). One left in the repository config becomes the author
+// of every real commit, and the before/after diff below never sees an entry that predates the run.
+const testIdentities = (file: string, entries: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const email = entries.findLast((entry) => entry.startsWith("user.email="));
+  if (email === undefined || !/@example\.com$/i.test(email)) return [];
+  const keys = new Set(
+    entries.filter((entry) => /^user\.(name|email)=/.test(entry)).map((e) => e.split("=")[0]),
+  );
+  return [
+    `  ${file}: ${email}`,
+    ...[...keys].map((key) => `    git config --file '${file}' --unset-all ${key}`),
+  ];
+};
+
 export function setup(): () => void {
   const snapshots = configFiles().map((file) => ({ file, before: readEntries(file) }));
+  const leaked = snapshots.flatMap(({ file, before }) => testIdentities(file, before));
+  if (leaked.length > 0) {
+    throw new Error(
+      [
+        "This repository's git config holds a test identity, so every commit made here is",
+        "authored by it. Remove it with the commands below and set your own identity (#1114):",
+        ...leaked,
+      ].join("\n"),
+    );
+  }
   return () => {
     const changes = snapshots.flatMap(({ file, before }) => {
       const after = readEntries(file);
