@@ -159,7 +159,7 @@ describe.each(["react.js", "react.mjs"])("pinned web row layout (%s)", (bundle) 
 
   it("updates the distant pin when the cached cumulative position changes", () => {
     const list = createWebList(bundle, 10_000);
-    list.state.positions[99] += 100;
+    list.state.positions[99] = (list.state.positions[99] ?? 0) + 100;
     list.update(100);
     expect(list.state.positions.at(-1)).toBe(1_000_000);
   });

@@ -3,17 +3,22 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 
-const manifest = JSON.parse(
+const ConnectArtifactManifest = Schema.Struct({
+  sourceSha: Schema.String,
+  artifactDigest: Schema.String,
+  publicConfig: Schema.Struct({ hostedAppUrl: Schema.String }),
+  files: Schema.Array(Schema.Struct({ name: Schema.String, sha256: Schema.String })),
+});
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(UnknownJson);
+const manifestJson = Schema.decodeSync(UnknownJson)(
   await NodeFSP.readFile("apps/web/dist/connect-artifact.json", "utf8"),
-) as {
-  sourceSha: string;
-  artifactDigest: string;
-  publicConfig: { hostedAppUrl: string };
-  files: Array<{ name: string; sha256: string }>;
-};
+);
+const manifest = Schema.decodeUnknownSync(ConnectArtifactManifest)(manifestJson);
 const origin = manifest.publicConfig.hostedAppUrl;
 await Effect.runPromise(
   Effect.gen(function* () {
@@ -22,7 +27,7 @@ await Effect.runPromise(
     if (deployed.status < 200 || deployed.status >= 300)
       throw new Error("Missing deployed build receipt");
     const receipt = yield* deployed.json;
-    if (JSON.stringify(receipt) !== JSON.stringify(manifest))
+    if (encodeJson(receipt) !== encodeJson(manifestJson))
       throw new Error("Deployed artifact/config differs from build");
     for (const path of ["/", "/connect", "/settings/connections"]) {
       const response = yield* client.get(`${origin}${path}`);
@@ -39,7 +44,7 @@ await Effect.runPromise(
         throw new Error("Hosted shell is cacheable");
     }
     yield* Console.log(
-      JSON.stringify({
+      encodeJson({
         sourceSha: manifest.sourceSha,
         artifactDigest: manifest.artifactDigest,
         origin,
