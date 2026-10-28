@@ -376,7 +376,9 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
             Effect.gen(function* () {
               const failure = yield* Effect.flip(
                 operation === "resolveMemoryConflict"
-                  ? textGeneration.resolveMemoryConflict!(memoryConflict)
+                  ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                      Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                    )
                   : textGeneration.generateMemorySummary!(memorySummary),
               );
               expect(failure.operation).toBe(operation);
@@ -393,15 +395,20 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
     withFakeAcpGrok(
       {
         GOAT_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify(
-          operation === "resolveMemoryConflict" ? { ...output, judgment: "Synthetic" } : output,
+          operation === "resolveMemoryConflict"
+            ? { ...output, judgment: "Synthetic" }
+            : { summary: output },
         ),
       },
       (generation) =>
         Effect.gen(function* () {
           const result = yield* operation === "resolveMemoryConflict"
-            ? generation.resolveMemoryConflict!(memoryConflict)
+            ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : generation.generateMemorySummary!(memorySummary);
-          expect(result.result.text).toBe(output.text);
+          expect(result.result).not.toBeNull();
+          expect(result.result?.text).toBe(output.text);
           expect(result.execution).toEqual({
             requestedModelSelection: memorySelection,
             effectiveModel: "grok-mock-default",
@@ -421,11 +428,21 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
       {
         ...(scenario === "tool" ? { GOAT_MEMORY_TOOL: "1" } : {}),
         ...(scenario === "permission" ? { GOAT_MEMORY_PERMISSION: "1" } : {}),
-        GOAT_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
-          ...output,
-          ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-          ...(scenario === "authority" ? { execution: { effectiveModel: "forged" } } : {}),
-        }),
+        GOAT_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify(
+          operation === "resolveMemoryConflict"
+            ? {
+                ...output,
+                judgment: "Synthetic",
+                ...(scenario === "authority" ? { execution: { effectiveModel: "forged" } } : {}),
+              }
+            : {
+                summary: {
+                  ...output,
+
+                  ...(scenario === "authority" ? { execution: { effectiveModel: "forged" } } : {}),
+                },
+              },
+        ),
       },
       (generation, tempDir) =>
         Effect.gen(function* () {
@@ -435,7 +452,10 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
               : memorySelection;
           const failure = yield* (
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!({ ...memoryConflict, modelSelection: selection })
+              ? generation.resolveMemoryConflict!({
+                  ...memoryConflict,
+                  modelSelection: selection,
+                }).pipe(Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome))
               : generation.generateMemorySummary!({ ...memorySummary, modelSelection: selection })
           ).pipe(Effect.flip);
           expect(failure._tag).toBe("TextGenerationError");
@@ -470,7 +490,9 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
                 .pipe(Effect.andThen(Deferred.succeed(ready, undefined)), Effect.forkChild);
               const fiber = yield* (
                 operation === "resolveMemoryConflict"
-                  ? generation.resolveMemoryConflict!(memoryConflict)
+                  ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                      Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                    )
                   : generation.generateMemorySummary!(memorySummary)
               ).pipe(Effect.flip, Effect.forkChild);
               yield* Deferred.await(ready);

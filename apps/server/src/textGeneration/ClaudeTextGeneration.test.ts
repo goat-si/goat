@@ -313,7 +313,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             structured_output:
               operation === "resolveMemoryConflict"
                 ? { ...memoryOutput, judgment: "Synthetic" }
-                : memoryOutput,
+                : { summary: memoryOutput },
           }),
           memoryRunnerContext: memoryContext,
           argsMustContain: `--model ${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded] --effort high`,
@@ -376,14 +376,16 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             structured_output:
               operation === "resolveMemoryConflict"
                 ? { ...memoryOutput, judgment: "Synthetic" }
-                : memoryOutput,
+                : { summary: memoryOutput },
           }),
         },
         (generation) =>
           Effect.gen(function* () {
             const failure = yield* Effect.flip(
               operation === "resolveMemoryConflict"
-                ? generation.resolveMemoryConflict!(memoryConflict)
+                ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                    Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                  )
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(failure.cause).toMatchObject({ code: "unavailable" });
@@ -422,7 +424,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           structured_output:
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic" }
-              : memoryOutput,
+              : { summary: memoryOutput },
         }),
       },
       (generation) =>
@@ -431,7 +433,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             operation === "resolveMemoryConflict"
               ? yield* generation.resolveMemoryConflict!(memoryConflict)
               : yield* generation.generateMemorySummary!(memorySummary);
-          expect(generated.result.text).toBe(memoryOutput.text);
+          expect(generated.result).not.toBeNull();
+          expect(generated.result?.text).toBe(memoryOutput.text);
         }),
     ),
   );
@@ -516,7 +519,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           structured_output:
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic" }
-              : memoryOutput,
+              : { summary: memoryOutput },
         }),
         registryQuery: (key) => {
           if (scenario === "query failure" || scenario === "interop unavailable")
@@ -535,7 +538,9 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         Effect.gen(function* () {
           const failure = yield* Effect.flip(
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!(memoryConflict)
+              ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : generation.generateMemorySummary!(memorySummary),
           );
           expect(failure.cause).toMatchObject({ code: "unavailable" });
@@ -556,7 +561,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           structured_output:
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic" }
-              : memoryOutput,
+              : { summary: memoryOutput },
         }),
       },
       (generation) =>
@@ -565,7 +570,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             operation === "resolveMemoryConflict"
               ? yield* generation.resolveMemoryConflict!(memoryConflict)
               : yield* generation.generateMemorySummary!(memorySummary);
-          expect(result.result.text).toBe(memoryOutput.text);
+          expect(result.result).not.toBeNull();
+          expect(result.result?.text).toBe(memoryOutput.text);
         }),
     ),
   );
@@ -611,7 +617,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           structured_output:
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic judgment" }
-              : memoryOutput,
+              : { summary: memoryOutput },
         }),
         memoryRunnerContext: memoryContext,
         cwdMustNotBe: memorySummary.cwd,
@@ -625,7 +631,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             operation === "resolveMemoryConflict"
               ? yield* generation.resolveMemoryConflict!(memoryConflict)
               : yield* generation.generateMemorySummary!(memorySummary);
-          expect(generated.result.text).toBe(memoryOutput.text);
+          expect(generated.result).not.toBeNull();
+          expect(generated.result?.text).toBe(memoryOutput.text);
           expect(generated.execution).toEqual({
             requestedModelSelection: memorySelection,
             effectiveModel: `${SYNTHETIC_CLAUDE_STANDARD_MODEL}[expanded]`,
@@ -643,7 +650,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           structured_output:
             operation === "resolveMemoryConflict"
               ? { ...memoryOutput, judgment: "Synthetic judgment" }
-              : memoryOutput,
+              : { summary: memoryOutput },
         }),
         memoryRunnerContext: memoryContext,
         argsMustContain: '--settings {"disableAllHooks":true,"alwaysThinkingEnabled":false}',
@@ -685,10 +692,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       ].map((scenario) => ({ operation, scenario })),
     ),
   )("$operation discards $scenario even with valid final JSON", ({ operation, scenario }) => {
-    const structured_output = {
-      ...memoryOutput,
-      ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-    };
+    const structured_output =
+      operation === "resolveMemoryConflict"
+        ? { ...memoryOutput, judgment: "Synthetic" }
+        : { summary: memoryOutput };
     const denial = {
       tool_name: "Bash",
       tool_use_id: "synthetic-tool",
@@ -740,7 +747,9 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         Effect.gen(function* () {
           const failure = yield* Effect.flip(
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!(memoryConflict)
+              ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : generation.generateMemorySummary!(memorySummary),
           );
           expect(failure.cause).toMatchObject({ code: "invalid_output" });
@@ -761,10 +770,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             {
               type: "result",
               permission_denials: [],
-              structured_output: {
-                ...memoryOutput,
-                ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-              },
+              structured_output:
+                operation === "resolveMemoryConflict"
+                  ? { ...memoryOutput, judgment: "Synthetic" }
+                  : { summary: memoryOutput },
             },
           ]),
         },
@@ -774,7 +783,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!(memoryConflict)
                 : yield* generation.generateMemorySummary!(memorySummary);
-            expect(result.result.text).toBe(memoryOutput.text);
+            expect(result.result).not.toBeNull();
+            expect(result.result?.text).toBe(memoryOutput.text);
           }),
       ),
   );
@@ -791,10 +801,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       ].map((scenario) => ({ operation, scenario })),
     ),
   )("$operation handles StructuredOutput $scenario", ({ operation, scenario }) => {
-    const structured_output = {
-      ...memoryOutput,
-      ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-    };
+    const structured_output =
+      operation === "resolveMemoryConflict"
+        ? { ...memoryOutput, judgment: "Synthetic" }
+        : { summary: memoryOutput };
     return withFakeClaudeEnv(
       {
         memoryRunnerContext: memoryContext,
@@ -847,10 +857,14 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         Effect.gen(function* () {
           const run =
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!(memoryConflict)
+              ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : generation.generateMemorySummary!(memorySummary);
           if (scenario === "round trip") {
-            expect((yield* run).result.text).toBe(memoryOutput.text);
+            const generated = yield* run;
+            expect(generated.result).not.toBeNull();
+            expect(generated.result?.text).toBe(memoryOutput.text);
           } else {
             expect((yield* Effect.flip(run)).cause).toMatchObject({ code: "invalid_output" });
           }
@@ -862,7 +876,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
     withFakeClaudeEnv(
       {
         output: JSON.stringify({
-          structured_output: { ...memoryOutput, judgment: "Forged", environmentId: "forged" },
+          structured_output:
+            operation === "resolveMemoryConflict"
+              ? { ...memoryOutput, judgment: "Forged", environmentId: "forged" }
+              : { summary: { ...memoryOutput, environmentId: "forged" } },
         }),
         memoryRunnerContext: memoryContext,
       },
@@ -870,7 +887,9 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         Effect.gen(function* () {
           const exit = yield* Effect.exit(
             operation === "resolveMemoryConflict"
-              ? generation.resolveMemoryConflict!(memoryConflict)
+              ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : generation.generateMemorySummary!(memorySummary),
           );
           expect(exit._tag).toBe("Failure");
@@ -886,7 +905,9 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           Effect.gen(function* () {
             const exit = yield* Effect.exit(
               operation === "resolveMemoryConflict"
-                ? generation.resolveMemoryConflict!(memoryConflict)
+                ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+                    Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                  )
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(exit._tag).toBe("Failure");

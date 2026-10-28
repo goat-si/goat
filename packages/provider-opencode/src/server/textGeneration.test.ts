@@ -794,7 +794,9 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
             };
             const failure = yield* Effect.flip(
               operation === "resolveMemoryConflict"
-                ? textGeneration.resolveMemoryConflict!(memoryConflict)
+                ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                    Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                  )
                 : textGeneration.generateMemorySummary!(memorySummary),
             );
             expect(failure.operation).toBe(operation);
@@ -822,11 +824,20 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
         parts: [
           {
             type: "text",
-            text: JSON.stringify({
-              ...output,
-              ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-              ...extra,
-            }),
+            text: JSON.stringify(
+              operation === "resolveMemoryConflict"
+                ? {
+                    ...output,
+                    judgment: "Synthetic",
+                    ...extra,
+                  }
+                : {
+                    summary: {
+                      ...output,
+                      ...extra,
+                    },
+                  },
+            ),
           },
         ],
       },
@@ -834,7 +845,9 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
   };
   const invoke = (generation: ProviderTextGeneration, operation: (typeof operations)[number]) =>
     operation === "resolveMemoryConflict"
-      ? generation.resolveMemoryConflict!(memoryConflict)
+      ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+          Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+        )
       : generation.generateMemorySummary!(memorySummary);
   it.effect.each(operations)(
     "%s succeeds with disabled tools and trusted metadata, then cleans up",
@@ -845,7 +858,8 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
           Effect.gen(function* () {
             setOutput(operation);
             const generated = yield* invoke(generation, operation);
-            expect(generated.result.text).toBe(output.text);
+            expect(generated.result).not.toBeNull();
+            expect(generated.result?.text).toBe(output.text);
             expect(generated.execution).toEqual({
               requestedModelSelection: memorySelection,
               effectiveModel: "openai/gpt-5",

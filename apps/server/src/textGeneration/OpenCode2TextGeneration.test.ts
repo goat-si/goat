@@ -225,7 +225,9 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
         ).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
         const failure = yield* Effect.flip(
           operation === "resolveMemoryConflict"
-            ? textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : textGeneration.generateMemorySummary!(memorySummary),
         );
         assert.equal(failure.operation, operation);
@@ -254,7 +256,9 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
         const invoke = () =>
           Effect.flip(
             operation === "resolveMemoryConflict"
-              ? textGeneration.resolveMemoryConflict!(memoryConflict)
+              ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                  Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+                )
               : textGeneration.generateMemorySummary!(memorySummary),
           );
         const missing = yield* invoke();
@@ -334,11 +338,25 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
             yield* emit("session.text.ended", {
               assistantMessageID: "msg-1",
               ordinal: 0,
-              text: JSON.stringify({
-                ...output,
-                ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-                ...(scenario === "authority" ? { execution: { effectiveModel: "forged" } } : {}),
-              }),
+              text: JSON.stringify(
+                operation === "resolveMemoryConflict"
+                  ? {
+                      ...output,
+                      judgment: "Synthetic",
+                      ...(scenario === "authority"
+                        ? { execution: { effectiveModel: "forged" } }
+                        : {}),
+                    }
+                  : {
+                      summary: {
+                        ...output,
+
+                        ...(scenario === "authority"
+                          ? { execution: { effectiveModel: "forged" } }
+                          : {}),
+                      },
+                    },
+              ),
             });
             yield* emit("session.execution.succeeded", {});
           }),
@@ -380,13 +398,16 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
     operation: (typeof operations)[number],
   ) =>
     operation === "resolveMemoryConflict"
-      ? generation.resolveMemoryConflict!(memoryConflict)
+      ? generation.resolveMemoryConflict!(memoryConflict).pipe(
+          Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+        )
       : generation.generateMemorySummary!(memorySummary);
   it.effect.each(operations)("%s succeeds with session deny-all and runner metadata", (operation) =>
     Effect.gen(function* () {
       const { generation, state } = yield* fixture("success", operation);
       const result = yield* invoke(generation, operation);
-      assert.equal(result.result.text, output.text);
+      assert.isNotNull(result.result);
+      assert.equal(result.result?.text, output.text);
       assert.deepEqual(result.execution, {
         requestedModelSelection: memorySelection,
         effectiveModel: "openai/gpt-5",
