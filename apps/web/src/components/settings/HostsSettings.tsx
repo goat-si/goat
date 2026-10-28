@@ -108,6 +108,12 @@ function HostCard({
                   <span className="col-span-2 break-words text-foreground">{card.computerUse}</span>
                 </>
               ) : null}
+              {card.browser ? (
+                <>
+                  <span className="text-muted-foreground">Browser</span>
+                  <span className="col-span-2 break-words text-foreground">{card.browser}</span>
+                </>
+              ) : null}
             </div>
           )}
           {card.quotas.map((quota) => {

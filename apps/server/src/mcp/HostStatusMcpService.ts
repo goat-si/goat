@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ServerBrowserReadiness from "../preview/serverBrowserReadiness.ts";
 import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
@@ -140,6 +141,7 @@ const make = Effect.gen(function* () {
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  const browserReadiness = yield* ServerBrowserReadiness.optionalReadiness;
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
   /** Per caller and host, so a slow host's connection keeps going between polls instead of restarting. */
@@ -230,6 +232,7 @@ const make = Effect.gen(function* () {
         },
         ...(yield* readQuotas()),
         ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
+        ...(Option.isSome(browserReadiness) ? { browser: yield* browserReadiness.value } : {}),
         opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
         ...(storageHealth === null ? {} : { storage: storageHealth }),
         ...(strayScan === null ? {} : { strays: strayScan }),

@@ -1,5 +1,27 @@
-import type { ActionOutcomeSafety, PreviewAutomationOperation } from "@goat/contracts";
+import {
+  ServerBrowserReadiness,
+  type ActionOutcomeSafety,
+  type PreviewAutomationOperation,
+} from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { classifyBrowserControlReason } from "../../../preview/actionOutcomeSafety.ts";
+
+const isReadiness = Schema.is(ServerBrowserReadiness);
+
+/** A status without a tab: what to do depends on whether this host's browser can start. */
+const noTabNext = (browser: unknown): string => {
+  switch (isReadiness(browser) ? browser.state : undefined) {
+    case "installing":
+      return "GOAT's browser is still installing: call goat_preview_status again in a minute.";
+    case "install_failed":
+      return "No tab yet: call goat_preview_open, which retries the install. If it fails with an install error again, report it.";
+    case "blocked":
+    case "unsupported":
+      return "This host's browser cannot start: do not retry; report browser.reason.";
+    default:
+      return "No tab yet: call goat_preview_open with a url.";
+  }
+};
 
 const actions = new Set([
   "click",
@@ -21,7 +43,7 @@ export const previewHints = (
   result: object,
 ): { next?: string } => {
   if (operation === "status" && "tabId" in result && result.tabId === null)
-    return { next: "No tab yet: call goat_preview_open with a url." };
+    return { next: noTabNext("browser" in result ? result.browser : undefined) };
   if (operation === "snapshot" && "treeComplete" in result && result.treeComplete === false)
     return {
       next: "Narrow with interactiveOnly or scope, or read the text with goat_preview_read.",

@@ -22,6 +22,7 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -126,10 +127,7 @@ const layer = ServerBrowser.layer.pipe(
         getEnvironmentId: Effect.succeed(scope.environmentId),
         getDescriptor: Effect.die("unused descriptor"),
       }),
-      Layer.succeed(PreviewBrowser.PreviewBrowser, {
-        executable: Effect.die("mock Chromium does not need an executable"),
-        installed: Effect.die("mock Chromium does not need an executable"),
-      }),
+      Layer.succeed(PreviewBrowser.PreviewBrowser, unusedPreviewBrowser),
       Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
         available: false,
         awaitAttached: () => Effect.succeed(false),

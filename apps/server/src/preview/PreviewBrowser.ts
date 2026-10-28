@@ -179,8 +179,23 @@ export class PreviewBrowser extends Context.Service<
       PreviewBrowserInstallError | PreviewBrowserInstallingError | PreviewBrowserUnsupportedError
     >;
     readonly installed: Effect.Effect<Option.Option<string>>;
+    /** Reads where installation stands without starting or retrying one. */
+    readonly installStatus: Effect.Effect<PreviewBrowserInstallStatus>;
   }
 >()("goat/preview/PreviewBrowser") {}
+
+export type PreviewBrowserInstallStatus =
+  | { readonly _tag: "custom"; readonly path: string; readonly runnable: boolean }
+  | { readonly _tag: "unsupported"; readonly platform: string; readonly arch: string }
+  | { readonly _tag: "installed" }
+  | {
+      readonly _tag: "installing";
+      readonly downloadedBytes: number;
+      readonly totalBytes: number;
+      readonly unpacking: boolean;
+    }
+  | { readonly _tag: "failed"; readonly detail: string }
+  | { readonly _tag: "notInstalled"; readonly totalBytes: number };
 
 export interface PreviewBrowserOptions {
   readonly baseDir: string;
@@ -520,11 +535,7 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
     gate.withPermit(
       Effect.gen(function* () {
         if (state._tag === "installing") return state;
-        if (state._tag === "failed") {
-          const failed = state;
-          state = { _tag: "idle" };
-          return failed;
-        }
+        // A failed install is retried by the next caller; installStatus keeps showing the failure until then.
         const installed = yield* installedExecutable(release);
         if (Option.isSome(installed)) {
           state = { _tag: "installed", executable: installed.value };
@@ -561,13 +572,6 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
       }),
     );
 
-  const clearFailure = (error: PreviewBrowserInstallError) =>
-    gate.withPermit(
-      Effect.sync(() => {
-        if (state._tag === "failed" && state.error === error) state = { _tag: "idle" };
-      }),
-    );
-
   const executable = Effect.gen(function* () {
     if (customExecutablePath !== undefined) {
       const runnable = yield* runnableExecutable(customExecutablePath);
@@ -584,11 +588,8 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
     switch (current._tag) {
       case "installed":
         return current.executable;
-      case "failed":
-        return yield* current.error;
       case "installing":
         return yield* Deferred.await(current.done).pipe(
-          Effect.tapError(clearFailure),
           Effect.timeoutOrElse({
             duration: wait,
             orElse: () =>
@@ -611,7 +612,38 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
         ? Effect.succeedNone
         : installedExecutable(release);
 
-  return PreviewBrowser.of({ executable, installed });
+  const installStatus: Effect.Effect<PreviewBrowserInstallStatus> = Effect.suspend(() => {
+    if (customExecutablePath !== undefined)
+      return runnableExecutable(customExecutablePath).pipe(
+        Effect.map((runnable) => ({
+          _tag: "custom" as const,
+          path: customExecutablePath,
+          runnable: Option.isSome(runnable),
+        })),
+      );
+    if (release === null) return Effect.succeed({ _tag: "unsupported" as const, platform, arch });
+    switch (state._tag) {
+      case "installing":
+        return Effect.succeed({
+          _tag: "installing" as const,
+          downloadedBytes: progress.downloadedBytes,
+          totalBytes: release.bytes,
+          unpacking: progress.unpacking,
+        });
+      case "failed":
+        return Effect.succeed({ _tag: "failed" as const, detail: state.error.detail });
+      default:
+        return installedExecutable(release).pipe(
+          Effect.map((found): PreviewBrowserInstallStatus =>
+            Option.isSome(found)
+              ? { _tag: "installed" }
+              : { _tag: "notInstalled", totalBytes: release.bytes },
+          ),
+        );
+    }
+  });
+
+  return PreviewBrowser.of({ executable, installed, installStatus });
 });
 
 export const layer = Layer.effect(

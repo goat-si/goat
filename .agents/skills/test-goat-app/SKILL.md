@@ -5,10 +5,21 @@ description: Test GOAT's web and desktop UI through its built-in Browser panel a
 
 # Test GOAT web and desktop
 
-Use GOAT's built-in Browser panel for verification. If its tools are absent or
-the panel reports unavailable, explain the blocker and stop verification.
-Do not install or switch to another automation system. For native mobile
-testing, use [test-goat-mobile](../test-goat-mobile/SKILL.md).
+Use GOAT's built-in Browser panel for verification. Its tools drive the GOAT
+server's own headless browser, which runs without the desktop app, so a remote
+or SSH host with only a GOAT server can use it too. Do not install or switch to
+another automation system. For native mobile testing, use
+[test-goat-mobile](../test-goat-mobile/SKILL.md).
+
+`available:false` with no `tabId` only means no tab is open yet. Read its
+`browser.state`: `installed` or `installs_on_open` means call `preview.open`
+(the first open installs the browser and can take a minute), `installing`
+means check `preview.status` again in a minute, and `install_failed` means
+`preview.open` retries the install. The blockers are `blocked` or
+`unsupported`, an install error from that retry, and a "browser preview tools
+are off for this thread" error: report the reason and stop verification.
+`goat_call {path:"host.status", args:{host}}` shows the same `browser` state for
+another host.
 
 ## Start the app
 
@@ -53,3 +64,17 @@ using retained terminal sessions or captured PIDs.
 When sharing is requested, start with `vp run dev --share` and give the user
 a fresh complete pairing URL that you have not consumed. Keep other credentials
 out of screenshots, commits, and replies.
+
+## Computer use on another host
+
+For a desktop flow that needs computer use on another host, read
+`metrics.computerUse.reason` from `host.status` for that host. A Mac that
+runs only a GOAT server cannot use it; the reason names the installed GOAT apps
+and versions. A person at that Mac or over Screen Sharing updates and opens the
+desktop app. Start the lane in the app's environment: SSH dispatch moves to the
+app's server only once the background server has no running work, and threads
+already there keep running without computer use. From a GOAT app connected
+directly to the app's environment with permission to change its settings, the
+person turns computer use on in **Settings → Computer** and approves the
+thread's `computer_use.request` there. Agents cannot turn it on or approve it
+themselves.

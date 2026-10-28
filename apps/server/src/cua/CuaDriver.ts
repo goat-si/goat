@@ -41,6 +41,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
+import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import { honoredSignals } from "./ComputerUsePrivateMode.ts";
 import * as StandaloneCuaManifest from "./StandaloneCuaManifest.ts";
@@ -970,6 +971,7 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const probe = CuaDisplay.probeDisplay(
       config.mode === "desktop" ? "desktop" : "standalone",
+      yield* InstalledDesktopApps.cached(fs, path),
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
