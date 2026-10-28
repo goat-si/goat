@@ -144,6 +144,15 @@ describe("buildImportGraph", () => {
     write("apps/server/src/app.ts", 'import "./upload.ts";');
     write("apps/server/src/upload.test.ts", 'import "./upload.ts";');
     write("apps/server/src/main.test.ts", 'spawn("node", ["src/main.ts"]);');
+    write("apps/server/src/runner.test.ts", 'spawn("node", ["src/tools/runner.ts"]);');
+    write("apps/server/src/tools/runner.ts", 'spawn("node", ["src/tools/runnerEntry.ts"]);');
+    write("apps/server/src/tools/runnerEntry.ts", 'import "./runnerLeaf.ts";');
+    write("apps/server/src/tools/runnerLeaf.ts");
+    write("apps/server/src/cycle.test.ts", 'import "./cycle/a.ts";');
+    write("apps/server/src/cycle/a.ts", 'import "./b.ts";\nspawn("node", ["src/cycle/entry.ts"]);');
+    write("apps/server/src/cycle/b.ts", 'import "./a.ts";');
+    write("apps/server/src/cycle/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/cycle/leaf.ts");
     write("apps/server/src/ws.ts");
     write("apps/server/src/nested/deep.ts");
     write(
@@ -217,6 +226,11 @@ describe("buildImportGraph", () => {
   it("follows a change through the imports of a file a test spawns", () => {
     assert.ok(reaches("apps/server/src/helperDep.ts", "apps/server/src/spawn.test.ts"));
     assert.ok(reaches("apps/server/src/core/deep.ts", "apps/server/src/main.test.ts"));
+    assert.ok(reaches("apps/server/src/tools/runnerLeaf.ts", "apps/server/src/runner.test.ts"));
+  });
+
+  it("follows names from test helpers that import each other", () => {
+    assert.ok(reaches("apps/server/src/cycle/leaf.ts", "apps/server/src/cycle.test.ts"));
   });
 
   it("does not spread a change through a production module that names the server entry", () => {
