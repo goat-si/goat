@@ -247,7 +247,9 @@
         "apps/server/src/mcp/toolkits/orchestrator/tools.ts",
         "apps/server/src/mcp/toolkits/ssh/tools.ts",
         "apps/server/src/mcp/toolkits/preview/tools.ts",
-        "packages/contracts/src/channelGateway.ts"
+        "packages/contracts/src/channelGateway.ts",
+        "packages/contracts/src/agentWorkspace.ts",
+        "packages/contracts/src/agentTerminal.ts"
       ]
     },
     {

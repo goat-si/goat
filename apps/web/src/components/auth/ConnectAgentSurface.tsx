@@ -25,6 +25,7 @@ import { Input } from "../ui/input";
 import { RadioGroup } from "../ui/radio-group";
 import { Spinner } from "../ui/spinner";
 import { AuthSurfaceShell } from "./AuthSurfaceShell";
+import { WorkspaceTerminalConsent, type WorkspaceTerminalScope } from "./WorkspaceTerminalConsent";
 
 const accessConfig: Record<
   AuthMcpClientAccess,
@@ -87,11 +88,15 @@ function oneClickApproves(
   details: AuthMcpApprovalDetails,
   access: AuthMcpClientAccess,
   memoryScopes: ReadonlyArray<AuthMcpMemoryScope>,
+  workspaceTerminalScopes: readonly WorkspaceTerminalScope[],
 ) {
   return (
     details.csrfToken !== undefined &&
     (details.oneClickAccess ?? []).includes(access) &&
-    memoryScopes.every((scope) => (details.oneClickMemoryScopes ?? []).includes(scope))
+    memoryScopes.every((scope) => (details.oneClickMemoryScopes ?? []).includes(scope)) &&
+    workspaceTerminalScopes.every((scope) =>
+      (details.oneClickWorkspaceTerminalScopes ?? []).includes(scope),
+    )
   );
 }
 
@@ -109,6 +114,9 @@ export function ConnectAgentSurface({
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [access, setAccess] = useState<AuthMcpClientAccess>("read-only");
   const [memoryScopes, setMemoryScopes] = useState<ReadonlyArray<AuthMcpMemoryScope>>([]);
+  const [workspaceTerminalScopes, setWorkspaceTerminalScopes] = useState<
+    readonly WorkspaceTerminalScope[]
+  >([]);
   const [pairingCode, setPairingCode] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [pending, setPending] = useState<"approve" | "deny" | null>(null);
@@ -142,9 +150,16 @@ export function ConnectAgentSurface({
     const decision: AuthMcpApprovalDecision =
       choice === "deny"
         ? { _tag: "deny" }
-        : csrfToken !== undefined && oneClickApproves(loaded.details, access, memoryScopes)
-          ? { _tag: "browser-session", access, csrfToken, memoryScopes }
-          : { _tag: "pairing-code", access, code: pairingCode.trim(), memoryScopes };
+        : csrfToken !== undefined &&
+            oneClickApproves(loaded.details, access, memoryScopes, workspaceTerminalScopes)
+          ? { _tag: "browser-session", access, csrfToken, memoryScopes, workspaceTerminalScopes }
+          : {
+              _tag: "pairing-code",
+              access,
+              code: pairingCode.trim(),
+              memoryScopes,
+              workspaceTerminalScopes,
+            };
     const answer = await runApproval((client) =>
       client.mcpOAuth.decision({ payload: { authorization, decision } }),
     );
@@ -180,7 +195,7 @@ export function ConnectAgentSurface({
   }
 
   const { details } = loaded;
-  const oneClick = oneClickApproves(details, access, memoryScopes);
+  const oneClick = oneClickApproves(details, access, memoryScopes, workspaceTerminalScopes);
   const canApprove = pending === null && (oneClick || pairingCode.trim().length > 0);
 
   return (
@@ -223,7 +238,18 @@ export function ConnectAgentSurface({
           <RadioGroup
             aria-labelledby="connect-agent-access-label"
             value={access}
-            onValueChange={(value) => setAccess(value as AuthMcpClientAccess)}
+            onValueChange={(value) => {
+              const next = AuthMcpClientAccess.literals.find((option) => option === value);
+              if (next === undefined) return;
+              setAccess(next);
+              if (next === "read-only")
+                setWorkspaceTerminalScopes((previous) =>
+                  previous.filter(
+                    (scope) => scope !== "filesystem:write" && scope !== "terminal:operate",
+                  ),
+                );
+            }}
+            disabled={pending !== null}
           >
             {AuthMcpClientAccess.literals.map((option) => (
               <AccessOption key={option} access={option} selected={option === access} />
@@ -261,6 +287,13 @@ export function ConnectAgentSurface({
             Memory permissions are separate from thread access. Nothing is selected by default.
           </p>
         </div>
+
+        <WorkspaceTerminalConsent
+          scopes={workspaceTerminalScopes}
+          readOnly={access === "read-only"}
+          disabled={pending !== null}
+          onChange={setWorkspaceTerminalScopes}
+        />
 
         {oneClick ? null : (
           <div className="space-y-2">

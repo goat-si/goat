@@ -1776,7 +1776,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
       const policy = memoryRegistry?.currentMemoryPolicy
         ? yield* memoryRegistry.currentMemoryPolicy(config.providerSessionId)
         : undefined;
-      return !policy || policy.grant === "none" ? { ...config, grantedScopes: [] } : config;
+      const grantedScopes = (config.grantedScopes ?? []).filter(
+        (scope) => scope !== "memory:read" && scope !== "memory:write",
+      );
+      return !policy || policy.grant === "none" ? { ...config, grantedScopes } : config;
     });
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;

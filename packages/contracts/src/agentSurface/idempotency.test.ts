@@ -17,6 +17,12 @@ it("requires keys only on ToolAdmission-keyed writes", () => {
     "pull_request.comment",
     "pull_request.review_submit",
     "pull_request.thread_reply",
+    "terminal.clear",
+    "terminal.close",
+    "terminal.open",
+    "terminal.restart",
+    "terminal.write",
+    "workspace.write",
   ]);
   for (const entry of required) {
     expect(entry.idempotency, entry.path).toBe("key");

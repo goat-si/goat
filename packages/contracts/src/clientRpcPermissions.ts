@@ -14,11 +14,10 @@ import {
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
-import { requiredScopesForServerSettingsPatch, ServerSettingsPatch } from "./settings.ts";
-import { ProviderInstanceMutation } from "./providerInstance.ts";
+import { requiredScopesForServerSettingsPatch } from "./settings.ts";
 import { CHANNEL_GATEWAY_WS_METHODS } from "./channelGateway.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import { WS_METHODS } from "./rpc.ts";
+import { WS_METHODS, ServerSettingsUpdateInput } from "./rpc.ts";
 import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
@@ -174,27 +173,27 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
-const decodeSettingsUpdate = Schema.decodeUnknownSync(
-  Schema.Struct({
-    patch: ServerSettingsPatch,
-    providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
-  }),
-);
-
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);
+const decodeSettingsUpdate = Schema.decodeUnknownSync(ServerSettingsUpdateInput);
 
 export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
-  if (method === WS_METHODS.serverUpdateSettings && input !== undefined) {
+  if (method === WS_METHODS.serverUpdateSettings) {
+    if (input === undefined) return [AuthSettingsWriteScope];
     const payload = decodeSettingsUpdate(input);
-    const scopes = requiredScopesForServerSettingsPatch(payload.patch);
-    if (payload.providerInstanceMutation === undefined) return scopes;
-    return Object.values(payload.patch).every((value) => value === undefined)
-      ? [AuthProvidersManageScope]
-      : [...new Set([...scopes, AuthProvidersManageScope])];
+    const scopes = requiredScopesForServerSettingsPatch(
+      payload.patch,
+      payload.agentTerminalBinding,
+    );
+    return payload.providerInstanceMutation === undefined
+      ? scopes
+      : payload.agentTerminalBinding === undefined &&
+          Object.values(payload.patch).every((value) => value === undefined)
+        ? [AuthProvidersManageScope]
+        : [...new Set([...scopes, AuthProvidersManageScope])];
   }
   if (method === WS_METHODS.memoryImportProvider)
     return [AuthMemoryWriteScope, AuthFilesystemReadScope];

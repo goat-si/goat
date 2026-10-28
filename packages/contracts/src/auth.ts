@@ -4,9 +4,11 @@ import {
 } from "@goat/contracts/legacyT3Names";
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
+import type { ServerSettingsPatch } from "./settings.ts";
 
 import {
   AuthSessionId,
+  ThreadId,
   ForwardCompatibleArray,
   ClientSurface,
   ClientWebDeployment,
@@ -514,9 +516,21 @@ const AuthMcpMemoryScopes = Schema.Array(AuthMcpMemoryScope).check(
   Schema.makeFilter((s) => new Set(s).size === s.length),
 );
 
+export const AuthMcpWorkspaceTerminalScope = Schema.Literals([
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
+  AuthTerminalReadScope,
+  AuthTerminalOperateScope,
+]);
+export type AuthMcpWorkspaceTerminalScope = typeof AuthMcpWorkspaceTerminalScope.Type;
+const AuthMcpWorkspaceTerminalScopes = Schema.Array(AuthMcpWorkspaceTerminalScope).check(
+  Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length),
+);
+
 export const AuthMcpApprovalDetails = Schema.Struct({
   /** Self-declared by the client, so shown as such. */
   oneClickMemoryScopes: Schema.optionalKey(AuthMcpMemoryScopes),
+  oneClickWorkspaceTerminalScopes: Schema.optionalKey(AuthMcpWorkspaceTerminalScopes),
   clientName: Schema.String,
   redirectHost: Schema.String,
   environmentHost: Schema.String,
@@ -535,11 +549,13 @@ export const AuthMcpApprovalDecision = Schema.Union([
   Schema.TaggedStruct("deny", {}),
   Schema.TaggedStruct("pairing-code", {
     memoryScopes: Schema.optionalKey(AuthMcpMemoryScopes),
+    workspaceTerminalScopes: Schema.optionalKey(AuthMcpWorkspaceTerminalScopes),
     access: AuthMcpClientAccess,
     code: TrimmedNonEmptyString,
   }),
   Schema.TaggedStruct("browser-session", {
     memoryScopes: Schema.optionalKey(AuthMcpMemoryScopes),
+    workspaceTerminalScopes: Schema.optionalKey(AuthMcpWorkspaceTerminalScopes),
     access: AuthMcpClientAccess,
     csrfToken: Schema.String,
   }),
@@ -591,4 +607,42 @@ export class AuthMcpTokenError extends Schema.Error<AuthMcpTokenError>("AuthMcpT
   override get message(): string {
     return this.error_description;
   }
+}
+
+export const AgentWorkspaceAccess = Schema.Literals(["off", "read", "read_write"]);
+export type AgentWorkspaceAccess = typeof AgentWorkspaceAccess.Type;
+export const AgentTerminalAccess = Schema.Literals(["off", "read", "operate"]);
+export type AgentTerminalAccess = typeof AgentTerminalAccess.Type;
+export const AgentTerminalClientBinding = Schema.Struct({
+  threadId: ThreadId,
+  generation: TrimmedNonEmptyString,
+});
+export type AgentTerminalClientBinding = typeof AgentTerminalClientBinding.Type;
+export const AgentTerminalBinding = Schema.Struct({
+  sessionId: AuthSessionId,
+  threadId: Schema.NullOr(ThreadId),
+});
+export type AgentTerminalBinding = typeof AgentTerminalBinding.Type;
+
+export function requiredScopesForServerSettingsPatch(
+  patch: ServerSettingsPatch,
+  agentTerminalBinding?: AgentTerminalBinding,
+): ReadonlyArray<AuthEnvironmentScope> {
+  let changesProviders = false;
+  let changesSettings = false;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
+      changesProviders = true;
+    } else {
+      changesSettings = true;
+    }
+  }
+  return [
+    ...(changesSettings || !changesProviders || agentTerminalBinding !== undefined
+      ? [AuthSettingsWriteScope]
+      : []),
+    ...(changesProviders ? [AuthProvidersManageScope] : []),
+    ...(agentTerminalBinding !== undefined ? [AuthAccessWriteScope] : []),
+  ];
 }

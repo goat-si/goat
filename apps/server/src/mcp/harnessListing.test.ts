@@ -62,6 +62,8 @@ const threadTools = Object.values(agentSurfaceRegistry)
     (entry) =>
       entry.requires !== "client" &&
       entry.resource !== "device" &&
+      entry.resource !== "workspace" &&
+      entry.resource !== "terminal" &&
       entry.path !== "surface.screen_run",
   )
   .map(listedToolName);

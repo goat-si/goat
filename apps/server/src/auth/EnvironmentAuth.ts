@@ -16,6 +16,7 @@ import {
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
   type AuthMcpClientAccess,
+  type AuthMcpWorkspaceTerminalScope,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
@@ -578,6 +579,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly label: string;
       readonly access: AuthMcpClientAccess;
       readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
+      readonly workspaceTerminalScopes?: ReadonlyArray<AuthMcpWorkspaceTerminalScope>;
       readonly client: AuthClientMetadata;
     }) => Effect.Effect<
       {
@@ -592,6 +594,7 @@ export class EnvironmentAuth extends Context.Service<
       code: string,
       access: AuthMcpClientAccess,
       memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">,
+      workspaceTerminalScopes?: ReadonlyArray<AuthMcpWorkspaceTerminalScope>,
     ) => Effect.Effect<void, ServerAuthMcpApprovalCodeError | ServerAuthInternalError>;
     readonly authenticateBrowserSession: (
       request: HttpServerRequest.HttpServerRequest,
@@ -1304,7 +1307,7 @@ export const make = Effect.gen(function* () {
       .issue({
         subject: MCP_CLIENT_SUBJECT,
         method: "bearer-access-token",
-        scopes: mcpClientScopes(input.access, input.memoryScopes),
+        scopes: mcpClientScopes(input.access, input.memoryScopes, input.workspaceTerminalScopes),
         ttl: MCP_CLIENT_SESSION_TTL,
         ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
         client: { ...input.client, label: input.label, deviceType: "bot" },
@@ -1337,6 +1340,7 @@ export const make = Effect.gen(function* () {
     code,
     access,
     memoryScopes,
+    workspaceTerminalScopes,
   ) =>
     resolveBootstrapGrant(code.trim()).pipe(
       Effect.catchTags({
@@ -1348,7 +1352,9 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((grant) =>
         grant.method !== "one-time-token" && grant.method !== "reusable-dev-token"
           ? Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "not_a_pairing_code" }))
-          : mcpClientScopes(access, memoryScopes).every((scope) => grant.scopes.includes(scope))
+          : mcpClientScopes(access, memoryScopes, workspaceTerminalScopes).every((scope) =>
+                grant.scopes.includes(scope),
+              )
             ? Effect.void
             : Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "insufficient_scope" })),
       ),

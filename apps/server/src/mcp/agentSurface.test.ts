@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(262);
+  expect(entries).toHaveLength(273);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -528,7 +528,7 @@ describe("agent surface access", () => {
       const mismatches: Array<string> = [];
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
-        if (entry.resource === "memory") continue;
+        if (["memory", "workspace", "terminal"].includes(entry.resource)) continue;
         // No screen runner in this inert catalog; screen/handlers.test.ts covers its admission.
         if (entry.path === "surface.screen_run") continue;
         const args = yield* argumentsFor(entry);
@@ -687,7 +687,13 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
     const listed = (yield* http.listTools("thread")).map((tool) => tool.name);
-    const forThreads = entries.filter((e) => e.requires !== "client" && e.verb !== "screen_run");
+    const forThreads = entries.filter(
+      (e) =>
+        e.requires !== "client" &&
+        e.verb !== "screen_run" &&
+        e.resource !== "workspace" &&
+        e.resource !== "terminal",
+    );
     expect(listed.toSorted()).toEqual(forThreads.map(listedToolName).sort());
     expect(listed).toContain("goat_task_create");
     expect(listed).not.toContain("delegate_task");
@@ -772,7 +778,7 @@ it.effect("goat_describe answers at three depths with availability for this call
       now: false,
       reason: "Needs an agent running inside a GOAT thread.",
     });
-    const write = entries.find((entry) => entry.effect !== "read" && entry.requires === "either")!;
+    const write = agentSurfaceRegistry["thread.send"];
     expect((yield* detail(readOnly, write.path)).available).toEqual({
       now: false,
       reason: "This MCP client was approved for read-only access.",

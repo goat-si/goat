@@ -74,6 +74,21 @@ export const availability = (
   host: HostConditions = {},
 ): Availability => {
   if (!served) return { now: false, reason: "This GOAT server does not serve it." };
+  if (entry.resource === "workspace" || entry.resource === "terminal") {
+    const permission =
+      entry.resource === "workspace"
+        ? entry.effect === "read"
+          ? "filesystem:read"
+          : "filesystem:write"
+        : entry.effect === "read"
+          ? "terminal:read"
+          : "terminal:operate";
+    if (!scope.grantedScopes?.includes(permission) || !scope.reauthorize)
+      return {
+        now: false,
+        reason: `Needs an explicit ${permission} grant. A person enables access in Settings → Integrations → Agent tools and approves outside clients separately.`,
+      };
+  }
   if (entry.resource === "computer_use" && host.computerUseFailure !== undefined)
     return { now: false, reason: host.computerUseFailure };
   if (entry.requires === "thread" && scope.thread === undefined)

@@ -31,6 +31,8 @@ export const SETTINGS_ACCESS = {
   storageCleanup: agent,
   worktreesDirectory: agent,
   enableAgentMemoryAccess: person(GRANTS_AGENTS),
+  agentWorkspaceAccess: person(GRANTS_AGENTS),
+  agentTerminalAccess: person(GRANTS_AGENTS),
   memoryEnabled: path("memory.settings_update"),
   memoryModelSelection: path("memory.settings_update"),
   goatBotModelSelection: agent,
