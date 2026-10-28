@@ -1,4 +1,11 @@
-import { assert, describe, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert, describe } from "vite-plus/test";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as EventLoopMonitor from "./EventLoopMonitor.ts";
 
@@ -34,3 +41,127 @@ describe("EventLoopMonitor", () => {
     assert.strictEqual(EventLoopMonitor.stallMs({ ...asleep, activeMs: 600_000 }), 599_000);
   });
 });
+
+const stallLog = { filePath: "/unused/stalls.ndjson", maxBytes: 262144 };
+const runtimeStall = { ...stalled, delayMaxNs: ms(7_000), activeMs: 7_000 };
+
+for (const [label, readings] of [
+  ["stalled", runtimeStall],
+  ["healthy", { ...stalled, delayMaxNs: ms(1_000), activeMs: 1 }],
+] as const) {
+  it.effect(`persists the ${label} startup sample without a reconnect notice`, () =>
+    Effect.gen(function* () {
+      const lines = yield* Queue.unbounded<string>();
+      yield* Effect.gen(function* () {
+        const monitor = yield* EventLoopMonitor.EventLoopMonitor;
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(yield* Queue.size(lines), 1, "startup evidence must be persisted");
+        const line = yield* Queue.take(lines);
+        assert.include(line, '"phase":"startup"');
+        if (label === "healthy") assert.include(line, '"delayMaxMs":0');
+        assert.isUndefined(yield* monitor.latestStall);
+        assert.isUndefined(yield* monitor.latestNoticeableStall);
+      }).pipe(
+        Effect.provide(
+          EventLoopMonitor.layerWith(Effect.succeed(Effect.succeed(readings)), stallLog, (line) =>
+            Queue.offer(lines, line).pipe(Effect.asVoid),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}
+
+it.effect("publishes stall state and serves reconnects while its sink is blocked", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const monitor = yield* EventLoopMonitor.EventLoopMonitor;
+      yield* TestClock.adjust("60 seconds");
+      assert.isTrue(yield* Deferred.isDone(entered));
+      assert.equal((yield* monitor.latestStall)?.delayMs, 6_000);
+      const reconnect = yield* monitor.latestNoticeableStall.pipe(Effect.forkChild);
+      yield* TestClock.adjust(0);
+      assert.isDefined(reconnect.pollUnsafe(), "reconnect sampling must not await disk");
+      assert.deepEqual(yield* Fiber.join(reconnect), {
+        detectedAt: "1970-01-01T00:01:00.000Z",
+        durationMs: 6_000,
+        loadAverage: 219.4,
+        cpuCount: 18,
+      });
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(release, undefined)),
+      Effect.provide(
+        EventLoopMonitor.layerWith(Effect.succeed(Effect.succeed(runtimeStall)), stallLog, () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("bounds pending stall records and reports rejected evidence", () =>
+  Effect.gen(function* () {
+    const release = yield* Deferred.make<void>();
+    const written = yield* Queue.unbounded<string>();
+    let samples = 0;
+    yield* Effect.gen(function* () {
+      const monitor = yield* EventLoopMonitor.EventLoopMonitor;
+      for (let index = 0; index < 19; index++) yield* TestClock.adjust("30 seconds");
+      assert.equal(samples, 19, "sampling must continue under disk pressure");
+      yield* Deferred.succeed(release, undefined);
+      yield* TestClock.adjust(0);
+      assert.equal(yield* Queue.size(written), 17, "one active write plus sixteen queued");
+      yield* monitor.latestNoticeableStall;
+      yield* TestClock.adjust(0);
+      for (let index = 0; index < 17; index++) yield* Queue.take(written);
+      assert.include(yield* Queue.take(written), '"droppedStallRecords":2');
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(release, undefined)),
+      Effect.provide(
+        EventLoopMonitor.layerWith(
+          Effect.succeed(
+            Effect.sync(() => {
+              samples++;
+              return runtimeStall;
+            }),
+          ),
+          stallLog,
+          (line) =>
+            Deferred.await(release).pipe(Effect.andThen(Queue.offer(written, line)), Effect.asVoid),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("continues recording after sink failure and expires runtime notices", () =>
+  Effect.gen(function* () {
+    const lines = yield* Queue.unbounded<string>();
+    let writes = 0;
+    let readings = runtimeStall;
+    yield* Effect.gen(function* () {
+      const monitor = yield* EventLoopMonitor.EventLoopMonitor;
+      yield* TestClock.adjust("60 seconds");
+      assert.equal(yield* Queue.size(lines), 1);
+      assert.include(yield* Queue.take(lines), '"phase":"runtime"');
+      readings = { ...runtimeStall, delayMaxNs: ms(1_000), activeMs: 0 };
+      assert.isDefined(yield* monitor.latestNoticeableStall);
+      yield* TestClock.adjust("5 minutes");
+      assert.isDefined(yield* monitor.latestNoticeableStall);
+      yield* TestClock.adjust("1 millisecond");
+      assert.isUndefined(yield* monitor.latestNoticeableStall);
+    }).pipe(
+      Effect.provide(
+        EventLoopMonitor.layerWith(Effect.succeed(Effect.sync(() => readings)), stallLog, (line) =>
+          Effect.suspend(() =>
+            ++writes === 1
+              ? Effect.fail("injected sink failure")
+              : Queue.offer(lines, line).pipe(Effect.asVoid),
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
