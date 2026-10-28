@@ -529,7 +529,16 @@ it.effect(
       expect(yield* connect("owner", "a")).toMatchObject({ status: 429, retryAfterMillis: 60000 });
       expect(exchanges).toBe(2);
       expect(connects).toBe(2);
-      yield* connect("owner", "b");
+      expect(yield* connect("owner", "b")).toMatchObject({
+        status: 429,
+        retryAfterMillis: 60000,
+        cause: {
+          _tag: "RelayRateLimitExceededError",
+          operation: "connect",
+          retryAfterSeconds: 60,
+          traceId: "fixture",
+        },
+      });
       yield* connect("owner", "a");
       expect(exchanges).toBe(2);
       expect(connects).toBe(2);
@@ -584,7 +593,15 @@ it.effect("suspension denial does not exchange the accepted DPoP token again", (
             scopes: [RelayEnvironmentConnectScope],
           })
           .pipe(Effect.flip),
-      ).toMatchObject({ status: 403 });
+      ).toMatchObject({
+        _tag: "ManagedRelayRequestFailedError",
+        relayError: {
+          _tag: "RelayAccountAccessDeniedError",
+          code: "account_access_denied",
+          reason: "suspended",
+          traceId: "fixture",
+        },
+      });
     expect(exchanges).toBe(1);
     expect(connects).toBe(2);
   }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));

@@ -1,5 +1,5 @@
 // @effect-diagnostics anyUnknownInErrorContext:off -- Alchemy owns the isolated local Worker lifecycle/error union.
-import { verifyToken } from "@clerk/backend";
+import { createClerkClient, verifyToken } from "@clerk/backend";
 import { expect } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -38,6 +38,8 @@ import { EnvironmentOwnership } from "../environments/EnvironmentOwnership.ts";
 import { EnvironmentCredentials } from "../environments/EnvironmentCredentials.ts";
 import { ManagedEndpointAllocations } from "../environments/ManagedEndpointAllocations.ts";
 import { Devices } from "../agentActivity/Devices.ts";
+import { MobileRegistrations } from "../agentActivity/MobileRegistrations.ts";
+import { ClientKeys } from "../auth/ClientKeys.ts";
 import { AgentActivityRows } from "../agentActivity/AgentActivityRows.ts";
 import * as Api from "./Api.ts";
 import { dpopKey, httpServices, issuer, signingKey, signJwt } from "./RateLimitHttp.testkit.ts";
@@ -55,7 +57,7 @@ const { test } = Test.make({
   stage: "wp3-http-rate-fixture",
 });
 
-test.provider("real HTTP budgets deny every protected path before its side effects", (stack) =>
+test.provider("HTTP budgets deny Connect writes and disabled mobile scopes", (stack) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "relay-http-rates-" });
@@ -108,13 +110,33 @@ test.provider("real HTTP budgets deny every protected path before its side effec
       pg.query(
         "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1)",
       );
+      const now = yield* DateTime.now;
+      const issuedAt = Math.floor(now.epochMilliseconds / 1000);
+      const assurance = {
+        policyVersion: 1 as const,
+        source: "clerk-session" as const,
+        userId: "owner",
+        sessionId: "fixture-session",
+        firstVerifiedAtFloor: issuedAt - 60,
+        secondVerifiedAtFloor: issuedAt - 60,
+        checkedAt: issuedAt,
+        authGeneration: 1,
+      };
+      vi.mocked(createClerkClient).mockReturnValue({
+        sessions: {
+          getSession: vi.fn().mockResolvedValue({ userId: "owner", status: "active" }),
+        },
+      } as unknown as ReturnType<typeof createClerkClient>);
       vi.mocked(verifyToken).mockResolvedValue({
         sub: "owner",
-        aud: "fixture-relay",
+        aud: issuer,
+        azp: "https://app.example.test",
+        v: 2,
+        fva: [0, 0],
         __raw: "fixture-session-token",
         iss: "https://clerk.example.test",
         sid: "fixture-session",
-        iat: 0,
+        iat: issuedAt,
         nbf: 0,
         exp: 4_000_000_000,
       });
@@ -123,8 +145,26 @@ test.provider("real HTTP budgets deny every protected path before its side effec
       const linkKey = signingKey();
       const clientKey = dpopKey();
       const fixture = httpServices(pg, rates, relayKey);
-      const now = yield* DateTime.now;
-      const issuedAt = Math.floor(now.epochMilliseconds / 1000);
+      const intent = {
+        connectAuthPolicyVersion: 1 as const,
+        environmentId: "new-env",
+        environmentPublicKey: linkKey.publicKey.trim(),
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+        notificationsEnabled: false as const,
+        liveActivitiesEnabled: false as const,
+        managedTunnelsEnabled: true,
+      };
+      const admission = yield* ClientKeys.pipe(
+        Effect.flatMap((keys) =>
+          keys.admit({
+            assurance,
+            clientId: RelayMobileClientId,
+            thumbprint: clientKey.thumbprint,
+            now: issuedAt,
+          }),
+        ),
+        Effect.provide(fixture.services),
+      );
       const activity: RelayAgentActivityState = {
         environmentId: "env" as RelayAgentActivityState["environmentId"],
         threadId: "existing-thread" as RelayAgentActivityState["threadId"],
@@ -165,6 +205,7 @@ test.provider("real HTTP budgets deny every protected path before its side effec
         yield* sql`UPDATE relay_managed_endpoint_allocations SET tunnel_id='seed-tunnel',dns_record_id='seed-dns',ready_at='ready' WHERE user_id='owner'`;
         yield* sql`INSERT INTO relay_environment_links(user_id,environment_id,environment_public_key,endpoint_http_base_url,endpoint_ws_base_url,endpoint_provider_kind,managed_tunnels_enabled,account_epoch,created_at,updated_at) VALUES ('owner','env',${hostKey.publicKey.trim()},${`https://${identity.hostname}/`},${`wss://${identity.hostname}/ws`},'cloudflare_tunnel',true,1,'now','now')`;
         yield* sql`UPDATE relay_environment_owners SET state='active' WHERE user_id='owner'`;
+        yield* sql`UPDATE relay_environment_links SET connect_auth_policy_version=1 WHERE user_id='owner'`;
         const devices = yield* Devices;
         yield* devices.register({
           userId: "owner",
@@ -240,11 +281,14 @@ test.provider("real HTTP budgets deny every protected path before its side effec
           aud: issuer,
           sub: "owner",
           account_epoch: 1,
+          assurance,
+          clientKeyAuthorizedAt: admission.authorizedAt,
+          clientKeyAdmissionId: admission.admissionId,
           jti: "fixture-access",
           iat: issuedAt,
           exp: issuedAt + 1800,
           client_id: RelayMobileClientId,
-          scope: "environment:connect mobile:registration",
+          scope: "environment:connect",
           cnf: { jkt: clientKey.thumbprint },
         },
         "goat-relay-dpop-access+jwt",
@@ -256,6 +300,8 @@ test.provider("real HTTP budgets deny every protected path before its side effec
             new Request(new URL(path, issuer), {
               method: "POST",
               headers: {
+                host: new URL(issuer).host,
+                "x-forwarded-proto": "https",
                 authorization: token,
                 "content-type":
                   body instanceof URLSearchParams
@@ -300,17 +346,14 @@ test.provider("real HTTP budgets deny every protected path before its side effec
       }
       using signing = vi.spyOn(RelayJwt, "signRelayJwt");
       yield* assertLimited(
-        yield* post("/v1/client/environment-link-challenges", {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
-          managedTunnelsEnabled: true,
-        }),
+        yield* post("/v1/client/environment-link-challenges", intent),
         "link_challenge",
       );
       yield* assertLimited(
         yield* post(
           "/v1/client/dpop-token",
           new URLSearchParams({
+            connectAuthPolicyVersion: "1",
             grant_type: RelayDpopTokenExchangeGrantType,
             subject_token: "fixture-clerk",
             subject_token_type: RelayJwtSubjectTokenType,
@@ -331,11 +374,13 @@ test.provider("real HTTP budgets deny every protected path before its side effec
             aud: issuer,
             sub: "owner",
             account_epoch: 1,
+            assurance,
+            intent: { ...intent, managedTunnelsEnabled },
             jti: `challenge-${managedTunnelsEnabled}`,
             iat: issuedAt,
             exp: issuedAt + 300,
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled,
           },
           "goat-link-challenge+jwt",
@@ -356,6 +401,7 @@ test.provider("real HTTP budgets deny every protected path before its side effec
             platform: { os: "darwin", arch: "arm64" },
             serverVersion: "0.0.0-test",
             capabilities: { repositoryIdentity: true },
+            connectAuthPolicyVersion: 1,
           },
           environmentPublicKey: linkKey.publicKey.trim(),
           endpoint: {
@@ -369,8 +415,8 @@ test.provider("real HTTP budgets deny every protected path before its side effec
         yield* assertLimited(
           yield* post("/v1/client/environment-links", {
             proof: signJwt(payload, RelayJwt.RELAY_LINK_PROOF_TYP, linkKey.privateKey),
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled,
           }),
           "link",
@@ -413,21 +459,31 @@ test.provider("real HTTP budgets deny every protected path before its side effec
         "SELECT row_to_json(d) FROM relay_mobile_devices d ORDER BY device_id",
       );
       for (const deviceId of ["blocked-phone", "existing-phone"]) {
-        yield* assertLimited(
-          yield* post(
-            "/v1/mobile/devices",
-            {
-              deviceId,
-              label: "Changed",
-              platform: "android",
-              androidApiLevel: 35,
-              pushToken: "blocked-token",
-              preferences,
-            },
-            `DPoP ${accessToken}`,
-          ),
-          "mobile_registration",
+        const payload = {
+          deviceId,
+          label: "Changed",
+          platform: "android" as const,
+          androidApiLevel: 35,
+          pushToken: "blocked-token",
+          preferences,
+        };
+        const limited = yield* MobileRegistrations.pipe(
+          Effect.flatMap((service) => service.registerDevice({ userId: "owner", payload })),
+          Effect.provide(fixture.services),
+          Effect.flip,
         );
+        expect(limited).toMatchObject({
+          _tag: "RelayRateLimitExceededError",
+          operation: "mobile_registration",
+          retryAfterSeconds: 60,
+        });
+        const response = yield* post("/v1/mobile/devices", payload, `DPoP ${accessToken}`);
+        expect(response.status).toBe(401);
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({
+          _tag: "RelayAuthInvalidError",
+          code: "auth_invalid",
+          reason: "invalid_dpop",
+        });
         expect(
           pg.query("SELECT row_to_json(d) FROM relay_mobile_devices d ORDER BY device_id"),
         ).toBe(beforeDevices);

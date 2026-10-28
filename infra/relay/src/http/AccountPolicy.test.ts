@@ -42,6 +42,7 @@ import { layerDpopClientAuth } from "./Api.ts";
 import { RelayTokens } from "../auth/RelayTokens.ts";
 import { ClientKeys } from "../auth/ClientKeys.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
+import { rethrowPolicyError } from "./ApiErrors.ts";
 
 const decodeProtectedError = Schema.decodeUnknownEffect(RelayProtectedError);
 
@@ -83,7 +84,7 @@ it.effect(
       );
       const handlers = HttpApiBuilder.group(api, "policy", (h) =>
         h.handle("getAgentActivitySnapshot", () =>
-          Effect.fail(
+          rethrowPolicyError(
             new RelayRateLimitExceededError({
               code: "rate_limit_exceeded",
               operation: "connect",

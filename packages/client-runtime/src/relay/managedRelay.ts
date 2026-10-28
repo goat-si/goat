@@ -445,6 +445,7 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
     if (existing)
       return yield* new ManagedRelayRequestFailedError({
         ...existing.error,
+        cause: existing.error.cause,
         retryAfterMillis: existing.deadline - now,
       });
     return yield* effect.pipe(

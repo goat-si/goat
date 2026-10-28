@@ -294,8 +294,8 @@ it.effect(
           assurance: { ...assurance, userId: "fixture-owner" },
           intent,
           request: {
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled: false,
           },
           jti: "fixture-nonce",
@@ -317,8 +317,8 @@ it.effect(
           token,
           userId: "fixture-owner",
           request: {
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled: false,
           },
           nowEpochSeconds: 150,

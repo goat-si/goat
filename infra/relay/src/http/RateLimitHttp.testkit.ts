@@ -102,6 +102,9 @@ export function httpServices(
     limits: { tunnels: 2 },
     config: {
       ...testConfig,
+      clerkPublishableKey: `pk_test_${btoa("clerk.example.test$")}`,
+      clerkJwtAudience: issuer,
+      clerkAuthorizedParties: ["https://app.example.test"],
       cloudMintPrivateKey: Redacted.make(relayKey.privateKey),
       cloudMintPublicKey: relayKey.publicKey,
     },

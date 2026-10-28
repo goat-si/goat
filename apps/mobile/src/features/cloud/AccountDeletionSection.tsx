@@ -88,9 +88,8 @@ function AccountDeletionForSession() {
           ? cause.message
           : "Deletion is unconfirmed. Refresh status before retrying.",
       );
-    } finally {
-      if (isCurrent()) setBusy(false);
     }
+    if (isCurrent()) setBusy(false);
   };
   const confirm = () => {
     if (!user || !session || !isCurrent()) return;
