@@ -1,4 +1,5 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
@@ -112,6 +113,8 @@ const notRun = (callId: number, haltedBy: number): ScreenRunError => ({
   nextStep: `Call ${haltedBy} in this cell failed, so this call did not run. Observe in a new cell before acting again.`,
 });
 const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
+// A tab wait's deadline answer must still reach the cell process before the cell ends.
+const WAIT_REPLY_RESERVE_MS = 100;
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
 
@@ -525,7 +528,28 @@ export class ScreenHostBridge {
       else state.cutoff.signal.addEventListener("abort", onAbort, { once: true });
       return Effect.sync(() => state.cutoff.signal.removeEventListener("abort", onAbort));
     });
-    const result = yield* Effect.raceFirst(effect, cutoff).pipe(
+    // A tab wait stuck behind its tab's other calls, its authorization or a browser that never
+    // answers still answers inside its cell; it only reads, so it settles as a failed read.
+    const waitDeadline =
+      call.method === "wait_for" && call.targetRef?.kind === "tab"
+        ? Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              Effect.sleep(Math.max(0, call.deadlineMillis - WAIT_REPLY_RESERVE_MS - now)),
+            ),
+            Effect.andThen(
+              Effect.suspend(() =>
+                Effect.fail({
+                  ...failure("deadline", call.callId),
+                  nextStep: callDispatched
+                    ? "The wait did not answer before this cell ends; the browser may still be checking. Observe in a new cell."
+                    : "The wait could not start before this cell ends; observe or wait in a new cell.",
+                  ...(callDispatched ? { evidence: ["wait_deadline:after_dispatch"] } : {}),
+                }),
+              ),
+            ),
+          )
+        : Effect.never;
+    const result = yield* Effect.raceFirst(Effect.raceFirst(effect, cutoff), waitDeadline).pipe(
       Effect.result,
       Effect.ensuring(
         Effect.sync(() => {

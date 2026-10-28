@@ -51,7 +51,11 @@ it.live("a tab wait takes its timeout as a number or as options", () => {
       if (request.operation === "waitFor") {
         waits.push(request.timeoutMs);
         return Effect.fail(
-          new PreviewAutomationTimeoutError({ ...actionErrorContext, operation: "waitFor" }),
+          new PreviewAutomationTimeoutError({
+            ...actionErrorContext,
+            operation: "waitFor",
+            remoteTag: "PreviewAutomationTimeoutError",
+          }),
         );
       }
       return Effect.succeed({
