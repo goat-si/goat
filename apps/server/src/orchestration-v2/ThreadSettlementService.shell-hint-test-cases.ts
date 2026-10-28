@@ -54,7 +54,7 @@ export function settlementShellHintTests({
           const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
           const fixture = yield* makeHarness({
             snapshot: makeSnapshot([thread]),
-            currentThreads: [marker],
+            currentThreads: [marker, appThread(thread.id, null)],
             settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
             branchPullRequest: (input, options) =>
               Ref.update(refreshes, (values) => [...values, options?.refresh === true]).pipe(
@@ -116,7 +116,7 @@ export function settlementShellHintTests({
           const refreshes = yield* Ref.make<ReadonlyArray<boolean>>([]);
           const fixture = yield* makeHarness({
             snapshot: makeSnapshot([thread]),
-            currentThreads: [marker, retired],
+            currentThreads: [marker, appThread(thread.id, null)],
             settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
             branchPullRequest: (input, options) =>
               Ref.update(refreshes, (values) => [...values, options?.refresh === true]).pipe(
@@ -131,6 +131,7 @@ export function settlementShellHintTests({
             yield* fixture.publishEvent(settledEvent(marker));
             yield* Queue.take(fixture.closedIdle);
             yield* service.drain;
+            yield* Ref.set(fixture.currentThreads, [marker, retired]);
             const event: OrchestrationV2DomainEvent = {
               ...settledEvent(retired),
               type,
@@ -151,6 +152,18 @@ export function settlementShellHintTests({
             yield* Queue.take(fixture.closedIdle);
             yield* service.drain;
             assert.deepStrictEqual(yield* Ref.get(refreshes), [false, false]);
+            assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+            yield* Ref.set(fixture.snapshots, makeSnapshot([]));
+            yield* fixture.publishEvent(shellMergeEvent(thread.id));
+            yield* fixture.publishEvent(settledEvent(marker));
+            yield* Queue.take(fixture.closedIdle);
+            yield* service.drain;
+            yield* Ref.set(fixture.snapshots, makeSnapshot([thread]));
+            yield* fixture.publishEvent(terminalEvent(thread.id));
+            yield* fixture.publishEvent(settledEvent(marker));
+            yield* Queue.take(fixture.closedIdle);
+            yield* service.drain;
+            assert.deepStrictEqual(yield* Ref.get(refreshes), [false, false, false]);
             assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
           }).pipe(Effect.provide(fixture.layer));
         }),

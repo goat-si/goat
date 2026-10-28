@@ -303,8 +303,6 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const shellClosedThreads = new Set<ThreadId>();
-  let lookupRefreshGeneration = 0;
-  let consumedLookupRefreshGeneration = 0;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
@@ -320,10 +318,7 @@ export const make = Effect.gen(function* () {
     threadId?: ThreadId,
     refreshLookups = false,
   ) {
-    if (refreshLookups && threadId === undefined) lookupRefreshGeneration++;
     if ((yield* automationHold.current) !== null) return;
-    const refreshGeneration = lookupRefreshGeneration;
-    refreshLookups = refreshGeneration !== consumedLookupRefreshGeneration;
     if (mergedPullRequest !== null || (refreshLookups && threadId === undefined)) {
       mergeGeneration++;
       lookupCache.clear();
@@ -343,11 +338,7 @@ export const make = Effect.gen(function* () {
         if (entry.expiresAt <= nowMs) lookupCache.delete(key);
       }
     }
-    if (threads.length === 0) {
-      if (threadId === undefined && refreshGeneration === lookupRefreshGeneration)
-        consumedLookupRefreshGeneration = refreshGeneration;
-      return;
-    }
+    if (threads.length === 0) return;
     const projectShells = yield* projectStore.listShells();
     const projects = new Map(projectShells.map((project) => [project.id, project]));
     // A merge event re-sweeps every candidate, not just the threads linked to
@@ -356,10 +347,8 @@ export const make = Effect.gen(function* () {
     // sweep on a possibly stale cached answer.
     const settingsKey = autoSettlementSettingsKey(settings);
     const keys = new Map<ThreadId, string>();
-    let refreshDeferred = false;
     const candidates = threads.filter((thread) => {
       if (!isAutoSettlementCandidate(thread, nowMs)) {
-        refreshDeferred = true;
         evaluated.delete(thread.id);
         return false;
       }
@@ -386,6 +375,7 @@ export const make = Effect.gen(function* () {
       return (
         threadId !== undefined ||
         mergedPullRequest !== null ||
+        shellClosedThreads.has(thread.id) ||
         previous?.key !== key ||
         previous.expiresAt <= nowMs
       );
@@ -439,13 +429,11 @@ export const make = Effect.gen(function* () {
         effect.pipe(
           Effect.catchCauseIf(
             (cause) => !Cause.hasInterruptsOnly(cause),
-            (cause) => {
-              refreshDeferred = true;
-              return Effect.logWarning("automatic thread settlement skipped", {
+            (cause) =>
+              Effect.logWarning("automatic thread settlement skipped", {
                 threadId: thread.id,
                 cause: Cause.pretty(cause),
-              }).pipe(Effect.as(null));
-            },
+              }).pipe(Effect.as(null)),
           ),
         ),
     );
@@ -598,7 +586,11 @@ export const make = Effect.gen(function* () {
       ([key, group]) =>
         Effect.gen(function* () {
           const cached =
-            threadId === undefined && !refreshLookups ? lookupCache.get(key) : undefined;
+            threadId === undefined &&
+            !refreshLookups &&
+            !group.some((thread) => shellClosedThreads.has(thread.id))
+              ? lookupCache.get(key)
+              : undefined;
           const pullRequest =
             cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
               ? cached.value
@@ -631,25 +623,15 @@ export const make = Effect.gen(function* () {
         }).pipe(
           Effect.catchCauseIf(
             (cause) => !Cause.hasInterruptsOnly(cause),
-            (cause) => {
-              refreshDeferred = true;
-              return Effect.logWarning("automatic thread settlement skipped", {
+            (cause) =>
+              Effect.logWarning("automatic thread settlement skipped", {
                 threadIds: group.map((thread) => thread.id),
                 cause: Cause.pretty(cause),
-              });
-            },
+              }),
           ),
         ),
       { concurrency: 8, discard: true },
     );
-    // Ineligible threads still need a fresh lookup later; newer overflow must outlive this pass.
-    if (
-      threadId === undefined &&
-      !refreshDeferred &&
-      refreshGeneration === lookupRefreshGeneration
-    ) {
-      consumedLookupRefreshGeneration = refreshGeneration;
-    }
   });
 
   const runSweep = (
@@ -658,11 +640,6 @@ export const make = Effect.gen(function* () {
     refreshLookups = false,
   ) =>
     sweep(mergedPullRequest, threadId, refreshLookups).pipe(
-      Effect.onError(() =>
-        Effect.sync(() => {
-          if (threadId === undefined) lookupRefreshGeneration++;
-        }),
-      ),
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
@@ -674,24 +651,28 @@ export const make = Effect.gen(function* () {
   // A thread that just stopped must not wait behind a full sweep or another thread's host
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
   const admission = yield* SettlementAdmission.make({
-    targeted: (threadId: ThreadId, refresh): ReturnType<typeof runSweep> =>
-      Effect.suspend(() => {
-        if (refresh) {
-          if (
-            shellClosedThreads.has(threadId) ||
-            shellClosedThreads.size < SettlementAdmission.TARGET_CAPACITY
-          ) {
-            shellClosedThreads.add(threadId);
-          } else {
-            lookupRefreshGeneration++;
-            return admission.enqueueFull.pipe(Effect.andThen(runSweep(null, threadId)));
-          }
-        }
-        return runSweep(null, threadId);
-      }),
+    targeted: (threadId: ThreadId) => runSweep(null, threadId),
     full: (refresh) => runSweep(null, undefined, refresh),
   });
-  const enqueueThread = admission.enqueue;
+  const enqueueThread = Effect.fn("ThreadSettlementServiceV2.enqueueThread")(function* (
+    threadId: ThreadId,
+    refresh = false,
+  ) {
+    // A full pass can exclude active threads, so only their fresh lookup consumes the hint.
+    if (refresh) {
+      const thread = yield* projections.getThread(threadId);
+      if (
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        thread.settledOverride !== "settled"
+      ) {
+        shellClosedThreads.add(threadId);
+      } else {
+        shellClosedThreads.delete(threadId);
+      }
+    }
+    yield* admission.enqueue(threadId);
+  });
 
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
@@ -733,8 +714,15 @@ export const make = Effect.gen(function* () {
 
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
+      case "thread.deleted":
+      case "thread.archived":
+        return Effect.sync(() => {
+          shellClosedThreads.delete(event.threadId);
+        });
       case "thread.settled":
-        return cleanUpSettledThread(event.threadId);
+        return Effect.sync(() => {
+          shellClosedThreads.delete(event.threadId);
+        }).pipe(Effect.andThen(cleanUpSettledThread(event.threadId)));
       case "thread.pull-request-link-updated":
       case "thread.pull-request-synced":
       case "provider-session.detached":

@@ -8,7 +8,6 @@ const TARGET_WORKERS = 8;
 type Target = {
   readonly running: boolean;
   readonly rerun: boolean;
-  readonly refresh: boolean;
 };
 type State<K> = {
   readonly targets: ReadonlyMap<K, Target>;
@@ -27,7 +26,7 @@ const requestFull = <K>(state: State<K>, refresh: boolean): State<K> =>
       };
 
 export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(options: {
-  readonly targeted: (key: K, refresh: boolean) => Effect.Effect<void, E, R>;
+  readonly targeted: (key: K) => Effect.Effect<void, E, R>;
   readonly full: (refresh: boolean) => Effect.Effect<void, E, R>;
 }) {
   const state = yield* TxRef.make<State<K>>({
@@ -46,7 +45,7 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
   );
 
   // All reservations and both lanes' drain milestones commit in the same transaction.
-  const enqueue = Effect.fn("settlementAdmission.enqueue")(function* (key: K, refresh = false) {
+  const enqueue = Effect.fn("settlementAdmission.enqueue")(function* (key: K) {
     const current = yield* TxRef.get(state);
     if (current.closed) return yield* Effect.interrupt;
     const previous = current.targets.get(key);
@@ -54,17 +53,11 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
       yield* TxRef.set(state, requestFull(current, true));
       return;
     }
-    if (
-      previous !== undefined &&
-      (!previous.running || previous.rerun) &&
-      (!refresh || previous.refresh)
-    )
-      return;
+    if (previous !== undefined && (!previous.running || previous.rerun)) return;
     const targets = new Map(current.targets);
     targets.set(key, {
       running: previous?.running ?? false,
       rerun: previous?.running === true,
-      refresh: refresh || (previous?.refresh ?? false),
     });
     yield* TxRef.set(state, { ...current, targets });
   }, Effect.tx);
@@ -82,9 +75,9 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
     for (const [key, target] of current.targets) {
       if (target.running) continue;
       const targets = new Map(current.targets);
-      targets.set(key, { running: true, rerun: false, refresh: false });
+      targets.set(key, { running: true, rerun: false });
       yield* TxRef.set(state, { ...current, targets });
-      return { key, refresh: target.refresh };
+      return key;
     }
     return yield* Effect.txRetry;
   }).pipe(Effect.tx);
@@ -96,7 +89,7 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
       targets.delete(key);
       // Moving a dirty key to the tail keeps a hot thread behind already queued work.
       if (!current.closed && previous?.rerun) {
-        targets.set(key, { running: false, rerun: false, refresh: previous.refresh });
+        targets.set(key, { running: false, rerun: false });
       }
       return { ...current, targets };
     }).pipe(Effect.tx);
@@ -108,8 +101,8 @@ export const make = Effect.fn("settlementAdmission.make")(function* <K, E, R>(op
 
   for (let index = 0; index < TARGET_WORKERS; index++) {
     yield* takeTarget.pipe(
-      Effect.flatMap(({ key, refresh }) =>
-        Effect.suspend(() => options.targeted(key, refresh)).pipe(
+      Effect.flatMap((key) =>
+        Effect.suspend(() => options.targeted(key)).pipe(
           Effect.catchCause(recover),
           Effect.ensuring(finishTarget(key)),
         ),
