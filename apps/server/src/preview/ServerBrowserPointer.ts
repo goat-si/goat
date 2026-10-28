@@ -1,21 +1,46 @@
+// @effect-diagnostics globalDate:off - Playwright waits run outside the Effect runtime.
 import type { Page } from "playwright-core";
 
-import { type PointerReporter, targetLocator } from "./ServerBrowserPage.ts";
+import {
+  DEFAULT_TIMEOUT_MS,
+  type DispatchGate,
+  type PointerReporter,
+  targetLocator,
+} from "./ServerBrowserPage.ts";
+
+type TargetInput = {
+  readonly locator?: string | undefined;
+  readonly selector?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+};
 
 /**
  * Moves the agent's pointer over the element an input names before the input reaches it, as a
- * click does. Input into whatever has focus, or an element not in view, draws no pointer.
+ * click does, and returns the input with what is left of its time. The wait for the target uses
+ * the input's own budget, so a control that loads late still gets its pointer; a Stop during the
+ * move sends nothing. Input into whatever has focus draws no pointer.
  */
-export const pointAtTarget = async (
+export const pointBefore = async <Input extends TargetInput>(
   page: Page,
-  input: { readonly locator?: string | undefined; readonly selector?: string | undefined },
+  input: Input,
   pointer: PointerReporter,
-) => {
+  gate: DispatchGate,
+): Promise<Input> => {
   const locator = targetLocator(page, input);
-  const box = locator && (await locator.boundingBox({ timeout: 500 }).catch(() => null));
+  if (locator === null) return input;
+  const ends = Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const box = await locator
+    .boundingBox({ timeout: Math.max(1, ends - Date.now()) })
+    .catch(() => null);
+  // A desktop page's viewport is unknown to Playwright; its boxes are still in viewport pixels.
   const viewport = page.viewportSize();
-  if (!box || !viewport) return;
-  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  if (point.x >= 0 && point.y >= 0 && point.x <= viewport.width && point.y <= viewport.height)
+  const point = box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  if (
+    point &&
+    (viewport === null ||
+      (point.x >= 0 && point.y >= 0 && point.x <= viewport.width && point.y <= viewport.height))
+  )
     await pointer(point, "move");
+  gate();
+  return { ...input, timeoutMs: Math.max(1, ends - Date.now()) };
 };

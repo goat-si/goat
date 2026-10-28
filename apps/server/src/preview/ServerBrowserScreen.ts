@@ -254,21 +254,45 @@ export const makeSurface = <Tab extends ScreenTab>(
     listeners.add(listener);
     return () => void listeners.delete(listener);
   };
-  /** Draws the agent's pointer for the tab's viewers, with the visible cursor that owns it. */
-  const showPointer = (tab: Tab, x: number, y: number, phase: "move" | "click") => {
-    const current = cursorByTab.get(tab);
-    const cursor =
-      current?.phase === "hidden" || current?.phase === "yielded" ? undefined : current;
-    const sequence = (pointerSequence = nextPointerSequence(pointerSequence, current));
-    const withCursor = cursor ? { cursor } : {};
-    for (const viewer of tab.viewers)
-      viewer.push({ _tag: "pointer", phase, x, y, sequence, ...withCursor });
-    drawPointer(tab, { phase, x, y, ...withCursor });
-    pointerByTab.set(tab, {
+  const notePointer = (tab: Tab, x: number, y: number) =>
+    void pointerByTab.set(tab, {
       x,
       y,
       ...(tab.documentGeneration === undefined ? {} : { document: tab.documentGeneration }),
     });
+  /** The visible cursor that owns the tab's pointer now, and the pointer's next sequence. */
+  const pointerOwner = (tab: Tab) => {
+    const current = cursorByTab.get(tab);
+    const cursor =
+      current?.phase === "hidden" || current?.phase === "yielded" ? undefined : current;
+    pointerSequence = nextPointerSequence(pointerSequence, current);
+    return { sequence: pointerSequence, withCursor: cursor ? { cursor } : {} };
+  };
+  /** Draws the agent's pointer for the tab's viewers, with the visible cursor that owns it. */
+  const showPointer = (tab: Tab, x: number, y: number, phase: "move" | "click") => {
+    const { sequence, withCursor } = pointerOwner(tab);
+    for (const viewer of tab.viewers)
+      viewer.push({ _tag: "pointer", phase, x, y, sequence, ...withCursor });
+    drawPointer(tab, { phase, x, y, ...withCursor });
+    notePointer(tab, x, y);
+  };
+  /** A viewer that opens mid-run sees where the agent's owned pointer last was on this page. */
+  const replayPointer = (
+    tab: Tab,
+    viewer: ScreenTab["viewers"] extends ReadonlySet<infer V> ? V : never,
+  ) => {
+    const last = pointerByTab.get(tab);
+    if (last === undefined || last.document !== tab.documentGeneration) return;
+    const { sequence, withCursor } = pointerOwner(tab);
+    if ("cursor" in withCursor)
+      viewer.push({
+        _tag: "pointer",
+        phase: "move",
+        x: last.x,
+        y: last.y,
+        sequence,
+        ...withCursor,
+      });
   };
   const cursorState: CursorStateSink = (input) =>
     Effect.sync(() => {
@@ -314,6 +338,8 @@ export const makeSurface = <Tab extends ScreenTab>(
   return {
     notify,
     showPointer,
+    notePointer,
+    replayPointer,
     service: {
       onAuthorityChange,
       cursorState,

@@ -2,7 +2,7 @@ import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { pointAtTarget } from "./ServerBrowserPointer.ts";
+import { pointBefore } from "./ServerBrowserPointer.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);
@@ -105,15 +105,29 @@ it.each([
   }),
 );
 
-it("points the agent's cursor at the field it types into, and nowhere for focused typing", () =>
+it("points at a field that appears late, within the input's time, and nowhere for focused typing", () =>
   fixture(async (page) => {
-    await page.setContent(
-      '<input id="f" style="position:fixed;left:100px;top:40px;width:80px;height:20px;border:0;padding:0">',
-    );
+    await page.setContent("<body></body>");
+    void page.evaluate(`setTimeout(() => document.body.insertAdjacentHTML("beforeend",
+      '<input id="f" style="position:fixed;left:100px;top:40px;width:80px;height:20px;border:0;padding:0">'), 800)`);
     const points: Array<[number, number, string]> = [];
     const pointer: ServerBrowserPage.PointerReporter = async ({ x, y }, phase) =>
       void points.push([x, y, phase]);
-    await pointAtTarget(page, { locator: "#f" }, pointer);
-    await pointAtTarget(page, {}, pointer);
+    const typed = await pointBefore(page, { locator: "#f", timeoutMs: 5_000 }, pointer, () => {});
     expect(points).toEqual([[140, 50, "move"]]);
+    // The input keeps only what is left of its own time.
+    expect(typed.timeoutMs).toBeLessThan(5_000);
+    expect(await pointBefore(page, {}, pointer, () => {})).toEqual({});
+    expect(points).toHaveLength(1);
+  }));
+
+it("sends nothing after a Stop that lands while the pointer moves", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f">');
+    const stop = () => {
+      throw new Error("stopped");
+    };
+    await expect(pointBefore(page, { locator: "#f" }, async () => {}, stop)).rejects.toThrow(
+      "stopped",
+    );
   }));

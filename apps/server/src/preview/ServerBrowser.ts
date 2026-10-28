@@ -92,7 +92,7 @@ import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
-import { pointAtTarget } from "./ServerBrowserPointer.ts";
+import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1577,8 +1577,12 @@ const make = Effect.gen(function* () {
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop)
-        return tab.control.assertAgentMayDispatch();
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop) {
+        const allowed = tab.control.assertAgentMayDispatch();
+        // Nobody watches yet; a viewer that opens later starts from here.
+        screen.notePointer(tab, x, y);
+        return allowed;
+      }
       screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
       if (phase === "click") {
@@ -1966,8 +1970,9 @@ const make = Effect.gen(function* () {
       case "select":
         return recordAction(tab, "select", async () => {
           const gate = actionGate();
-          await pointAtTarget(tab.page, input as PreviewAutomationSelectInput, pointerFor(tab));
-          return ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gate);
+          const aimed = input as PreviewAutomationSelectInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.select(tab.page, timed, gate);
         });
       case "drag":
         return recordAction(tab, "drag", () =>
@@ -1985,8 +1990,9 @@ const make = Effect.gen(function* () {
       case "type":
         return recordAction(tab, "type", async () => {
           const gate = actionGate();
-          await pointAtTarget(tab.page, input as PreviewAutomationTypeInput, pointerFor(tab));
-          return ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gate);
+          const aimed = input as PreviewAutomationTypeInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.type(tab.page, timed, gate);
         });
       case "press":
         return recordAction(tab, "press", () =>
@@ -2315,6 +2321,7 @@ const make = Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         tab.viewers.add(viewer);
+        screen.replayPointer(tab, viewer);
         reportLiveTabs();
       }),
       () =>
