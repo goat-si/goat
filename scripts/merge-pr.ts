@@ -20,6 +20,8 @@ const RESULT_CHECK = "goat-ci-result";
 export interface Run {
   readonly id: number;
   readonly name?: string | undefined;
+  readonly event?: string | undefined;
+  readonly display_title?: string | undefined;
   readonly status: string;
   readonly conclusion: string | null;
   readonly html_url: string;
@@ -30,20 +32,28 @@ export type MergeVerdict =
   | { readonly merge: false; readonly reason: string };
 
 /**
- * Only the newest goat-ci run on the head counts, and only through its own goat-ci-result job: a
- * newer run cancelled before that job ran leaves an older success as the newest result check.
- * An ignored event's run counts too; its goat-ci-result repeats the real run's verdict.
+ * Evidence is the newest real pull request run on the head, or a manual lane=all run, read
+ * through its own goat-ci-result at its latest attempt. Ignored-event runs only repeat an older
+ * verdict and partial lanes test less. Titles come from run-name in goat-ci.yml.
  */
 export function mergeVerdict(
   runs: ReadonlyArray<Run>,
   jobsOf: (run: Run) => ReadonlyArray<Run>,
+  pr: number,
   head: string,
   knownFailure?: string,
 ): MergeVerdict {
-  const newest = runs.reduce<Run | undefined>(
-    (latest, candidate) => (latest === undefined || candidate.id > latest.id ? candidate : latest),
-    undefined,
-  );
+  const counts = (run: Run) =>
+    (run.event === "pull_request" && run.display_title?.endsWith(` (#${pr})`) === true) ||
+    (run.event === "workflow_dispatch" &&
+      run.display_title?.startsWith("goat-ci all on ") === true);
+  const newest = runs
+    .filter(counts)
+    .reduce<Run | undefined>(
+      (latest, candidate) =>
+        latest === undefined || candidate.id > latest.id ? candidate : latest,
+      undefined,
+    );
   if (newest === undefined) return { merge: false, reason: `no goat-ci run on ${head} yet` };
   if (newest.status !== "completed") {
     return {
@@ -112,7 +122,7 @@ function main(argv: ReadonlyArray<string>): number {
     JSON.parse(
       gh(["api", `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "--jq", ".jobs"]),
     ) as ReadonlyArray<Run>;
-  const verdict = mergeVerdict(runs, jobsOf, head, values["known-failure"]);
+  const verdict = mergeVerdict(runs, jobsOf, Number(pr), head, values["known-failure"]);
   if (!verdict.merge) {
     console.error(`not merging ${view.url}: ${verdict.reason}`);
     return 1;
