@@ -308,7 +308,11 @@ describe("Cloudflare rate-limit retry hint", () => {
           }),
     });
 
-  const linkResponse = (failure: ManagedEndpointProvider.ManagedEndpointProvisioningFailed) => {
+  const linkResponse = (
+    failure:
+      | ManagedEndpointProvider.ManagedEndpointProvisioningFailed
+      | ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed,
+  ) => {
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
@@ -392,6 +396,28 @@ describe("Cloudflare rate-limit retry hint", () => {
       const other = yield* linkResponse(provisioningFailed());
       expect(other.status).toBe(503);
       expect(other.headers.get("retry-after")).toBeNull();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("answers a cleanup failure during link with the declared upstream error", () =>
+    Effect.gen(function* () {
+      const response = yield* linkResponse(
+        new ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed({
+          userId: "user-1",
+          environmentId: "env-1",
+          stage: "delete-tunnel",
+          tunnelId: "private-tunnel-id",
+          cause: new Error("private-provider-token"),
+        }),
+      );
+      expect(response.status).toBe(500);
+      const body = yield* Effect.promise(() => response.json());
+      expect(body).toMatchObject({
+        _tag: "RelayInternalError",
+        code: "internal_error",
+        reason: "upstream_unavailable",
+      });
+      expect(JSON.stringify(body)).not.toContain("private");
     }).pipe(Effect.scoped),
   );
 });

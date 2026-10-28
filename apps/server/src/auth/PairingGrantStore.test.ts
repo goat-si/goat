@@ -246,5 +246,5 @@ it.effect(
         scopes: ["terminal:read"],
       });
       expect((yield* store.consume(current.credential)).subject).toBe("cloud-connect");
-    }).pipe(Effect.provide(layerPairingGrantStore()), Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(layerPairingGrantStore().pipe(Layer.provideMerge(NodeServices.layer)))),
 );

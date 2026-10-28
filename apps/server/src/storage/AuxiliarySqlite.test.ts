@@ -242,7 +242,10 @@ it.effect("real inline workers bound ownership rows and bytes and discard every 
       update.close();
     }
     expect((yield* Effect.result(reader.read({ kind: "worktrees", file })))._tag).toBe("Failure");
-  }).pipe(Effect.provide(AuxiliarySqlite.layer), Effect.provide(NodeServices.layer), Effect.scoped),
+  }).pipe(
+    Effect.provide(AuxiliarySqlite.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.scoped,
+  ),
 );
 
 it.effect("a real native close failure rejects a successful ownership query", () =>
@@ -280,9 +283,9 @@ it.effect("a real native close failure rejects a successful ownership query", ()
             },
           }),
         ),
+        Layer.provideMerge(NodeServices.layer),
       ),
     ),
-    Effect.provide(NodeServices.layer),
     Effect.scoped,
   ),
 );
