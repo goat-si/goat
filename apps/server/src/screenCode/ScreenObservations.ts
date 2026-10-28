@@ -13,6 +13,49 @@ const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
 // `role "name" [attribute]...`, then `: text` when the line carries a value.
 const TAB_LINE = /^(\w[\w-]*)(?:\s+("(?:[^"\\]|\\.)*"))?((?:\s*\[[^\]]*\])*)\s*(?::\s?(.*))?$/;
 const CHECKABLE = /^(?:checkbox|radio|switch|menuitemcheckbox|menuitemradio|option|tab|treeitem)$/;
+// Fields whose content is the user's input, never the element's name.
+const EDITABLE = /^(?:textbox|searchbox|combobox|spinbutton|slider)$/;
+
+const indentOf = (line: string) => line.length - line.trimStart().length;
+
+/** What a tab observation left out for its size, and how to read it: at most 200 characters. */
+const droppedDetail = (indexes: readonly number[]) => {
+  const ranges: string[] = [];
+  for (let start = 0; start < indexes.length;) {
+    let end = start;
+    while (end + 1 < indexes.length && indexes[end + 1] === (indexes[end] ?? 0) + 1) end++;
+    ranges.push(start === end ? `[${indexes[start]}]` : `[${indexes[start]}]–[${indexes[end]}]`);
+    start = end + 1;
+  }
+  const tail = "; observe({diff:false, scope}) or scroll reads them.";
+  let list = ranges.join(", ");
+  const head = `Left out ${indexes.length} elements (`;
+  const room = 200 - head.length - tail.length - 1;
+  if (list.length > room) list = `${list.slice(0, Math.max(0, room - 1))}…`;
+  return `${head}${list})${tail}`;
+};
+
+/**
+ * The first text written under the element on line `at` (a `- text:` line, or the name or value
+ * of a line without a ref), when nothing under it has a ref of its own: a container of controls
+ * is not named after the help text beside them.
+ */
+const textUnder = (lines: readonly string[], at: number): string | undefined => {
+  const depth = indentOf(lines[at] ?? "");
+  let found: string | undefined;
+  for (let index = at + 1; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (!line.trim()) continue;
+    if (indentOf(line) <= depth) break;
+    if (/\[ref=[^\]]+\]/.test(line)) return undefined;
+    if (found !== undefined) continue;
+    const text = line.trim().match(/^-\s*text:\s?(.*)$/)?.[1];
+    const words =
+      text === undefined ? tabTreeElement(line).name || tabTreeElement(line).text : scalar(text);
+    if (words?.trim()) found = words.trim().slice(0, 1024);
+  }
+  return found;
+};
 
 /** A YAML scalar as Playwright writes it: plain, double-quoted (JSON) or single-quoted. */
 const scalar = (value: string): string => {
@@ -254,13 +297,28 @@ export class ScreenObservations {
     const tree = typeof snapshot.accessibilityTree === "string" ? snapshot.accessibilityTree : "";
     const lines = tree.split("\n");
     const elements: ScreenObservationDraft["elements"][number][] = [];
-    for (const line of lines) {
+    for (const [at, line] of lines.entries()) {
       const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
       if (!ref) continue;
-      elements.push({ ...tabTreeElement(line), driverToken: `aria-ref=${ref}` });
+      const element = tabTreeElement(line);
+      // A paragraph, generic box or image whose words are its child text lines is found by them.
+      const under =
+        element.name === "" && element.text === undefined && !EDITABLE.test(element.role)
+          ? textUnder(lines, at)
+          : undefined;
+      elements.push({
+        ...element,
+        ...(under === undefined ? {} : { name: under }),
+        driverToken: `aria-ref=${ref}`,
+      });
     }
     const validGeneration =
       typeof snapshot.refGeneration === "string" && snapshot.refGeneration.length > 0;
+    // An incomplete tree (an unread frame, a tree over the text limit) still offers the refs it
+    // has when the browser named the document they belong to, so its gate can refuse them later.
+    const usable =
+      validGeneration &&
+      (snapshot.treeComplete === true || typeof input.documentGeneration === "number");
     const key = JSON.stringify([
       input.connectionId,
       input.controlGeneration,
@@ -291,7 +349,7 @@ export class ScreenObservations {
                 : { kind: "budget" as const, detail: reason },
             ),
           }),
-      elements: snapshot.treeComplete === true && validGeneration ? elements : [],
+      elements: usable ? elements : [],
     };
   }
 
@@ -393,9 +451,9 @@ export class ScreenObservations {
           compact.length < renderedText.length
         ) {
           renderedText = compact;
-          selected = draft.elements.filter((element) =>
-            added.some((line) => line.includes(`[ref=${element.driverToken.slice(9)}]`)),
-          );
+          // The text shows what changed; the elements are every current one, numbered as a full
+          // read numbers them, so a name or number found before is found again.
+          selected = draft.elements;
         } else resetReason = "reordered_or_longer_diff";
       } else resetReason = "lineage_or_completeness_changed";
       if (resetReason) mode = "full";
@@ -429,28 +487,40 @@ export class ScreenObservations {
         },
       };
     });
-    // A tab's tree names elements by Playwright ref; show the same numbers an app's tree shows.
-    if (draft.targetRef.kind === "tab") {
-      const numbers = new Map(
-        selected.slice(0, 4096).map((element, position) => [element.driverToken, position]),
-      );
-      renderedText = renderedText.replace(/ ?\[ref=([^\]]+)\]/g, (marker, ref: string) => {
-        const number = numbers.get(`aria-ref=${ref}`);
-        return number === undefined ? "" : ` [${number}]`;
-      });
-    }
-    let text = Buffer.from(renderedText, "utf8")
-      .subarray(0, Math.min(input.limits.treeBytes, 128 * 1024))
-      .toString("utf8");
+    // A tab's tree names elements by Playwright ref; show the same numbers an app's tree shows,
+    // only for elements the observation still carries, so every number shown has a ref.
+    const numbers = new Map(
+      selected.slice(0, 4096).map((element, position) => [element.driverToken, position]),
+    );
+    const numbered = (carried: ReadonlySet<string>) =>
+      draft.targetRef.kind !== "tab"
+        ? renderedText
+        : renderedText.replace(/ ?\[ref=([^\]]+)\]/g, (_marker, ref: string) => {
+            const token = `aria-ref=${ref}`;
+            const number = numbers.get(token);
+            return number === undefined || !carried.has(token) ? "" : ` [${number}]`;
+          });
+    const cut = (value: string) =>
+      Buffer.from(value, "utf8")
+        .subarray(0, Math.min(input.limits.treeBytes, 128 * 1024))
+        .toString("utf8");
+    const fullText = numbered(new Set(numbers.keys()));
+    let text = cut(fullText);
     let truncated =
       draft.truncated ||
       queryTruncated ||
-      text.length !== renderedText.length ||
+      text.length !== fullText.length ||
       elements.length !== selected.length;
+    const dropped: number[] = [];
     const omittedNow = () =>
       [
         ...(draft.omitted ?? []),
-        ...(truncated && !draft.omitted?.some((item) => item.kind === "budget")
+        ...(dropped.length > 0 && draft.targetRef.kind === "tab"
+          ? [{ kind: "budget" as const, detail: droppedDetail(dropped) }]
+          : []),
+        ...(truncated &&
+        !draft.omitted?.some((item) => item.kind === "budget") &&
+        !(dropped.length > 0 && draft.targetRef.kind === "tab")
           ? [{ kind: "budget" as const }]
           : []),
       ].slice(0, 16);
@@ -480,8 +550,11 @@ export class ScreenObservations {
       const removed = elements.pop();
       if (removed) tokens.delete(removed.ref.id);
       if (removed) editable.delete(removed.ref.id);
+      if (removed) dropped.unshift(removed.index);
       truncated = true;
     }
+    if (dropped.length > 0 && draft.targetRef.kind === "tab")
+      text = cut(numbered(new Set(tokens.values())));
     while (Buffer.byteLength(JSON.stringify(build())) > budget && text.length > 0) {
       text = text.slice(0, Math.max(0, text.length - 256));
       truncated = true;
