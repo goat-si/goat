@@ -139,7 +139,7 @@ const PASSWORD_ORIGIN = `function () {
   return field ? self.origin : null;
 }`;
 // The identifier field a password field belongs to, as the sign-in state reads it.
-const IDENTIFIER_OF = `(field) => {
+const IDENTIFIER_FIELD_OF = `(field) => {
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const named = (input) => /username|email/i.test(input.autocomplete || "");
   const collect = (root) => {
@@ -155,23 +155,17 @@ const IDENTIFIER_OF = `(field) => {
   const scopes = [field.form || field.closest("form"), field.getRootNode(), field.ownerDocument];
   const inputs = scopes.filter(Boolean).map(candidates).find((found) => found.length > 0) || [];
   const before = inputs.filter((input) => input.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING);
-  const id = inputs.find(named) || before[before.length - 1];
+  return inputs.find(named) || before[before.length - 1] || null;
+}`;
+const IDENTIFIER_OF = `(field) => {
+  const id = (${IDENTIFIER_FIELD_OF})(field);
   return id ? id.value.trim() : null;
 }`;
 const IDENTIFIER = `function () { return (${IDENTIFIER_OF})(this); }`;
-const SENT_BINDING = "__goatSignInSent";
-// Reports, as the field's form is sent, whether its identifier was filled: the document that
-// could answer later is often gone by the time GOAT sees the request.
-const WATCH_SUBMIT = `function (binding) {
-  const field = this;
-  const form = field.form || field.closest("form");
-  if (!form || form.__goatSentWatch) return;
-  form.__goatSentWatch = true;
-  form.addEventListener("submit", () => {
-    const id = (${IDENTIFIER_OF})(field);
-    if (typeof self[binding] === "function")
-      self[binding](id === null ? "absent" : id === "" ? "empty" : "filled");
-  }, true);
+// The name a form request carries the identifier under; null without one or without a name.
+const IDENTIFIER_NAME = `function () {
+  const id = (${IDENTIFIER_FIELD_OF})(this);
+  return id && id.name ? id.name : null;
 }`;
 // Without an identifier field, page text names the account: as a whole address, and no other one.
 const NAMED_ONLY = `(wanted) => {
@@ -320,6 +314,39 @@ const identifierOf = async (target: Target) => {
   return typeof value === "string" ? value : null;
 };
 
+/** The name the identifier field is sent under, read where the page's script cannot change it. */
+const identifierNameOf = async (target: Target) => {
+  const read = await target.session
+    .send("Runtime.callFunctionOn", {
+      objectId: target.objectId,
+      functionDeclaration: IDENTIFIER_NAME,
+      returnByValue: true,
+    })
+    .catch(() => null);
+  const value: unknown = read && !read.exceptionDetails ? read.result.value : null;
+  return typeof value === "string" ? value : null;
+};
+
+/**
+ * The identifier as the form request itself carries it, so a cancelled submit or another form
+ * never speaks for it; unread when the body does not show that field.
+ */
+const sentIdentifier = (request: Request, name: string | null): PreviewSignInField | "unread" => {
+  const body = request.postData();
+  if (name === null || body === null) return "unread";
+  const type = request.headers()["content-type"] ?? "";
+  let value: string | null = null;
+  if (type.includes("application/x-www-form-urlencoded"))
+    value = new URLSearchParams(body).get(name);
+  else if (type.includes("multipart/form-data")) {
+    const header = `name="${name}"\r\n\r\n`;
+    const start = body.indexOf(header);
+    if (start >= 0) value = body.slice(start + header.length).split("\r\n")[0] ?? "";
+  }
+  if (value === null) return "unread";
+  return value.trim() === "" ? "empty" : "filled";
+};
+
 const originOf = (url: string) => {
   try {
     return new URL(url).origin;
@@ -329,8 +356,6 @@ const originOf = (url: string) => {
 };
 
 const VALIDATION_CHARS = 200;
-
-const SENT_STATES: ReadonlyArray<PreviewSignInField> = ["absent", "empty", "filled"];
 
 /** A form sent from the top document, or from a frame on the site the password went into. */
 const navigates = (request: Request, page: Page, destination: string) => {
@@ -500,7 +525,16 @@ export const make = Effect.gen(function* () {
   /** Fills under way per context: no recording there starts meanwhile. */
   const filling = new WeakMap<BrowserContext, number>();
   /** The field each tab last took a password into, and where it went. */
-  const lastFill = new WeakMap<Page, Target & { readonly destination: string }>();
+  const lastFill = new WeakMap<
+    Page,
+    Target & {
+      readonly destination: string;
+      /** The name the identifier is sent under; null when the step has none or it has no name. */
+      readonly identifierName: string | null;
+      /** The step had no identifier field: a password-only step after an earlier one. */
+      readonly identifierAbsent: boolean;
+    }
+  >();
   /** Threads with a tab in a context: a password filled there joins each one's mask at once. */
   const contextThreads = new WeakMap<BrowserContext, Set<ThreadId>>();
   /** Fills started per context, so an image let through before one started is dropped after. */
@@ -580,15 +614,18 @@ export const make = Effect.gen(function* () {
         request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
       if (values === undefined || !carriesValue(carried, values)) return;
       const at = ++signInOrder;
-      // A form reports its identifier as it is sent; a script request has none to read.
-      const sent = signIns.get(tab.page)?.identifierAtSubmit;
-      if (form) noteSignIn(tab.page, { identifierAtSubmit: undefined });
+      // Read from the request itself; a script request's identifier is never read.
+      const identifier = !form
+        ? "unread"
+        : field.identifierAbsent
+          ? "absent"
+          : sentIdentifier(request, field.identifierName);
       noteSignIn(tab.page, {
         submitted: {
           documentGeneration: tab.documentGeneration ?? 0,
           at,
           kind: form ? "form" : "script",
-          identifier: form ? (sent ?? "unread") : "unread",
+          identifier,
         },
       });
       void request.response().then((response) => {
@@ -600,33 +637,6 @@ export const make = Effect.gen(function* () {
     tab.control.onHandoffChange((end) => {
       if (end === "handedBack") noteSignIn(tab.page, { handedBackAt: ++signInOrder });
     });
-  };
-  const boundSessions = new WeakSet<CDPSession>();
-  /** Hears the field's form being sent, from the isolated world, before its request leaves. */
-  const watchSubmit = async (page: Page, target: Target) => {
-    if (!boundSessions.has(target.session)) {
-      boundSessions.add(target.session);
-      target.session.on("Runtime.bindingCalled", (event) => {
-        if (event.name !== SENT_BINDING) return;
-        const sent = SENT_STATES.find((state) => state === event.payload);
-        if (sent === undefined) return;
-        const submitted = signIns.get(page)?.submitted;
-        // The request can reach GOAT first; then the form's report completes it.
-        if (submitted?.kind === "form" && submitted.identifier === "unread")
-          noteSignIn(page, { submitted: { ...submitted, identifier: sent } });
-        else noteSignIn(page, { identifierAtSubmit: sent });
-      });
-      await target.session
-        .send("Runtime.addBinding", { name: SENT_BINDING, executionContextName: WORLD })
-        .catch(constVoid);
-    }
-    await target.session
-      .send("Runtime.callFunctionOn", {
-        objectId: target.objectId,
-        functionDeclaration: WATCH_SUBMIT,
-        arguments: [{ value: SENT_BINDING }],
-      })
-      .catch(constVoid);
   };
   const fences = new WeakMap<Page, Array<Fence>>();
   // A frame's session closes with its document: whatever it filled there is gone.
@@ -695,6 +705,7 @@ export const make = Effect.gen(function* () {
             try {
               const destination = await passwordOrigin(target);
               const identifier = await identifierOf(target);
+              const identifierName = identifier === null ? null : await identifierNameOf(target);
               fence.hold();
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
@@ -724,8 +735,12 @@ export const make = Effect.gen(function* () {
               contextOrigins.set(tab.page.context(), shared);
               markFilled(tab.page);
               // Watching before the value goes in: its own input handler may submit at once.
-              lastFill.set(tab.page, { ...target, destination });
-              await watchSubmit(tab.page, target);
+              lastFill.set(tab.page, {
+                ...target,
+                destination,
+                identifierName,
+                identifierAbsent: identifier === null,
+              });
               watchSignIn(tab, request.threadId);
               fence.assertMayDispatch();
               assertBefore(deadlineMs);

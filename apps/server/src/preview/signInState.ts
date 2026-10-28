@@ -28,8 +28,6 @@ export interface SignInPage {
 
 /** What GOAT recorded on this tab. */
 export interface SignInRecord {
-  /** The identifier as the field's form was last sent, until a request of that form claims it. */
-  readonly identifierAtSubmit?: PreviewSignInField | undefined;
   /**
    * A form or same-site script request from the tab carried a password GOAT filled, while this
    * document was showing.
@@ -41,7 +39,7 @@ export interface SignInRecord {
     readonly status?: number;
     /** A form the page sent, or a script request, which GOAT cannot tell from other traffic. */
     readonly kind?: "form" | "script";
-    /** The identifier beside the field as it was sent; unread when GOAT could not read it then. */
+    /** The identifier as the form request carried it; unread when the request does not show it. */
     readonly identifier?: PreviewSignInField | "unread";
   };
   /** When, in the same order as submitted.at, a person last handed the tab back after GOAT asked them to finish a step. */
