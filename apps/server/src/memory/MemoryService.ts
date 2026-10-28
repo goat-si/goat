@@ -1380,7 +1380,13 @@ const make = Effect.fnUntraced(function* (
                 });
             }
           }
-          const sourceExclusions = [...exclusionsBySource.values()];
+          // Merged ids still respect the per-exclusion bound of 100 messages.
+          const sourceExclusions = [...exclusionsBySource.values()].flatMap((exclusion) =>
+            Array.from({ length: Math.ceil(exclusion.messageIds.length / 100) }, (_, page) => ({
+              ...exclusion,
+              messageIds: exclusion.messageIds.slice(page * 100, page * 100 + 100),
+            })),
+          );
           const op: Extract<M.MemoryOperation, { kind: "forget" }> = old ?? {
             protocolVersion: 1,
             kind: "forget",

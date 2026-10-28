@@ -258,13 +258,12 @@ export const makeCommitSummary = (deps: {
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         if (!generated) {
           // Nothing new to summarize, but promotions still hang off the standing summary.
+          // Memories injected since it was written are in the thread's lineage, not in its payload.
           const head = current.revisions.find((p) => p.revision.revisionId === current.heads[0]);
           if (current.heads.length === 1 && head?.payload)
-            yield* promote(
-              input,
-              head.revision.revisionId,
-              head.payload.derivedFromMemoryRevisions,
-            );
+            yield* promote(input, head.revision.revisionId, [
+              ...new Set([...head.payload.derivedFromMemoryRevisions, ...lineage.revisions]),
+            ]);
           if (!(yield* store.completeSummaryWork(work)))
             return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
           return undefined;

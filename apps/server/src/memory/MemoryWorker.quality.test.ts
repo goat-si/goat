@@ -17,6 +17,7 @@ import {
   seed,
   seedDerivedSummary,
   incrementalSummary,
+  seedRolledBackRegeneration,
 } from "./MemoryWorker.testkit.ts";
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 
@@ -37,7 +38,11 @@ const userPromotionId = M.MemoryId.make(
 );
 // Summarize the seeded run, then let its daily consolidation run.
 const summarizeThenConsolidate = (
-  beforeConsolidation: Effect.Effect<void, unknown, never> = Effect.void,
+  beforeConsolidation: Effect.Effect<
+    void,
+    never,
+    Service.MemoryService | Store.MemoryStore
+  > = Effect.void,
 ) =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse(now));
@@ -58,6 +63,93 @@ const headText = (memoryId: M.MemoryId) =>
   });
 
 describe("MemoryWorker summary quality", () => {
+  it.effect(
+    "a promotion from an empty consolidation follows memories injected after its summary",
+    () =>
+      Effect.gen(function* () {
+        const injected = M.MemoryId.make(id(9700));
+        const inject = Effect.gen(function* () {
+          const service = yield* Service.MemoryService;
+          const store = yield* Store.MemoryStore;
+          yield* service.upsert(
+            {
+              memorySpaceId: space,
+              memoryId: injected,
+              operationId: M.MemoryOperationId.make(id(9701)),
+              expectedHeads: [],
+              scope: { kind: "user" },
+              assertionKind: "inference",
+              payload: {
+                text: "synthetic injected source",
+                evidence: [],
+                derivedFromMemoryRevisions: [],
+              },
+              baseBoundary: null,
+            },
+            Effect.void,
+          );
+          const revision = (yield* store.loadAggregate(space, injected)).heads;
+          yield* store.appendThreadLineage({ environmentId, threadId }, space, revision);
+        }).pipe(Effect.orDie);
+        yield* summarizeThenConsolidate(inject);
+        const store = yield* Store.MemoryStore;
+        assert.strictEqual(yield* headText(userPromotionId), "Synthetic user preference");
+        yield* (yield* Service.MemoryService).forget(
+          {
+            memorySpaceId: space,
+            memoryId: injected,
+            operationId: M.MemoryOperationId.make(id(9702)),
+            expectedHeads: (yield* store.loadAggregate(space, injected)).heads,
+          },
+          Effect.void,
+        );
+        const page = yield* store.list({
+          memorySpaceId: space,
+          scope: { kind: "user" },
+          limit: 20,
+        });
+        assert.notStrictEqual(
+          page.find((item) => item.memoryId === userPromotionId)?.status,
+          "active",
+        );
+      }).pipe(
+        Effect.provide(
+          live(
+            false,
+            undefined,
+            false,
+            0,
+            false,
+            (input) => input.promote === true,
+            (input) => ({ project: null, user: cited(input, "Synthetic user preference") }),
+          ),
+        ),
+      ),
+  );
+  it.effect("forgets a summary that cites more than 100 messages of one run", () =>
+    Effect.gen(function* () {
+      yield* seedRolledBackRegeneration;
+      const worker = yield* Worker.MemoryWorker;
+      yield* worker.sweepDue();
+      yield* worker.sweepDue();
+      yield* worker.drain;
+      const store = yield* Store.MemoryStore;
+      const summaryId = M.MemoryId.make(
+        Service.memoryStableUuid(`${environmentId}:${threadId}:summary`),
+      );
+      const before = yield* store.loadAggregate(space, summaryId);
+      yield* (yield* Service.MemoryService).forget(
+        {
+          memorySpaceId: space,
+          memoryId: summaryId,
+          operationId: M.MemoryOperationId.make(id(9600)),
+          expectedHeads: before.heads,
+        },
+        Effect.void,
+      );
+      assert.isDefined((yield* store.loadAggregate(space, summaryId)).tombstone);
+    }).pipe(Effect.provide(live())),
+  );
   it.effect("promoted text never keeps a GOAT credential", () => {
     const raw = `Use curl -H 'Authorization: Bearer ${"f".repeat(51)}' for the synthetic service.`;
     return Effect.gen(function* () {

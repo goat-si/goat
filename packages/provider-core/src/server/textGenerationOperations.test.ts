@@ -259,7 +259,7 @@ describe("memory shared operations", () => {
         expect(
           (yield* generate(
             prose(
-              "No durable preferences, decisions, recurring constraints, or verified results are present; the messages describe a one-off connectivity check.",
+              "No durable preferences, decisions, recurring constraints, or verified results were identified in the supplied messages.",
             ),
           )).result,
         ).toBeNull();
@@ -271,6 +271,12 @@ describe("memory shared operations", () => {
         const constraint =
           "No durable storage is available; all state must be committed to the remote database.";
         expect((yield* generate(prose(constraint))).result?.text).toBe(constraint);
+        // Durable content after or inside a no-memory sentence is kept as written.
+        for (const content of [
+          "No durable preferences were established. The one-off migration revealed that TLS must stay enabled.",
+          "No durable storage constraints were identified except that backups must be retained for seven years.",
+        ])
+          expect((yield* generate(prose(content))).result?.text).toBe(content);
       }),
   );
   it.effect("absent memoryRunner never invokes the legacy runner", () =>

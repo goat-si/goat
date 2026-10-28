@@ -69,22 +69,18 @@ export type MemoryPromotingModelAnswer = typeof MemoryPromotingModelAnswer.Type;
 export const MemoryConflictModelOutput = memoryConflictModelOutput(MEMORY_ORIGINS);
 export type MemoryConflictModelOutput = typeof MemoryConflictModelOutput.Type;
 
-/** A whole text that only says nothing durable was found (models that ignore the null answer). */
+const memoryNoun =
+  "(?:user[- ](?:specific )?)?(?:preferences?|information|decisions?|(?:recurring )?constraints?|verified (?:results?|findings?)|findings?)";
+/**
+ * One whole sentence saying nothing durable was found, the way models that ignore the null answer
+ * phrase it. Anything more (a second sentence, an exception, another noun) is kept as content.
+ */
+const NO_DURABLE_MEMORY = new RegExp(
+  `^(?:no|nothing) durable (?:${memoryNoun}(?:,? (?:or |and )?${memoryNoun})* )?(?:(?:are|were|is|was|can be) )?(?:established|identified|present|retained|supported|found|to retain)(?: (?:by|in|from) (?:the supplied (?:data|messages?|evidence)|this exchange))?\\.?$`,
+  "i",
+);
 export function isNoDurableMemoryText(text: string) {
-  const sentences = text.trim().split(/(?<=[.!?])\s+/);
-  return (
-    /^(?:no|nothing) durable\b[^.!?]*\b(?:established|identified|present|retain(?:ed)?|supported|found)\b/i.test(
-      sentences[0] ?? "",
-    ) &&
-    !/verified results?\s*:/i.test(text) &&
-    sentences
-      .slice(1)
-      .every((sentence) =>
-        /\b(?:one-off|one-time|not retained|omitted|omit it|no memory to retain|should not be retained|not reusable)\b/i.test(
-          sentence,
-        ),
-      )
-  );
+  return NO_DURABLE_MEMORY.test(text.trim().replace(/\s+/g, " "));
 }
 
 /**
