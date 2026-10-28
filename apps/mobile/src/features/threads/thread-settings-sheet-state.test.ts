@@ -81,7 +81,11 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-reanimated", async () => {
   const { useRef } = await import("react");
   const { View } = await import("react-native");
-  const animation = { duration: () => animation };
+  const animation = {
+    delay: () => animation,
+    duration: () => animation,
+    reduceMotion: () => animation,
+  };
   return {
     default: { View, createAnimatedComponent: (component: unknown) => component },
     FadeIn: animation,
