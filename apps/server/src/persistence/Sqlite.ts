@@ -23,7 +23,7 @@ const layerSetup = Layer.effectDiscard(
     }>`SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table'`;
     if (tables[0]?.count === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
-    // FULL fsyncs every event commit on the main thread; NORMAL syncs only at WAL checkpoints.
+    // NORMAL syncs at WAL checkpoints; FULL syncs every event commit.
     // App crashes lose nothing; OS crashes or power loss can roll back post-checkpoint commits without corruption.
     yield* sql`PRAGMA synchronous = NORMAL;`;
     // macOS fsync misses drive caches; F_FULLFSYNC flushes them at checkpoints and is ignored elsewhere.
@@ -51,7 +51,8 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
     NodeSqliteClient.layer({
       filename: dbPath,
       readerWorker: true,
-      // Run checkpoint fsyncs off the event loop so slow disk flushes cannot stall clients.
+      writerWorker: true,
+      // The owned writer performs checkpoint work on its connection.
       checkpointWorker: true,
       spanAttributes: {
         "db.name": path.basename(dbPath),

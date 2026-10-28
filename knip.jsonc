@@ -57,6 +57,9 @@
         "src/cua/linuxHelper/main.ts!",
         // AcpAdapterV2.test.ts selects this subprocess fixture by path string.
         "scripts/acp-mock-notice-v1-agent.ts",
+        "scripts/bench-server-responsiveness.ts",
+        // The responsiveness fixture loads this through Node's --import option.
+        "scripts/bench/benchmarkPreload.ts",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",

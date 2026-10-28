@@ -1,3 +1,4 @@
+import { idleEffectWorker, mockExecution } from "./EffectWorker.testkit.ts";
 import {
   seedCompaction,
   layerDatabase,
@@ -164,44 +165,49 @@ it.effect("discovers on the reader worker and deletes on the writer", () =>
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* seedCompaction();
-      // Establish the reader before recording main-thread statements.
+      // Establish the reader before rejecting main-thread statements.
       yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly);
-      const reads: string[] = [];
-      const writes: string[] = [];
-      const all = NodeSqlite.StatementSync.prototype.all;
-      const run = NodeSqlite.StatementSync.prototype.run;
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const readSpy = vi
-            .spyOn(NodeSqlite.StatementSync.prototype, "all")
-            .mockImplementation(function (this: NodeSqlite.StatementSync, ...params) {
-              reads.push(this.sourceSQL);
-              return all.apply(this, params);
-            });
-          const writeSpy = vi
-            .spyOn(NodeSqlite.StatementSync.prototype, "run")
-            .mockImplementation(function (this: NodeSqlite.StatementSync, ...params) {
-              writes.push(this.sourceSQL);
-              return run.apply(this, params);
-            });
-          return { readSpy, writeSpy };
-        }),
-        ({ readSpy, writeSpy }) =>
-          Effect.sync(() => {
-            readSpy.mockRestore();
-            writeSpy.mockRestore();
-          }),
-      );
+      const rejectMainThreadSql = () => {
+        throw new Error("Compaction SQL must execute on the reader or writer worker");
+      };
+      using _all = vi
+        .spyOn(NodeSqlite.StatementSync.prototype, "all")
+        .mockImplementation(rejectMainThreadSql);
+      using _run = vi
+        .spyOn(NodeSqlite.StatementSync.prototype, "run")
+        .mockImplementation(rejectMainThreadSql);
+      const spans: Tracer.Span[] = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
       const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
-      const result = yield* maintenance.compactEventStore();
+      const result = yield* maintenance
+        .compactEventStore()
+        .pipe(
+          Effect.withTracer(tracer),
+          Effect.provideService(Statement.SpanPropagationEnabled, true),
+        );
       assert.equal(result.deletedEventCount, 148);
       assert.equal(result.deletedReceiptCount, 100);
-      assert.deepEqual(
-        reads.filter((query) => /\bSELECT\b/.test(query)),
-        [],
+      const queries = spans.filter(
+        (span) => typeof span.attributes.get("db.query.text") === "string",
       );
-      assert(writes.some((query) => query.includes("DELETE FROM orchestration_events")));
-      assert(writes.some((query) => query.includes("DELETE FROM orchestration_command_receipts")));
+      const reads = queries.filter((span) =>
+        /\bSELECT\b/.test(String(span.attributes.get("db.query.text"))),
+      );
+      assert.isAbove(reads.length, 0);
+      assert.isTrue(reads.every((span) => span.attributes.get("db.connection") === "reader"));
+      for (const table of ["orchestration_events", "orchestration_command_receipts"]) {
+        const writes = queries.filter((span) =>
+          String(span.attributes.get("db.query.text")).includes(`DELETE FROM ${table}`),
+        );
+        assert.isAbove(writes.length, 0);
+        assert.isTrue(writes.every((span) => span.attributes.get("db.connection") === "writer"));
+      }
     }).pipe(
       Effect.provide(
         ProjectionMaintenance.layer.pipe(
@@ -1884,6 +1890,8 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       };
       const executionCount = yield* Ref.make(0);
       const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+        getExecution: () => Effect.succeed(mockExecution()),
+        notifyAvailable: () => Effect.void,
         claimNext: () => Effect.succeedSome(claimedEffect),
         get: () =>
           Effect.succeedSome({
@@ -2111,7 +2119,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           id: "effect:foundation-next-claimable:b1",
           commandId,
           threadId: ThreadId.make("thread:foundation-next-claimable:future"),
-          request: { type: "terminal.cleanup" },
+          request: { type: "delegated-tasks.stop" },
           availableAt: future,
         },
       ]);
@@ -2124,6 +2132,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       if (Option.isNone(claimed)) return;
       assert.equal(claimed.value.id, "effect:foundation-next-claimable:a1");
 
+      assert.isTrue(Option.isNone(yield* outbox.nextClaimableAtFor(["terminal.cleanup"])));
       const whileBlocked = yield* outbox.nextClaimableAt;
       assert.isTrue(Option.isSome(whileBlocked));
       if (Option.isSome(whileBlocked)) {
@@ -2154,7 +2163,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       }
       yield* outbox.cancelUnsettled({
         threadId: ThreadId.make("thread:foundation-next-claimable:future"),
-        effectTypes: ["terminal.cleanup"],
+        effectTypes: ["delegated-tasks.stop"],
         reason: "Test cleanup.",
       });
     }),
@@ -2854,16 +2863,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const recovery = yield* ProviderRuntimeRecovery.make.pipe(
         Effect.provide(ServerSettings.layerTest()),
-        Effect.provideService(
-          EffectWorker.OrchestrationEffectWorkerV2,
-          EffectWorker.OrchestrationEffectWorkerV2.of({
-            awaitWork: Effect.void,
-            runRecoveryOnce: Effect.succeed(false),
-            runOnce: Effect.succeed(false),
-            nextClaimableAt: Effect.succeedNone,
-            drain: () => Effect.succeed(0),
-          }),
-        ),
+        Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, idleEffectWorker()),
       );
       const first = yield* recovery.recover;
       assert.equal(first.terminalizedRuns, 1);
@@ -3071,16 +3071,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const recovery = yield* ProviderRuntimeRecovery.make.pipe(
         Effect.provide(ServerSettings.layerTest()),
-        Effect.provideService(
-          EffectWorker.OrchestrationEffectWorkerV2,
-          EffectWorker.OrchestrationEffectWorkerV2.of({
-            awaitWork: Effect.void,
-            runRecoveryOnce: Effect.succeed(false),
-            runOnce: Effect.succeed(false),
-            nextClaimableAt: Effect.succeedNone,
-            drain: () => Effect.succeed(0),
-          }),
-        ),
+        Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, idleEffectWorker()),
       );
       assert.include(yield* projectionStore.getRecoveryThreadIds("runtime"), childId);
       yield* recovery.recover;

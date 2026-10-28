@@ -5,7 +5,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   EventId,
-  ProviderInstanceId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -42,7 +41,14 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
+import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
+import {
+  appThread,
+  settledEvent,
+  settlementAdmissionTests,
+} from "./ThreadSettlementService.admission-test-cases.ts";
 import { settlementSweepCacheTests } from "./ThreadSettlementService.cache-test-cases.ts";
+import { settlementShellHintTests } from "./ThreadSettlementService.shell-hint-test-cases.ts";
 
 import {
   NOW_MS,
@@ -511,6 +517,8 @@ interface HarnessOptions {
     input: ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput,
   ) => Effect.Effect<void>;
   readonly onCloseIdle?: () => Effect.Effect<void>;
+  readonly onCandidateRead?: (threadId?: ThreadId) => Effect.Effect<void>;
+  readonly onRestoringThreadRead?: (threadId: ThreadId) => Effect.Effect<void>;
   readonly currentThreads?: ReadonlyArray<OrchestrationV2AppThread>;
 }
 
@@ -519,6 +527,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
 ) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make(options.snapshot);
+  const currentThreads = yield* Ref.make(options.currentThreads ?? []);
   const snapshotReadCount = yield* Ref.make(0);
   const snapshotReads = yield* Queue.unbounded<number>();
   const candidateReads = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
@@ -621,6 +630,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
         Ref.update(candidateReads, (reads) => [...reads, threadId]).pipe(
           Effect.andThen(Ref.updateAndGet(snapshotReadCount, (count) => count + 1)),
           Effect.tap((count) => Queue.offer(snapshotReads, count)),
+          Effect.andThen(options.onCandidateRead?.(threadId) ?? Effect.void),
           Effect.andThen(Ref.get(snapshots)),
           Effect.map((snapshot) =>
             threadId === undefined
@@ -628,12 +638,29 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
               : snapshot.threads.filter((thread) => thread.id === threadId),
           ),
         ),
-      getThread: (threadId) => {
-        const thread = options.currentThreads?.find((candidate) => candidate.id === threadId);
-        return thread
-          ? Effect.succeed(thread)
-          : Effect.die(new Error(`Unexpected thread read: ${threadId}`));
-      },
+      getThread: (threadId) =>
+        Effect.gen(function* () {
+          if (!(yield* SkipThreadArchiveRestore))
+            yield* options.onRestoringThreadRead?.(threadId) ?? Effect.void;
+          const current = (yield* Ref.get(currentThreads)).find(
+            (candidate) => candidate.id === threadId,
+          );
+          const candidate = (yield* Ref.get(snapshots)).threads.find(
+            (candidate) => candidate.id === threadId,
+          );
+          const thread =
+            current ??
+            (candidate === undefined
+              ? undefined
+              : {
+                  ...appThread(threadId, candidate.settledOverride, candidate.worktreePath),
+                  archivedAt: candidate.archivedAt,
+                  deletedAt: candidate.deletedAt ?? null,
+                });
+          return thread
+            ? thread
+            : yield* Effect.die(new Error(`Unexpected thread read: ${threadId}`));
+        }),
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       streamDomainEvents: Stream.fromPubSub(domainEvents),
@@ -671,6 +698,7 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
   return {
     activation,
     snapshots,
+    currentThreads,
     snapshotReadCount,
     snapshotReads,
     candidateReads,
@@ -1222,43 +1250,8 @@ describe("ThreadSettlementServiceV2 worker", () => {
 });
 
 describe("ThreadSettlementServiceV2 terminals", () => {
-  const appThread = (
-    id: string,
-    settledOverride: OrchestrationV2AppThread["settledOverride"],
-    worktreePath: string | null = null,
-  ): OrchestrationV2AppThread => {
-    const threadId = ThreadId.make(id);
-    return {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: PROJECT_ID,
-      title: id,
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath,
-      activeProviderThreadId: null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-      forkedFrom: null,
-      createdAt: DateTime.makeUnsafe(NOW),
-      updatedAt: DateTime.makeUnsafe(NOW),
-      archivedAt: null,
-      settledOverride,
-      settledAt: settledOverride === "settled" ? DateTime.makeUnsafe(NOW) : null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-  };
-  const settledEvent = (thread: OrchestrationV2AppThread): OrchestrationV2DomainEvent => ({
-    type: "thread.settled",
-    id: EventId.make(`event:settled:${thread.id}`),
-    threadId: thread.id,
-    occurredAt: DateTime.makeUnsafe(NOW),
-    payload: thread,
-  });
+  settlementAdmissionTests({ makeHarness, makeThread, makeSnapshot, startHarness });
+  settlementShellHintTests({ makeHarness, makeThread, makeSnapshot, startHarness });
 
   it.effect("keeps the terminals of a thread re-engaged before the event ran", () =>
     Effect.scoped(
