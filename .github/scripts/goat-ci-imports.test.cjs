@@ -166,6 +166,22 @@ describe("buildImportGraph", () => {
     write("apps/server/src/typed/entry.ts", 'import "./leaf.ts";');
     write("apps/server/src/typed/leaf.ts");
     write("apps/server/src/typed/consumer.ts", 'import type { Helper } from "./tool.ts";');
+    write("apps/server/src/named/default.test.ts", 'import type from "./runtime.ts";\ntype();');
+    write("apps/server/src/named/runtime.ts", 'import "./leaf.ts";');
+    write("apps/server/src/named/leaf.ts");
+    write(
+      "apps/server/src/named/alias.test.ts",
+      'export type Result = {}\nspawn("node", ["src/named/aliasEntry.ts"]);\nimport { x } from "./other.ts";',
+    );
+    write("apps/server/src/named/aliasEntry.ts", 'import "./aliasLeaf.ts";');
+    write("apps/server/src/named/aliasLeaf.ts");
+    write(
+      "apps/server/src/lone/a.ts",
+      'import "./lone.test.ts";\nspawn("node", ["src/lone/entry.ts"]);',
+    );
+    write("apps/server/src/lone/lone.test.ts", 'import "./a.ts";');
+    write("apps/server/src/lone/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/lone/leaf.ts");
     write("apps/server/src/ws.ts");
     write("apps/server/src/nested/deep.ts");
     write(
@@ -245,10 +261,13 @@ describe("buildImportGraph", () => {
   it("follows names from test helpers that import each other", () => {
     assert.ok(reaches("apps/server/src/cycle/leaf.ts", "apps/server/src/cycle.test.ts"));
     assert.ok(reaches("apps/server/src/mixed/leaf.ts", "apps/server/src/mixed/runner.test.ts"));
+    assert.ok(reaches("apps/server/src/lone/leaf.ts", "apps/server/src/lone/lone.test.ts"));
   });
 
   it("does not let a type-only import keep a test helper out of test code", () => {
     assert.ok(reaches("apps/server/src/typed/leaf.ts", "apps/server/src/typed/tool.test.ts"));
+    assert.ok(reaches("apps/server/src/named/leaf.ts", "apps/server/src/named/default.test.ts"));
+    assert.ok(reaches("apps/server/src/named/aliasLeaf.ts", "apps/server/src/named/alias.test.ts"));
   });
 
   it("does not spread a change through a production module that names the server entry", () => {

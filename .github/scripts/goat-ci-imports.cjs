@@ -82,7 +82,8 @@ function withoutComments(source) {
 }
 
 /** import type and export type statements, which never run, so they name nothing a run executes. */
-const TYPE_ONLY_MODULE = /\b(?:import|export)\s+type\s[^;]*?\bfrom\s+["'][^"'\n]+["']/g;
+const TYPE_ONLY_MODULE =
+  /\b(?:import\s+type\s+(?:\{[^}]*\}|\*\s*as\s+[\w$]+|[\w$]+)|export\s+type\s*(?:\{[^}]*\}|\*(?:\s*as\s+[\w$]+)?))\s*from\s*["'][^"'\n]+["']/g;
 
 /**
  * Files a source names in strings: a path ending in a file name (a fixture it reads, a script it
@@ -276,7 +277,8 @@ function testCodeOf(files, importers, rawNamers) {
       const users = group
         .flatMap((file) => [...(importers.get(file) ?? []), ...(rawNamers.get(file) ?? [])])
         .filter((user) => !members.has(user));
-      if (users.length === 0 || !users.every((user) => testCode.has(user))) continue;
+      const usedByTests = users.length > 0 || group.some((file) => testCode.has(file));
+      if (!usedByTests || !users.every((user) => testCode.has(user))) continue;
       for (const file of group) testCode.add(file);
       grew = true;
     }
