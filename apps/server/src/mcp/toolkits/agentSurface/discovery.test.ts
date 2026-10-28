@@ -125,6 +125,18 @@ it("renders a signature for every schema shape tools declare", () => {
       required: ["upload"],
     }),
   ).toBe("(x.union :upload{:type?=image|file :name :mimeType})");
+  // Alternatives nested inside alternatives read as if they were listed flat.
+  const variant = (key: string) => ({
+    type: "object",
+    properties: { shared: { type: "string" }, [key]: { type: "string" } },
+    required: ["shared", key],
+  });
+  const flat = { anyOf: [variant("a"), variant("b"), variant("c")] };
+  const nested = { anyOf: [{ anyOf: [variant("a"), variant("b")] }, variant("c")] };
+  for (const payload of [flat, nested])
+    expect(
+      toSignature("x.nested", { type: "object", properties: { payload }, required: ["payload"] }),
+    ).toBe("(x.nested :payload{:shared :a? :b? :c?})");
   expect(toSignature("x.record", { type: "object", additionalProperties: {} })).toBe(
     "(x.record ...)",
   );
