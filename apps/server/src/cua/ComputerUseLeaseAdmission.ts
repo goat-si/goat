@@ -15,6 +15,7 @@ import { callResource, type makeCallReservations } from "./ComputerUseCallReserv
 import { markActed } from "./ComputerUseControl.ts";
 import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { takesScreen } from "./ComputerUseScope.ts";
+import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
@@ -114,6 +115,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
     threadId: ThreadId,
     request: ComputerUseCallReservation,
   ): Effect.fn.Return<ComputerUseCallAdmission, E> {
+    if (request.action === "reserve" && request.appLabel !== undefined)
+      (yield* ComputerUseCallApps).remember(request.args, request.appLabel);
     if (request.action === "release" || request.action === "close") {
       const current = controls.get(threadId);
       if (request.action === "close") appLeases.release(threadId, request.controlId);

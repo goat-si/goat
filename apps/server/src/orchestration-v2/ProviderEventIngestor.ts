@@ -43,6 +43,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailureTurnItem } from "@goat/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
 
@@ -674,7 +675,12 @@ export const layer: Layer.Layer<
                   threadId: input.event.turnItem.threadId,
                   payload: boundFileChangeForStorage(
                     withFileChangeLineCounts(
-                      stripUnservedToolOutputImageBytes(withCommandActions(input.event.turnItem)),
+                      stripUnservedToolOutputImageBytes(
+                        // Every provider's cua-driver rows name the app their pid runs.
+                        (yield* ComputerUseCallApps).present(
+                          withCommandActions(input.event.turnItem),
+                        ),
+                      ),
                     ),
                   ),
                   runId: input.event.turnItem.runId,

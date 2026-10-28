@@ -1144,14 +1144,12 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         </View>
       </WorkLogPressable>
 
-      {computerUse && (expanded || computerUse.observes) ? (
+      {computerUse && expanded ? (
         <ThreadComputerUseCard
           run={computerUse}
           status={computerUseRunStatus(row.workEntry.toolLifecycleStatus)}
           row={row.projectedItem}
           environmentId={props.environmentId}
-          showScreenshots={!expanded}
-          onPressPreview={props.onPressPreview}
         />
       ) : null}
       {expanded &&

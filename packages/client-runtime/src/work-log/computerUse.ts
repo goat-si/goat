@@ -22,8 +22,6 @@ export interface ComputerUseRun {
   readonly summary: string;
   /** The app or window the call names in its input; an observation names it better in its output. */
   readonly target: string | null;
-  /** The call's result is a screenshot by design, so the card shows it without a click. */
-  readonly observes: boolean;
   /** How the call names its app, for the app's icon: a bundle id, an app name, or a pid. */
   readonly app: ComputerUseAppRef | null;
 }
@@ -116,14 +114,6 @@ function inputApp(input: Record<string, unknown>): ComputerUseAppRef | null {
     ...(pid === undefined ? {} : { pid }),
   };
 }
-
-const OBSERVATION_TOOLS: ReadonlySet<string> = new Set([
-  "get_window_state",
-  "wait_for_window_settle",
-  "get_desktop_state",
-  "zoom",
-  "verify_state",
-]);
 
 const SUMMARIES: Readonly<Record<string, string>> = {
   click: "Click",
@@ -242,12 +232,11 @@ export function computerUseRun(
     tool,
     summary: summary(tool, input),
     target: inputTarget(input),
-    observes: OBSERVATION_TOOLS.has(tool),
     app: inputApp(input),
   };
 }
 
-/** The app and window title an observation's result names. */
+/** The app and window title an observation's result names; a title that is the app's name once. */
 export function computerUseObservedTarget(output: unknown): string | null {
   const structured = record(record(output)?.structuredContent) ?? record(output);
   const fields =
@@ -256,7 +245,9 @@ export function computerUseObservedTarget(output: unknown): string | null {
       : jsonTextFields(output);
   const app = label(fields?.app_name);
   const title = label(fields?.window_title);
-  return app !== undefined && title !== undefined ? `${title} in ${app}` : (app ?? title ?? null);
+  return app !== undefined && title !== undefined && title.toLowerCase() !== app.toLowerCase()
+    ? `${title} in ${app}`
+    : (app ?? title ?? null);
 }
 
 /**

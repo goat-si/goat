@@ -41,7 +41,6 @@ describe("computerUseRun", () => {
         tool: "get_window_state",
         summary: "Look at a window",
         target: "Process 501, window 7",
-        observes: true,
         app: { pid: 501 },
       },
     );
@@ -52,7 +51,6 @@ describe("computerUseRun", () => {
       tool: "wait_for_window_settle",
       summary: "Wait for a window to settle",
       target: "Process 501, window 7",
-      observes: true,
       app: { pid: 501 },
     });
     expect(computerUseRun(call("cua-driver.click", { pid: 501, x: 10, y: 20 }))?.summary).toBe(
@@ -71,7 +69,6 @@ describe("computerUseRun", () => {
     expect(computerUseRun(call("cua-driver.launch_app", { name: "Finder" }))).toMatchObject({
       summary: "Open Finder",
       target: "Finder",
-      observes: false,
       app: { name: "Finder" },
     });
   });

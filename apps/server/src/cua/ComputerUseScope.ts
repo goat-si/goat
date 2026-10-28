@@ -169,8 +169,12 @@ export function learnApps(
   into: Map<number, ListedApp>,
   listing: boolean,
   executableOf?: (pid: number) => string | undefined,
+  /** Every app an answer names, for the timeline only. */
+  labels?: { readonly learn: (entries: ReadonlyArray<NamedApp>) => void },
 ): void {
-  for (const entry of listing ? listedApps(value) : namedApps(value)) {
+  const entries = listing ? listedApps(value) : namedApps(value);
+  labels?.learn(entries);
+  for (const entry of entries) {
     if (listing) {
       const executable =
         entry.executable ?? (entry.bundleId === undefined ? executableOf?.(entry.pid) : undefined);
