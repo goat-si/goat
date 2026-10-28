@@ -129,9 +129,11 @@ baseline arm is the default core listing and the candidate is core plus `goat_ev
 through the same server setting that makes `goat_eval` opt-in, on a provider without code
 mode (Claude is the reference population). The prompt still names no tool.
 
-The candidate passes when every one of these holds on one paired campaign:
+The candidate passes when every one of these holds on one paired campaign (composition rule,
+version 1):
 
-- The control's median turns rise by at most one at either end of the range.
+- The control shows no gain, as for every gate, and its median turns rise by at most one at
+  either end of the range.
 - At least two of the three automatic multi-step tasks (`wait-running`, `fan-out-review`,
   `launch-and-wait`) show the reduction defined in [What is counted](#what-is-counted).
 - On those tasks the median result bytes fall by at least a third. Without code mode, served
@@ -250,9 +252,10 @@ out of committed replay data. Changing a case or grading rule raises `REPLAY_VER
 - The composition campaign needs a server where `goat_eval` is mounted and its opt-in setting
   can change per run. This runner does not validate `goat_screen_run`; record screen-run
   evidence separately until a screen-task campaign is designed.
-- The report's `eval` verdict still requires every reduces task, manual ones included, and
-  ignores result bytes. It has to apply the [composition rule](#composition-campaigns) before a
-  composition campaign can pass.
+- The report's `eval` verdict does not apply the [composition rule](#composition-campaigns)
+  yet: it requires every reduces task, manual ones included; it ignores result bytes; it lets
+  the control's turns rise without limit; and rows do not record halts with `unknown_outcome`.
+  Accept a composition campaign only after the report enforces all four.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.
