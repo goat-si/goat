@@ -297,6 +297,107 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 
+  it.effect("never anchors a subagent prompt to another thread's row at a reused sequence", () =>
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore.OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const prompt = "Review the migration plan. ".repeat(200);
+      const driver = ProviderDriverKind.make("claudeAgent");
+      const providerInstanceId = ProviderInstanceId.make("claudeAgent");
+      const threadA = ThreadId.make("thread:anchor-reuse-a");
+      const threadB = ThreadId.make("thread:anchor-reuse-b");
+      const subagent = (id: string) =>
+        ({
+          id: EventId.make(id),
+          type: "subagent.updated",
+          threadId: threadA,
+          occurredAt: now,
+          payload: {
+            id: NodeId.make("node:anchor-reuse"),
+            memoryGrantCeiling: "none",
+            threadId: threadA,
+            runId: null,
+            parentNodeId: NodeId.make("node:anchor-reuse-parent"),
+            origin: "provider_native",
+            createdBy: "agent",
+            driver,
+            providerInstanceId,
+            providerThreadId: null,
+            childThreadId: null,
+            nativeTaskRef: null,
+            prompt,
+            progress: "Reading files",
+            title: "Review",
+            model: null,
+            status: "running",
+            result: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+          },
+        }) satisfies OrchestrationV2DomainEvent;
+      const otherThreadItem = {
+        id: EventId.make("event:anchor-reuse:b-item"),
+        type: "turn-item.updated",
+        threadId: threadB,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("item:anchor-reuse-b"),
+          type: "subagent",
+          threadId: threadB,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running",
+          title: "Review",
+          subagentId: NodeId.make("node:anchor-reuse-b"),
+          origin: "provider_native",
+          driver,
+          providerInstanceId,
+          childThreadId: null,
+          prompt,
+          progress: "Reading files",
+          result: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      } satisfies OrchestrationV2DomainEvent;
+
+      const rolledBack = yield* sql
+        .withTransaction(
+          store
+            .appendAgentEvents({ events: [subagent("event:anchor-reuse:a-rolled-back")] })
+            .pipe(Effect.flatMap(([entry]) => Effect.fail(entry!.sequence))),
+        )
+        .pipe(Effect.flip);
+      const [reused] = yield* store.appendAgentEvents({ events: [otherThreadItem] });
+      assert.equal(reused!.sequence, rolledBack);
+
+      const appended = yield* store.appendAgentEvents({
+        events: [subagent("event:anchor-reuse:a-committed")],
+      });
+      const stored = yield* sql<{ readonly prompt_sequence: number | null }>`
+        SELECT json_extract(payload_json, '$.promptSequence') AS prompt_sequence
+        FROM orchestration_events WHERE stream_id = ${threadA}
+      `;
+      assert.deepEqual(stored, [{ prompt_sequence: null }]);
+
+      // ThreadHistoryArchive deletes an archived thread's turn-item rows like this.
+      yield* sql`
+        DELETE FROM orchestration_events
+        WHERE stream_id = ${threadB} AND event_type = 'turn-item.updated'
+      `;
+      const replayed = yield* store.readAgentEvents({ threadId: threadA }).pipe(Stream.runCollect);
+      assert.deepEqual(replayed, appended);
+    }),
+  );
+
   it.effect("orders project and V2 agent events in the retained application event source", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore.OrchestrationEventStore;
