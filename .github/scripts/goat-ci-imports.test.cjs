@@ -171,7 +171,7 @@ describe("buildImportGraph", () => {
     write("apps/server/src/named/leaf.ts");
     write(
       "apps/server/src/named/alias.test.ts",
-      'export type Result = {}\nspawn("node", ["src/named/aliasEntry.ts"]);\nimport { x } from "./other.ts";',
+      'export type Result = {}\nspawn("node", ["src/named/aliasEntry.ts"])\nimport { x } from "./other.ts";',
     );
     write("apps/server/src/named/aliasEntry.ts", 'import "./aliasLeaf.ts";');
     write("apps/server/src/named/aliasLeaf.ts");
