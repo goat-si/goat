@@ -16,6 +16,7 @@ name: goat-ci
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
 # selected by check:changed: changed, companion, and importing tests (directly or through
 # testkit/fixture files), plus special suites. Production chains belong to broader lanes.
+# Selected server tests past one shard's estimated time run as related test-server shards instead.
 # The full suite runs on request.
 # Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
 # reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
@@ -119,8 +120,9 @@ jobs:
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
       # test-mobile, test-shared, test-ingest, test-memory-growth, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
-      # one to four for the related files goat-scope picked. A quick run has check, typecheck and
-      # test-changed. Each entry carries its job title.
+      # one to four for the related files goat-scope picked. A quick run has check, typecheck,
+      # test-changed, and related server shards when its server tests outgrow one job. Each entry
+      # carries its job title.
       matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     steps:
       - name: Checkout
@@ -329,8 +331,9 @@ jobs:
         if: matrix.task == 'test-server' && !matrix.related
         run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
 
-      # goat-scope picked these files through the import graph; its job summary says which change
-      # reached each one. Shard count never exceeds the file count, so no shard runs empty.
+      # goat-scope picked these files through the import graph, or took them from a quick run's
+      # selection; its job summary says which. Shard count never exceeds the file count, so no
+      # shard runs empty.
       - name: Test related server files
         if: matrix.task == 'test-server' && matrix.related
         working-directory: apps/server

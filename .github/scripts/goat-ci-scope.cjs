@@ -18,11 +18,21 @@
 // change is one the graph cannot place. A file it cannot place runs everything.
 //
 // ci:server adds the full server suite and ci:memory the memory growth suite to either kind of run.
+//
+// apps/server runs one test file at a time, so a quick run keeps its server tests in test-changed
+// only while they fit one related shard. More move to the related server shards, or the full suite
+// when they carry half of its time: 248 server files in one job hit the 60-minute limit (#1928).
 
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { buildImportGraph, dependents, isSource, mentionsOf } = require("./goat-ci-imports.cjs");
+const {
+  buildImportGraph,
+  dependents,
+  isSource,
+  listWorkspaceFiles,
+  mentionsOf,
+} = require("./goat-ci-imports.cjs");
 // Node strips the types, so CI picks the same files check:changed runs before every push.
 const { INGEST_SUITE_TRIGGER, testsForChanges } = require("../../scripts/lib/changed-tests.ts");
 
@@ -214,6 +224,38 @@ function readServerWeights(root) {
 }
 
 const serverKey = (file) => file.slice(SERVER_DIR.length + 1);
+const isServerTest = (file) => file.startsWith(SERVER_DIR + "/") && SERVER_TEST_RE.test(file);
+/** Estimated CI seconds of one server test file. */
+const serverSeconds = (weights, file) => (weights[serverKey(file)] ?? 0) + FILE_ESTIMATE_SECONDS;
+
+/**
+ * Sizes a run of the selected server test files against the whole suite: the full four-shard
+ * suite when they carry SERVER_FULL_SHARE of its time, otherwise related shards of about
+ * SERVER_SHARD_TARGET_SECONDS each. originOf names the change that selected a file.
+ */
+function sizeServerRun(selected, allTests, weights, originOf) {
+  const total = allTests.reduce((sum, file) => sum + serverSeconds(weights, file), 0);
+  const chosen = selected.reduce((sum, file) => sum + serverSeconds(weights, file), 0);
+  if (chosen >= total * SERVER_FULL_SHARE) {
+    return fullServer(
+      selected.length +
+        " related files carry " +
+        Math.round((100 * chosen) / total) +
+        "% of the suite's time",
+    );
+  }
+  const reached = new Map([...selected].sort().map((file) => [serverKey(file), originOf(file)]));
+  return {
+    mode: "related",
+    files: [...reached.keys()],
+    shards: Math.max(
+      1,
+      Math.min(SERVER_SHARDS, selected.length, Math.ceil(chosen / SERVER_SHARD_TARGET_SECONDS)),
+    ),
+    reason: selected.length + " related files, about " + Math.round(chosen / 60) + " min estimated",
+    reached,
+  };
+}
 
 /**
  * Which server test files the changed files reach. Returns { mode, files, shards, reason, reached }:
@@ -222,13 +264,7 @@ const serverKey = (file) => file.slice(SERVER_DIR.length + 1);
  * changed file that reached it.
  */
 function planServerTests(changed, graph, weights) {
-  const full = (reason) => ({
-    mode: "full",
-    files: [],
-    shards: SERVER_SHARDS,
-    reason,
-    reached: new Map(),
-  });
+  const full = fullServer;
   const seeds = new Map();
   const isServerData = (file) =>
     !isSource(file) && SERVER_DATA_ROOTS.some((dir) => file.startsWith(dir));
@@ -265,10 +301,7 @@ function planServerTests(changed, graph, weights) {
   const config = SERVER_RUN_CONFIG.find((file) => imported.has(file));
   if (config) return full(imported.get(config) + " reaches " + config);
 
-  const allTests = [...graph.sources.keys()].filter(
-    (file) => file.startsWith(SERVER_DIR + "/") && SERVER_TEST_RE.test(file),
-  );
-  const seconds = (file) => (weights[serverKey(file)] ?? 0) + FILE_ESTIMATE_SECONDS;
+  const allTests = [...graph.sources.keys()].filter(isServerTest);
   const sourceChange = changed.find(
     (file) => file.startsWith(SERVER_DIR + "/src/") && isSource(file) && !SERVER_TEST_RE.test(file),
   );
@@ -286,27 +319,7 @@ function planServerTests(changed, graph, weights) {
       reached: new Map(),
     };
   }
-  const total = allTests.reduce((sum, file) => sum + seconds(file), 0);
-  const chosen = selected.reduce((sum, file) => sum + seconds(file), 0);
-  if (chosen >= total * SERVER_FULL_SHARE) {
-    return full(
-      selected.length +
-        " related files carry " +
-        Math.round((100 * chosen) / total) +
-        "% of the suite's time",
-    );
-  }
-  const reached = new Map(selected.sort().map((file) => [serverKey(file), origin(file)]));
-  return {
-    mode: "related",
-    files: [...reached.keys()],
-    shards: Math.max(
-      1,
-      Math.min(SERVER_SHARDS, selected.length, Math.ceil(chosen / SERVER_SHARD_TARGET_SECONDS)),
-    ),
-    reason: selected.length + " related files, about " + Math.round(chosen / 60) + " min estimated",
-    reached,
-  };
+  return sizeServerRun(selected, allTests, weights, origin);
 }
 
 /** The memory growth suite runs when a memory or persistence change reaches one of its files. */
@@ -517,14 +530,24 @@ function laneRun(lane) {
 /**
  * The quick run for a pull request: check always, typecheck unless only documents changed, and
  * test-changed when the changes select tests (scripts/lib/changed-tests.ts). changedTests splits
- * them by runner.
+ * them by runner. Server tests past one related shard's time run as test-server instead.
  */
 function quickRun(changed, root) {
   const reasons = new Map([["check", "quick run"]]);
   const placed = changed.find((file) => !isDocument(file));
   if (placed !== undefined) reasons.set("typecheck", placed);
   const code = changed.filter((file) => CODE_RE.test(file));
-  const tests = [...testsForChanges(root, code, changed)].sort();
+  let tests = [...testsForChanges(root, code, changed)].sort();
+  let server = { mode: "none", files: [], shards: 0, reason: "quick run", reached: new Map() };
+  const serverTests = tests.filter(isServerTest);
+  const weights = readServerWeights(root);
+  const serverTime = serverTests.reduce((sum, file) => sum + serverSeconds(weights, file), 0);
+  if (serverTime > SERVER_SHARD_TARGET_SECONDS) {
+    const allTests = listWorkspaceFiles(root).filter(isServerTest);
+    server = sizeServerRun(serverTests, allTests, weights, () => "the quick run's selection");
+    reasons.set("test-server", server.reason);
+    tests = tests.filter((file) => !isServerTest(file));
+  }
   const changedTests = {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),
@@ -537,7 +560,7 @@ function quickRun(changed, root) {
     quick: true,
     tasks: MATRIX_ORDER.filter((task) => reasons.has(task)),
     reasons,
-    server: { mode: "none", files: [], shards: 0, reason: "quick run", reached: new Map() },
+    server,
     changedTests,
   };
 }
