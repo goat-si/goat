@@ -521,3 +521,17 @@ it("does not confirm a navigation a guard cancelled, or a measuring probe the ha
       effect: "suspected_noop",
     });
   }));
+
+it("confirms a click outside a field whose blur validation it triggered", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<input id="name" onchange="saveState.textContent = 'Saved'"><span id="saveState">Unsaved</span>
+       <p id="outside" style="margin-top:40px">outside</p>`,
+    );
+    await page.fill("#name", "Ada");
+    await expect(ServerBrowserPage.click(page, { selector: "#outside" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+    expect(await page.textContent("#saveState")).toBe("Saved");
+  }));

@@ -61,9 +61,14 @@ const INSTALL = `(() => {
   const types = new Set(["pointerdown", "mousedown", "pointerup", "mouseup", "click",
     "contextmenu", "dblclick"]);
   const dispatching = new Set();
+  // The press moves focus as its default action, so a blur, change or focus the browser dispatches
+  // once it began (validation on leaving a field) is the click's as well.
+  const focusTypes = new Set(["blur", "focusout", "change", "focus", "focusin"]);
+  let pressed = false;
   const handled = () => {
     const current = window.event;
     if (current && current.isTrusted && types.has(current.type)) return true;
+    if (pressed && current && current.isTrusted && focusTypes.has(current.type)) return true;
     for (const event of dispatching) if (event.eventPhase === 0) dispatching.delete(event);
     return dispatching.size > 0;
   };
@@ -127,7 +132,10 @@ const INSTALL = `(() => {
   let dismissible = new Set();
   const begin = (event) => {
     if (!event.isTrusted) return;
-    if (event.type === "pointerdown") dismissible = new Set(document.querySelectorAll(":popover-open"));
+    if (event.type === "pointerdown") {
+      pressed = true;
+      dismissible = new Set(document.querySelectorAll(":popover-open"));
+    }
     if (event.type === "pointerup") dismissible = new Set();
     // Changes pending from before this event are ambient.
     observer.takeRecords();
@@ -214,6 +222,7 @@ const INSTALL = `(() => {
   };
   const stop = () => {
     armed = false;
+    pressed = false;
     resolve();
     navigatedNow(false);
     dispatching.clear();
