@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   classifyHelperBundle,
@@ -104,7 +105,12 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
       const fresh = NodePath.join(input.root, "." + name + "-" + NodeCrypto.randomUUID());
       await NodeFSP.symlink(NodePath.join("generations", generation), fresh);
       // rename(2) replaces the old link in one step, so a reader sees the old or the new one.
-      await NodeFSP.rename(fresh, link);
+      await NodeFSP.rename(fresh, link).catch(async (error: NodeJS.ErrnoException) => {
+        // Windows refuses to rename over a directory link and has no atomic swap.
+        if (error.code !== "EPERM" || HostProcess.Platform.defaultValue() !== "win32") throw error;
+        await NodeFSP.rm(link, { force: true });
+        await NodeFSP.rename(fresh, link);
+      });
     };
 
     const team = (await dependencies.signature(input.app))?.team;

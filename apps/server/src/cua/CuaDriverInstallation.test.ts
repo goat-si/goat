@@ -249,83 +249,94 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
 });
 
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
-  it.effect.each(["-tzf", "-tvzf", "-xzf"])(
-    "expires tar %s without publishing and releases installation for retry",
-    (hang) =>
+  for (const hang of ["-tzf", "-tvzf", "-xzf"] as const)
+    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
+    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+      `expires tar ${hang} without publishing and releases installation for retry`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeTarFixture({ hang });
+          const h = yield* makeHarness(releases[0]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
+          );
+          const pending = yield* h.installation.executable.pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(fixture.started);
+          yield* TestClock.adjust("60 seconds");
+          expect(yield* Deferred.isDone(fixture.interrupted)).toBe(true);
+          const result = yield* Fiber.join(pending);
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
+          expect(yield* Deferred.isDone(fixture.stopped)).toBe(true);
+          yield* h.expectUnpublished;
+          expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
+          expect(h.publications).toEqual([h.destination]);
+        }).pipe(Effect.scoped),
+    );
+
+  for (const oversized of ["-tzf", "-tvzf"] as const)
+    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
+    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+      `rejects oversized tar ${oversized} output without publishing and permits retry`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeTarFixture({ oversized });
+          const h = yield* makeHarness(releases[0]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
+          );
+          const result = yield* h.installation.executable.pipe(Effect.result);
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
+          yield* h.expectUnpublished;
+          expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
+        }).pipe(Effect.scoped),
+    );
+
+  // quarantine: #2120 Its tar fixtures fail during extract on Windows.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "does not reuse another release archive's driver at the same version",
+    () =>
       Effect.gen(function* () {
-        const fixture = yield* makeTarFixture({ hang });
-        const h = yield* makeHarness(releases[0]).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
-        );
-        const pending = yield* h.installation.executable.pipe(Effect.result, Effect.forkChild);
-        yield* Deferred.await(fixture.started);
-        yield* TestClock.adjust("60 seconds");
-        expect(yield* Deferred.isDone(fixture.interrupted)).toBe(true);
-        const result = yield* Fiber.join(pending);
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
-        expect(yield* Deferred.isDone(fixture.stopped)).toBe(true);
-        yield* h.expectUnpublished;
-        expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
-        expect(h.publications).toEqual([h.destination]);
+        const fixture = releases[0];
+        const first = yield* makeHarness(fixture);
+        yield* first.installation.executable;
+
+        const next = yield* makeHarness(fixture, {
+          archiveName: "cua-driver-fixture-arm64.tar.gz",
+          baseDir: first.baseDir,
+        });
+        const executable = yield* next.installation.executable;
+
+        expect(executable).toBe(next.path.join(next.destination, fixture.executable));
+        expect(next.requests).toEqual([next.release.url]);
+        expect(yield* next.fs.exists(first.destination)).toBe(true);
+        expect(yield* next.fs.exists(next.destination)).toBe(true);
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["-tzf", "-tvzf"])(
-    "rejects oversized tar %s output without publishing and permits retry",
-    (oversized) =>
-      Effect.gen(function* () {
-        const fixture = yield* makeTarFixture({ oversized });
-        const h = yield* makeHarness(releases[0]).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
-        );
-        const result = yield* h.installation.executable.pipe(Effect.result);
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
-        yield* h.expectUnpublished;
-        expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
-      }).pipe(Effect.scoped),
-  );
+  for (const fixture of releases)
+    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
+    it.effect.skipIf(
+      HostProcess.Platform.defaultValue() === "win32" && fixture.format === "tar.gz",
+    )(
+      `publishes a complete ${fixture.format} release in GOAT home and reuses it across installer instances`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* makeHarness(fixture);
 
-  it.effect("does not reuse another release archive's driver at the same version", () =>
-    Effect.gen(function* () {
-      const fixture = releases[0];
-      const first = yield* makeHarness(fixture);
-      yield* first.installation.executable;
+          const executable = yield* h.installation.executable;
 
-      const next = yield* makeHarness(fixture, {
-        archiveName: "cua-driver-fixture-arm64.tar.gz",
-        baseDir: first.baseDir,
-      });
-      const executable = yield* next.installation.executable;
-
-      expect(executable).toBe(next.path.join(next.destination, fixture.executable));
-      expect(next.requests).toEqual([next.release.url]);
-      expect(yield* next.fs.exists(first.destination)).toBe(true);
-      expect(yield* next.fs.exists(next.destination)).toBe(true);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect.each(releases)(
-    "publishes a complete $format release in GOAT home and reuses it across installer instances",
-    (fixture) =>
-      Effect.gen(function* () {
-        const h = yield* makeHarness(fixture);
-
-        const executable = yield* h.installation.executable;
-
-        expect(executable).toBe(h.path.join(h.destination, fixture.executable));
-        for (const file of fixture.files) {
-          expect(yield* h.fs.readFileString(h.path.join(h.destination, file))).toBe(file);
-        }
-        expect(h.publications).toEqual([h.destination]);
-        expect(yield* h.fs.readDirectory(h.installRoot)).toEqual(["0.34.1"]);
-        expect(yield* h.installation.executable).toBe(executable);
-        const freshInstallation = yield* h.makeInstallation;
-        expect(yield* freshInstallation.executable).toBe(executable);
-        expect(h.requests).toEqual([h.release.url]);
-      }).pipe(Effect.scoped),
-  );
+          expect(executable).toBe(h.path.join(h.destination, fixture.executable));
+          for (const file of fixture.files) {
+            expect(yield* h.fs.readFileString(h.path.join(h.destination, file))).toBe(file);
+          }
+          expect(h.publications).toEqual([h.destination]);
+          expect(yield* h.fs.readDirectory(h.installRoot)).toEqual(["0.34.1"]);
+          expect(yield* h.installation.executable).toBe(executable);
+          const freshInstallation = yield* h.makeInstallation;
+          expect(yield* freshInstallation.executable).toBe(executable);
+          expect(h.requests).toEqual([h.release.url]);
+        }).pipe(Effect.scoped),
+    );
 
   it.effect("rejects short, oversized, and wrong-SHA downloads without publishing", () =>
     Effect.gen(function* () {

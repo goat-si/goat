@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   busSocketPath,
@@ -217,176 +218,192 @@ describe("AT-SPI focus events", () => {
     expect(busSocketPath("tcp:host=localhost,port=1")).toBeUndefined();
   });
 
-  it("registers for focus events on its own connection, hears GTK3 and GTK4, and reconnects when the bus drops (#1638)", async () => {
-    // A registry that only knows the two-argument RegisterEvent.
-    const bus = await scriptedBus(
-      (member, _first, signature) => member === "RegisterEvent" && signature === "sass",
-    );
-    const heard: Array<() => void> = [];
-    const hear = () => {
-      const done = Promise.withResolvers<void>();
-      heard.push(done.resolve);
-      return done.promise;
-    };
-    const retry = Promise.withResolvers<void>();
-    const events = openFocusEvents({
-      address: async () => bus.address,
-      uid: 1000,
-      retry: () => retry.promise,
-    });
-    const stop = events.subscribe(() => heard.shift()?.());
-    try {
-      // On connecting it reports a change it may have missed while down.
-      const connected = hear();
-      await bus.registration();
-      await connected;
-      expect(bus.calls).toEqual([
-        "\0AUTH EXTERNAL 31303030",
-        "Hello()",
-        "AddMatch(s)",
-        "AddMatch(s)",
-        "RegisterEvent(sass)",
-        "RegisterEvent(sas)",
-        "RegisterEvent(sass)",
-        "RegisterEvent(sas)",
-      ]);
-      const fromGtk3 = hear();
-      bus.clients[0]?.write(GTK3);
-      await fromGtk3;
-      // The bus restarts; the next connection registers again and hears GTK4.
-      const again = bus.registration();
-      const reconnected = hear();
-      bus.clients[0]?.destroy();
-      retry.resolve();
-      await again;
-      await reconnected;
-      const fromGtk4 = hear();
-      bus.clients[1]?.write(GTK4);
-      await fromGtk4;
-      expect(bus.clients).toHaveLength(2);
-    } finally {
-      stop();
-      events.close();
-      bus.close();
-    }
-  });
-
-  it("drops a bus that never answers authentication at the setup limit, retries, and closes a connection still authenticating (#1644 r1)", async () => {
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-silent-"));
-    const path = NodePath.join(dir, "bus");
-    const arrivals: Array<(socket: NodeNet.Socket) => void> = [];
-    const arrived = () =>
-      new Promise<NodeNet.Socket>((resolve) => {
-        arrivals.push(resolve);
+  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "registers for focus events on its own connection, hears GTK3 and GTK4, and reconnects when the bus drops (#1638)",
+    async () => {
+      // A registry that only knows the two-argument RegisterEvent.
+      const bus = await scriptedBus(
+        (member, _first, signature) => member === "RegisterEvent" && signature === "sass",
+      );
+      const heard: Array<() => void> = [];
+      const hear = () => {
+        const done = Promise.withResolvers<void>();
+        heard.push(done.resolve);
+        return done.promise;
+      };
+      const retry = Promise.withResolvers<void>();
+      const events = openFocusEvents({
+        address: async () => bus.address,
+        uid: 1000,
+        retry: () => retry.promise,
       });
-    // Accepts every connection and never says anything.
-    const server = NodeNet.createServer((socket) => {
-      socket.on("error", () => undefined);
-      arrivals.shift()?.(socket);
-    });
-    await new Promise<void>((resolve) => server.listen(path, resolve));
-    const limit = Promise.withResolvers<void>();
-    // Only the first connection's setup limit passes; the second waits on close alone.
-    const limits = [limit.promise, new Promise<void>(() => undefined)];
-    const retried = Promise.withResolvers<void>();
-    const retry = Promise.withResolvers<void>();
-    const closedSocket = (socket: NodeNet.Socket) =>
-      new Promise<void>((resolve) => {
-        socket.once("close", () => resolve());
-      });
-    const firstArrival = arrived();
-    const events = openFocusEvents({
-      address: async () => "unix:path=" + path,
-      uid: 1000,
-      setupLimit: () => limits.shift() ?? new Promise<void>(() => undefined),
-      retry: () => {
-        retried.resolve();
-        return retry.promise;
-      },
-    });
-    const stopListening = events.subscribe(() => undefined);
-    try {
-      const first = await firstArrival;
-      const firstClosed = closedSocket(first);
-      limit.resolve();
-      await firstClosed;
-      await retried.promise;
-      const secondArrival = arrived();
-      retry.resolve();
-      // Closing must end a connection that is still waiting for its auth answer.
-      const second = await secondArrival;
-      const secondClosed = closedSocket(second);
-      events.close();
-      await secondClosed;
-    } finally {
-      stopListening();
-      events.close();
-      server.close();
-      NodeFS.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+      const stop = events.subscribe(() => heard.shift()?.());
+      try {
+        // On connecting it reports a change it may have missed while down.
+        const connected = hear();
+        await bus.registration();
+        await connected;
+        expect(bus.calls).toEqual([
+          "\0AUTH EXTERNAL 31303030",
+          "Hello()",
+          "AddMatch(s)",
+          "AddMatch(s)",
+          "RegisterEvent(sass)",
+          "RegisterEvent(sas)",
+          "RegisterEvent(sass)",
+          "RegisterEvent(sas)",
+        ]);
+        const fromGtk3 = hear();
+        bus.clients[0]?.write(GTK3);
+        await fromGtk3;
+        // The bus restarts; the next connection registers again and hears GTK4.
+        const again = bus.registration();
+        const reconnected = hear();
+        bus.clients[0]?.destroy();
+        retry.resolve();
+        await again;
+        await reconnected;
+        const fromGtk4 = hear();
+        bus.clients[1]?.write(GTK4);
+        await fromGtk4;
+        expect(bus.clients).toHaveLength(2);
+      } finally {
+        stop();
+        events.close();
+        bus.close();
+      }
+    },
+  );
 
-  it("connects only while someone listens, and leaving drops the registration (#1650)", async () => {
-    const bus = await scriptedBus(() => false);
-    const retry = Promise.withResolvers<void>();
-    const events = openFocusEvents({
-      address: async () => bus.address,
-      uid: 1000,
-      retry: () => retry.promise,
-    });
-    try {
-      const first = bus.registration();
+  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "drops a bus that never answers authentication at the setup limit, retries, and closes a connection still authenticating (#1644 r1)",
+    async () => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-silent-"));
+      const path = NodePath.join(dir, "bus");
+      const arrivals: Array<(socket: NodeNet.Socket) => void> = [];
+      const arrived = () =>
+        new Promise<NodeNet.Socket>((resolve) => {
+          arrivals.push(resolve);
+        });
+      // Accepts every connection and never says anything.
+      const server = NodeNet.createServer((socket) => {
+        socket.on("error", () => undefined);
+        arrivals.shift()?.(socket);
+      });
+      await new Promise<void>((resolve) => server.listen(path, resolve));
+      const limit = Promise.withResolvers<void>();
+      // Only the first connection's setup limit passes; the second waits on close alone.
+      const limits = [limit.promise, new Promise<void>(() => undefined)];
+      const retried = Promise.withResolvers<void>();
+      const retry = Promise.withResolvers<void>();
+      const closedSocket = (socket: NodeNet.Socket) =>
+        new Promise<void>((resolve) => {
+          socket.once("close", () => resolve());
+        });
+      const firstArrival = arrived();
+      const events = openFocusEvents({
+        address: async () => "unix:path=" + path,
+        uid: 1000,
+        setupLimit: () => limits.shift() ?? new Promise<void>(() => undefined),
+        retry: () => {
+          retried.resolve();
+          return retry.promise;
+        },
+      });
+      const stopListening = events.subscribe(() => undefined);
+      try {
+        const first = await firstArrival;
+        const firstClosed = closedSocket(first);
+        limit.resolve();
+        await firstClosed;
+        await retried.promise;
+        const secondArrival = arrived();
+        retry.resolve();
+        // Closing must end a connection that is still waiting for its auth answer.
+        const second = await secondArrival;
+        const secondClosed = closedSocket(second);
+        events.close();
+        await secondClosed;
+      } finally {
+        stopListening();
+        events.close();
+        server.close();
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "connects only while someone listens, and leaving drops the registration (#1650)",
+    async () => {
+      const bus = await scriptedBus(() => false);
+      const retry = Promise.withResolvers<void>();
+      const events = openFocusEvents({
+        address: async () => bus.address,
+        uid: 1000,
+        retry: () => retry.promise,
+      });
+      try {
+        const first = bus.registration();
+        const stop = events.subscribe(() => undefined);
+        await first;
+        expect(bus.clients).toHaveLength(1);
+        const dropped = new Promise<void>((resolve) => {
+          bus.clients[0]?.once("close", () => resolve());
+        });
+        stop();
+        await dropped;
+        // Listening again registers again on a new connection.
+        const second = bus.registration();
+        const stopAgain = events.subscribe(() => undefined);
+        retry.resolve();
+        await second;
+        expect(bus.clients).toHaveLength(2);
+        stopAgain();
+      } finally {
+        events.close();
+        bus.close();
+      }
+    },
+  );
+
+  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "stops trying older RegisterEvent forms once the bus closes the connection (#1680 r1)",
+    async () => {
+      // Only the call deadlines are faked, to count them; sockets run for real.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const bus = await scriptedBus(
+        () => false,
+        (member, signature) => member === "RegisterEvent" && signature === "sass",
+      );
+      const retried = Promise.withResolvers<void>();
+      const events = openFocusEvents({
+        address: async () => bus.address,
+        uid: 1000,
+        setupLimit: () => new Promise<void>(() => undefined),
+        retry: () => {
+          retried.resolve();
+          return new Promise<void>(() => undefined);
+        },
+      });
       const stop = events.subscribe(() => undefined);
-      await first;
-      expect(bus.clients).toHaveLength(1);
-      const dropped = new Promise<void>((resolve) => {
-        bus.clients[0]?.once("close", () => resolve());
-      });
-      stop();
-      await dropped;
-      // Listening again registers again on a new connection.
-      const second = bus.registration();
-      const stopAgain = events.subscribe(() => undefined);
-      retry.resolve();
-      await second;
-      expect(bus.clients).toHaveLength(2);
-      stopAgain();
-    } finally {
-      events.close();
-      bus.close();
-    }
-  });
-
-  it("stops trying older RegisterEvent forms once the bus closes the connection (#1680 r1)", async () => {
-    // Only the call deadlines are faked, to count them; sockets run for real.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const bus = await scriptedBus(
-      () => false,
-      (member, signature) => member === "RegisterEvent" && signature === "sass",
-    );
-    const retried = Promise.withResolvers<void>();
-    const events = openFocusEvents({
-      address: async () => bus.address,
-      uid: 1000,
-      setupLimit: () => new Promise<void>(() => undefined),
-      retry: () => {
-        retried.resolve();
-        return new Promise<void>(() => undefined);
-      },
-    });
-    const stop = events.subscribe(() => undefined);
-    try {
-      await retried.promise;
-      expect(bus.calls.filter((call) => call.startsWith("RegisterEvent"))).toEqual([
-        "RegisterEvent(sass)",
-      ]);
-      // No later form was attempted on the closed connection, so no call deadline is pending.
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      stop();
-      events.close();
-      bus.close();
-      vi.useRealTimers();
-    }
-  });
+      try {
+        await retried.promise;
+        expect(bus.calls.filter((call) => call.startsWith("RegisterEvent"))).toEqual([
+          "RegisterEvent(sass)",
+        ]);
+        // No later form was attempted on the closed connection, so no call deadline is pending.
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        stop();
+        events.close();
+        bus.close();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

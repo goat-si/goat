@@ -8,6 +8,8 @@ const {
   AFFECTED_LABEL,
   SERVER_LABEL,
   MEMORY_LABEL,
+  WINDOWS_LABEL,
+  WINDOWS_SUITES,
   TASKS,
   MEMORY_GROWTH_TESTS,
   SOURCE_SCANNING_TESTS,
@@ -123,7 +125,10 @@ describe("selectTasks", () => {
   it("runs every dependent task for contracts", () => {
     assert.deepEqual(
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
-      TASKS.filter((task) => task !== "test-memory-growth" && task !== "test-ingest"),
+      TASKS.filter(
+        (task) =>
+          task !== "test-memory-growth" && task !== "test-ingest" && task !== "test-windows",
+      ),
     );
   });
 
@@ -375,8 +380,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists seventeen jobs for a full run including relay and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 17);
+  it("lists eighteen jobs for a full run including relay, Windows and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 18);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -401,6 +406,10 @@ describe("matrixFor", () => {
         "test-server",
       ],
     );
+    assert.deepEqual(
+      Object.keys(pools).filter((task) => pools[task] === "windows"),
+      ["test-windows"],
+    );
   });
 });
 
@@ -410,6 +419,7 @@ describe("laneRun", () => {
     assert.equal(laneRun("server").server.mode, "full");
     assert.deepEqual(laneRun("memory-growth").tasks, ["test-memory-growth"]);
     assert.deepEqual(laneRun("quick").tasks, ["check", "typecheck"]);
+    assert.deepEqual(laneRun("windows").tasks, ["test-windows"]);
     assert.deepEqual(laneRun("all").tasks, TASKS);
     assert.equal(laneRun("all").full, true);
   });
@@ -559,6 +569,43 @@ describe("planRun", () => {
       "test-server",
     ]);
     assert.equal(result.server.mode, "full");
+  });
+
+  it("adds the Windows tests for a change under a Windows suite or the ci:windows label (#1385)", async () => {
+    const helper = await plan(pr(), labels([]), [
+      "apps/desktop/src/cua/ComputerUseHelperInstall.ts",
+    ]);
+    assert.ok(helper.quick);
+    assert.equal(
+      helper.reasons.get("test-windows"),
+      "apps/desktop/src/cua/ComputerUseHelperInstall.ts",
+    );
+    assert.ok(
+      (await plan(pr(), labels([]), ["packages/shared/src/path.ts"])).tasks.includes(
+        "test-windows",
+      ),
+    );
+    assert.ok(!(await plan(pr(), labels([]))).tasks.includes("test-windows"));
+    const labelled = await plan(pr(), labels([WINDOWS_LABEL]));
+    assert.equal(labelled.reasons.get("test-windows"), WINDOWS_LABEL + " label");
+    assert.deepEqual(
+      matrixFor(labelled.tasks, labelled.server).include.find((e) => e.task === "test-windows"),
+      { task: "test-windows", title: "test-windows", runner: "windows" },
+    );
+  });
+
+  it("filters the Windows job by suites that each still select a test file", () => {
+    const tests = listWorkspaceFiles(root).filter((file) => /\.test\.[cm]?[jt]sx?$/.test(file));
+    for (const suite of WINDOWS_SUITES)
+      assert.ok(
+        tests.some((file) => file.startsWith(suite)),
+        suite + " selects no test file",
+      );
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const step = workflow.match(/- name: Test Windows\n([\s\S]*?)(?=\n\s*- name:)/)?.[1];
+    assert.ok(step);
+    assert.match(step, /if: matrix\.task == 'test-windows'/);
+    assert.match(step, /WINDOWS_SUITES/);
   });
 
   it("tells a quick run how to request the full run, and a full run that it was one", async () => {

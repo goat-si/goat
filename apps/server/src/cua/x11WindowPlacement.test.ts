@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
@@ -134,62 +135,74 @@ const display = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
 const bounds = { x: 0, y: 0, width: 100, height: 80 };
 
 describe("X11 window placement (#1358)", () => {
-  it("windows on the display, owned by the pid the driver named, are on it", async () => {
-    await using server = await scriptedServer(
-      new Map([
-        [20, { pid: 10 }],
-        [21, { clientPid: 11 }],
-      ]),
-      { withResources: true },
-    );
-    const placement = makeX11WindowPlacement(display, server.path);
-    expect(await placement([{ pid: 10, windowId: 20, bounds }])).toBe("same");
-    // A window without _NET_WM_PID is read through the X server's own record of its client.
-    expect(
-      await placement([
-        { pid: 10, windowId: 20 },
-        { pid: 11, windowId: 21 },
-      ]),
-    ).toBe("same");
-  });
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "windows on the display, owned by the pid the driver named, are on it",
+    async () => {
+      await using server = await scriptedServer(
+        new Map([
+          [20, { pid: 10 }],
+          [21, { clientPid: 11 }],
+        ]),
+        { withResources: true },
+      );
+      const placement = makeX11WindowPlacement(display, server.path);
+      expect(await placement([{ pid: 10, windowId: 20, bounds }])).toBe("same");
+      // A window without _NET_WM_PID is read through the X server's own record of its client.
+      expect(
+        await placement([
+          { pid: 10, windowId: 20 },
+          { pid: 11, windowId: 21 },
+        ]),
+      ).toBe("same");
+    },
+  );
 
-  it("one window whose owner cannot be read leaves the whole answer unknown", async () => {
-    await using server = await scriptedServer(
-      new Map([
-        [20, { pid: 10 }],
-        [21, {}],
-      ]),
-    );
-    const placement = makeX11WindowPlacement(display, server.path);
-    expect(await placement([{ pid: 11, windowId: 21 }])).toBe("unknown");
-    expect(
-      await placement([
-        { pid: 10, windowId: 20 },
-        { pid: 11, windowId: 21 },
-      ]),
-    ).toBe("unknown");
-  });
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "one window whose owner cannot be read leaves the whole answer unknown",
+    async () => {
+      await using server = await scriptedServer(
+        new Map([
+          [20, { pid: 10 }],
+          [21, {}],
+        ]),
+      );
+      const placement = makeX11WindowPlacement(display, server.path);
+      expect(await placement([{ pid: 11, windowId: 21 }])).toBe("unknown");
+      expect(
+        await placement([
+          { pid: 10, windowId: 20 },
+          { pid: 11, windowId: 21 },
+        ]),
+      ).toBe("unknown");
+    },
+  );
 
-  it("a window the display lacks, another process owns, or that sits elsewhere is elsewhere", async () => {
-    await using server = await scriptedServer(new Map([[20, { pid: 10 }]]));
-    const placement = makeX11WindowPlacement(display, server.path);
-    expect(
-      await placement([
-        { pid: 10, windowId: 20 },
-        { pid: 900, windowId: 77 },
-      ]),
-    ).toBe("other");
-    expect(await placement([{ pid: 900, windowId: 20 }])).toBe("other");
-    // A window on the display's other screen, which the driver on screen 0 must not act on.
-    await using screens = await scriptedServer(new Map([[30, { pid: 10, root: 0x500 }]]));
-    const second = makeX11WindowPlacement(display, screens.path);
-    expect(await second([{ pid: 10, windowId: 30 }])).toBe("other");
-    expect(await second([{ pid: 10, windowId: 30, bounds }])).toBe("other");
-    // The same id and pid on another X server, as one process with windows on both would have.
-    expect(await placement([{ pid: 10, windowId: 20, bounds: { ...bounds, x: 300 } }])).toBe(
-      "other",
-    );
-  });
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a window the display lacks, another process owns, or that sits elsewhere is elsewhere",
+    async () => {
+      await using server = await scriptedServer(new Map([[20, { pid: 10 }]]));
+      const placement = makeX11WindowPlacement(display, server.path);
+      expect(
+        await placement([
+          { pid: 10, windowId: 20 },
+          { pid: 900, windowId: 77 },
+        ]),
+      ).toBe("other");
+      expect(await placement([{ pid: 900, windowId: 20 }])).toBe("other");
+      // A window on the display's other screen, which the driver on screen 0 must not act on.
+      await using screens = await scriptedServer(new Map([[30, { pid: 10, root: 0x500 }]]));
+      const second = makeX11WindowPlacement(display, screens.path);
+      expect(await second([{ pid: 10, windowId: 30 }])).toBe("other");
+      expect(await second([{ pid: 10, windowId: 30, bounds }])).toBe("other");
+      // The same id and pid on another X server, as one process with windows on both would have.
+      expect(await placement([{ pid: 10, windowId: 20, bounds: { ...bounds, x: 300 } }])).toBe(
+        "other",
+      );
+    },
+  );
 
   it("a display that cannot be read is unknown, never the same", async () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));

@@ -18,6 +18,10 @@
 // change is one the graph cannot place. A file it cannot place runs everything.
 //
 // ci:server adds the full server suite and ci:memory the memory growth suite to either kind of run.
+//
+// test-windows runs WINDOWS_SUITES on hosted Windows: in lane=all, in the windows lane, with the
+// ci:windows label, and on a pull request that changes one of those paths. Its job has a 30-minute
+// timeout and never runs on EPYC.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -36,7 +40,27 @@ const FULL_LABEL = "ci:full";
 const AFFECTED_LABEL = "ci:affected";
 const SERVER_LABEL = "ci:server";
 const MEMORY_LABEL = "ci:memory";
-const LANES = ["all", "server", "memory-growth", "quick"];
+const WINDOWS_LABEL = "ci:windows";
+const LANES = ["all", "server", "memory-growth", "windows", "quick"];
+/**
+ * Platform-sensitive tests the Windows job runs, as path prefixes. Each is both a Vitest filter for
+ * the job and a trigger: a pull request changing a file under one selects test-windows.
+ */
+const WINDOWS_SUITES = [
+  "apps/desktop/src/cua/",
+  "apps/server/src/cua/",
+  "packages/shared/src/cuaDriver",
+  "packages/shared/src/computerUse",
+  "packages/shared/src/path",
+  "packages/shared/src/shell",
+  "packages/shared/src/atomicWrite",
+  "packages/shared/src/goatHome",
+  "packages/shared/src/devHome",
+  "packages/shared/src/testing/",
+  "scripts/lib/changed-tests",
+  "scripts/build-computer-use-helper",
+];
+const WINDOWS_TASK = "test-windows";
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
@@ -95,6 +119,7 @@ const TASKS = [
   "test-relay",
   "test-ingest",
   "test-memory-growth",
+  WINDOWS_TASK,
   "build",
   "test-server",
 ];
@@ -143,6 +168,8 @@ const BUILD_ONLY_EDGES = [["apps/server", "apps/web"]];
 
 /** Directories outside apps/ and packages/ that only typecheck and lint cover. */
 const TYPECHECK_ONLY_RE = /^(?:infra\/(?!relay\/)[^/]+|oxlint-plugin-goat)\//;
+
+const isWindowsSensitive = (file) => WINDOWS_SUITES.some((suite) => file.startsWith(suite));
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -409,13 +436,13 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
 
 /**
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
- * runner pool, hosted or epyc; goat-ci.yml sends only trusted runs' epyc entries to EPYC.
+ * runner pool, hosted, epyc or windows; goat-ci.yml sends only trusted runs' epyc entries to EPYC.
  */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
-    const runner = HOSTED_TASKS.has(task) ? "hosted" : "epyc";
+    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "epyc";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
@@ -507,6 +534,14 @@ function laneRun(lane) {
       full: false,
       tasks: ["test-memory-growth"],
       reasons: reasons(["test-memory-growth"], why),
+      server: fullServer(why),
+    };
+  }
+  if (lane === "windows") {
+    return {
+      full: false,
+      tasks: [WINDOWS_TASK],
+      reasons: reasons([WINDOWS_TASK], why),
       server: fullServer(why),
     };
   }
@@ -630,6 +665,11 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
     tasks.add("test-memory-growth");
     reasons.set("test-memory-growth", MEMORY_LABEL + " label");
   }
+  const windowsChange = changed.find(isWindowsSensitive);
+  if (!tasks.has(WINDOWS_TASK) && (labels.has(WINDOWS_LABEL) || windowsChange !== undefined)) {
+    tasks.add(WINDOWS_TASK);
+    reasons.set(WINDOWS_TASK, windowsChange ?? WINDOWS_LABEL + " label");
+  }
   return {
     ...result,
     tasks: MATRIX_ORDER.filter((task) => tasks.has(task)),
@@ -662,7 +702,9 @@ function summaryLines(result) {
             SERVER_LABEL +
             " (full server suite), " +
             MEMORY_LABEL +
-            " (memory growth). A manual run of the branch runs everything: " +
+            " (memory growth), " +
+            WINDOWS_LABEL +
+            " (Windows tests). A manual run of the branch runs everything: " +
             "gh workflow run goat-ci.yml --ref <branch>.",
         ]),
     "",
@@ -731,6 +773,8 @@ module.exports = {
   AFFECTED_LABEL,
   SERVER_LABEL,
   MEMORY_LABEL,
+  WINDOWS_LABEL,
+  WINDOWS_SUITES,
   LANES,
   TASKS,
   CHANGED_TESTS_TASK,

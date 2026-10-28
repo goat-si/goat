@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   classifyDevices,
@@ -220,184 +221,215 @@ describe("XInput2 human input", () => {
     expect(supportsSourceId(2, 4)).toBe(true);
   });
 
-  it("refuses a server that negotiates XI 2.0, whose raw events name no device", async () => {
-    const server = await scriptedServer({ minor: 0 });
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-      },
-    );
-    expect(source).toBeUndefined();
-    server.close();
-  });
-
-  it("a keyboard plugged in after the source opened is the person's; the driver's devices never are", async () => {
-    const server = await scriptedServer({ minor: 2 });
-    const listed = lists();
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onListed: listed.onListed,
-      },
-    );
-    if (!source) throw new Error("no source");
-    // The driver adds its devices and types through them: not a person.
-    server.setDevices([...XVFB, ...DRIVER]);
-    let applied = listed.next();
-    server.send(hierarchyEvent([8, 10, 11, 12]));
-    server.send(xiEvent(RAW_KEY, 11));
-    await applied;
-    expect(source.latest()).toBeUndefined();
-    // A person plugs in a keyboard, which gets an id the driver's keyboard had before.
-    server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
-    applied = listed.next();
-    server.send(hierarchyEvent([11]));
-    server.send(xiEvent(RAW_KEY, 11));
-    await applied;
-    expect(source.latest()).toMatchObject({ source: "keyboard" });
-    source.close();
-    server.close();
-  });
-
-  it("input from a device the list does not have yet waits for the next list", async () => {
-    const server = await scriptedServer({ minor: 2 });
-    const listed = lists();
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onListed: listed.onListed,
-      },
-    );
-    if (!source) throw new Error("no source");
-    // The raw event arrives before the hierarchy event that announces its device.
-    server.setDevices([...XVFB, { id: 20, use: 4, name: "Bluetooth Keyboard" }]);
-    const applied = listed.next();
-    server.send(xiEvent(RAW_KEY, 20));
-    await applied;
-    expect(source.latest()).toMatchObject({ source: "keyboard" });
-    source.close();
-    server.close();
-  });
-
-  it("a device change that arrives with the first list is caught up, not lost", async () => {
-    // The first reply carries the driver's keyboard on id 11; a change and a person's key on a
-    // reused 11 follow in the same write, before the source has finished opening.
-    let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
-    const server = await scriptedServer({
-      minor: 2,
-      after: (query) => {
-        if (query !== 1) return [];
-        devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
-        return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
-      },
-    });
-    server.setDevices(devicesNow);
-    const listed = lists();
-    const second = listed.next().then(() => listed.next());
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onListed: () => {
-          server.setDevices(devicesNow);
-          listed.onListed();
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "refuses a server that negotiates XI 2.0, whose raw events name no device",
+    async () => {
+      const server = await scriptedServer({ minor: 0 });
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
         },
-      },
-    );
-    if (!source) throw new Error("no source");
-    await second;
-    expect(source.latest()).toMatchObject({ source: "keyboard" });
-    source.close();
-    server.close();
-  });
+      );
+      expect(source).toBeUndefined();
+      server.close();
+    },
+  );
 
-  it("input held across a change keeps waiting for a list read after that change", async () => {
-    // Another change and the person's key arrive in the same write as the list the source was
-    // waiting for; that list predates the change and must not decide the key.
-    let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
-    const server = await scriptedServer({
-      minor: 2,
-      after: (query) => {
-        if (query !== 2) return [];
-        devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
-        return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
-      },
-    });
-    server.setDevices(devicesNow);
-    const listed = lists();
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onListed: () => {
-          server.setDevices(devicesNow);
-          listed.onListed();
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a keyboard plugged in after the source opened is the person's; the driver's devices never are",
+    async () => {
+      const server = await scriptedServer({ minor: 2 });
+      const listed = lists();
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onListed: listed.onListed,
         },
-      },
-    );
-    if (!source) throw new Error("no source");
-    const third = listed.next().then(() => listed.next());
-    server.send(hierarchyEvent([8, 10, 11, 12]));
-    await third;
-    expect(source.latest()).toMatchObject({ source: "keyboard" });
-    source.close();
-    server.close();
-  });
+      );
+      if (!source) throw new Error("no source");
+      // The driver adds its devices and types through them: not a person.
+      server.setDevices([...XVFB, ...DRIVER]);
+      let applied = listed.next();
+      server.send(hierarchyEvent([8, 10, 11, 12]));
+      server.send(xiEvent(RAW_KEY, 11));
+      await applied;
+      expect(source.latest()).toBeUndefined();
+      // A person plugs in a keyboard, which gets an id the driver's keyboard had before.
+      server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
+      applied = listed.next();
+      server.send(hierarchyEvent([11]));
+      server.send(xiEvent(RAW_KEY, 11));
+      await applied;
+      expect(source.latest()).toMatchObject({ source: "keyboard" });
+      source.close();
+      server.close();
+    },
+  );
 
-  it("a device id reused while a list is being read never drops a person's held key", async () => {
-    // The keyboard on 11 is a person's. An unrelated change starts a read; the person's key is
-    // held for it; then 11 is removed and the driver's keyboard takes it, and those changes are
-    // announced before the reply, which already lists the driver's device.
-    const removed = hierarchyEvent([11]);
-    new DataView(removed.buffer).setUint32(16, 0x8, true);
-    new DataView(removed.buffer).setUint32(40, 0x8, true);
-    const server = await scriptedServer({
-      minor: 2,
-      after: () => [],
-    });
-    server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
-    const listed = lists();
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onListed: listed.onListed,
-      },
-    );
-    if (!source) throw new Error("no source");
-    server.holdNextList();
-    const applied = listed.next();
-    server.send(hierarchyEvent([30]));
-    server.send(xiEvent(RAW_KEY, 11));
-    await server.listRequested();
-    server.setDevices([...XVFB, { id: 11, use: 4, name: "CUA v1.AAAA.BBBB.CCCC uinput keyboard" }]);
-    server.send(removed);
-    server.send(hierarchyEvent([11]));
-    server.releaseList();
-    await applied;
-    expect(source.latest()).toMatchObject({ source: "keyboard" });
-    source.close();
-    server.close();
-  });
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "input from a device the list does not have yet waits for the next list",
+    async () => {
+      const server = await scriptedServer({ minor: 2 });
+      const listed = lists();
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onListed: listed.onListed,
+        },
+      );
+      if (!source) throw new Error("no source");
+      // The raw event arrives before the hierarchy event that announces its device.
+      server.setDevices([...XVFB, { id: 20, use: 4, name: "Bluetooth Keyboard" }]);
+      const applied = listed.next();
+      server.send(xiEvent(RAW_KEY, 20));
+      await applied;
+      expect(source.latest()).toMatchObject({ source: "keyboard" });
+      source.close();
+      server.close();
+    },
+  );
 
-  it("a server that goes away leaves the source lost", async () => {
-    const server = await scriptedServer({ minor: 2 });
-    const lost = Promise.withResolvers<void>();
-    const source = await openX11HumanInput(
-      { DISPLAY: ":0" },
-      {
-        socketPath: server.path,
-        onLost: () => lost.resolve(),
-      },
-    );
-    if (!source) throw new Error("no source");
-    server.close();
-    await lost.promise;
-    expect(source.lost()).toBe(true);
-  });
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a device change that arrives with the first list is caught up, not lost",
+    async () => {
+      // The first reply carries the driver's keyboard on id 11; a change and a person's key on a
+      // reused 11 follow in the same write, before the source has finished opening.
+      let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
+      const server = await scriptedServer({
+        minor: 2,
+        after: (query) => {
+          if (query !== 1) return [];
+          devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
+          return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
+        },
+      });
+      server.setDevices(devicesNow);
+      const listed = lists();
+      const second = listed.next().then(() => listed.next());
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onListed: () => {
+            server.setDevices(devicesNow);
+            listed.onListed();
+          },
+        },
+      );
+      if (!source) throw new Error("no source");
+      await second;
+      expect(source.latest()).toMatchObject({ source: "keyboard" });
+      source.close();
+      server.close();
+    },
+  );
+
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "input held across a change keeps waiting for a list read after that change",
+    async () => {
+      // Another change and the person's key arrive in the same write as the list the source was
+      // waiting for; that list predates the change and must not decide the key.
+      let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
+      const server = await scriptedServer({
+        minor: 2,
+        after: (query) => {
+          if (query !== 2) return [];
+          devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
+          return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
+        },
+      });
+      server.setDevices(devicesNow);
+      const listed = lists();
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onListed: () => {
+            server.setDevices(devicesNow);
+            listed.onListed();
+          },
+        },
+      );
+      if (!source) throw new Error("no source");
+      const third = listed.next().then(() => listed.next());
+      server.send(hierarchyEvent([8, 10, 11, 12]));
+      await third;
+      expect(source.latest()).toMatchObject({ source: "keyboard" });
+      source.close();
+      server.close();
+    },
+  );
+
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a device id reused while a list is being read never drops a person's held key",
+    async () => {
+      // The keyboard on 11 is a person's. An unrelated change starts a read; the person's key is
+      // held for it; then 11 is removed and the driver's keyboard takes it, and those changes are
+      // announced before the reply, which already lists the driver's device.
+      const removed = hierarchyEvent([11]);
+      new DataView(removed.buffer).setUint32(16, 0x8, true);
+      new DataView(removed.buffer).setUint32(40, 0x8, true);
+      const server = await scriptedServer({
+        minor: 2,
+        after: () => [],
+      });
+      server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
+      const listed = lists();
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onListed: listed.onListed,
+        },
+      );
+      if (!source) throw new Error("no source");
+      server.holdNextList();
+      const applied = listed.next();
+      server.send(hierarchyEvent([30]));
+      server.send(xiEvent(RAW_KEY, 11));
+      await server.listRequested();
+      server.setDevices([
+        ...XVFB,
+        { id: 11, use: 4, name: "CUA v1.AAAA.BBBB.CCCC uinput keyboard" },
+      ]);
+      server.send(removed);
+      server.send(hierarchyEvent([11]));
+      server.releaseList();
+      await applied;
+      expect(source.latest()).toMatchObject({ source: "keyboard" });
+      source.close();
+      server.close();
+    },
+  );
+
+  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a server that goes away leaves the source lost",
+    async () => {
+      const server = await scriptedServer({ minor: 2 });
+      const lost = Promise.withResolvers<void>();
+      const source = await openX11HumanInput(
+        { DISPLAY: ":0" },
+        {
+          socketPath: server.path,
+          onLost: () => lost.resolve(),
+        },
+      );
+      if (!source) throw new Error("no source");
+      server.close();
+      await lost.promise;
+      expect(source.lost()).toBe(true);
+    },
+  );
 });
 
 describe("makeDeviceLedger", () => {

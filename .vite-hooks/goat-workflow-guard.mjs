@@ -26,6 +26,8 @@ const goatCiTrustedRunner =
 const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
 // The ci matrix picks a pool per entry; only a trusted run's epyc entries reach EPYC.
 const goatCiMatrixRunner = `matrix.runner == 'epyc' && ${goatCiTrustedRunner}`;
+// The Windows entry takes a pinned hosted image whatever the trust, since it never reaches EPYC.
+const goatCiWindowsMatrixRunner = `matrix.runner == 'windows' && 'windows-2025' || ${goatCiMatrixRunner}`;
 const goatCiGateJobs = new Set([
   "scope",
   "screenshot-gate",
@@ -212,7 +214,10 @@ function validateWorkflow(source, yaml) {
     } else if (
       runners !== goatCiHostedRunner &&
       !isExpression(goatCiTrustedRunner) &&
-      !(name === "ci" && isExpression(goatCiMatrixRunner)) &&
+      !(
+        name === "ci" &&
+        (isExpression(goatCiMatrixRunner) || isExpression(goatCiWindowsMatrixRunner))
+      ) &&
       (!Array.isArray(runners) ||
         runners.length !== 5 ||
         new Set(runners).size !== 5 ||
