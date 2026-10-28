@@ -8,17 +8,22 @@ import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
 import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
 import type { useNewTaskFlow } from "./new-task-flow-provider";
-import type { NewTaskDraftScreen } from "./NewTaskDraftScreen";
-import type { ComponentProps } from "react";
 
-export function useInitialNewTaskProject(
-  props: ComponentProps<typeof NewTaskDraftScreen> & {
-    readonly flow: ReturnType<typeof useNewTaskFlow>;
-    readonly servesRoute: boolean;
-    readonly projects: ReadonlyArray<EnvironmentProject>;
-    readonly onMissingProject: (missing: boolean) => void;
-  },
-) {
+export function useInitialNewTaskProject(props: {
+  readonly initialProjectRef?: {
+    readonly environmentId?: string;
+    readonly projectId?: string;
+    readonly branch?: string | null;
+    readonly worktreePath?: string | null;
+  };
+  readonly pendingTaskId?: string;
+  readonly draftId?: string;
+  readonly incomingShareId?: string;
+  readonly flow: ReturnType<typeof useNewTaskFlow>;
+  readonly servesRoute: boolean;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly onMissingProject: (missing: boolean) => void;
+}) {
   const {
     flow,
     servesRoute,
