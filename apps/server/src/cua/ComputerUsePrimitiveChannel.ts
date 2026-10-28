@@ -44,6 +44,9 @@ interface Pending {
   sent: boolean;
 }
 
+/** How long a call waits for a restarting driver to bind, inside its own deadline. */
+export const DRIVER_BIND_WAIT_MS = 10_000;
+
 interface Control {
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
@@ -157,6 +160,8 @@ export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
   const threadTokens = new Map<ThreadId, string>();
+  // Completed and replaced on every driver binding, so a call waiting for one re-checks.
+  let bound = Deferred.makeUnsafe<void>();
   const settle = (pending: Pending) =>
     Deferred.doneUnsafe(
       pending.answer,
@@ -282,6 +287,63 @@ export const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkScoped,
   );
+  // Runs inside request's span; a span of its own would only repeat it.
+  const send = Effect.fnUntraced(function* (
+    input: PrimitiveChannelRequest,
+    controlId: string,
+    registered: Registration,
+    record: Control,
+    binding: NonNullable<Control["binding"]>,
+    now: number,
+  ) {
+    if (
+      input.expectedConnectionGeneration !== undefined &&
+      input.expectedConnectionGeneration !== binding.connectionId
+    )
+      return yield* Effect.fail({
+        code: "stale_reference" as const,
+        effectStarted: false,
+        nextStep: "Bind the desktop app again after the driver reconnects.",
+      });
+    const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
+    const request: ComputerUsePrimitiveRequest = {
+      state: "primitive-request",
+      requestId: NodeCrypto.randomUUID(),
+      registrationId: registered.id,
+      controlId,
+      connectionGeneration: binding.connectionId,
+      runId: input.runId,
+      turnId: input.turnId,
+      callId: input.callId,
+      deadlineMillis: input.deadlineMillis,
+      tool: input.tool,
+      args: input.args,
+    };
+    const pending: Pending = { request, answer, sent: false };
+    record.pending.set(request.requestId, pending);
+    const offered = yield* Queue.offer(registered.queue, request);
+    if (!offered) {
+      record.pending.delete(request.requestId);
+      return yield* Effect.fail(desktopNotReady("unbound"));
+    }
+    return yield* Deferred.await(answer).pipe(
+      Effect.timeoutOrElse({
+        duration: Math.max(0, input.deadlineMillis - now),
+        orElse: () =>
+          Effect.fail({
+            code: "deadline" as const,
+            effectStarted: pending.sent,
+            nextStep: "Observe the desktop before any later action.",
+          }),
+      }),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (record.pending.has(request.requestId)) cancelDelivered(registered, pending);
+          record.pending.delete(request.requestId);
+        }),
+      ),
+    );
+  });
   return ComputerUsePrimitiveChannel.of({
     tokenFor: Effect.fn("ComputerUsePrimitiveChannel.tokenFor")(function* (threadId) {
       const existing = threadTokens.get(threadId);
@@ -440,6 +502,9 @@ export const make = Effect.gen(function* () {
         clear(registered, record);
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
+        const waiting = bound;
+        bound = Deferred.makeUnsafe<void>();
+        Deferred.doneUnsafe(waiting, Exit.void);
         return true;
       },
     ),
@@ -468,69 +533,26 @@ export const make = Effect.gen(function* () {
       },
     ),
     request: Effect.fn("ComputerUsePrimitiveChannel.request")(function* (input) {
-      const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-      if (current === undefined || !(yield* active(input.threadId, current.controlId)))
-        return yield* Effect.fail(desktopNotReady("none"));
-      const now = yield* Clock.currentTimeMillis;
-      const value = attachments.get(input.threadId);
-      const registered = value?.registration;
-      const record = registered?.controls.get(current.controlId);
-      const binding = record?.binding;
-      if (
-        value === undefined ||
-        !live(value, now) ||
-        registered === undefined ||
-        record === undefined ||
-        binding === undefined
-      )
-        return yield* Effect.fail(desktopNotReady("unbound"));
-      if (
-        input.expectedConnectionGeneration !== undefined &&
-        input.expectedConnectionGeneration !== binding.connectionId
-      )
-        return yield* Effect.fail({
-          code: "stale_reference" as const,
-          effectStarted: false,
-          nextStep: "Bind the desktop app again after the driver reconnects.",
-        });
-      const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
-      const request: ComputerUsePrimitiveRequest = {
-        state: "primitive-request",
-        requestId: NodeCrypto.randomUUID(),
-        registrationId: registered.id,
-        controlId: current.controlId,
-        connectionGeneration: binding.connectionId,
-        runId: input.runId,
-        turnId: input.turnId,
-        callId: input.callId,
-        deadlineMillis: input.deadlineMillis,
-        tool: input.tool,
-        args: input.args,
-      };
-      const pending: Pending = { request, answer, sent: false };
-      record.pending.set(request.requestId, pending);
-      const offered = yield* Queue.offer(registered.queue, request);
-      if (!offered) {
-        record.pending.delete(request.requestId);
-        return yield* Effect.fail(desktopNotReady("unbound"));
+      const started = yield* Clock.currentTimeMillis;
+      const waitUntil = Math.min(input.deadlineMillis, started + DRIVER_BIND_WAIT_MS);
+      let now = started;
+      // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
+      // the call waits for it inside its own budget instead of failing or hanging to its deadline.
+      for (;;) {
+        const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+        if (current === undefined || !(yield* active(input.threadId, current.controlId)))
+          return yield* Effect.fail(desktopNotReady("none"));
+        const value = attachments.get(input.threadId);
+        const registered = value?.registration;
+        const record = registered?.controls.get(current.controlId);
+        const binding = record?.binding;
+        if (registered !== undefined && record !== undefined && binding !== undefined)
+          return yield* send(input, current.controlId, registered, record, binding, now);
+        if (value === undefined || !live(value, now) || now >= waitUntil)
+          return yield* Effect.fail(desktopNotReady("unbound"));
+        yield* Deferred.await(bound).pipe(Effect.timeoutOption(waitUntil - now));
+        now = yield* Clock.currentTimeMillis;
       }
-      return yield* Deferred.await(answer).pipe(
-        Effect.timeoutOrElse({
-          duration: Math.max(0, input.deadlineMillis - now),
-          orElse: () =>
-            Effect.fail({
-              code: "deadline" as const,
-              effectStarted: pending.sent,
-              nextStep: "Observe the desktop before any later action.",
-            }),
-        }),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (record.pending.has(request.requestId)) cancelDelivered(registered, pending);
-            record.pending.delete(request.requestId);
-          }),
-        ),
-      );
     }),
     reply: Effect.fn("ComputerUsePrimitiveChannel.reply")((input) =>
       Clock.currentTimeMillis.pipe(

@@ -12,7 +12,11 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
-import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
+import {
+  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  ComputerUseRefusalDetail,
+  ComputerUseRefusalReason,
+} from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -365,7 +369,24 @@ export const createDesktopTargetHost = (deps: {
         bound.connectionGeneration,
       );
       const state = object(driverValue(reply));
-      if (!state || state.pid !== bound.pid || state.window_id !== bound.windowId) {
+      // The read ran; only a driver naming another window makes the binding stale.
+      if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE)
+        return yield* Effect.fail(
+          fail(
+            "tree_limit",
+            capture
+              ? "This window's capture answer is larger than GOAT carries in one read; nothing changed. Observe again."
+              : "This window's accessibility tree is larger than GOAT carries in one read; nothing changed. Take a screenshot of it, or work in a smaller window.",
+          ),
+        );
+      if (!state || integer(state.pid) === undefined || integer(state.window_id) === undefined)
+        return yield* Effect.fail(
+          fail(
+            "downstream_failure",
+            "The driver's answer did not describe the window. Observe again.",
+          ),
+        );
+      if (state.pid !== bound.pid || state.window_id !== bound.windowId) {
         observations.evictTarget(bound.ref.id);
         targets.delete(bound.ref.id);
         return yield* Effect.fail(fail("stale_reference"));

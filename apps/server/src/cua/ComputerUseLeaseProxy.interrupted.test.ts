@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   active,
@@ -154,5 +155,45 @@ describe("ComputerUseLeaseProxy answers for sent calls whose reply it cannot sho
       assert.notInclude(text, "did not run");
       assert.notInclude(text, "try again");
     }),
+  );
+});
+
+describe("ComputerUseLeaseProxy and a driver that stops answering", () => {
+  it.effect(
+    "a server call its driver leaves unanswered past the deadline gets the next call a new driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        const listApps = (
+          requestId: string,
+          connectionGeneration: string,
+          deadlineMillis: number,
+        ) => ({
+          state: "primitive-request" as const,
+          requestId,
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration,
+          runId: "run:one",
+          turnId: "turn:one",
+          callId: 0,
+          deadlineMillis,
+          tool: "list_apps",
+          args: {},
+        });
+        yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 30_000));
+        assert.equal((yield* h.nextDispatch).index, 0);
+        // The driver never answers; its caller gave up at 30 s.
+        yield* TestClock.adjust("31 seconds");
+        assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+        assert.equal((yield* h.primitiveReply).status, "unknown_outcome");
+        const second = yield* h.driverStarted;
+        assert.notEqual(second.connectionId, first.connectionId);
+        yield* h.sendPrimitive(listApps("request:next", second.connectionId, 90_000));
+        assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+        assert.equal(h.drivers.length, 2);
+      }),
   );
 });

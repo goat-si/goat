@@ -71,6 +71,7 @@ import {
 } from "./ComputerUseLeaseMessages.ts";
 import * as Transport from "./ComputerUseLeaseProxyTransport.ts";
 import { refreshDriverManifest } from "./ComputerUseLeaseProxyManifest.ts";
+import { makeUnansweredWatch } from "./ComputerUseLeaseProxyUnanswered.ts";
 import {
   type JsonRpcId,
   UNCONFIRMED_DISPLAY,
@@ -414,6 +415,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ),
   });
   const start = lifecycle.start;
+  const watchUnanswered = makeUnansweredWatch(
+    { lock: lifecycleLock, scope, outstanding, lifecycle },
+    { active, interrupt, start, end },
+  );
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
   ) {
@@ -977,6 +982,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             : notSent(id),
       );
     }
+    if (primitive !== undefined && isRequest)
+      yield* watchUnanswered(JSON.stringify(id), primitiveDeadline);
   });
   yield* forwardPrimitiveRequests(
     options.primitiveRequests,
