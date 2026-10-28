@@ -200,6 +200,7 @@ describe("Usage limits board", () => {
       now,
     );
     const claude = sections.find((section) => section.driver === "claudeAgent");
+    expect(claude?.verdict).toEqual({ tone: "unknown", text: "Can't read the pool" });
     expect(claude?.groups).toMatchObject([
       { kind: "pool", unreadable: message, detail: "Routed: Claude via Hub on Laptop", rows: [] },
     ]);

@@ -435,12 +435,13 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
       (left, right) =>
         ORIGIN_RANK[left.kind] - ORIGIN_RANK[right.kind] || left.title.localeCompare(right.title),
     );
+    const rows = ordered.flatMap((group) => group.rows);
     return {
       driver,
-      verdict: limitVerdict(
-        ordered.flatMap((group) => group.rows),
-        now,
-      ),
+      verdict:
+        rows.length === 0 && missing
+          ? { tone: "unknown" as const, text: "Can't read the pool" }
+          : limitVerdict(rows, now),
       groups: ordered,
     };
   });
