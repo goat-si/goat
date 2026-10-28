@@ -840,7 +840,10 @@ export const createDesktopTargetHost = (deps: {
       { ...first, deadlineMillis: Math.min(...calls.map((call) => call.deadlineMillis)) },
       context,
       bound.connectionGeneration,
-      { bound, point: bound.aims?.get(String(steps[0]?.args.element_token)) },
+      {
+        bound,
+        point: aimOf(bound.frames?.get(String(steps[0]?.args.element_token)), bound.framesBasis),
+      },
     ).pipe(Effect.result);
     if (sent._tag === "Failure") {
       const error = sent.failure;
