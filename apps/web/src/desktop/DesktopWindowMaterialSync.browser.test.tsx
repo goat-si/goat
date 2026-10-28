@@ -143,3 +143,20 @@ it("does not ask without a change made here, or when the app cannot relaunch", a
   await act(() => fixture.push(macGlass("restart", 4)));
   await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
 });
+
+it("does not ask again when turning glass off after Later fails to save and rolls back", async () => {
+  using fixture = materialBridge(macGlass("off", 1), "darwin");
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<DesktopWindowMaterialSync />);
+  await act(() => persistClientSettingsPatch({ desktopSystemMaterialEnabled: true }));
+  await act(() => fixture.push(macGlass("restart", 2)));
+  await screen.getByRole("button", { name: "Later" }).click();
+  await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
+  fixture.bridge.setClientSettings.mockRejectedValueOnce(new Error("disk unavailable"));
+  using _log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  await act(() =>
+    persistClientSettingsPatch({ desktopSystemMaterialEnabled: false }).catch(() => undefined),
+  );
+  expect(fixture.saved().desktopSystemMaterialEnabled).toBe(true);
+  await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
+});

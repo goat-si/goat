@@ -97,11 +97,14 @@ export function WindowMaterialRestartPrompt({
   const wanted = useClientSettings(wantsSystemGlass);
   const [seenWanted, setSeenWanted] = useState<boolean | null>(null);
   const [requested, setRequested] = useState(false);
+  // Set once asked; cleared when the window leaves "restart", so a rolled-back off cannot re-ask.
+  const [asked, setAsked] = useState(false);
   const [open, setOpen] = useState(false);
   if (hydrated && wanted !== seenWanted) {
     setSeenWanted(wanted);
-    setRequested(seenWanted === false && wanted);
+    setRequested(seenWanted === false && wanted && !asked);
   }
+  if (asked && reason !== null && reason !== "restart") setAsked(false);
   if (open && reason !== null && reason !== "restart") setOpen(false);
   const due = requested && reason === "restart";
 
@@ -112,6 +115,7 @@ export function WindowMaterialRestartPrompt({
     const show = () => {
       if (cancelled) return;
       setRequested(false);
+      setAsked(true);
       setOpen(true);
     };
     if (document.querySelector("input[type='range']:active") === null) {
