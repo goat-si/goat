@@ -122,7 +122,7 @@ describe("computer use skill text", () => {
     const mac = builtInSkillSections(["computer-use"], "darwin").join("\n");
     expect(mac).toContain('os="macOS"');
     expect(mac).not.toContain('os="Windows"');
-    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(2);
+    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(3);
   });
 
   it("contains no identifier from another vendor's computer use skill", () => {
@@ -252,9 +252,21 @@ describe("computer use skill against what agents receive today", () => {
       ).toBeDefined();
   });
 
-  it("teaches no tool an approved-app turn refuses", () => {
-    // ComputerUseScope refuses scripts and batches whenever a thread's control names apps.
-    for (const tool of ["run_steps", "run_script"]) expect(codeSpans).not.toContain(tool);
+  it("teaches batches and scripts, with single calls where an approved-app turn refuses them", () => {
+    // ComputerUseScope refuses run_steps and run_script, sending nothing, whenever a thread's
+    // control names apps, and reservations count both as foreground use of the desktop.
+    for (const tool of ["run_steps", "run_script"]) expect(codeSpans).toContain(tool);
+    const line = (text: string) => guidance.split("\n").find((entry) => entry.includes(text)) ?? "";
+    expect(line("`run_steps` call")).toContain("`observe: {}`");
+    expect(line("approved apps gets")).toMatch(
+      /refused, and nothing was sent\. Make the calls one at a time/,
+    );
+    expect(line("foreground use of the whole screen")).toContain(
+      "do not ask for foreground approval just to batch",
+    );
+    // A batch must not become the way around a confirmation or the never-resend rule.
+    expect(line("purchases, deletes")).toContain("stay single calls");
+    expect(line("`failed_step`")).toContain("never resent unchanged, in a batch or alone");
   });
 
   it("reports an action as done only after a read showed its effect (#1599)", () => {

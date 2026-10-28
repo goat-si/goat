@@ -24,7 +24,7 @@ export const BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillListing> = [
     name: "computer-use",
     displayName: "Computer Use",
     description:
-      "Operate app windows on the computer that runs GOAT: observe one window, act once, verify. Loads on every turn that has computer use.",
+      "Operate app windows on the computer that runs GOAT: observe one window, act in single calls or batches, verify at checkpoints. Loads on every turn that has computer use.",
     anyOf: ["computer-use"],
   },
   {

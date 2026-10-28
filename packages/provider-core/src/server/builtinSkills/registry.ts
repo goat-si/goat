@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 
 import {
   COMPUTER_USE_PLATFORM_NOTES,
+  COMPUTER_USE_SKILL_BATCH,
   COMPUTER_USE_SKILL_CORE,
   COMPUTER_USE_SKILL_PEOPLE,
 } from "./computerUse.ts";
@@ -23,7 +24,7 @@ const SECTIONS: Readonly<
 > = {
   "computer-use": (platform) => {
     const notes = COMPUTER_USE_PLATFORM_NOTES[platform];
-    const skill = [COMPUTER_USE_SKILL_CORE, COMPUTER_USE_SKILL_PEOPLE];
+    const skill = [COMPUTER_USE_SKILL_CORE, COMPUTER_USE_SKILL_BATCH, COMPUTER_USE_SKILL_PEOPLE];
     return notes === undefined ? skill : [...skill, notes];
   },
   "goat-discipline": () => [GOAT_DISCIPLINE_SKILL],

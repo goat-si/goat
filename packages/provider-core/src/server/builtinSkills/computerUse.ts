@@ -8,16 +8,16 @@
 export const COMPUTER_USE_SKILL_CORE = `<computer_use>
 # Computer use (GOAT built-in skill)
 
-The \`cua-driver\` tools act on the computer the person is using right now. Use them only for work that needs an app's window. A shell command, an API, another MCP tool, or GOAT's preview browser for web pages comes first whenever it can do the job.
+The \`cua-driver\` tools act on the computer the person is using right now. Use them only for work that needs an app's window. A shell command, an API, another MCP tool, or GOAT's preview browser for web pages comes first when it can.
 
 ## Observe
 - Pick the window yourself: \`list_windows\`, then pass that window's \`pid\` and \`window_id\` to every call. Never act on whatever happens to be frontmost.
 - Read narrow first. \`get_window_state\` with \`query\` returns the rows whose text contains it, with their ancestors; \`max_elements\` and \`max_depth\` bound the walk. A filtered or truncated tree cannot show that something is absent.
-- After acting, read with \`since: "latest"\` for only what changed since the last read with the same \`query\` and limits; leave \`since\` out for a full read. Every tree read of a window issues a new snapshot id and retires that window's earlier tokens, so act only with \`element_token\` values from the newest tree read; a screenshot-only read (\`include_accessibility_tree: false\`) keeps them.
+- After acting, read with \`since: "latest"\` for only what changed since the last read with the same \`query\` and limits; leave \`since\` out for a full read. Every tree read issues a new snapshot id and retires that window's earlier tokens, so act only with \`element_token\` values from the newest tree read; a screenshot-only read (\`include_accessibility_tree: false\`) keeps them.
 - Take only what you need: \`include_screenshot: false\` when the tree answers the question, a screenshot when the tree is empty, wrong or drawn (canvas, many Electron apps). Points are pixels of that window's latest screenshot.
 
 ## Act
-- One action, then check it. Prefer element tokens; use points for controls the tree lacks or that ignored an element action.
+- Check each call or batch (below) before acting again. Prefer element tokens; use points for controls the tree lacks or that ignored an element action.
 - \`set_value\` replaces a field's whole value. When a fresh read shows it did not apply and you meant to replace, click the field, select all with \`hotkey\`, \`type_text\`, and read the value back. Some apps keep a value only after Tab or Return; check what was committed.
 - \`type_text\` inserts at the caret, but a newline in its text presses Return and a tab presses Tab, which can send or submit. Leave them out unless you mean those keys. When it refuses with \`retryable: true\` and a \`max_chunk_chars\`, send pieces no longer than that; after any other answer, observe first.
 - Wait with \`verify_state\`, never a sleep: name the outcome you expect (an element by role or label that exists, has a value, is enabled or selected; a window that exists, is gone, or has given bounds) and at most 10 s. It cannot wait for an element to disappear; read again instead. \`unsatisfied\` means it did not happen in time and \`unknown\` proves nothing.
@@ -32,6 +32,26 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
 - Details: \`target_busy\`: the named thread holds that window or the desktop; wait or work elsewhere. \`control_idle\`: this turn is over, leave the screen. \`reconnecting\`: its link to GOAT blinked; retry shortly, then observe. \`transport_lost\`: it stayed down and the control ended; tell the person.
 </computer_use>`;
+
+/** Batches and scripts: when several steps go in one call, and when single calls are the only way. */
+export const COMPUTER_USE_SKILL_BATCH = `<computer_use_batch>
+# Batching computer use actions
+
+## When to batch
+- Several steps you have already decided in one window: send them as one \`run_steps\` call with the window's \`pid\` and \`window_id\` on the call and \`observe: {}\`. It runs the steps in order, stops at the first failure, and returns each step's result and what changed, so no separate read is needed.
+- A loop, a branch on what the app shows, or a retry: write it as one \`run_script\` that finds the window with \`cua.getApp({pid, windowId})\`, using that window's \`pid\` and \`window_id\`.
+- Verify at checkpoints: after a meaningful change and before you finish, not after every step. End a batch where an answer decides the next step, then read.
+- Sending or posting to other people, purchases, deletes and anything the person must confirm stay single calls, each checked by a read before the next.
+
+## Results
+- Read \`steps[].ok\` and \`failed_step\`. Steps before a failure ran and are not undone; steps after it did not. The result rules above hold for every step: one that may have landed is never resent unchanged, in a batch or alone. Observe before repairing.
+- A batch or script grants nothing a single call lacks; a refused step ends it.
+
+## When single calls are the only way
+- A thread limited to approved apps gets \`run_steps\` and \`run_script\` refused, and nothing was sent. Make the calls one at a time, each with the \`pid\` and \`window_id\` of an approved app's window.
+- GOAT counts a batch or script as foreground use of the whole screen. Full-access turns have that authority and may batch. In other turns, prefer single calls; do not ask for foreground approval just to batch.
+- When \`run_script\` is not among the driver's tools, use \`run_steps\` or single calls.
+</computer_use_batch>`;
 
 /** Stop, take over, private fields and confirmation: what the person sees and decides. */
 export const COMPUTER_USE_SKILL_PEOPLE = `<computer_use_people>

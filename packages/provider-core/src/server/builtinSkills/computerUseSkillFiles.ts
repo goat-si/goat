@@ -7,6 +7,7 @@
  */
 import {
   COMPUTER_USE_PLATFORM_NOTES,
+  COMPUTER_USE_SKILL_BATCH,
   COMPUTER_USE_SKILL_CORE,
   COMPUTER_USE_SKILL_PEOPLE,
 } from "./computerUse.ts";
@@ -42,7 +43,7 @@ const COMPUTER_USE_APP_NOTES: Readonly<
 const frontmatter = [
   "---",
   "name: computer-use",
-  "description: Operate app windows on the computer that runs GOAT with the cua-driver tools: observe one window, act once, verify. Read before the first computer use action of a turn.",
+  "description: Operate app windows on the computer that runs GOAT with the cua-driver tools: observe one window, act in single calls or batches, verify at checkpoints. Read before the first computer use action of a turn.",
   "---",
 ].join("\n");
 
@@ -59,6 +60,7 @@ export function computerUseSkillFiles(platform: NodeJS.Platform): Readonly<Recor
   const body = [
     frontmatter,
     COMPUTER_USE_SKILL_CORE,
+    COMPUTER_USE_SKILL_BATCH,
     COMPUTER_USE_SKILL_PEOPLE,
     ...(host === undefined ? [] : [host]),
     ...(apps === ""

@@ -156,10 +156,11 @@ the agent hears that too.
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
-**Computer Use** skill. It tells agents to work in one window at a time, check
-the result of each step, stop when you take over or press Stop, and hand
-sign-ins, payments, and other private steps to you. It appears as a built-in
-skill in the composer's `$` menu.
+**Computer Use** skill. It tells agents to work in one window at a time, run
+steps they have already decided as one batch and check the result, make sends,
+purchases and deletions one checked step at a time, stop when you take over or
+press Stop, and hand sign-ins, payments, and other private steps to you. It
+appears as a built-in skill in the composer's `$` menu.
 
 To keep the tools without the skill, turn off **Computer Use skill** under
 **Computer use** in the same settings.
