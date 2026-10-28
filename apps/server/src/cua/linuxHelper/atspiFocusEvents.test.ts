@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   busSocketPath,
@@ -130,7 +131,8 @@ async function scriptedBus(
   };
 }
 
-describe("AT-SPI focus events", () => {
+// quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("AT-SPI focus events", () => {
   it("reads the focus signals GTK3 and GTK4 send, and nothing else, as focus changes", () => {
     for (const signal of [GTK3, GTK4]) {
       const read = readMessage(signal);

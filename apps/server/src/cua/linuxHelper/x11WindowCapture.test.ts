@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeZlib from "node:zlib";
 
 import { describe, expect, it } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { pngColors } from "./linuxSession.ts";
 import {
@@ -389,326 +390,333 @@ function firstPixel(png: Uint8Array): ReadonlyArray<number> {
   return [raw[1] ?? -1, raw[2] ?? -1, raw[3] ?? -1];
 }
 
-describe("X11 window capture against a scripted server", () => {
-  it("captures a window inside its redirected frame, at the driver's size", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    const capture = await captureX11Window(environment, 0x200001, shot, {
-      socketPath: server.path,
-    });
-    expect(capture).toMatchObject({ width: 100, height: 80 });
-  });
-
-  it("refuses a window whose frame nothing redirects", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({
-      refused: UNREDIRECTED_CAPTURE,
-    });
-  });
-
-  it("refuses when another client's window is drawn over it inside the same frame", async () => {
-    const shared: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x600001] },
-      0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
-    };
-    await using server = await scriptedServer(shared, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({
-      refused: SHARED_CAPTURE,
-    });
-    // The same window unmapped, input-only, or off to the side draws nothing over it.
-    for (const other of [{ viewable: false }, { inputOnly: true }, { x: 400, y: 400 }]) {
-      await using clear = await scriptedServer(
-        { ...shared, 0x600001: { ...shared[0x600001]!, ...other } },
-        { redirected: [0x400001] },
-      );
-      expect(
-        await captureX11Window(environment, 0x200001, shot, { socketPath: clear.path }),
-      ).toMatchObject({
-        width: 100,
+// quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "X11 window capture against a scripted server",
+  () => {
+    it("captures a window inside its redirected frame, at the driver's size", async () => {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+      const capture = await captureX11Window(environment, 0x200001, shot, {
+        socketPath: server.path,
       });
-    }
-  });
+      expect(capture).toMatchObject({ width: 100, height: 80 });
+    });
 
-  it("refuses when another client's window lies under it inside the same frame (#1335 shaped targets)", async () => {
-    // A shaped target, or one without a background, shows what is stacked below it in the pixmap.
-    const below: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x400001: { ...FRAMED[0x400001]!, children: [0x600001, 0x200001] },
-      0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
-    };
-    await using server = await scriptedServer(below, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: SHARED_CAPTURE });
-  });
+    it("refuses a window whose frame nothing redirects", async () => {
+      await using server = await scriptedServer(FRAMED, { redirected: [] });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({
+        refused: UNREDIRECTED_CAPTURE,
+      });
+    });
 
-  it("refuses when another client's window is a child of the target", async () => {
-    const embedded: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x200001: { ...FRAMED[0x200001]!, children: [0x600001] },
-      0x600001: { parent: 0x200001, children: [], x: 40, y: 50, width: 30, height: 30 },
-    };
-    await using server = await scriptedServer(embedded, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: SHARED_CAPTURE });
-  });
+    it("refuses when another client's window is drawn over it inside the same frame", async () => {
+      const shared: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x600001] },
+        0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+      };
+      await using server = await scriptedServer(shared, { redirected: [0x400001] });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({
+        refused: SHARED_CAPTURE,
+      });
+      // The same window unmapped, input-only, or off to the side draws nothing over it.
+      for (const other of [{ viewable: false }, { inputOnly: true }, { x: 400, y: 400 }]) {
+        await using clear = await scriptedServer(
+          { ...shared, 0x600001: { ...shared[0x600001]!, ...other } },
+          { redirected: [0x400001] },
+        );
+        expect(
+          await captureX11Window(environment, 0x200001, shot, { socketPath: clear.path }),
+        ).toMatchObject({
+          width: 100,
+        });
+      }
+    });
 
-  it("captures a window with the window manager's own backing window under it, as Openbox frames do", async () => {
-    const openbox: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x400001: { ...FRAMED[0x400001]!, children: [0x400002, 0x200001] },
-      0x400002: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
-    };
-    await using server = await scriptedServer(openbox, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toMatchObject({ width: 100, height: 80 });
-  });
-
-  it("trusts the top-level's client only when a window manager frames the target", async () => {
-    // Another app's own top-level holding the target and its window beside it (#1335 r11).
-    const appTop: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x400002] },
-      0x400002: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
-    };
-    for (const [windows, managed] of [
-      [appTop, []],
-      [appTop, [0x200001, 0x400001]],
-      [{ ...appTop, 0x400001: { ...appTop[0x400001]!, overrideRedirect: true } }, [0x200001]],
-    ] as const) {
-      await using server = await scriptedServer(windows, { redirected: [0x400001], managed });
+    it("refuses when another client's window lies under it inside the same frame (#1335 shaped targets)", async () => {
+      // A shaped target, or one without a background, shows what is stacked below it in the pixmap.
+      const below: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x400001: { ...FRAMED[0x400001]!, children: [0x600001, 0x200001] },
+        0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+      };
+      await using server = await scriptedServer(below, { redirected: [0x400001] });
       expect(
         await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
       ).toEqual({ refused: SHARED_CAPTURE });
-    }
-  });
+    });
 
-  it("refuses when another client's window sits between the target and its frame", async () => {
-    // Its background shows wherever a shaped target leaves a gap (#1335 r11).
-    const nested: Record<number, FakeWindow> = {
-      ...FRAMED,
-      0x400001: { ...FRAMED[0x400001]!, children: [0x600001] },
-      0x600001: { parent: 0x400001, children: [0x200001], x: 10, y: 30, width: 100, height: 80 },
-      0x200001: { ...FRAMED[0x200001]!, parent: 0x600001 },
-    };
-    await using server = await scriptedServer(nested, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: SHARED_CAPTURE });
-  });
-
-  it("reads the pixmap the compositor shows when the app does not repaint all of it on Expose", async () => {
-    // GTK 3 and 4, Firefox and Xt apps on GNOME's compositor answer a synthetic Expose with no
-    // drawing or with their frame only; what the compositor shows is still that window's.
-    for (const redraw of ["none", "half"] as const) {
-      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], redraw });
+    it("refuses when another client's window is a child of the target", async () => {
+      const embedded: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x200001: { ...FRAMED[0x200001]!, children: [0x600001] },
+        0x600001: { parent: 0x200001, children: [], x: 40, y: 50, width: 30, height: 30 },
+      };
+      await using server = await scriptedServer(embedded, { redirected: [0x400001] });
       expect(
         await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: SHARED_CAPTURE });
+    });
+
+    it("captures a window with the window manager's own backing window under it, as Openbox frames do", async () => {
+      const openbox: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x400001: { ...FRAMED[0x400001]!, children: [0x400002, 0x200001] },
+        0x400002: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
+      };
+      await using server = await scriptedServer(openbox, { redirected: [0x400001] });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toMatchObject({ width: 100, height: 80 });
+    });
+
+    it("trusts the top-level's client only when a window manager frames the target", async () => {
+      // Another app's own top-level holding the target and its window beside it (#1335 r11).
+      const appTop: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x400002] },
+        0x400002: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+      };
+      for (const [windows, managed] of [
+        [appTop, []],
+        [appTop, [0x200001, 0x400001]],
+        [{ ...appTop, 0x400001: { ...appTop[0x400001]!, overrideRedirect: true } }, [0x200001]],
+      ] as const) {
+        await using server = await scriptedServer(windows, { redirected: [0x400001], managed });
+        expect(
+          await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+        ).toEqual({ refused: SHARED_CAPTURE });
+      }
+    });
+
+    it("refuses when another client's window sits between the target and its frame", async () => {
+      // Its background shows wherever a shaped target leaves a gap (#1335 r11).
+      const nested: Record<number, FakeWindow> = {
+        ...FRAMED,
+        0x400001: { ...FRAMED[0x400001]!, children: [0x600001] },
+        0x600001: { parent: 0x400001, children: [0x200001], x: 10, y: 30, width: 100, height: 80 },
+        0x200001: { ...FRAMED[0x200001]!, parent: 0x600001 },
+      };
+      await using server = await scriptedServer(nested, { redirected: [0x400001] });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: SHARED_CAPTURE });
+    });
+
+    it("reads the pixmap the compositor shows when the app does not repaint all of it on Expose", async () => {
+      // GTK 3 and 4, Firefox and Xt apps on GNOME's compositor answer a synthetic Expose with no
+      // drawing or with their frame only; what the compositor shows is still that window's.
+      for (const redraw of ["none", "half"] as const) {
+        await using server = await scriptedServer(FRAMED, { redirected: [0x400001], redraw });
+        expect(
+          await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+        ).toMatchObject({ width: 100 });
+      }
+    });
+
+    it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
+      const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
+        const drawn = coverage(100, 80);
+        for (const rect of rects) drawn.add(rect);
+        return drawn.whole();
+      };
+      const tiles = [
+        { x: 50, y: 0, w: 50, h: 40 },
+        { x: 0, y: 0, w: 60, h: 80 },
+        { x: 50, y: 40, w: 50, h: 40 },
+      ];
+      expect(covered(tiles)).toBe(true);
+      expect(covered(tiles.slice(0, 2))).toBe(false);
+      expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
+      // Drawing that spills past the window counts only where it is inside.
+      expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
+    });
+
+    it("refuses when the window tree read through changes between the redraw and the read", async () => {
+      // Each leaves pixels in the pixmap that the app's redraw never covered (#1390 review).
+      const MAP = 19;
+      const UNMAP = 18;
+      const CREATE = 16;
+      const CONFIGURE = 22;
+      for (const afterRedraw of [
+        // Another app's window mapped inside the target.
+        [[MAP, 0x200001, 0x600001]],
+        // The app adds a child, which is not watched, so anything inside it would go unseen.
+        [[CREATE, 0x200001, 0x200009]],
+        // The target unmapped and mapped again gets a new pixmap, filled from behind it.
+        [
+          [UNMAP, 0x200001, 0x200001],
+          [MAP, 0x200001, 0x200001],
+        ],
+        // Another app's window mapped beside the target, inside its frame.
+        [[MAP, 0x400001, 0x600001]],
+        // A window beside the target moved over it and away again (#1390 review r3).
+        [[CONFIGURE, 0x400001, 0x400005]],
+        // The frame's own window mapped: whatever it holds was never checked (#1390 review r3).
+        [[MAP, 0x400001, 0x400005]],
+      ] as const) {
+        await using server = await scriptedServer(FRAMED, { redirected: [0x400001], afterRedraw });
+        expect(
+          await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+        ).toEqual({ refused: STILL_DRAWING, transient: true });
+      }
+      // Moving the whole frame on screen keeps its pixmap.
+      await using moved = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        afterRedraw: [[22, 0x400001, 0x400001]],
+      });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
       ).toMatchObject({ width: 100 });
-    }
-  });
+    });
 
-  it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
-    const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
-      const drawn = coverage(100, 80);
-      for (const rect of rects) drawn.add(rect);
-      return drawn.whole();
-    };
-    const tiles = [
-      { x: 50, y: 0, w: 50, h: 40 },
-      { x: 0, y: 0, w: 60, h: 80 },
-      { x: 50, y: 40, w: 50, h: 40 },
-    ];
-    expect(covered(tiles)).toBe(true);
-    expect(covered(tiles.slice(0, 2))).toBe(false);
-    expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
-    // Drawing that spills past the window counts only where it is inside.
-    expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
-  });
-
-  it("refuses when the window tree read through changes between the redraw and the read", async () => {
-    // Each leaves pixels in the pixmap that the app's redraw never covered (#1390 review).
-    const MAP = 19;
-    const UNMAP = 18;
-    const CREATE = 16;
-    const CONFIGURE = 22;
-    for (const afterRedraw of [
-      // Another app's window mapped inside the target.
-      [[MAP, 0x200001, 0x600001]],
-      // The app adds a child, which is not watched, so anything inside it would go unseen.
-      [[CREATE, 0x200001, 0x200009]],
-      // The target unmapped and mapped again gets a new pixmap, filled from behind it.
-      [
-        [UNMAP, 0x200001, 0x200001],
-        [MAP, 0x200001, 0x200001],
-      ],
-      // Another app's window mapped beside the target, inside its frame.
-      [[MAP, 0x400001, 0x600001]],
-      // A window beside the target moved over it and away again (#1390 review r3).
-      [[CONFIGURE, 0x400001, 0x400005]],
-      // The frame's own window mapped: whatever it holds was never checked (#1390 review r3).
-      [[MAP, 0x400001, 0x400005]],
-    ] as const) {
-      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], afterRedraw });
+    it("hears of a child added while the tree is first listed, because each window is watched before it is listed (#1400 review r7)", async () => {
+      // Listing first and watching after would miss a child created in between, and anything
+      // later mapped inside it would go unseen.
+      await using server = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        createdWhileListed: { parent: 0x200001, child: 0x200009 },
+      });
       expect(
         await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
       ).toEqual({ refused: STILL_DRAWING, transient: true });
-    }
-    // Moving the whole frame on screen keeps its pixmap.
-    await using moved = await scriptedServer(FRAMED, {
-      redirected: [0x400001],
-      afterRedraw: [[22, 0x400001, 0x400001]],
     });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
-    ).toMatchObject({ width: 100 });
-  });
 
-  it("hears of a child added while the tree is first listed, because each window is watched before it is listed (#1400 review r7)", async () => {
-    // Listing first and watching after would miss a child created in between, and anything
-    // later mapped inside it would go unseen.
-    await using server = await scriptedServer(FRAMED, {
-      redirected: [0x400001],
-      createdWhileListed: { parent: 0x200001, child: 0x200009 },
+    it("a compositor toggling redirection cannot swap the pixmap read: the frame stays redirected while it is read", async () => {
+      // A replaced pixmap is filled from what is behind the frame (#1390 review r4b, #1400 r5).
+      await using server = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        compositorToggles: true,
+      });
+      const capture = await captureX11Window(environment, 0x200001, shot, {
+        socketPath: server.path,
+      });
+      if (!("png" in capture)) throw new Error(JSON.stringify(capture));
+      // The app's own gray, never the red behind the frame.
+      expect(firstPixel(capture.png)).toEqual([0x80, 0x80, 0x80]);
     });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: STILL_DRAWING, transient: true });
-  });
 
-  it("a compositor toggling redirection cannot swap the pixmap read: the frame stays redirected while it is read", async () => {
-    // A replaced pixmap is filled from what is behind the frame (#1390 review r4b, #1400 r5).
-    await using server = await scriptedServer(FRAMED, {
-      redirected: [0x400001],
-      compositorToggles: true,
+    it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
+      const drawn = coverage(3840, 2160);
+      let accepted = true;
+      for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
+        accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
+      expect(accepted).toBe(false);
+      expect(drawn.whole()).toBe(false);
     });
-    const capture = await captureX11Window(environment, 0x200001, shot, {
-      socketPath: server.path,
-    });
-    if (!("png" in capture)) throw new Error(JSON.stringify(capture));
-    // The app's own gray, never the red behind the frame.
-    expect(firstPixel(capture.png)).toEqual([0x80, 0x80, 0x80]);
-  });
 
-  it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
-    const drawn = coverage(3840, 2160);
-    let accepted = true;
-    for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
-      accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
-    expect(accepted).toBe(false);
-    expect(drawn.whole()).toBe(false);
-  });
-
-  it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    expect(
-      await captureX11Window(
-        environment,
-        0x200001,
-        { ...shot, windowHeight: 90 },
-        { socketPath: server.path },
-      ),
-    ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
-  });
-
-  it("holds the server from the size check through the pixel read, and only for that", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    await captureX11Window(environment, 0x200001, shot, { socketPath: server.path });
-    await server.ended;
-    const grab = server.requests.indexOf(36);
-    const release = server.requests.indexOf(37);
-    const held = server.requests.slice(grab + 1, release);
-    // The size is checked again, the window and its frame's border placed, and the pixels read,
-    // all while held; the release follows the read.
-    expect(grab).toBeGreaterThan(0);
-    expect(release).toBeGreaterThan(server.requests.indexOf(73));
-    expect(held[0]).toBe(14);
-    expect(held).toContain(40);
-    // The window's own size and its frame's border are both read while held.
-    expect(held.filter((op) => op === 14)).toHaveLength(2);
-    expect(held).toContain(73);
-    // The tree walk up to the top-level window happens before the hold.
-    expect(server.requests.slice(0, grab)).toContain(15);
-  });
-
-  it("an unchanged window read at a rounded thumbnail size is not taken for a resized one", async () => {
-    // 1920 x 1040 at 256 wide is 256 x 138.67, which the driver rounds to 139.
-    const wide: Record<number, FakeWindow> = {
-      [ROOT]: { parent: 0, children: [0x200001], x: 0, y: 0, width: 1920, height: 1080 },
-      0x200001: { parent: ROOT, children: [], x: 0, y: 0, width: 1920, height: 1040 },
-    };
-    await using server = await scriptedServer(wide, { redirected: [0x200001] });
-    expect(
-      await captureX11Window(
-        environment,
-        0x200001,
-        { width: 256, height: 139, windowWidth: 1920, windowHeight: 1040 },
-        // The scripted server's 2 MP reply can outlast the real hold limit on a slow runner; this
-        // test is about rounding, the hold limit has its own test.
-        { socketPath: server.path, grabLimitMs: 60_000 },
-      ),
-    ).toMatchObject({ width: 256, height: 139 });
-  });
-
-  it("a hold that runs past its limit is ended, by dropping the connection, and refused", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [0x400001], stallImage: true });
-    const held: number[] = [];
-    const capture = await captureX11Window(environment, 0x200001, shot, {
-      socketPath: server.path,
-      grabLimitMs: 1,
-      onGrab: (ms) => held.push(ms),
-    });
-    expect(capture).toEqual({ refused: BUSY_CAPTURE, transient: true });
-    // The server sees the connection end, which releases the hold.
-    await server.ended;
-    expect(held).toHaveLength(1);
-  });
-
-  it("a window that grew past the pixel budget after its first read is refused before any pixels are asked for", async () => {
-    await using server = await scriptedServer(FRAMED, {
-      redirected: [0x400001],
-      grows: { width: 8000, height: 8000 },
-    });
-    const capture = await captureX11Window(
-      environment,
-      0x200001,
-      { width: 1568, height: 1568, windowWidth: 8000, windowHeight: 8000 },
-      { socketPath: server.path },
-    );
-    expect(capture).toEqual({ refused: expect.stringContaining("could not be read") });
-    await server.ended;
-    expect(server.requests).not.toContain(73);
-  });
-
-  it("a window whose size differs from the driver's read by any amount is refused", async () => {
-    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    for (const changed of [{ windowHeight: 81 }, { windowWidth: 99 }])
+    it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
       expect(
         await captureX11Window(
           environment,
           0x200001,
-          { ...shot, ...changed },
+          { ...shot, windowHeight: 90 },
           { socketPath: server.path },
         ),
       ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
-  });
+    });
 
-  it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {
-    // The second GetGeometry is the frame's, asked after the window's own.
-    await using server = await scriptedServer(FRAMED, {
-      redirected: [0x400001],
-      closeOnGeometry: 2,
+    it("holds the server from the size check through the pixel read, and only for that", async () => {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path });
+      await server.ended;
+      const grab = server.requests.indexOf(36);
+      const release = server.requests.indexOf(37);
+      const held = server.requests.slice(grab + 1, release);
+      // The size is checked again, the window and its frame's border placed, and the pixels read,
+      // all while held; the release follows the read.
+      expect(grab).toBeGreaterThan(0);
+      expect(release).toBeGreaterThan(server.requests.indexOf(73));
+      expect(held[0]).toBe(14);
+      expect(held).toContain(40);
+      // The window's own size and its frame's border are both read while held.
+      expect(held.filter((op) => op === 14)).toHaveLength(2);
+      expect(held).toContain(73);
+      // The tree walk up to the top-level window happens before the hold.
+      expect(server.requests.slice(0, grab)).toContain(15);
     });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({
-      refused: UNREDIRECTED_CAPTURE,
+
+    it("an unchanged window read at a rounded thumbnail size is not taken for a resized one", async () => {
+      // 1920 x 1040 at 256 wide is 256 x 138.67, which the driver rounds to 139.
+      const wide: Record<number, FakeWindow> = {
+        [ROOT]: { parent: 0, children: [0x200001], x: 0, y: 0, width: 1920, height: 1080 },
+        0x200001: { parent: ROOT, children: [], x: 0, y: 0, width: 1920, height: 1040 },
+      };
+      await using server = await scriptedServer(wide, { redirected: [0x200001] });
+      expect(
+        await captureX11Window(
+          environment,
+          0x200001,
+          { width: 256, height: 139, windowWidth: 1920, windowHeight: 1040 },
+          // The scripted server's 2 MP reply can outlast the real hold limit on a slow runner; this
+          // test is about rounding, the hold limit has its own test.
+          { socketPath: server.path, grabLimitMs: 60_000 },
+        ),
+      ).toMatchObject({ width: 256, height: 139 });
     });
-  });
-});
+
+    it("a hold that runs past its limit is ended, by dropping the connection, and refused", async () => {
+      await using server = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        stallImage: true,
+      });
+      const held: number[] = [];
+      const capture = await captureX11Window(environment, 0x200001, shot, {
+        socketPath: server.path,
+        grabLimitMs: 1,
+        onGrab: (ms) => held.push(ms),
+      });
+      expect(capture).toEqual({ refused: BUSY_CAPTURE, transient: true });
+      // The server sees the connection end, which releases the hold.
+      await server.ended;
+      expect(held).toHaveLength(1);
+    });
+
+    it("a window that grew past the pixel budget after its first read is refused before any pixels are asked for", async () => {
+      await using server = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        grows: { width: 8000, height: 8000 },
+      });
+      const capture = await captureX11Window(
+        environment,
+        0x200001,
+        { width: 1568, height: 1568, windowWidth: 8000, windowHeight: 8000 },
+        { socketPath: server.path },
+      );
+      expect(capture).toEqual({ refused: expect.stringContaining("could not be read") });
+      await server.ended;
+      expect(server.requests).not.toContain(73);
+    });
+
+    it("a window whose size differs from the driver's read by any amount is refused", async () => {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+      for (const changed of [{ windowHeight: 81 }, { windowWidth: 99 }])
+        expect(
+          await captureX11Window(
+            environment,
+            0x200001,
+            { ...shot, ...changed },
+            { socketPath: server.path },
+          ),
+        ).toEqual({ refused: RESIZED_CAPTURE, transient: true });
+    });
+
+    it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {
+      // The second GetGeometry is the frame's, asked after the window's own.
+      await using server = await scriptedServer(FRAMED, {
+        redirected: [0x400001],
+        closeOnGeometry: 2,
+      });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({
+        refused: UNREDIRECTED_CAPTURE,
+      });
+    });
+  },
+);

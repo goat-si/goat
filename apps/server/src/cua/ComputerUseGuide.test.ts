@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { installComputerUseSkill, makeAppGuide } from "./ComputerUseGuide.ts";
 
@@ -104,7 +105,11 @@ describe("computer use skill on disk", () => {
     }
   });
 
-  it("returns no path when the state directory cannot be written", () => {
-    assert.isUndefined(installComputerUseSkill("/dev/null/not-a-directory", "darwin"));
-  });
+  // quarantine: #2121 /dev/null/not-a-directory is a writable path on Windows.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "returns no path when the state directory cannot be written",
+    () => {
+      assert.isUndefined(installComputerUseSkill("/dev/null/not-a-directory", "darwin"));
+    },
+  );
 });

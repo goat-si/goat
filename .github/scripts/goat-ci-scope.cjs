@@ -44,7 +44,7 @@ const WINDOWS_LABEL = "ci:windows";
 const LANES = ["all", "server", "memory-growth", "windows", "quick"];
 /**
  * Platform-sensitive tests the Windows job runs, as path prefixes. Each is both a Vitest filter for
- * the job and a trigger: a pull request changing a file under one selects test-windows (#1385).
+ * the job and a trigger: a pull request changing a file under one selects test-windows.
  */
 const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",

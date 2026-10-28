@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
 import { dbusMethodCall, dbusParseMessages, dbusSocketPath, dbusAuthLine } from "./CuaDbusProbe.ts";
@@ -151,7 +152,8 @@ describe("D-Bus wire format", () => {
   });
 });
 
-describe("live probes", () => {
+// quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("live probes", () => {
   it.live("tries every Xauthority cookie and keeps the one the X server accepts", () =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory;

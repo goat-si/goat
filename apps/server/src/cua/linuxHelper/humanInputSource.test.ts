@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   classifyDevices,
@@ -197,7 +198,8 @@ function lists() {
   };
 }
 
-describe("XInput2 human input", () => {
+// quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("XInput2 human input", () => {
   it("reads every device from a query reply, classes skipped", () => {
     expect(parseDevices(devicesReply(XVFB))).toEqual(XVFB);
   });
