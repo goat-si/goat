@@ -105,6 +105,26 @@ it("renders a signature for every schema shape tools declare", () => {
       ],
     }),
   ).toBe("(x.branches :a? :b?)");
+  // Alternatives that overlap keep a key required by all of them, and every value either allows.
+  const upload = (type: string, mimeType: object, required: ReadonlyArray<string>) => ({
+    type: "object",
+    properties: { type: { type: "string", enum: [type] }, name: { type: "string" }, mimeType },
+    required,
+  });
+  expect(
+    toSignature("x.union", {
+      type: "object",
+      properties: {
+        upload: {
+          anyOf: [
+            upload("image", { type: "string", enum: ["image/png"] }, ["name", "mimeType"]),
+            upload("file", { type: "string" }, ["type", "name", "mimeType"]),
+          ],
+        },
+      },
+      required: ["upload"],
+    }),
+  ).toBe("(x.union :upload{:type?=image|file :name :mimeType})");
   expect(toSignature("x.record", { type: "object", additionalProperties: {} })).toBe(
     "(x.record ...)",
   );

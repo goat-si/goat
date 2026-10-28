@@ -40,19 +40,51 @@ const hasFields = (schema: Schema) =>
   isSchema(schema.additionalProperties) ||
   branchesOf(schema).some((branch) => isSchema(branch) && isSchema(branch.properties));
 
+const requiredOf = (schema: Schema): ReadonlyArray<unknown> =>
+  Array.isArray(schema.required) ? schema.required : [];
+
+/** One key as its anyOf/oneOf alternatives declare it: a hint only when every one allows it. */
+const merged = (alternatives: ReadonlyArray<Schema>): Schema => {
+  const [first] = alternatives;
+  if (first === undefined || alternatives.length === 1) return first ?? {};
+  const values = alternatives.map((alternative) =>
+    Array.isArray(alternative.enum)
+      ? alternative.enum
+      : alternative.const === undefined
+        ? undefined
+        : [alternative.const],
+  );
+  if (values.every((list) => list !== undefined)) return { enum: [...new Set(values.flat())] };
+  if (alternatives.every(hasFields)) return { anyOf: alternatives };
+  const types = new Set(alternatives.map((alternative) => alternative.type));
+  return types.size === 1 ? { type: first.type } : {};
+};
+
 /**
- * An object's keys. Keys from anyOf/oneOf branches are optional, since no one branch is required;
- * a schema for additionalProperties means it takes keys no line can list.
+ * An object's keys, with those its anyOf/oneOf alternatives declare: a key is required when the
+ * object or every alternative requires it. A schema for additionalProperties means keys no line lists.
  */
 const fieldsOf = (schema: Schema) => {
-  const properties: Record<string, unknown> = isSchema(schema.properties)
-    ? { ...schema.properties }
-    : {};
-  for (const branch of branchesOf(schema))
-    if (isSchema(branch) && isSchema(branch.properties))
-      for (const [key, value] of Object.entries(branch.properties))
-        if (!Object.hasOwn(properties, key)) properties[key] = value;
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const own = isSchema(schema.properties) ? schema.properties : {};
+  const properties: Record<string, unknown> = { ...own };
+  const required = new Set(requiredOf(schema));
+  const alternatives = branchesOf(schema).filter(
+    (branch): branch is Schema => isSchema(branch) && branch.type !== "null",
+  );
+  const declaring = alternatives.filter((branch) => isSchema(branch.properties));
+  for (const key of new Set(
+    declaring.flatMap((branch) => Object.keys(branch.properties as Schema)),
+  ))
+    if (!Object.hasOwn(own, key))
+      properties[key] = merged(
+        declaring.flatMap((branch) => {
+          const value = (branch.properties as Schema)[key];
+          return isSchema(value) ? [unwrap(value)] : [];
+        }),
+      );
+  const [first, ...rest] = alternatives.map(requiredOf);
+  for (const key of declaring.length === 0 ? [] : (first ?? []))
+    if (rest.every((list) => list.includes(key))) required.add(key);
   return { properties, required, open: isSchema(schema.additionalProperties) };
 };
 
