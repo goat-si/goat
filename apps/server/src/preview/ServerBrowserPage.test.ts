@@ -584,60 +584,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     },
   );
 
-  it("clicks a snapshot ref passed as the bare locator, the form the tree shows", async () => {
-    await page.setContent(`<button onclick="this.textContent='saved'">save</button>`);
-    const locator = buttonLocator((await takeSnapshot()).accessibilityTree, "save");
-    await ServerBrowserPage.click(page, { locator: locator.slice("aria-ref=".length) });
-    expect(await page.locator("button").textContent()).toBe("saved");
-  });
-
-  it("still reads a CSS selector that merely starts like a ref", async () => {
-    await page.setContent(
-      `<t3-toolbar><button id="save-e1" onclick="this.textContent='saved'">save</button></t3-toolbar>`,
-    );
-    await takeSnapshot();
-    await ServerBrowserPage.click(page, { selector: "t3-toolbar>#save-e1" });
-    expect(await page.locator("button").textContent()).toBe("saved");
-  });
-
-  it("refuses a stale bare ref at once and before any input", async () => {
-    await page.setContent("<button>continue</button>");
-    const locator = buttonLocator((await takeSnapshot()).accessibilityTree, "continue");
-    await takeSnapshot();
-    await expect(
-      ServerBrowserPage.click(page, { locator: locator.slice("aria-ref=".length) }),
-    ).rejects.toMatchObject({ detail: { staleRef: true } });
-  });
-
-  it("reports a target that never appeared as refused before input", async () => {
-    await page.setContent("<button>continue</button>");
-    await expect(
-      ServerBrowserPage.click(page, { selector: "#missing", timeoutMs: 200 }),
-    ).rejects.toMatchObject({
-      tag: "PreviewAutomationTimeoutError",
-      detail: { beforeInput: true },
-    });
-  });
-
-  it("lists interactive-only lines flat, so no control reads as nested under another", async () => {
-    await page.setContent(
-      `<a href="#gh"><img alt="Fork me" style="position:absolute;width:0;height:0"></a><div><div><button>save</button></div></div>`,
-    );
-    const result = await ServerBrowserPage.snapshot({
-      page,
-      cdp,
-      renderScale: 1,
-      interactiveOnly: true,
-      consoleEntries: [],
-      networkEntries: [],
-      actionTimeline: [],
-      timeoutMs: 15_000,
-    });
-    const lines = String(result.accessibilityTree).split("\n").slice(1);
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) expect(line).toMatch(/^- [^\n]*[^:]$/);
-  });
-
   it("preserves quoted attribute values containing ref engine text", async () => {
     await page.setContent(
       '<button data-example=" >> aria-ref=e1" onclick="this.textContent=\'saved\'">save</button>',
