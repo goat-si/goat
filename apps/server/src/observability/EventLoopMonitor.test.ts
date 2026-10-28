@@ -49,37 +49,39 @@ const stallLog = { filePath: "/unused/stalls.ndjson", maxBytes: 262144 };
 const runtimeStall = { ...stalled, delayMaxNs: ms(7_000), activeMs: 7_000 };
 
 it.effect.each([
-  ["stalled", runtimeStall],
-  ["healthy", { ...stalled, delayMaxNs: ms(1_000), activeMs: 1 }],
-] as const)("persists the %s startup sample without a reconnect notice", (label, readings) =>
-  Effect.gen(function* () {
-    const lines = yield* Queue.unbounded<string>();
-    let first = true;
-    yield* Effect.gen(function* () {
-      const monitor = yield* EventLoopMonitor.EventLoopMonitor;
-      yield* TestClock.adjust("30 seconds");
-      assert.equal(yield* Queue.size(lines), 1, "startup evidence must be persisted");
-      const line = yield* Queue.take(lines);
-      assert.include(line, '"phase":"startup"');
-      if (label === "healthy") assert.include(line, '"delayMaxMs":0');
-      assert.isUndefined(yield* monitor.latestStall);
-      assert.isUndefined(yield* monitor.latestNoticeableStall);
-    }).pipe(
-      Effect.provide(
-        EventLoopMonitor.layerWith(
-          Effect.succeed(
-            Effect.sync(() => {
-              const next = first ? readings : { ...readings, delayMaxNs: ms(1_000), activeMs: 0 };
-              first = false;
-              return next;
-            }),
+  { label: "stalled", readings: runtimeStall },
+  { label: "healthy", readings: { ...stalled, delayMaxNs: ms(1_000), activeMs: 1 } },
+] as const)(
+  "persists the $label startup sample without a reconnect notice",
+  ({ label, readings }) =>
+    Effect.gen(function* () {
+      const lines = yield* Queue.unbounded<string>();
+      let first = true;
+      yield* Effect.gen(function* () {
+        const monitor = yield* EventLoopMonitor.EventLoopMonitor;
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(yield* Queue.size(lines), 1, "startup evidence must be persisted");
+        const line = yield* Queue.take(lines);
+        assert.include(line, '"phase":"startup"');
+        if (label === "healthy") assert.include(line, '"delayMaxMs":0');
+        assert.isUndefined(yield* monitor.latestStall);
+        assert.isUndefined(yield* monitor.latestNoticeableStall);
+      }).pipe(
+        Effect.provide(
+          EventLoopMonitor.layerWith(
+            Effect.succeed(
+              Effect.sync(() => {
+                const next = first ? readings : { ...readings, delayMaxNs: ms(1_000), activeMs: 0 };
+                first = false;
+                return next;
+              }),
+            ),
+            stallLog,
+            (line) => Queue.offer(lines, line).pipe(Effect.asVoid),
           ),
-          stallLog,
-          (line) => Queue.offer(lines, line).pipe(Effect.asVoid),
         ),
-      ),
-    );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("publishes stall state and serves reconnects while its sink is blocked", () =>
