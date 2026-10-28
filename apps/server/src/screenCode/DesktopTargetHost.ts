@@ -109,7 +109,21 @@ const refusalText = (
       .find((text) => text !== undefined);
   return said === undefined || said.length <= 1000 ? said : `${said.slice(0, 999)}…`;
 };
+/** The driver's own effect and code, kept on a failed call's receipt beside GOAT's error code. */
+const driverEvidence = (structured: Record<string, unknown> | undefined) => {
+  const effect = string(structured?.effect);
+  const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  return [
+    ...(effect === undefined ? [] : [`driver:effect=${effect.slice(0, 80)}`]),
+    ...(code === undefined ? [] : [`driver:code=${code.slice(0, 80)}`]),
+  ];
+};
 const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
+  const error = classifyDriverError(reply);
+  const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
+  return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
+};
+const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
   const result = object(reply.result);

@@ -334,6 +334,8 @@ export const ScreenRunError = Schema.Struct({
   receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt).check(Schema.isMaxLength(16))),
   nextStep: text(1024),
   message: Schema.optionalKey(text(200)),
+  /** What the driver said of the call, such as its effect and code, for the call's receipt. */
+  evidence: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(16))),
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 

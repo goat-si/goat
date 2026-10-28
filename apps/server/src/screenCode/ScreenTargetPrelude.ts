@@ -24,7 +24,7 @@ class ScreenError extends Error {
     this.code = code;
     this.nothingSent = nothingSent;
     if (host)
-      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'receipts'])
+      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'evidence', 'receipts'])
         if (host[key] !== undefined) this[key] = host[key];
   }
 }

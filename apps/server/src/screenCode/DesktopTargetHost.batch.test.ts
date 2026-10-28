@@ -101,8 +101,18 @@ it.live("a refused step stops the batch, and the cell sees which clicks ran", ()
     ),
   });
   return Effect.gen(function* () {
-    const result = yield* runCell(`${BIND} ${clicks(3)} ${SETTLED}`);
-    expect(result.value).toEqual(["confirmed", "permission_denied:true", "not_run:true"]);
+    const result = yield* runCell(
+      `${BIND} ${clicks(3)} const settled = await Promise.allSettled(clicks); return settled.map((r) => r.status === 'fulfilled' ? r.value.verdict : [r.reason.code, r.reason.nothingSent, r.reason.evidence ?? []]);`,
+    );
+    // The refused step keeps the driver's own effect and code beside GOAT's error code.
+    const said = ["driver:effect=refused", "driver:code=outside_scope"];
+    expect(result.value).toEqual([
+      "confirmed",
+      ["permission_denied", true, said],
+      ["not_run", true, []],
+    ]);
+    const refused = result.journal.find((entry) => entry.receipt.category === "refused");
+    expect(refused?.receipt.evidence).toEqual(expect.arrayContaining(said));
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });

@@ -388,7 +388,7 @@ export class ScreenHostBridge {
         safety.possibleCommit ? "unknown_outcome" : "refused",
         safety.possibleCommit ? "unknown" : "settled",
         error.effectStarted,
-        notRunEvidence(error),
+        [...notRunEvidence(error), ...(error.evidence ?? [])],
         safety,
         refusalOf(error),
       );
@@ -554,7 +554,7 @@ export class ScreenHostBridge {
         result.failure.effectStarted ? "unknown_outcome" : "refused",
         result.failure.effectStarted ? "unknown" : "settled",
         result.failure.effectStarted,
-        [],
+        result.failure.evidence ?? [],
         safety,
         refusalOf(result.failure),
       );

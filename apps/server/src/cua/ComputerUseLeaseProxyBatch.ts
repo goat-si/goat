@@ -30,14 +30,7 @@ const acceptsAppScope = (toolList: unknown, name: string): boolean => {
   return record(record(record(tool?.inputSchema)?.properties)?.app_scope) !== undefined;
 };
 
-/**
- * A proxy's scoping of batch calls.
- *
- * @param listTools Asks one child for its tools/list result.
- * @param grantApps The apps the control's grant names, as it spells them; undefined for the whole
- *   screen.
- * @param current The child calls go to now, undefined while there is none.
- */
+/** grantApps: the grant's apps as it spells them, undefined for the whole screen. */
 export const makeProxyBatchScope = (
   listTools: (send: Send) => Effect.Effect<unknown>,
   grantApps: () => ReadonlyArray<string> | undefined,
