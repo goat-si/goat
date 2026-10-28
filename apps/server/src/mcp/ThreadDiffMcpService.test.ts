@@ -25,10 +25,12 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const queried = yield* Ref.make(0);
+      // Tabs double when JSON-escaped, so raw bytes alone would overrun the budget.
+      const content = yield* Ref.make("\t".repeat(300 * 1024));
       const diff = (threadId: ThreadId, toTurnCount: number) =>
         Ref.update(queried, (count) => count + 1).pipe(
-          // Tabs double when JSON-escaped, so raw bytes alone would overrun the budget.
-          Effect.as({ threadId, fromTurnCount: 0, toTurnCount, diff: "\t".repeat(300 * 1024) }),
+          Effect.andThen(Ref.get(content)),
+          Effect.map((text) => ({ threadId, fromTurnCount: 0, toTurnCount, diff: text })),
         );
       const service = yield* ThreadDiffMcpService.ThreadDiffMcpService.pipe(
         Effect.provide(
@@ -70,5 +72,14 @@ it.effect(
       expect(read.truncated).toBe(true);
       expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(256 * 1024);
       expect(read.diff.length).toBeGreaterThan(100 * 1024);
+      // A diff that exactly fills the budget is returned whole, still within it.
+      const rest = Buffer.byteLength(JSON.stringify({ ...read, diff: "", truncated: true }));
+      yield* Ref.set(content, "+".repeat(256 * 1024 - rest));
+      const whole = yield* service.turnDiff(scope, {
+        threadId: shown,
+        fromTurnCount: 0,
+        toTurnCount: 4,
+      });
+      expect(Buffer.byteLength(JSON.stringify(whole), "utf8")).toBeLessThanOrEqual(256 * 1024);
     }),
 );

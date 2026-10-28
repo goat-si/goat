@@ -103,6 +103,22 @@ describe("pull request reads within the budget", () => {
         });
         expect([thread.comments.length, thread.commentsOmitted]).toEqual([0, 1]);
         within(thread);
+        // A target whose echo alone overruns the budget is refused instead of answered oversized.
+        const longTarget = { url: `${target.url}?${"q".repeat(300 * 1024)}` };
+        const refusedActivity = yield* harness
+          .call("goat_pull_request_activity", longTarget)
+          .pipe(Effect.flip);
+        const refusedThread = yield* harness
+          .call("goat_pull_request_review_thread", {
+            ...longTarget,
+            threadId: "thread-1",
+            cursor: "start",
+          })
+          .pipe(Effect.flip);
+        expect([refusedActivity._tag, refusedThread._tag]).toEqual([
+          "PullRequestReadTooLargeError",
+          "PullRequestReadTooLargeError",
+        ]);
         const file = yield* harness.call("goat_pull_request_file", {
           ...target,
           changeType: "change",
@@ -133,7 +149,7 @@ describe("pull request reads within the budget", () => {
         const many = yield* harness
           .call("goat_pull_request_search", { state: "open", query: "many" })
           .pipe(Effect.flip);
-        expect(many._tag).toBe("PullRequestSearchTooLargeError");
+        expect(many._tag).toBe("PullRequestReadTooLargeError");
       }),
   );
 });

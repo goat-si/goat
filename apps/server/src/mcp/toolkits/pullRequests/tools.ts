@@ -216,12 +216,13 @@ export class PullRequestReadFailedError extends Schema.TaggedError<PullRequestRe
   }
 }
 
-export class PullRequestSearchTooLargeError extends Schema.TaggedError<PullRequestSearchTooLargeError>()(
-  "PullRequestSearchTooLargeError",
-  {},
+/** The answer cannot fit the read budget; detail says how to ask for less. */
+export class PullRequestReadTooLargeError extends Schema.TaggedError<PullRequestReadTooLargeError>()(
+  "PullRequestReadTooLargeError",
+  { detail: Schema.String },
 ) {
   override get message(): string {
-    return "These search results exceed 256 KiB. Narrow with projectId, query or filters, or lower limit.";
+    return this.detail;
   }
 }
 
@@ -244,7 +245,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestRepositoryAmbiguousError,
   PullRequestGuideFailedError,
   PullRequestReadFailedError,
-  PullRequestSearchTooLargeError,
+  PullRequestReadTooLargeError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 

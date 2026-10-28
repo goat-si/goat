@@ -322,7 +322,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PullRequestThreadNotFoundError: before("not_found"),
   PullRequestProjectNotFoundError: before("not_found"),
   PullRequestRepositoryAmbiguousError: before("invalid_request"),
-  PullRequestSearchTooLargeError: before("invalid_request"),
+  PullRequestReadTooLargeError: before("invalid_request"),
   PullRequestNotOpenError: before("failed_precondition"),
   PullRequestWatchFromSubagentError: before("failed_precondition"),
   PullRequestLinkFailedError: c("internal"),

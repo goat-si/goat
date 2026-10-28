@@ -39,7 +39,8 @@ const make = Effect.gen(function* () {
       message: `Unable to read the thread's diff: ${error.message}`,
     });
   const clipped = (diff: typeof ThreadTurnDiff.Type): ThreadDiffRead => {
-    const rest = bytesOf({ ...diff, diff: "", truncated: true });
+    // false is the longer flag, so either answer fits.
+    const rest = bytesOf({ ...diff, diff: "", truncated: false });
     const cut = clipJsonText(diff.diff, READ_BUDGET_BYTES - rest);
     return { ...diff, diff: cut.text, truncated: cut.truncated };
   };

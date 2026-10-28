@@ -47,7 +47,7 @@ import {
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
   PullRequestReadFailedError,
-  PullRequestSearchTooLargeError,
+  PullRequestReadTooLargeError,
   PullRequestRepositoryAmbiguousError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
@@ -206,6 +206,8 @@ function projectForPullRequest(
 const SEARCH_LIMIT = 10;
 // Measured in place of each omitted count, so the shell never grows after the lists are fitted.
 const WIDEST_COUNT = 999_999_999;
+const TARGET_TOO_LARGE =
+  "This pull request target is too long to answer within 256 KiB. Pass a URL without its query, or repository and number.";
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -667,6 +669,8 @@ const make = Effect.gen(function* () {
           reviewersOmitted: WIDEST_COUNT,
           reactionsOmitted: WIDEST_COUNT,
         };
+        if (bytesOf(shell) > READ_BUDGET_BYTES)
+          return yield* new PullRequestReadTooLargeError({ detail: TARGET_TOO_LARGE });
         // Every list shares what the shell leaves, in this order; each says how many it left out.
         let left = READ_BUDGET_BYTES - bytesOf(shell);
         const take = <A>(items: ReadonlyArray<A>) => {
@@ -710,6 +714,8 @@ const make = Effect.gen(function* () {
           nextCursor: page.nextCursor,
           commentsOmitted: WIDEST_COUNT,
         };
+        if (bytesOf(shell) > READ_BUDGET_BYTES)
+          return yield* new PullRequestReadTooLargeError({ detail: TARGET_TOO_LARGE });
         const comments = fitItems(page.comments, READ_BUDGET_BYTES - bytesOf(shell));
         return {
           ...identityOf(target),
@@ -760,7 +766,10 @@ const make = Effect.gen(function* () {
           nextCursors: result.nextCursors,
         };
         if (fitItems([page], READ_BUDGET_BYTES).omitted > 0)
-          return yield* new PullRequestSearchTooLargeError({});
+          return yield* new PullRequestReadTooLargeError({
+            detail:
+              "These search results exceed 256 KiB. Narrow with projectId, query or filters, or lower limit.",
+          });
         return page;
       }),
     ),
