@@ -33,6 +33,7 @@ import {
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
+import { dragBetween, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -997,14 +998,11 @@ export const drag = async (
   const deadline = actionDeadline(timeout, gate.deadline);
   if (input.from && input.to) {
     await pointer(input.from, "move");
-    remaining(deadline);
-    gate();
-    await page.mouse.move(input.from.x, input.from.y);
-    await page.mouse.down();
-    await page.mouse.move(input.to.x, input.to.y, { steps: input.steps ?? 10 });
-    await page.mouse.up();
-    await pointer(input.to, "move");
-    return;
+    await dragBetween(page, { ...input, from: input.from, to: input.to }, () => {
+      remaining(deadline);
+      gate();
+    });
+    return pointer(input.to, "move");
   }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
@@ -1035,9 +1033,7 @@ export const scroll = async (
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
   if (input.x !== undefined && input.y !== undefined) {
     gate();
-    await page.mouse.move(input.x, input.y);
-    await page.mouse.wheel(delta[0], delta[1]);
-    return;
+    return wheelAt(page, { x: input.x, y: input.y }, delta);
   }
   const locator = targetLocator(page, input);
   if (locator === null) {
