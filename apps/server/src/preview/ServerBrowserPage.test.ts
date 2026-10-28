@@ -958,6 +958,7 @@ describe("a gate reused across a click's presses", () => {
       on: () => undefined,
       off: () => undefined,
       url: () => "about:blank",
+      mainFrame: () => undefined,
       evaluateHandle: async () => Promise.reject(new Error("no document")),
       mouse: {
         click: async () => {

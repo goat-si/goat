@@ -32,7 +32,7 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
-import { type ClickEffect, watchClick } from "./clickEffect.ts";
+import { aimClick, type ClickEffect, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
   narrowTree,
@@ -730,7 +730,8 @@ export const click = async (
     onDialog = () => resolve("dialog");
     page.once("dialog", onDialog);
   });
-  const watch = await watchClick(page);
+  const aim = await aimClick(page, locator, point);
+  const watch = await watchClick(page, aim.frame);
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
@@ -752,7 +753,7 @@ export const click = async (
       .then(() => page.mouse.up({ button, clickCount: count }));
   };
   try {
-    await watch.arm(point);
+    await watch.arm(aim);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
       const pressed = press(count);
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
