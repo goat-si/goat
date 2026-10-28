@@ -143,9 +143,10 @@ export interface StallLogOptions {
   readonly maxBytes: number;
 }
 
-const layerWith = (
+export const layerWith = (
   makeSampler: Effect.Effect<Effect.Effect<EventLoopReadings>, never, Scope.Scope>,
   stallLog: StallLogOptions,
+  writeOverride?: (line: string) => Effect.Effect<void, unknown>,
 ) =>
   Layer.effect(
     EventLoopMonitor,
@@ -160,7 +161,7 @@ const layerWith = (
       const latestStall = yield* Ref.make<
         { readonly delayMs: number; readonly atMs: number } | undefined
       >(undefined);
-      const stallSink = yield* Effect.try(
+      const stallSink = yield* (writeOverride === undefined ? Effect.try(
         () =>
           new RotatingFileSink({
             filePath: stallLog.filePath,
@@ -168,7 +169,7 @@ const layerWith = (
             maxFiles: 1,
             throwOnError: true,
           }),
-      ).pipe(
+      ) : Effect.succeed(undefined)).pipe(
         Effect.catch(() =>
           Effect.logWarning("event loop stall log unavailable", {
             filePath: stallLog.filePath,
@@ -210,9 +211,11 @@ const layerWith = (
         yield* Effect.logWarning(`event loop stalled for ${delayMaxMs} ms`).pipe(
           Effect.withSpan("server.eventLoop.stall", { root: true, level: "Warn", attributes }),
         );
-        if (stallSink !== undefined) {
+        if (stallSink !== undefined || writeOverride !== undefined) {
           yield* encodeStallLine({ time: detectedAt, ...attributes }).pipe(
-            Effect.flatMap((line) => Effect.try(() => stallSink.write(`${line}\n`))),
+            Effect.flatMap((line) => writeOverride !== undefined
+              ? writeOverride(`${line}\n`)
+              : Effect.try(() => stallSink?.write(`${line}\n`))),
             Effect.catch(() =>
               Effect.logWarning("event loop stall log write failed", {
                 filePath: stallLog.filePath,
