@@ -2,6 +2,11 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { vi } from "vite-plus/test";
+import { migrationManifest } from "./Migrations.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -51,3 +56,96 @@ it.effect("drops planner statistics a database already has", () => {
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 });
+
+it.effect("runs file database opening and migration SQL away from the server thread", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-writer-migration-" });
+    const dbPath = path.join(directory, "state.sqlite");
+    let nativeCalls = 0;
+    using _prepare = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(() => {
+        nativeCalls++;
+        throw new Error("Main-thread SQLite must not run in worker persistence mode");
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const applied = yield* sql<{ migration_id: number }>`
+        SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id DESC LIMIT 1`;
+      assert.isAbove(migrationManifest.length, 0);
+      const migrationHead = Math.max(...migrationManifest.map(([id]) => id));
+      assert.equal(applied[0]?.migration_id, migrationHead);
+      yield* sql`CREATE TABLE writer_roundtrip(value TEXT)`;
+      yield* sql`INSERT INTO writer_roundtrip VALUES ('kept')`;
+      assert.deepEqual(yield* sql`SELECT value FROM writer_roundtrip`, [{ value: "kept" }]);
+    }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
+    assert.equal(nativeCalls, 0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+import * as NodeWorkerThreads from "node:worker_threads";
+
+it.effect("does not receipt a failed worker migration and reopens safely", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-failed-migration-" });
+    const filename = path.join(directory, "state.sqlite");
+    const receipts = () => {
+      const db = new NodeSqlite.DatabaseSync(filename, { readOnly: true });
+      try {
+        if (
+          db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'effect_sql_migrations'").get() ===
+          undefined
+        )
+          return undefined;
+        return Number(
+          db.prepare("SELECT COUNT(*) AS count FROM effect_sql_migrations").get()?.count,
+        );
+      } finally {
+        db.close();
+      }
+    };
+    let before: number | undefined;
+    const original = NodeWorkerThreads.Worker.prototype.postMessage;
+    using injecting = vi
+      .spyOn(NodeWorkerThreads.Worker.prototype, "postMessage")
+      .mockImplementation(function (this: NodeWorkerThreads.Worker, message, ...rest) {
+        if (
+          before === undefined &&
+          typeof message === "object" &&
+          message !== null &&
+          "sql" in message &&
+          typeof message.sql === "string" &&
+          /^\s*CREATE\s+TABLE\b/i.test(message.sql) &&
+          !message.sql.includes("effect_sql_migrations")
+        ) {
+          before = receipts();
+          if (before !== undefined)
+            return original.call(
+              this,
+              { ...message, sql: "SELECT deliberately_missing_migration_function()" },
+              ...rest,
+            );
+        }
+        return original.call(this, message, ...rest);
+      });
+    const failed = yield* Layer.build(SqlitePersistence.layerFromPath(filename)).pipe(
+      Effect.scoped,
+      Effect.result,
+    );
+    assert.equal(failed._tag, "Failure");
+    assert.isNumber(before);
+    assert.equal(receipts(), before);
+    injecting.mockRestore();
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.equal(
+        (yield* sql`SELECT MAX(migration_id) AS id FROM effect_sql_migrations`)[0]?.id,
+        Math.max(...migrationManifest.map(([id]) => id)),
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerFromPath(filename)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
