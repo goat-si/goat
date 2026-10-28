@@ -31,6 +31,26 @@ const context = (limits: ReturnType<typeof screenRunLimits>) => ({
   },
 });
 
+const supervisorFor = (
+  asset: { path: string; sha256: string },
+  limits: ReturnType<typeof screenRunLimits>,
+  hostBridge: ScreenHostBridge,
+) =>
+  createScreenRunSupervisor({
+    asset,
+    limits,
+    hostBridge,
+    // Only the child's own wall limit ends the cell, never the supervisor's backstop timer.
+    scheduleDeadline: () => () => {},
+    invocation: {
+      command: process.execPath,
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+    },
+    // The supervisor callback enters Effect from a child-process event listener.
+    // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests
+    runCallback: (effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined),
+  });
+
 it.live("a cell that reaches its deadline still returns the calls it finished", () =>
   Effect.gen(function* () {
     const asset = yield* resolveScreenRuntimeAsset("dev");
@@ -57,20 +77,7 @@ it.live("a cell that reaches its deadline still returns the calls it finished", 
             ? Effect.succeed({ category: "confirmed" as const, evidence: ["driver:acted"] })
             : Deferred.succeed(offered, undefined).pipe(Effect.andThen(Effect.never)),
     });
-    const supervisor = createScreenRunSupervisor({
-      asset,
-      limits,
-      hostBridge: bridge,
-      // Only the child's own wall limit ends the cell, never the supervisor's backstop timer.
-      scheduleDeadline: () => () => {},
-      invocation: {
-        command: process.execPath,
-        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-      },
-      // The supervisor callback enters Effect from a child-process event listener.
-      // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests
-      runCallback: (effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined),
-    });
+    const supervisor = supervisorFor(asset, limits, bridge);
     const result = yield* supervisor.runCell(
       { runId: "r", turnId: "t", context: context(limits) },
       "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.press('Escape'); await app.press('Escape'); return true;",
