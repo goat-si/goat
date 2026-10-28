@@ -8,7 +8,7 @@ import { ComputerUsePrimitiveRequest } from "@goat/contracts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import { context, DriverError, fixture, NotStarted } from "./DesktopTargetHost.testkit.ts";
+import { context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 
 const cellService = (host: ReturnType<typeof fixture>["host"]) =>
   ScreenRunService.layerWithRuntime({
@@ -38,48 +38,19 @@ const SETTLED =
   "return (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code + ':' + r.reason.nothingSent);";
 const clicks = (count: number) =>
   `const clicks = Array.from({ length: ${count} }, () => app.click('Apply'));`;
-/** A run_steps answer: each step's report as the driver gives it (cua-driver-core batch_tools.rs). */
-const ranSteps = (reports: ReadonlyArray<Record<string, unknown>>, total: number) => ({
-  ok: reports.every((report) => report.ok !== false),
-  total,
-  executed: reports.length,
-  failed_step: reports.some((report) => report.ok === false) ? reports.length - 1 : null,
-  steps: reports.map((report, index) => ({ index, tool: "click", ...report })),
-});
-
-it.live("eight unawaited element clicks on one window reach the driver as one run_steps", () => {
-  const { host, sent } = fixture({
-    run_steps: (args: { steps: ReadonlyArray<unknown> }) =>
-      ranSteps(
-        args.steps.map((_, index) => ({
-          ok: true,
-          effect: index === args.steps.length - 1 ? "confirmed" : "unverifiable",
-        })),
-        args.steps.length,
-      ),
-  });
+// Until the driver bounds each run_steps step by its own deadline, a group's element input goes
+// one call at a time, so one call that never answers costs only its own cap.
+it.live("eight unawaited element clicks on one window reach the driver one at a time", () => {
+  const { host, sent } = fixture();
   return Effect.gen(function* () {
     const result = yield* runCell(`${BIND} ${clicks(8)} ${SETTLED}`);
-    expect(result.value).toEqual([...Array.from({ length: 7 }, () => "unverifiable"), "confirmed"]);
-    // Before batching each click was its own driver call: eight round trips; now one.
+    expect(result.value).toEqual(Array.from({ length: 8 }, () => "confirmed"));
     expect(sent.map((entry) => entry.tool)).toEqual([
       "list_apps",
       "list_windows",
       "get_window_state",
-      "run_steps",
+      ...Array.from({ length: 8 }, () => "click"),
     ]);
-    const step = {
-      tool: "click",
-      args: { pid: 42, window_id: 7, element_token: "snapshot:1", delivery_mode: "background" },
-    };
-    expect(sent[3]?.args).toEqual({
-      pid: 42,
-      window_id: 7,
-      verify: "checkpoint",
-      app_scope: { apps: ["org.example.Editor"], delivery: "background" },
-      steps: Array.from({ length: 8 }, () => step),
-    });
-    // Each click keeps its own receipt.
     expect(result.journal.filter((entry) => entry.receipt.method === "click")).toHaveLength(8);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
@@ -88,13 +59,7 @@ it.live("eight unawaited element clicks on one window reach the driver as one ru
 it.live(
   "element typing started together past the primitive args cap goes one call at a time",
   () => {
-    const { host, sent } = fixture({
-      run_steps: (args: { steps: ReadonlyArray<unknown> }) =>
-        ranSteps(
-          args.steps.map(() => ({ ok: true, effect: "confirmed" })),
-          args.steps.length,
-        ),
-    });
+    const { host, sent } = fixture();
     // What the lease stream encodes for each call; it rejects args over the primitive cap.
     const primitive = Schema.decodeUnknownSync(ComputerUsePrimitiveRequest);
     return Effect.gen(function* () {
@@ -125,87 +90,27 @@ it.live(
   },
 );
 
-it.live("a refused step stops the batch, and the cell sees which clicks ran", () => {
-  const { host } = fixture({
-    run_steps: new DriverError(
-      ranSteps(
-        [
-          { ok: true, effect: "confirmed" },
-          {
-            ok: false,
+it.live("a refused click stops the group, and the cell sees which clicks ran", () => {
+  let clicked = 0;
+  const { host, sent } = fixture({
+    click: () =>
+      ++clicked === 1
+        ? { effect: "confirmed", evidence: ["driver:acted"] }
+        : new DriverError({
             effect: "refused",
             code: "outside_scope",
-            message: "click: refused by the batch scope",
-          },
-        ],
-        3,
-      ),
-    ),
+            message: "click: refused by the scope",
+          }),
   });
   return Effect.gen(function* () {
     const result = yield* runCell(
-      `${BIND} ${clicks(3)} const settled = await Promise.allSettled(clicks); return settled.map((r) => r.status === 'fulfilled' ? r.value.verdict : [r.reason.code, r.reason.nothingSent, r.reason.evidence ?? []]);`,
+      `${BIND} ${clicks(3)} const settled = await Promise.allSettled(clicks); return settled.map((r) => r.status === 'fulfilled' ? r.value.verdict : [r.reason.code, r.reason.nothingSent]);`,
     );
-    // The refused step keeps the driver's own effect and code beside GOAT's error code.
-    const said = ["driver:effect=refused", "driver:code=outside_scope"];
-    expect(result.value).toEqual([
-      "confirmed",
-      ["permission_denied", true, said],
-      ["not_run", true, []],
-    ]);
-    const refused = result.journal.find((entry) => entry.receipt.category === "refused");
-    expect(refused?.receipt.evidence).toEqual(expect.arrayContaining(said));
+    expect(result.value).toEqual(["confirmed", ["permission_denied", true], ["not_run", true]]);
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(2);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
-
-it.live.each([
-  ["a reply cut to its message", { message: "Driver reply exceeded the primitive channel limit." }],
-  // It ran three steps but reports one, with no failure to say where it stopped.
-  [
-    "fewer step reports than it ran",
-    { ...ranSteps([{ ok: true, effect: "confirmed" }], 3), executed: 3 },
-  ],
-] as const)("%s leaves every click possibly run", ([, answer]) => {
-  const { host } = fixture({ run_steps: answer });
-  return Effect.gen(function* () {
-    const result = yield* runCell(`${BIND} ${clicks(3)} ${SETTLED}`);
-    const value = result.value as ReadonlyArray<string>;
-    expect(value).toHaveLength(3);
-    // None of them may be reported as not sent.
-    for (const settled of value) expect(settled).toMatch(/:false$/);
-    yield* finish;
-  }).pipe(Effect.provide(cellService(host)));
-});
-
-it.live(
-  "a driver whose run_steps takes no app_scope gets the clicks one at a time, and is not asked again",
-  () => {
-    const { host, sent } = fixture({
-      run_steps: new NotStarted({ refused: "targetRefused", detail: "outside_manifest" }),
-    });
-    return Effect.gen(function* () {
-      const first = yield* runCell(`${BIND} ${clicks(2)} ${SETTLED}`);
-      expect(first.value).toEqual(["confirmed", "confirmed"]);
-      const second = yield* runCell(`${BIND} ${clicks(2)} ${SETTLED}`);
-      expect(second.value).toEqual(["confirmed", "confirmed"]);
-      expect(sent.map((entry) => entry.tool).filter((tool) => tool !== "get_window_state")).toEqual(
-        [
-          "list_apps",
-          "list_windows",
-          "run_steps",
-          "click",
-          "click",
-          "list_apps",
-          "list_windows",
-          "click",
-          "click",
-        ],
-      );
-      yield* finish;
-    }).pipe(Effect.provide(cellService(host)));
-  },
-);
 
 it.live(
   "a group the runtime cannot take whole is refused whole, without waiting for its deadline",
@@ -229,18 +134,12 @@ it.live(
 );
 
 it.live("a batch group takes one pending place, so a run longer than one group still runs", () => {
-  const { host, sent } = fixture({
-    run_steps: (args: { steps: ReadonlyArray<unknown> }) =>
-      ranSteps(
-        args.steps.map(() => ({ ok: true, effect: "confirmed" })),
-        args.steps.length,
-      ),
-  });
+  const { host, sent } = fixture();
   return Effect.gen(function* () {
     // Seventeen is one group of sixteen and one more click, under a limit of four pending calls.
     const result = yield* runCell(`${BIND} ${clicks(17)} ${SETTLED}`);
     expect(result.value).toEqual(Array.from({ length: 17 }, () => "confirmed"));
-    expect(sent.map((entry) => entry.tool).slice(3)).toEqual(["run_steps", "click"]);
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(17);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
@@ -260,31 +159,10 @@ it.live("a refused group sends nothing and, like any refusal, leaves the cell fr
       settled: [...Array.from({ length: 16 }, () => "refused:true"), "confirmed"],
       after: "confirmed",
     });
-    expect(
-      sent.map((entry) => entry.tool).filter((tool) => tool === "click" || tool === "run_steps"),
-    ).toEqual(["click", "click"]);
-    yield* finish;
-  }).pipe(Effect.provide(cellService(host)));
-});
-
-it.live("a step the driver calls a no-op keeps the driver's words in its error and receipt", () => {
-  const { host } = fixture({
-    run_steps: ranSteps(
-      [
-        { ok: true, effect: "suspected_noop", code: "no_change" },
-        { ok: true, effect: "confirmed" },
-      ],
-      2,
-    ),
-  });
-  return Effect.gen(function* () {
-    const result = yield* runCell(
-      `${BIND} ${clicks(2)} return (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.evidence ?? []);`,
-    );
-    const said = ["driver:effect=suspected_noop", "driver:code=no_change"];
-    expect(result.value).toEqual([said, "confirmed"]);
-    const failed = result.journal.find((entry) => entry.receipt.method === "click");
-    expect(failed?.receipt.evidence).toEqual(expect.arrayContaining(said));
+    expect(sent.map((entry) => entry.tool).filter((tool) => tool === "click")).toEqual([
+      "click",
+      "click",
+    ]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
