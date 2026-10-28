@@ -9,7 +9,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -45,7 +44,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
-import { NOW_MS, DAY_MS, at, shell } from "./storageCleanup.testFixtures.ts";
+import { NOW_MS, DAY_MS, at, shell, allocatedBytes } from "./storageCleanup.testFixtures.ts";
 
 describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
@@ -166,16 +165,6 @@ describe("merged pull request cleanup", () => {
     expect(storageCleanupPullRequestMerged(pullRequest({ state: "open" }), integrated)).toBe(false);
   });
 });
-
-const allocatedBytes = (fs: FileSystem.FileSystem, file: string) =>
-  fs.stat(file).pipe(
-    Effect.map((stat) =>
-      Option.getOrElse(
-        Option.map(stat.blocks, (blocks) => Number(blocks) * 512),
-        () => Number(stat.size),
-      ),
-    ),
-  );
 
 const cleanupFixture = (
   storageCleanup: StorageCleanupSettings = {
@@ -1738,21 +1727,30 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
-  it.live("serializes concurrent requests and returns each run's report", () =>
+  it.live("coalesces concurrent manual requests into one fresh sweep after active work", () =>
     runCleanupTest(
       Effect.gen(function* () {
-        const { service } = yield* cleanupFixture();
-        const reports = yield* Effect.all([service.runNow, service.runNow], {
-          concurrency: "unbounded",
-        });
-        yield* service.drain;
-        expect(
-          reports.flatMap((report) => report.entries).filter((entry) => entry.kind === "worktree"),
-        ).toMatchObject([{ outcome: "removed" }]);
-        expect(yield* service.latestReport).toEqual(reports[1]);
+        const fixture = yield* pausedMeasurementFixture();
+        const active = yield* fixture.service.runNow.pipe(Effect.forkChild);
+        yield* Deferred.await(fixture.measuring);
+        const pending = yield* Effect.forEach(Array.from({ length: 32 }), () =>
+          fixture.service.runNow.pipe(Effect.forkChild({ startImmediately: true })),
+        );
+        yield* Deferred.succeed(fixture.resume, undefined);
+        const activeReport = yield* Fiber.join(active);
+        const reports = yield* Effect.forEach(pending, Fiber.join);
+        yield* fixture.service.drain;
+        expect(reports[0]).not.toBe(activeReport);
+        expect(activeReport.entries.filter((entry) => entry.kind === "worktree")).toMatchObject([
+          { outcome: "removed" },
+        ]);
+        expect(reports[0]?.counts.removed).toBe(0);
+        expect(reports.every((report) => report === reports[0])).toBe(true);
+        expect(yield* fixture.service.latestReport).toBe(reports[0]);
       }),
     ),
   );
+
   it.live("aggregates expired artifacts and rotated logs while retaining current logs", () =>
     runCleanupTest(
       Effect.gen(function* () {

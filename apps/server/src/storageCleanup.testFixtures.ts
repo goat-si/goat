@@ -5,6 +5,19 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+
+export const allocatedBytes = (fs: FileSystem.FileSystem, file: string) =>
+  fs.stat(file).pipe(
+    Effect.map((stat) =>
+      Option.getOrElse(
+        Option.map(stat.blocks, (blocks) => Number(blocks) * 512),
+        () => Number(stat.size),
+      ),
+    ),
+  );
 
 export const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 export const DAY_MS = 24 * 60 * 60 * 1_000;

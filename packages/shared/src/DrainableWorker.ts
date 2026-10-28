@@ -5,15 +5,15 @@ import * as TxQueue from "effect/TxQueue";
 import * as TxRef from "effect/TxRef";
 
 export interface DrainableWorker<A> {
-  readonly enqueue: (item: A) => Effect.Effect<void>;
+  readonly enqueue: (item: A) => Effect.Effect<"accepted" | "full" | "closed">;
 
   readonly drain: Effect.Effect<void>;
 }
 
 /**
- * A finalizer shuts down the queue and drops queued items, so `drain` resolves after the scope
- * closes instead of waiting on them. An item that fails or dies is logged and skipped; the worker
- * keeps processing later items and `drain` still resolves.
+ * Scope closure drops queued items; `drain` still waits for active work. Item failures are logged.
+ * Capacity counts waiting items, excluding the active item; rejection never blocks.
+ * Bounded callers reconcile rejected work. Omission preserves unbounded admission.
  */
 export const makeDrainableWorker = Effect.fn("DrainableWorker.makeDrainableWorker")(function* <
   A,
@@ -21,16 +21,22 @@ export const makeDrainableWorker = Effect.fn("DrainableWorker.makeDrainableWorke
   R,
 >(
   process: (item: A) => Effect.Effect<void, E, R>,
+  options?: { readonly capacity: number },
 ): Effect.fn.Return<DrainableWorker<A>, never, Scope.Scope | R> {
+  if (options && (!Number.isSafeInteger(options.capacity) || options.capacity < 1)) {
+    return yield* Effect.die(new RangeError("Worker capacity must be a positive safe integer"));
+  }
   const outstanding = yield* TxRef.make(0);
-  const queue = yield* Effect.acquireRelease(TxQueue.unbounded<A>(), (queue) =>
-    // Uncount only the dropped items: an item still running uncounts itself,
-    // even when a parallel scope closes it after this finalizer.
-    TxQueue.clear(queue).pipe(
-      Effect.flatMap((dropped) => TxRef.update(outstanding, (n) => n - dropped.length)),
-      Effect.andThen(TxQueue.shutdown(queue)),
-      Effect.tx,
-    ),
+  const queue = yield* Effect.acquireRelease(
+    options ? TxQueue.dropping<A>(options.capacity) : TxQueue.unbounded<A>(),
+    (queue) =>
+      // Uncount only the dropped items: an item still running uncounts itself,
+      // even when a parallel scope closes it after this finalizer.
+      TxQueue.clear(queue).pipe(
+        Effect.flatMap((dropped) => TxRef.update(outstanding, (n) => n - dropped.length)),
+        Effect.andThen(TxQueue.shutdown(queue)),
+        Effect.tx,
+      ),
   );
 
   yield* TxQueue.take(queue).pipe(
@@ -57,11 +63,13 @@ export const makeDrainableWorker = Effect.fn("DrainableWorker.makeDrainableWorke
     Effect.tx,
   );
 
-  const enqueue = (element: A): Effect.Effect<boolean, never, never> =>
-    TxQueue.offer(queue, element).pipe(
-      Effect.tap((offered) => (offered ? TxRef.update(outstanding, (n) => n + 1) : Effect.void)),
-      Effect.tx,
-    );
+  // Admission runs for each producer event, so avoid a span per item.
+  const enqueue: DrainableWorker<A>["enqueue"] = Effect.fnUntraced(function* (element: A) {
+    if (!(yield* TxQueue.isOpen(queue))) return "closed" as const;
+    if (!(yield* TxQueue.offer(queue, element))) return "full" as const;
+    yield* TxRef.update(outstanding, (n) => n + 1);
+    return "accepted" as const;
+  }, Effect.tx);
 
   return { enqueue, drain } satisfies DrainableWorker<A>;
 });

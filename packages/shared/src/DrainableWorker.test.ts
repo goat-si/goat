@@ -19,6 +19,37 @@ const captureErrorLogs = () => {
 };
 
 describe("makeDrainableWorker", () => {
+  it.effect("rejects overflow without blocking and drains only accepted work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const processed: string[] = [];
+        const worker = yield* makeDrainableWorker(
+          (item: string) =>
+            Effect.gen(function* () {
+              if (item === "active") {
+                yield* Deferred.succeed(started, undefined);
+                yield* Deferred.await(release);
+              }
+              processed.push(item);
+            }),
+          { capacity: 1 },
+        );
+        yield* worker.enqueue("active");
+        yield* Deferred.await(started);
+        yield* worker.enqueue("queued");
+        expect(yield* worker.enqueue("overflow")).toBe("full");
+        yield* Deferred.succeed(release, undefined);
+        yield* worker.drain;
+        expect(processed).toEqual(["active", "queued"]);
+        expect(yield* worker.enqueue("after drain")).toBe("accepted");
+        yield* worker.drain;
+        expect(processed).toEqual(["active", "queued", "after drain"]);
+      }),
+    ),
+  );
+
   it.effect("logs a failed or defective item and keeps processing later items", () => {
     const { loggedErrors, loggerLayer } = captureErrorLogs();
 
@@ -73,7 +104,7 @@ describe("makeDrainableWorker", () => {
       expect(processed).toEqual(["block"]);
       expect(loggedErrors).toEqual([]);
 
-      yield* worker.enqueue("after close");
+      expect(yield* worker.enqueue("after close")).toBe("closed");
       const drained = yield* Effect.forkChild(worker.drain, { startImmediately: true });
       expect(drained.pollUnsafe()).toEqual(Exit.void);
       expect(processed).toEqual(["block"]);

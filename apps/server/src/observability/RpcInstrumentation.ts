@@ -13,6 +13,7 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 
 import { rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
+import { PersistenceRecoveryOwner } from "../persistence/PersistenceRecoveryOwner.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>["_tag"];
 
@@ -340,7 +341,11 @@ export class RpcInstrumentation extends RpcMiddleware.Service<RpcInstrumentation
 
 export const rpcInstrumentationLayer = Layer.succeed(RpcInstrumentation)((effect, { rpc }) => {
   const method = rpc._tag;
-  const measured = effect.pipe(
+  const measured = Effect.gen(function* () {
+    const persistence = yield* PersistenceRecoveryOwner;
+    if (persistence !== undefined) yield* persistence.check.pipe(Effect.orDie);
+    return yield* effect;
+  }).pipe(
     withMetrics({ counter: rpcRequestsTotal, timer: rpcRequestDuration, attributes: { method } }),
   );
 

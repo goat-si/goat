@@ -222,6 +222,7 @@ import { fixPath } from "./os-jank.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -1321,14 +1322,13 @@ const layerMakeServer = Layer.unwrap(
   }),
 ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));
 
-// Keep the CLI boundary requirements explicit: cross-module inference widens this large
-// composed layer to any when the memory/provider dependency graph is included.
+// Keep explicit CLI requirements: inference widens this memory/provider graph to any.
 export const runServer: Effect.Effect<
   never,
-  Layer.Error<typeof layerMakeServer>,
+  Layer.Error<typeof layerMakeServer> | PersistenceRecoveryOwner.FatalPersistenceError,
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | ServerConfig.ServerConfig
-> = Layer.launch(layerMakeServer);
+> = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));

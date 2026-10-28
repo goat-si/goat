@@ -53,6 +53,8 @@ export interface SqliteClientConfig {
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
   readonly writerWorker?: boolean | undefined;
+  /** Synchronous, nonthrowing lifetime notification; ordinary SQL errors are excluded. */
+  readonly onFatalPersistence?: ((cause: SqlError) => void) | undefined;
 }
 
 // SqlClient masks transaction acquisition, so readOnly carries the caller's interruption policy.
