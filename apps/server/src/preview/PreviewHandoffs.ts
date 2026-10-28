@@ -166,6 +166,11 @@ const make = Effect.gen(function* () {
   const storedEnd = (entry: Stored) =>
     handoffs.read({ threadId: entry.threadId, handoffId: entry.handoffId }).pipe(
       Effect.map((stored) => (isHandoffPending(stored.state) ? undefined : stored.state)),
+      // A record that is gone has nothing left to end; any other failure reads as still waiting.
+      Effect.catchIf(
+        (error) => error.reason === "not_found",
+        () => Effect.succeed("cancelled" as const),
+      ),
       Effect.orElseSucceed(() => undefined),
     );
 
@@ -230,9 +235,10 @@ const make = Effect.gen(function* () {
   });
 
   // An owed Stop is written as the agent's end even past the deadline; the sweep leaves it alone.
-  yield* handoffs.holdExpiry(
+  const unhold = yield* handoffs.holdExpiry(
     (handoffId) => owed.get(TurnItemId.make(handoffId))?.end === "stopped",
   );
+  yield* Effect.addFinalizer(() => Effect.sync(unhold));
 
   /** Frees the screen side of a request. */
   const end = Effect.fn("PreviewHandoffs.end")(function* (key: string, entry: Pending) {

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   EnvironmentId,
+  PREVIEW_HANDOFF_PATH,
   type Handoff,
   HandoffError,
   ProviderInstanceId,
@@ -81,6 +82,37 @@ describe("computer use grant handoffs", () => {
       refused(
         yield* transitionHandoff(other, "cancelled", person, minute(12), false).pipe(Effect.exit),
       );
+    }),
+  );
+});
+
+describe("screen handoffs", () => {
+  const screen = grant({
+    kind: "mfa",
+    requestedBy: {
+      threadId: ThreadId.make("bot"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      path: "preview.request_handoff",
+    },
+    target: { environmentId: EnvironmentId.make("host"), path: PREVIEW_HANDOFF_PATH },
+  });
+  const agent = { type: "agent", threadId: ThreadId.make("bot") } as const;
+
+  it.effect("keep a person's Stop, written as the agent's cancel, even after the deadline", () =>
+    Effect.gen(function* () {
+      const stopped = yield* transitionHandoff(screen, "cancelled", agent, minute(31), false);
+      assert.deepEqual([stopped.state, stopped.actor], ["cancelled", agent]);
+      // Anyone else's late end is still the expiry.
+      const fromPerson = yield* transitionHandoff(screen, "cancelled", person, minute(31), false);
+      assert.deepEqual([fromPerson.state, fromPerson.actor], ["expired", { type: "server" }]);
+      const fromServer = yield* transitionHandoff(
+        screen,
+        "cancelled",
+        { type: "server" },
+        minute(31),
+        false,
+      );
+      assert.equal(fromServer.state, "expired");
     }),
   );
 });

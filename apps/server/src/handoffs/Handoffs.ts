@@ -49,6 +49,7 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
+import { makeExpiryHolds } from "./expiryHolds.ts";
 import { targetKey } from "./targetKey.ts";
 
 export const SshProgressBinding = Schema.Struct({
@@ -260,8 +261,8 @@ export class Handoffs extends Context.Service<
       sessionId: AuthSessionId,
     ) => Effect.Effect<SshProgressBinding | null, HandoffError | EnvironmentAuthorizationError>;
     readonly sweep: Effect.Effect<void, HandoffError>;
-    /** Keeps the expiry sweep off handoffs another service is still ending. */
-    readonly holdExpiry: (holds: (handoffId: string) => boolean) => Effect.Effect<void>;
+    /** Keeps the expiry sweep off handoffs another service is still ending; returns its undo. */
+    readonly holdExpiry: (holds: (handoffId: string) => boolean) => Effect.Effect<() => void>;
     /** Whether a handoff was created with exactly these continuation arguments. */
     readonly matchesArgs: (
       handoff: Handoff,
@@ -656,7 +657,7 @@ const make = Effect.gen(function* () {
       return handoffSummary(handoff);
     }).pipe(lock.withPermits(1));
 
-  const expiryHolds = new Set<(handoffId: string) => boolean>();
+  const expiryHolds = makeExpiryHolds();
   const expirePending = Effect.fn("Handoffs.expirePending")(function* (threadId?: string) {
     // Batch pending cards with their owning run; resolved payloads are never decoded.
     const rows = yield* sql<{
@@ -674,8 +675,7 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.mapError(unavailable));
     const now = yield* DateTime.now;
     for (const row of rows) {
-      if (row.handoff_json === null || [...expiryHolds].some((holds) => holds(row.turn_item_id)))
-        continue;
+      if (row.handoff_json === null || expiryHolds.held(row.turn_item_id)) continue;
       const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
       const runStatus = yield* decodeRunStatus(row.run_status).pipe(Effect.mapError(unavailable));
       if (
@@ -951,7 +951,7 @@ const make = Effect.gen(function* () {
     open,
     respond,
     sweep,
-    holdExpiry: (holds) => Effect.sync(() => void expiryHolds.add(holds)),
+    holdExpiry: expiryHolds.hold,
     matchesArgs: (handoff, args) =>
       Effect.sync(() => {
         const expected = Buffer.from(
