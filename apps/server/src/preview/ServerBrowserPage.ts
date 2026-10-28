@@ -33,7 +33,7 @@ import {
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
-import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
+import { animating, dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -264,8 +264,8 @@ const unsentOnTimeout = (cause: unknown) =>
     : cause;
 
 /**
- * Waits for visible and enabled before the gate. Stability is left to the Playwright action after
- * the gate, which checks it again with the hit target; checking it twice cost a frame per action.
+ * Waits for visible and enabled before the gate, and for stable only while the page animates:
+ * the Playwright action after the gate checks stability again, so checking it twice cost a frame.
  */
 const settled = async (locator: Locator, deadline: number, enabled = true) => {
   const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
@@ -274,6 +274,8 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
   try {
     await handle.waitForElementState("visible", { timeout: remaining(deadline) });
     if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
+    if (await animating(handle))
+      await handle.waitForElementState("stable", { timeout: remaining(deadline) });
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {
@@ -990,10 +992,7 @@ export const drag = async (
   const deadline = actionDeadline(timeout, gate.deadline);
   if (input.from && input.to) {
     await pointer(input.from, "move");
-    await dragBetween(page, { ...input, from: input.from, to: input.to }, () => {
-      remaining(deadline);
-      gate();
-    });
+    await dragBetween(page, { ...input, from: input.from, to: input.to }, gate, deadline);
     return pointer(input.to, "move");
   }
   const source = targetLocator(page, { locator: input.source })!;
@@ -1024,8 +1023,7 @@ export const scroll = async (
 ) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
   if (input.x !== undefined && input.y !== undefined) {
-    gate();
-    return wheelAt(page, { x: input.x, y: input.y }, delta);
+    return wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
   }
   const locator = targetLocator(page, input);
   if (locator === null) {

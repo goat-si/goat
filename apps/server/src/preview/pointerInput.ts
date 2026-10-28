@@ -3,28 +3,73 @@
  *
  * @module pointerInput
  */
-import type { Page } from "playwright-core";
+import type { ElementHandle, Page } from "playwright-core";
+import { remaining } from "./actionReadiness.ts";
+import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 type Point = { readonly x: number; readonly y: number };
 
-/** Presses at `from`, moves in `steps` to `to`, releases; `dispatch` runs before any input. */
+/**
+ * Before each input after the first: an earlier one can open a dialog that holds the page past
+ * the caller's deadline, or a person can take the tab, and then the rest must not go out.
+ */
+const again = (gate: () => void, deadline: number) => {
+  if (performance.now() >= deadline)
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationTimeoutError",
+      "The deadline passed partway through the pointer input, so the rest was not sent.",
+    );
+  gate();
+};
+
+/** Presses at `from`, moves in `steps` to `to`, releases; each input passes the gate first. */
 export const dragBetween = async (
   page: Page,
   input: { readonly from: Point; readonly to: Point; readonly steps?: number | undefined },
-  dispatch: () => void,
+  gate: () => void,
+  deadline: number,
 ) => {
-  dispatch();
+  const steps = input.steps ?? 10;
+  remaining(deadline);
+  gate();
   await page.mouse.move(input.from.x, input.from.y);
+  again(gate, deadline);
   await page.mouse.down();
-  await page.mouse.move(input.to.x, input.to.y, { steps: input.steps ?? 10 });
+  try {
+    for (let step = 1; step <= steps; step++) {
+      const along = (from: number, to: number) => from + ((to - from) * step) / steps;
+      again(gate, deadline);
+      await page.mouse.move(along(input.from.x, input.to.x), along(input.from.y, input.to.y));
+    }
+    again(gate, deadline);
+  } catch (cause) {
+    // A drag cut short still lets go of the button it pressed, where the pointer stopped.
+    await page.mouse.up().catch(() => undefined);
+    throw cause;
+  }
   await page.mouse.up();
 };
 
 /** A real wheel at a point goes to whatever is under it, which page script can zoom on. */
-export const wheelAt = async (page: Page, at: Point, delta: readonly [number, number]) => {
+export const wheelAt = async (
+  page: Page,
+  at: Point,
+  delta: readonly [number, number],
+  gate: () => void,
+  deadline: number,
+) => {
+  remaining(deadline);
+  gate();
   await page.mouse.move(at.x, at.y);
+  again(gate, deadline);
   await page.mouse.wheel(delta[0], delta[1]);
 };
+
+/** Whether anything in the element's document is animating, which can move it under the pointer. */
+export const animating = async (handle: ElementHandle) =>
+  (await handle.evaluate(
+    "document.getAnimations().some((animation) => animation.playState === 'running')",
+  )) === true;
 
 type Box = Point & { readonly width: number; readonly height: number };
 

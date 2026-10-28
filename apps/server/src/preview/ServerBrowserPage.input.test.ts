@@ -35,6 +35,34 @@ it("drags between two page points, as a map or canvas needs", () =>
     expect(events.at(-1)).toEqual(["mouseup", 300, 200, 0]);
   }));
 
+it("sends no more of a drag once its first move opened a dialog and the tab was taken", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      pointerPad +
+        `<script>pad.addEventListener("mousemove", () => alert("held"), { once: true });</script>`,
+    );
+    const gate = Object.assign(
+      () => {
+        if (gate.taken) throw new Error("taken");
+      },
+      { taken: false },
+    );
+    page.once("dialog", (dialog) => {
+      gate.taken = true;
+      void dialog.dismiss();
+    });
+    await expect(
+      ServerBrowserPage.drag(
+        page,
+        { from: { x: 100, y: 100 }, to: { x: 300, y: 200 } },
+        undefined,
+        gate,
+      ),
+    ).rejects.toThrow("taken");
+    const events = (await page.evaluate("events")) as Array<[string]>;
+    expect(events.map(([type]) => type)).toEqual(["mousemove"]);
+  }));
+
 it("wheels at a page point, so the element under it receives the wheel", () =>
   fixture(async (page) => {
     await page.setContent(pointerPad);

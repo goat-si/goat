@@ -117,6 +117,15 @@ it("never clicks a moving target after its deadline, even once it settles", () =
     expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
   }));
 
+it("clicks a ready button once its animation ends, within the request's time", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide 1.4s linear}</style><button onclick="window.clicks=(window.clicks??0)+1">Go</button>`,
+    );
+    await ServerBrowserPage.click(page, { locator: "button", timeoutMs: 5_000 });
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(1);
+  }));
+
 it("types into the field that had focus, even when the page moves focus while it waits", () =>
   fixture(async (page) => {
     await page.setContent('<input id="a" readonly><input id="b">');
