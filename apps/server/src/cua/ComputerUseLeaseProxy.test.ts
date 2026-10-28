@@ -636,6 +636,58 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect("names the app a call's pid runs in its reservation, as the driver named it", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "list_windows"));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            structuredContent: {
+              windows: [
+                {
+                  pid: 42,
+                  window_id: 3,
+                  app_name: "Calculator",
+                  bundle_id: "com.apple.calculator",
+                  title: "Calculator",
+                },
+              ],
+            },
+          },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 1);
+      yield* h.send(call(2, "click", { pid: 42, window_id: 3, element_index: 5 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 2);
+      yield* h.send(call(3, "click", { pid: 77, window_id: 1, element_index: 1 }));
+      assert.equal((yield* h.nextToDriver).id, 3);
+
+      const reserved = h.reservations.flatMap((reservation) =>
+        reservation.action === "reserve" ? [reservation] : [],
+      );
+      const labelOf = (pid: number) =>
+        (
+          reserved.find(
+            (reservation) => (reservation.args as { readonly pid?: unknown }).pid === pid,
+          ) as { readonly appLabel?: unknown } | undefined
+        )?.appLabel;
+      assert.deepEqual(
+        reserved.map((reservation) => reservation.name),
+        ["list_windows", "click", "click"],
+      );
+      assert.deepEqual(labelOf(42), { bundleId: "com.apple.calculator", name: "Calculator" });
+      // A pid no answer named keeps no label; the timeline shows its generic row.
+      assert.isUndefined(labelOf(77));
+    }),
+  );
+
   it.effect(
     "never screenshots the whole display, even for a thread approved for the whole screen",
     () =>

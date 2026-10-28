@@ -105,6 +105,15 @@ describe("computerUseObservedTarget", () => {
       computerUseObservedTarget({ content: [{ type: "text", text: "{not json" }] }),
     ).toBeNull();
   });
+
+  it("names a window once when its title is only the app's name", () => {
+    expect(computerUseObservedTarget({ app_name: "KakaoTalk", window_title: "KakaoTalk" })).toBe(
+      "KakaoTalk",
+    );
+    expect(
+      computerUseObservedTarget({ app_name: "Calculator", window_title: " calculator " }),
+    ).toBe("Calculator");
+  });
 });
 
 describe("computerUseRunStatus", () => {
