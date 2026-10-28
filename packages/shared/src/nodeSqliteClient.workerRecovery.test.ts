@@ -1,4 +1,5 @@
-import { assert, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
+import { assert } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as NodeWorkerThreads from "node:worker_threads";
 import * as NodeSqlite from "node:sqlite";
@@ -18,6 +19,7 @@ const failingWorkers = vi.hoisted(() => ({ message: undefined as string | undefi
 const workerStarts = vi.hoisted(() => ({
   onStart: undefined as ((worker: NodeWorkerThreads.Worker) => void) | undefined,
 }));
+const nativeTiming = vi.hoisted(() => ({ enabled: false }));
 const nativeRead = vi.hoisted(() => ({ latch: undefined as SharedArrayBuffer | undefined }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeWorkerThreads>();
@@ -47,6 +49,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           ...args[1],
           workerData: { ...args[1]?.workerData, nativeReadLatch: nativeRead.latch },
         };
+      }
+      if (nativeTiming.enabled && typeof args[0] === "string") {
+        args[0] =
+          `let nativeClock = 0;
+          Object.defineProperty(performance, "now", { value: () => nativeClock += 75 });
+        ` + args[0];
       }
       super(...args);
       startedWorkers.push(this);
@@ -763,4 +771,31 @@ it.effect(
         }).pipe(Effect.provide(SqliteClient.layer({ filename, ...workers })));
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reports native reader durations on successful and failed statements", () =>
+  Effect.gen(function* () {
+    const replies: Array<{ nativeMs?: number; prepareMs?: number }> = [];
+    nativeTiming.enabled = true;
+    workerStarts.onStart = (worker) =>
+      worker.on("message", (reply) => {
+        if (typeof reply?.id === "number") replies.push(reply);
+      });
+    yield* withReaderClient((sql) =>
+      Effect.gen(function* () {
+        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        yield* sql`SELECT * FROM missing_native_table`.pipe(SqliteClient.readOnly, Effect.exit);
+        assert.equal(replies[0]?.nativeMs, 75, "success carries worker-native duration");
+        assert.equal(replies[0]?.prepareMs, 75);
+        assert.equal(replies[1]?.prepareMs, 75, "prepare failure retains native duration");
+      }),
+    ).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          nativeTiming.enabled = false;
+          workerStarts.onStart = undefined;
+        }),
+      ),
+    );
+  }),
 );
