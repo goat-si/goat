@@ -6,10 +6,10 @@ import {
 export * from "./DesktopBackendProcess.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Path joining here is a pure platform operation.
 import * as NodePath from "node:path";
-import { restartDelayMs } from "@goat/shared/managedRecoveryPolicy";
+import { restartDelayMs } from "./DesktopBackendRecoveryPolicy.ts";
 import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
-import { makeRecoveryBudget, type WatchdogState } from "./DesktopBackendWatchdog.ts";
+import { makeRecoveryBudget } from "./DesktopBackendRecovery.ts";
 import {
   makeStartupFailureReporter,
   makeBackendReadinessWait,
@@ -51,9 +51,10 @@ export interface DesktopBackendSnapshot {
   readonly activePid: Option.Option<number>;
   readonly restartAttempt: number;
   readonly restartScheduled: boolean;
-  readonly watchdog?:
-    | WatchdogState
-    | "watchdog-unavailable"
+  readonly recovery?:
+    | "starting"
+    | "running"
+    | "blocked"
     | "backoff"
     | "crash-loop"
     | "record-unavailable"
@@ -196,8 +197,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const updateActiveRun = (runId: number, f: (run: ActiveBackendRun) => ActiveBackendRun) =>
     Ref.update(state, withActiveRun(runId, f));
 
-  let watchdogStatus: NonNullable<DesktopBackendSnapshot["watchdog"]> = "watchdog-unavailable";
-  let watchdogRun = 0;
+  let recoveryStatus: NonNullable<DesktopBackendSnapshot["recovery"]> = "stopped";
+  let controlRun = 0;
   const snapshot = Ref.get(state).pipe(
     Effect.map((current): DesktopBackendSnapshot => ({
       desiredRunning: current.desiredRunning,
@@ -205,7 +206,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       activePid: activePid(current.active),
       restartAttempt: current.restartAttempt,
       restartScheduled: Option.isSome(current.restartFiber),
-      watchdog: watchdogStatus,
+      recovery: recoveryStatus,
     })),
   );
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
@@ -213,13 +214,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const removeControlSource = Effect.fn("desktop.backendInstance.removeControlSource")(function* (
     runId: number,
   ) {
-    if (runId <= lastRemovedControlRun || runId !== watchdogRun) return;
+    if (runId <= lastRemovedControlRun || runId !== controlRun) return;
     lastRemovedControlRun = runId;
     yield* desktopTelemetryPublisher.removeControlSource(spec.id);
   });
 
   const pauseRecovery = Effect.fn("desktop.backendInstance.pauseRecovery")(function* () {
-    watchdogStatus = "blocked";
+    recoveryStatus = "blocked";
     const wasReady = yield* Ref.modify(
       state,
       (current) => [current.ready, { ...current, ready: false, desiredRunning: false }] as const,
@@ -289,7 +290,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ),
         );
         if ((yield* recovery.current).pause !== null) {
-          watchdogStatus = (yield* recovery.current).pause ?? "blocked";
+          recoveryStatus = (yield* recovery.current).pause ?? "blocked";
           yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
           yield* Effect.forkIn(showRecovery, parentScope);
           return;
@@ -386,11 +387,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           },
         ]);
 
-        watchdogRun = runId;
-        watchdogStatus =
-          config.value.bootstrap.backendWatchdog === undefined
-            ? "watchdog-unavailable"
-            : "starting";
+        controlRun = runId;
+        recoveryStatus = "starting";
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
           reason: string,
           exitCode?: number,
@@ -492,45 +490,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         const program = runBackendProcess({
           ...config.value,
-          ...(config.value.bootstrap.backendWatchdog?.mode === "fd"
-            ? {
-                watchdog: {
-                  ...config.value.bootstrap.backendWatchdog,
-                  onStatus: (status) => {
-                    if (watchdogRun === runId && watchdogStatus !== "stopped")
-                      watchdogStatus = status;
-                  },
-                  isCurrent: Ref.get(state).pipe(
-                    Effect.map((current) => {
-                      const run = Option.getOrUndefined(current.active);
-                      return run?.id === runId && !run.stopRequested && current.desiredRunning;
-                    }),
-                  ),
-                  onSustainedHealth: mutex.withPermits(1)(
-                    Effect.gen(function* () {
-                      const current = yield* Ref.get(state);
-                      const active = Option.getOrUndefined(current.active);
-                      if (active?.id !== runId || active.stopRequested || !current.desiredRunning)
-                        return;
-                      if (!(yield* recovery.reset)) {
-                        yield* pauseRecovery();
-                        return;
-                      }
-                      yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: 0 }));
-                    }),
-                  ),
-                  onState: Effect.fn("desktop.backendInstance.onWatchdogState")(function* (status) {
-                    const current = yield* Ref.get(state);
-                    if (Option.getOrUndefined(current.active)?.id !== runId) return;
-                    if (status === "blocked") yield* pauseRecovery();
-                    else if (status === "retiring") {
-                      yield* Ref.update(state, (latest) => ({ ...latest, ready: false }));
-                      if (current.ready) yield* spec.onShutdown?.() ?? Effect.void;
-                    }
-                  }),
-                },
-              }
-            : {}),
           desktopTelemetryStream: Stream.unwrap(
             Ref.get(state).pipe(
               Effect.map((current) =>
@@ -573,8 +532,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 activeRun?.id !== runId ||
                 activeRun.stopRequested ||
                 !latest.desiredRunning ||
-                watchdogStatus === "retiring" ||
-                watchdogStatus === "blocked"
+                recoveryStatus === "blocked"
               ) {
                 return [false, latest] as const;
               }
@@ -591,6 +549,30 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               return;
             }
 
+            recoveryStatus = "running";
+            yield* Effect.sleep("10 minutes").pipe(
+              Effect.andThen(
+                mutex.withPermits(1)(
+                  Effect.gen(function* () {
+                    const current = yield* Ref.get(state);
+                    const active = Option.getOrUndefined(current.active);
+                    if (
+                      active?.id !== runId ||
+                      active.stopRequested ||
+                      !current.ready ||
+                      !current.desiredRunning
+                    )
+                      return;
+                    if (!(yield* recovery.reset)) {
+                      yield* pauseRecovery();
+                      return;
+                    }
+                    yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: 0 }));
+                  }),
+                ),
+              ),
+              Effect.forkIn(runScope),
+            );
             yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
             if (
               config.value.runningDistro !== undefined &&
@@ -644,18 +626,17 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     if (!current.desiredRunning || Option.isSome(current.restartFiber)) return;
     const record = yield* recovery.fail(
       yield* Clock.currentTimeMillis,
-      Option.getOrUndefined(current.config)?.bootstrap.backendWatchdog?.generation ??
-        String(current.nextRunId - 1),
+      String(current.nextRunId - 1),
       reason,
     );
     if (record.pause !== null) {
-      watchdogStatus = record.pause;
+      recoveryStatus = record.pause;
       yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false, ready: false }));
       yield* Effect.forkIn(showRecovery, parentScope);
       return;
     }
     const delay = Duration.millis(restartDelayMs(record.attempt - 1, yield* Random.next));
-    watchdogStatus = "backoff";
+    recoveryStatus = "backoff";
     const scheduled = Option.some(delay);
     yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: record.attempt }));
 
@@ -707,7 +688,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const stop = Effect.fn("desktop.backendInstance.stop")(function* (options?: {
     readonly timeout?: Duration.Duration;
   }) {
-    watchdogStatus = "stopped";
+    recoveryStatus = "stopped";
     const { active, restartFiber, notifyShutdown } = yield* mutex.withPermits(1)(
       Effect.gen(function* () {
         const result = yield* Ref.modify(state, (latest) => {
@@ -808,8 +789,10 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       yield* stop({ timeout: Duration.seconds(10) });
       if (Option.isSome((yield* Ref.get(state)).active)) return;
     }
-    if (yield* recovery.reset) yield* start;
-    else yield* Effect.forkIn(showRecovery, parentScope);
+    if (yield* recovery.reset) {
+      yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: 0 }));
+      yield* start;
+    } else yield* Effect.forkIn(showRecovery, parentScope);
   });
   const showRecovery: Effect.Effect<void> = Effect.gen(function* () {
     const record = yield* recovery.current;

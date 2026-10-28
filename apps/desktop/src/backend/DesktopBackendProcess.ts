@@ -19,7 +19,6 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
-import { makeBackendWatchdog, type WatchdogOptions } from "./DesktopBackendWatchdog.ts";
 import { makeControlDispatch, makeControlLineFramer } from "./DesktopBackendControlDispatch.ts";
 const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
@@ -172,7 +171,6 @@ export const BackendProcessError = Schema.Union([
 export type BackendProcessError = typeof BackendProcessError.Type;
 
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
-  readonly watchdog?: WatchdogOptions;
   readonly desktopTelemetryStream: Stream.Stream<Uint8Array>;
   readonly desktopBrowserStream?: Stream.Stream<Uint8Array>;
   readonly onControlFailure?: Effect.Effect<void>;
@@ -308,31 +306,6 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       additionalFds[`fd${options.bootstrap.desktopBrowserControlFd}`] = { type: "output" };
     }
   }
-  const negotiated = options.bootstrap.backendWatchdog;
-  const watchdogOptions =
-    options.watchdog ??
-    (negotiated?.mode === "fd"
-      ? { protocol: 1 as const, generation: negotiated.generation, healthFd: negotiated.healthFd }
-      : undefined);
-  if (
-    (watchdogOptions !== undefined &&
-      (negotiated?.mode !== "fd" ||
-        negotiated.generation !== watchdogOptions.generation ||
-        negotiated.healthFd !== watchdogOptions.healthFd ||
-        options.bootstrapDelivery !== "fd3")) ||
-    (negotiated?.mode === "self-observer" && options.bootstrapDelivery !== "stdin")
-  ) {
-    return yield* new BackendProcessBootstrapEncodeError({
-      executablePath: options.executablePath,
-      entryPath: options.entryPath,
-      cwd: options.cwd,
-      httpBaseUrl: options.httpBaseUrl,
-      cause: new Error("Managed health channel negotiation does not match the launch"),
-    });
-  }
-  if (watchdogOptions !== undefined && options.bootstrapDelivery === "fd3") {
-    additionalFds[`fd${watchdogOptions.healthFd}`] = { type: "output" };
-  }
   const command = ChildProcess.make(options.executablePath, options.args, {
     cwd: options.cwd,
     env: options.env,
@@ -360,10 +333,6 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   );
   const outputFibers: Array<Fiber.Fiber<void, never>> = [];
 
-  const watchdog =
-    watchdogOptions === undefined ? undefined : yield* makeBackendWatchdog(watchdogOptions, handle);
-  if (watchdog && watchdogOptions)
-    yield* watchdog.read(handle.getOutputFd(watchdogOptions.healthFd)).pipe(Effect.forkScoped);
   yield* options.onStarted?.(handle.pid) ?? Effect.void;
   if (
     options.bootstrap.desktopTelemetryControlFd !== undefined &&
@@ -467,11 +436,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       httpBaseUrl: options.httpBaseUrl,
       timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
     }).pipe(
-      Effect.flatMap(() =>
-        (watchdog?.markReady ?? Effect.void).pipe(
-          Effect.andThen(options.onReady?.() ?? Effect.void),
-        ),
-      ),
+      Effect.flatMap(() => options.onReady?.() ?? Effect.void),
       Effect.as(true),
       Effect.catchTags({
         BackendReadinessTimeoutError: (error) =>
@@ -512,9 +477,8 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     Effect.exit,
   );
   if (Exit.isSuccess(exit)) {
-    yield* watchdog?.exitObserved ?? Effect.void;
     yield* options.onExitObserved?.() ?? Effect.void;
-  } else yield* watchdog?.disarm ?? Effect.void;
+  }
   yield* Effect.forEach(outputFibers, Fiber.await, {
     concurrency: "unbounded",
     discard: true,

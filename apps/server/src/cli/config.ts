@@ -1,4 +1,4 @@
-import { PortSchema } from "@goat/contracts";
+import { DesktopBackendBootstrap, PortSchema } from "@goat/contracts";
 import { GOAT_DESKTOP_BOOTSTRAP_HOME_KEY } from "@goat/contracts/legacyT3Names";
 import * as NetService from "@goat/shared/Net";
 import { OtlpHeadersFromString, OtlpProtocol, type SignalExport } from "@goat/shared/observability";
@@ -18,7 +18,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { Argument, Flag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
-import { readDesktopBootstrap } from "../managed/ManagedBootstrap.ts";
+import { readBootstrapEnvelope } from "../bootstrap.ts";
 import { parseDurationInput } from "../durationInput.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
@@ -273,7 +273,9 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   } satisfies CliServerFlags;
   const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
   const bootstrapEnvelope =
-    bootstrapFd !== undefined ? yield* readDesktopBootstrap(bootstrapFd) : Option.none();
+    bootstrapFd !== undefined
+      ? yield* readBootstrapEnvelope(DesktopBackendBootstrap, bootstrapFd)
+      : Option.none();
   const bootstrap = Option.getOrUndefined(bootstrapEnvelope);
 
   const mode: ServerConfig.RuntimeMode = Option.getOrElse(

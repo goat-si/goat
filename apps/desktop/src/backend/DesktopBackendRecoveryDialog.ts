@@ -6,7 +6,7 @@ const recoveryReason = (reason: string) => {
     case "crash-loop":
       return "The server stopped repeatedly. Automatic restarts have reached their limit.";
     case "blocked":
-      return "GOAT could not confirm that the previous server stopped or that its health observer started. Recovery is paused.";
+      return "GOAT could not confirm that the previous server stopped. Recovery is paused.";
     case "record-unavailable":
       return "GOAT could not read or save its recovery state. Automatic restarts are disabled.";
     default:

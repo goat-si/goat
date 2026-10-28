@@ -29,7 +29,6 @@ export const makeDesktopControlWriter = Effect.fn("DesktopControlWriter.make")(f
       for (const waiter of item.waiters) yield* Deferred.fail(waiter, options.overflow());
     }
   });
-  yield* Effect.addFinalizer(() => stop);
   yield* Queue.take(wake).pipe(
     Effect.andThen(
       Effect.suspend(() => {
@@ -50,13 +49,14 @@ export const makeDesktopControlWriter = Effect.fn("DesktopControlWriter.make")(f
               if (pending.length > 0) Queue.offerUnsafe(wake, undefined);
             }),
           ),
-          Effect.uninterruptible,
         );
       }),
     ),
     Effect.forever,
     Effect.forkScoped,
   );
+  // Close admission before the scoped fiber is interrupted; a partial native frame is never reused.
+  yield* Effect.addFinalizer(() => stop);
   const send = Effect.fn("DesktopControlWriter.send")(function* (payload: Buffer, key?: string) {
     const index = key === undefined ? -1 : pending.findIndex((item) => item.key === key);
     const previous = index < 0 ? undefined : pending[index];

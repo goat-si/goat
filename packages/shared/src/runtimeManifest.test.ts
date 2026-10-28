@@ -1,4 +1,3 @@
-import { supportsManagedWatchdog } from "./runtimeManifest.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { cliArchiveFileName } from "./cliRelease.ts";
@@ -68,15 +67,4 @@ describe("runtime manifest", () => {
     expect(release.commitTime).toBe(10);
     expect(() => releaseRuntimeManifest(own, new Map())).toThrow(/no runtime archive/);
   });
-});
-
-it("does not advertise or enable unproven native watchdog profiles", () => {
-  const manifest = ownRuntimeManifest({ version: "0.0.0" });
-  expect(manifest.capabilities).not.toContain("managed-watchdog-health-v1");
-  expect(
-    supportsManagedWatchdog(
-      { ...manifest, capabilities: [...manifest.capabilities, "managed-watchdog-health-v1"] },
-      "darwin-arm64",
-    ),
-  ).toBe(false);
 });

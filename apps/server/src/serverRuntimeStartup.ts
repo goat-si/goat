@@ -1,4 +1,3 @@
-import { publishManagedPhase, isManagedHeartbeatRetired } from "./managed/ManagedBootstrap.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -115,7 +114,6 @@ export const makeCommandGate = Effect.gen(function* () {
   const enqueueCommand = Effect.fn("serverRuntimeStartup.enqueueCommand")(function* <A, E>(
     effect: Effect.Effect<A, E>,
   ): Effect.fn.Return<A, E | ServerRuntimeStartupError> {
-    if (isManagedHeartbeatRetired()) return yield* Effect.interrupt;
     const readinessState = yield* Ref.get(commandReadinessState);
     if (readinessState === "ready") {
       return yield* effect;
@@ -127,7 +125,7 @@ export const makeCommandGate = Effect.gen(function* () {
     const result = yield* Deferred.make<A, E | ServerRuntimeStartupError>();
     yield* Queue.offer(commandQueue, {
       run: Deferred.await(commandReady).pipe(
-        Effect.flatMap(() => (isManagedHeartbeatRetired() ? Effect.interrupt : effect)),
+        Effect.flatMap(() => effect),
         Effect.exit,
         Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
       ),
@@ -138,7 +136,6 @@ export const makeCommandGate = Effect.gen(function* () {
   return {
     awaitCommandReady: Deferred.await(commandReady),
     signalCommandReady: Effect.gen(function* () {
-      if (isManagedHeartbeatRetired()) return yield* Effect.interrupt;
       yield* Ref.set(commandReadinessState, "ready");
       yield* Deferred.succeed(commandReady, undefined).pipe(Effect.orDie);
     }),
@@ -664,7 +661,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
-    if (!publishManagedPhase("ready")) return yield* Effect.interrupt;
     yield* commandGate.signalCommandReady;
     yield* Effect.logDebug("startup phase: publishing ready event");
     yield* runStartupPhase(

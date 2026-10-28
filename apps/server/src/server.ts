@@ -1,4 +1,3 @@
-import { closeManagedHeartbeat } from "./managed/ManagedBootstrap.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import * as VoiceTranscription from "./voiceTranscription.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
@@ -1336,4 +1335,4 @@ export const runServer: Effect.Effect<
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | ServerConfig.ServerConfig
-> = Layer.launch(layerMakeServer).pipe(Effect.ensuring(Effect.promise(closeManagedHeartbeat)));
+> = Layer.launch(layerMakeServer);

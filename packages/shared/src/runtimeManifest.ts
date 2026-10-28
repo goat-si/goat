@@ -1,4 +1,3 @@
-import { MANAGED_WATCHDOG_CAPABILITY } from "./managedRecoveryPolicy.ts";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -115,13 +114,4 @@ export function runtimeManifestVerdict(
   return required.every((capability) => manifest.capabilities.includes(capability))
     ? "compatible"
     : "missing-capability";
-}
-
-// Native process/SEA and WSL exit proof is required before adding an enabled profile.
-const VERIFIED_WATCHDOG_PROFILES: ReadonlyArray<string> = [];
-export function supportsManagedWatchdog(manifest: RuntimeManifest, profile: string): boolean {
-  return (
-    VERIFIED_WATCHDOG_PROFILES.includes(profile) &&
-    manifest.capabilities.includes(MANAGED_WATCHDOG_CAPABILITY)
-  );
 }

@@ -2,8 +2,6 @@
 import * as NodeFS from "node:fs";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
-import { makeManagedHeartbeat } from "../managed/ManagedHeartbeat.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 
 import { it } from "@effect/vitest";
@@ -106,7 +104,7 @@ describe("DesktopTelemetryReceiver", () => {
   });
 });
 
-it.effect("held native business write preserves frame bytes while main health continues", () =>
+it.effect("held native control write preserves the complete frame bytes", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -136,26 +134,11 @@ it.effect("held native business write preserves frame bytes while main health co
           complete = undefined;
         }),
       );
-      let progress = 0;
-      const owner = yield* makeManagedHeartbeat({
-        generation: "A",
-        ready: true,
-        writeHealth: () =>
-          Effect.sync(() => {
-            progress++;
-          }),
-        retireSelf: () => Effect.die("Healthy main retired"),
-      });
+
       const payload = Buffer.from('{"version":1,"type":"setDiagnosticsDemand","enabled":true}\n');
       const business = yield* writeAllToFileDescriptor(5, payload).pipe(Effect.forkChild);
       yield* Deferred.await(entered);
-      for (let beat = 0; beat < 30; beat++) {
-        yield* TestClock.adjust("2 seconds");
-        yield* owner.publish("ready");
-        yield* owner.observe;
-      }
       expect(write.mock.calls).toHaveLength(1);
-      expect(progress).toBeGreaterThan(0);
       complete?.();
       complete = undefined;
       yield* Fiber.join(business);
@@ -165,83 +148,66 @@ it.effect("held native business write preserves frame bytes while main health co
   ),
 );
 
-it.effect(
-  "real receiver request stays pending behind held native output without stalling health publication",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        const completed: Buffer[] = [];
-        let release: (() => void) | undefined;
-        let hold = false;
-        const nativeWrite = <T extends NodeJS.ArrayBufferView>(
-          _fd: number,
-          buffer: T,
-          offset: number,
-          length: number,
-          _position: number | null,
-          callback: (error: NodeJS.ErrnoException | null, count: number, buffer: T) => void,
-        ) => {
-          const finish = () => {
-            completed.push(Buffer.from(buffer.buffer, buffer.byteOffset + offset, length));
-            callback(null, length, buffer);
-          };
-          if (hold) {
-            release = finish;
-            Deferred.doneUnsafe(entered, Effect.void);
-          } else finish();
+it.effect("receiver request completes only after its held native control frame", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const completed: Buffer[] = [];
+      let release: (() => void) | undefined;
+      let hold = false;
+      const nativeWrite = <T extends NodeJS.ArrayBufferView>(
+        _fd: number,
+        buffer: T,
+        offset: number,
+        length: number,
+        _position: number | null,
+        callback: (error: NodeJS.ErrnoException | null, count: number, buffer: T) => void,
+      ) => {
+        const finish = () => {
+          completed.push(Buffer.from(buffer.buffer, buffer.byteOffset + offset, length));
+          callback(null, length, buffer);
         };
-        using _write = vi
-          .spyOn(NodeFS, "write")
-          .mockImplementation(nativeWrite as typeof NodeFS.write);
-        const config = yield* ServerConfig.ServerConfig;
-        const receiver = yield* make().pipe(
-          Effect.provideService(ServerConfig.ServerConfig, {
-            ...config,
-            desktopTelemetryControlFd: 5,
-          }),
-        );
-        let progress = 0;
-        const owner = yield* makeManagedHeartbeat({
-          generation: "A",
-          ready: true,
-          writeHealth: () =>
-            Effect.sync(() => {
-              progress++;
-            }),
-          retireSelf: () => Effect.die("Healthy main retired"),
-        });
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            hold = false;
-            release?.();
-            release = undefined;
-          }),
-        );
-        hold = true;
-        const request = yield* receiver.setDiagnosticsDemand(true).pipe(Effect.forkChild);
-        yield* Deferred.await(entered);
-        for (let beat = 0; beat < 30; beat++) {
-          yield* TestClock.adjust("2 seconds");
-          yield* owner.publish("ready");
-          yield* owner.observe;
-        }
-        expect(request.pollUnsafe()).toBeUndefined();
-        expect(progress).toBeGreaterThan(0);
-        hold = false;
-        release?.();
-        release = undefined;
-        yield* Fiber.join(request);
-        expect(Buffer.concat(completed).toString()).toContain(
-          '"type":"setDiagnosticsDemand","enabled":true',
-        );
-      }),
-    ).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          ServerSettings.layerTest(),
-          ServerConfig.layerTest("/test", { prefix: "goat-held-control" }),
-        ).pipe(Layer.provide(NodeServices.layer)),
-      ),
+        if (hold) {
+          release = finish;
+          Deferred.doneUnsafe(entered, Effect.void);
+        } else finish();
+      };
+      using _write = vi
+        .spyOn(NodeFS, "write")
+        .mockImplementation(nativeWrite as typeof NodeFS.write);
+      const config = yield* ServerConfig.ServerConfig;
+      const receiver = yield* make().pipe(
+        Effect.provideService(ServerConfig.ServerConfig, {
+          ...config,
+          desktopTelemetryControlFd: 5,
+        }),
+      );
+
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          hold = false;
+          release?.();
+          release = undefined;
+        }),
+      );
+      hold = true;
+      const request = yield* receiver.setDiagnosticsDemand(true).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      expect(request.pollUnsafe()).toBeUndefined();
+      hold = false;
+      release?.();
+      release = undefined;
+      yield* Fiber.join(request);
+      expect(Buffer.concat(completed).toString()).toContain(
+        '"type":"setDiagnosticsDemand","enabled":true',
+      );
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        ServerSettings.layerTest(),
+        ServerConfig.layerTest("/test", { prefix: "goat-held-control" }),
+      ).pipe(Layer.provide(NodeServices.layer)),
     ),
+  ),
 );
