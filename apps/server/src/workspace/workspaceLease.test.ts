@@ -497,6 +497,12 @@ it.live(
         yield* fs.makeDirectory(record);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(removal);
+        // While removal keeps failing, this server's next claim refuses instead of entering.
+        const refused = yield* tryWithWorkspaceLease(
+          base + "/elsewhere",
+          Effect.die("must not enter while a record cannot be removed"),
+        ).pipe(Effect.flip);
+        assert.equal(refused._tag, "WorkspaceLeaseUnavailableError");
         yield* fs.remove(record, { recursive: true });
         yield* fs.writeFileString(record, contents);
         assert.equal(yield* other.answer("lease", folder + "/inner"), "busy");
