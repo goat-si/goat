@@ -199,8 +199,10 @@ export const targetLocator = (
     /\\.|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g,
     " ",
   );
-  if (/(?:^|>>)\s*\*?aria-ref\s*=/.test(engines)) {
-    const ref = /^\s*aria-ref\s*=\s*(\S+)\s*$/.exec(selector)?.[1];
+  // The tree shows a ref bare, so a bare GOAT ref is one; as CSS it would match nothing.
+  const bare = /^\s*(t3-\S+-(?:f\d+)?e\d+)\s*$/.exec(selector)?.[1];
+  if (bare !== undefined || /(?:^|>>)\s*\*?aria-ref\s*=/.test(engines)) {
+    const ref = bare ?? /^\s*aria-ref\s*=\s*(\S+)\s*$/.exec(selector)?.[1];
     const nativeRef = ref === undefined ? undefined : pageRefs.get(page)?.refs.get(ref);
     if (nativeRef === undefined) {
       throw new ServerBrowserOperationError(
@@ -246,13 +248,27 @@ export const elementOf = async (locator: Locator, timeout: number) => {
   return handle;
 };
 
+/** A wait for the target that timed out sent nothing, so the broker can report it unsent. */
+const unsentOnTimeout = (cause: unknown) =>
+  cause instanceof Error && cause.name === "TimeoutError"
+    ? new ServerBrowserOperationError(
+        "PreviewAutomationTimeoutError",
+        "The target was not found or not ready before the deadline, so no input was sent.",
+        { beforeInput: true },
+      )
+    : cause;
+
 /** Playwright's actionability waits, without the mouse move its trial runs make. */
 const settled = async (locator: Locator, deadline: number, enabled = true) => {
-  const handle = await elementOf(locator, remaining(deadline));
+  const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
+    throw unsentOnTimeout(cause);
+  });
   try {
     await handle.waitForElementState("visible", { timeout: remaining(deadline) });
     if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
     await handle.waitForElementState("stable", { timeout: remaining(deadline) });
+  } catch (cause) {
+    throw unsentOnTimeout(cause);
   } finally {
     void handle.dispose().catch(constVoid);
   }
@@ -261,7 +277,17 @@ const settled = async (locator: Locator, deadline: number, enabled = true) => {
 /** After the gate: Playwright's own last checks, briefly, and no wait for a navigation. */
 const dispatched = { timeout: DISPATCH_TIMEOUT_MS, noWaitAfter: true } as const;
 
-const targetPoint = async (
+const targetPoint = (
+  page: Page,
+  locator: Locator | null,
+  input: { readonly x?: number | undefined; readonly y?: number | undefined },
+  deadline: number,
+) =>
+  locatePoint(page, locator, input, deadline).catch((cause: unknown) => {
+    throw unsentOnTimeout(cause);
+  });
+
+const locatePoint = async (
   page: Page,
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
