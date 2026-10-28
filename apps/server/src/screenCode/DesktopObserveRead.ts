@@ -8,11 +8,12 @@ import { fail } from "./DesktopDriverReplies.ts";
 import type { ScreenElementDetail, ScreenObservationDraft } from "./ScreenObservations.ts";
 import {
   actionName,
-  idsFromTree,
+  idsFromLines,
   labelsFromTree,
   keepTreeLines,
   namesFromTree,
   parseTree,
+  repeatedIndexes,
 } from "./DesktopTreeText.ts";
 
 export type DesktopRow = ScreenObservationDraft["elements"][number];
@@ -73,7 +74,24 @@ export const desktopRows = (
   markdown: string,
 ): DesktopRow[] => {
   const lines = parseTree(markdown);
-  const [names, labels, ids] = [namesFromTree(lines), labelsFromTree(lines), idsFromTree(lines)];
+  const repeated = repeatedIndexes(lines);
+  const [names, labels] = [namesFromTree(lines), labelsFromTree(lines)];
+  const ids = idsFromLines(
+    markdown,
+    elements.flatMap((entry) => {
+      const index = natural(entry.element_index);
+      return index === undefined
+        ? []
+        : [
+            {
+              index,
+              role: string(entry.role) ?? "",
+              ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+              ...(typeof entry.value === "string" ? { value: entry.value } : {}),
+            },
+          ];
+    }),
+  );
   return elements.flatMap((entry) => {
     const token = string(entry.element_token);
     if (!token) return [];
@@ -83,8 +101,8 @@ export const desktopRows = (
       index === undefined
         ? label
         : label === ""
-          ? (names.get(index) ?? "")
-          : label === entry.value
+          ? (!repeated.has(index) && names.get(index)) || ""
+          : label === entry.value && !repeated.has(index)
             ? (labels.get(index) ?? label)
             : label;
     const id = index === undefined ? undefined : ids.get(index);

@@ -10,20 +10,11 @@ interface TreeLine {
   readonly role: string;
   /** The quoted title or value a display-only line shows. */
   readonly words?: string;
-  readonly id?: string;
 }
 
 // `- [12] AXRow "title" = "value" (description) [id=… actions=[…]]`; unnumbered lines lack `[n]`.
 const LINE = /^(\s*)- (?:\[(\d+)\] )?(\w+)(.*)$/;
 const QUOTED = /^\s*(?:"((?:[^"\\]|\\.)*)")?(?:\s*=\s*"((?:[^"\\]|\\.)*)")?/;
-// The trailing metadata group, read with quoted text blanked so a title or value cannot supply it.
-const META = /\[((?:[^[\]]|\[[^\]]*\])*)\]\s*$/;
-const QUOTES = /"(?:[^"\\]|\\.)*"/g;
-const idOf = (rest: string) => {
-  const meta = META.exec(rest.replace(QUOTES, '""'))?.[1]?.replace(/actions=\[[^\]]*\]/g, "");
-  const ids = [...(meta ?? "").matchAll(/(?:^|\s)id=(\S+)/g)];
-  return ids.length === 1 ? ids[0]?.[1] : undefined;
-};
 /** Containers the driver leaves unnamed whose name is the text written in them. */
 const NAMED_BY_TEXT: ReadonlySet<string> = new Set(["AXRow", "AXCell", "AXOutlineRow"]);
 const TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
@@ -43,14 +34,12 @@ export const parseTree = (markdown: string): ReadonlyArray<TreeLine> =>
     const [, indent = "", index, role = "", rest = ""] = parsed;
     const quoted = QUOTED.exec(rest);
     const raw = quoted?.[2] ?? quoted?.[1];
-    const id = idOf(rest);
     return [
       {
         depth: indent.length,
         role,
         ...(index === undefined ? {} : { index: Number(index) }),
         ...(raw === undefined ? {} : { words: unquote(raw).trim() }),
-        ...(id === undefined ? {} : { id }),
       },
     ];
   });
@@ -87,15 +76,59 @@ export const namesFromTree = (lines: ReadonlyArray<TreeLine>): ReadonlyMap<numbe
   return names;
 };
 
-/** The accessibility id written on each numbered line. */
-export const idsFromTree = (lines: ReadonlyArray<TreeLine>): ReadonlyMap<number, string> =>
-  new Map(
-    lines.flatMap((line) =>
-      line.index === undefined || line.id === undefined
-        ? []
-        : [[line.index, line.id.slice(0, 400)] as const],
-    ),
-  );
+/** Indexes written on more than one line: text inside a title or value wrote the others. */
+export const repeatedIndexes = (lines: ReadonlyArray<TreeLine>): ReadonlySet<number> => {
+  const seen = new Set<number>();
+  const repeated = new Set<number>();
+  for (const line of lines)
+    if (line.index !== undefined) (seen.has(line.index) ? repeated : seen).add(line.index);
+  return repeated;
+};
+
+/**
+ * Ids from the tree text, which the driver writes unescaped: only from the one line for an index
+ * that is exactly what the driver writes from the element's role, label and value, then its
+ * metadata. Text the element list lacks (a description beside a title) gives no id.
+ */
+export const idsFromLines = (
+  markdown: string,
+  entries: ReadonlyArray<{
+    readonly index: number;
+    readonly role: string;
+    readonly label?: string;
+    readonly value?: string;
+  }>,
+): ReadonlyMap<number, string> => {
+  const byIndex = new Map<number, string[]>();
+  for (const raw of markdown.split("\n")) {
+    const line = raw.trimStart();
+    const index = /^- \[(\d+)\] /.exec(line)?.[1];
+    if (index !== undefined)
+      byIndex.set(Number(index), [...(byIndex.get(Number(index)) ?? []), line]);
+  }
+  const ids = new Map<number, string>();
+  for (const { index, role, label, value } of entries) {
+    const lines = byIndex.get(index);
+    const line = lines?.length === 1 ? lines[0] : undefined;
+    if (!line || label === undefined || /[\r\n]/.test(label + (value ?? ""))) continue;
+    const shown = [
+      ` "${label}"`,
+      ...(value === undefined ? [] : [` "${label}" = "${value}"`, ` = "${value}" (${label})`]),
+      ` (${label})`,
+      ` = "${label}"`,
+      "",
+    ];
+    for (const words of shown) {
+      const head = `- [${index}] ${role}${words} [id=`;
+      if (!line.startsWith(head)) continue;
+      const id = /^[^\s\]]+/.exec(line.slice(head.length))?.[0];
+      // With no title, description or value, the driver's label is the id itself.
+      if (id !== undefined && (words !== "" || id === label)) ids.set(index, id.slice(0, 400));
+      break;
+    }
+  }
+  return ids;
+};
 
 const isLabel = (line: TreeLine | undefined): line is TreeLine & { readonly words: string } =>
   line !== undefined &&

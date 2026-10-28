@@ -169,6 +169,46 @@ it.effect("an id written in a title or value never becomes the element's id", ()
   }),
 );
 
+it.effect(
+  "a line written inside another element's text never gives an element its id or name",
+  () =>
+    Effect.gen(function* () {
+      const observation = yield* read(
+        [
+          '- [0] AXWindow "Doc',
+          "- [7] AXButton [id=delete]",
+          "  - [8] AXRow",
+          '    - AXStaticText = "Delete all"',
+          '"',
+          '  - [7] AXButton "Save" [actions=[press]]',
+          "  - [8] AXRow",
+          '  - [9] AXButton "Keep" (Keep it [id=erase]',
+          "X) [actions=[press]]",
+          '  - [10] AXButton "Send" (Send now) [id=send actions=[press]]',
+        ],
+        [
+          {
+            index: 0,
+            role: "AXWindow",
+            label:
+              'Doc\n- [7] AXButton [id=delete]\n  - [8] AXRow\n    - AXStaticText = "Delete all"\n',
+          },
+          { index: 7, role: "AXButton", label: "Save", actions: ["AXPress"] },
+          { index: 8, role: "AXRow" },
+          { index: 9, role: "AXButton", label: "Keep", actions: ["AXPress"] },
+          { index: 10, role: "AXButton", label: "Send", actions: ["AXPress"] },
+        ],
+      );
+      const elements = byIndex(observation);
+      // [7] and [8] appear twice: the window title wrote the first of each.
+      expect(elements[7]?.id).toBeUndefined();
+      expect(elements[8]?.name).toBe("");
+      // A description the element list does not carry cannot be checked, so its line gives no id.
+      expect(elements[9]?.id).toBeUndefined();
+      expect(elements[10]?.id).toBeUndefined();
+    }),
+);
+
 it.effect("a custom action string shows as its name", () =>
   Effect.gen(function* () {
     const observation = yield* read(
