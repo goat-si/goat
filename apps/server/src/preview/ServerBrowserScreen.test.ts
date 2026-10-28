@@ -1,10 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+  EnvironmentId,
   ThreadId,
   type PreviewAutomationRequest,
 } from "@goat/contracts";
-import { assertScreenExpectation, type ScreenTab } from "./ServerBrowserScreen.ts";
+import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
+import { assertScreenExpectation, makeSurface, type ScreenTab } from "./ServerBrowserScreen.ts";
 
 const tab = (documentGeneration: number) =>
   ({
@@ -43,4 +46,60 @@ describe("screen expectation at the input gate", () => {
     // Element actions carry no document; Playwright refs already fail on a new document.
     expect(() => assertScreenExpectation(tab(2), request())).not.toThrow();
   });
+});
+
+describe("the agent's position on a screen tab", () => {
+  it.effect(
+    "a cursor state redraws the agent's last pointer on that document under its owner",
+    () =>
+      Effect.gen(function* () {
+        const seen: ServerBrowserViewerOutput[] = [];
+        const agentTab = {
+          threadId: "thread",
+          tabId: "tab",
+          control: { agentId: "agent", isPrivate: false, controller: null },
+          page: { url: () => "https://example.test/" },
+          desktop: null,
+          viewers: new Set([
+            { push: (output: ServerBrowserViewerOutput) => void seen.push(output) },
+          ]),
+          documentGeneration: 1,
+        } as unknown as ScreenTab & { documentGeneration: number };
+        const surface = makeSurface(
+          (threadId, tabId) => (threadId === "thread" && tabId === "tab" ? agentTab : undefined),
+          () => {},
+        );
+        const owner = {
+          environmentId: EnvironmentId.make("environment"),
+          runId: "run",
+          turnId: "turn",
+          targetId: "target",
+          generation: 1,
+        };
+        const state = (sequence: number, phase: "thinking" | "resting") =>
+          surface.service.cursorState({
+            threadId: "thread",
+            tabId: "tab",
+            cursor: { identity: { ...owner, sequence }, phase },
+          });
+        // The click's pointer reached the tab before the cell's thinking state did.
+        surface.showPointer(agentTab, 140, 50, "click");
+        yield* state(1, "thinking");
+        expect(seen.at(-1)).toEqual({
+          _tag: "pointer",
+          phase: "move",
+          x: 140,
+          y: 50,
+          sequence: 2,
+          cursor: { identity: { ...owner, sequence: 1 }, phase: "thinking" },
+        });
+        // A new document moved everything; the old position is not redrawn on it.
+        agentTab.documentGeneration = 2;
+        yield* state(2, "resting");
+        expect(seen.at(-1)).toEqual({
+          _tag: "cursor-state",
+          cursor: { identity: { ...owner, sequence: 2 }, phase: "resting" },
+        });
+      }),
+  );
 });
