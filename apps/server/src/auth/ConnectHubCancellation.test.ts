@@ -44,6 +44,7 @@ it.effect.each([true, false])(
               ),
         },
       });
+      yield* runtime.auth.setCloudLinkTrust("test-account");
       yield* runtime.settings.start;
       yield* runtime.settings.updateSettings({
         hub: { enabled: true, connectDevicesHubProxy: !allowed },
@@ -147,7 +148,8 @@ it.effect(
       const next = yield* Runtime.open({ fs: nextWatch.fs });
       yield* next.settings.start;
       yield* next.settings.ready;
-      expect(yield* next.access.current).toMatchObject({ allowed: true, fenced: false });
+      expect(yield* next.access.current).toMatchObject({ allowed: false, fenced: false });
+      expect((yield* next.settings.getSettings).hub.connectDevicesHubProxy).toBe(false);
       expect(admits(old, yield* next.access.current)).toBe(false);
       expect(yield* fs.exists(`${config.stateDir}/connect-hub-access.fence`)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(Runtime.storage)),

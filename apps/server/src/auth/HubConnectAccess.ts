@@ -225,10 +225,15 @@ const make = Effect.gen(function* () {
             const current = yield* SubscriptionRef.get(state);
             if (allowed && current.fenced)
               return yield* new HubConnectAccessError({ cause: "Withdrawal fence pending" });
-            if (!allowed && (!initialized || current.allowed || current.fenced)) yield* withdraw();
+            const withdrawn =
+              !allowed && (!initialized || current.allowed || current.fenced)
+                ? yield* Effect.exit(withdraw())
+                : Exit.void;
             // An unchanged allow at startup preserves current-generation sessions.
             if (allowed && !current.allowed && initialized) yield* cleanup;
             const result = yield* commit;
+            // Persist opt-out even when withdrawal fails, so stale consent cannot reopen access.
+            if (Exit.isFailure(withdrawn)) return yield* Effect.failCause(withdrawn.cause);
             if (allowed && !current.allowed) {
               yield* sql`UPDATE hub_connect_access SET allowed = 1 WHERE id = 1`.pipe(
                 Effect.mapError((cause) => new HubConnectAccessError({ cause })),

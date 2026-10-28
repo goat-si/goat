@@ -26,6 +26,7 @@ it.effect(
       const config = yield* Config.ServerConfig;
       const watch = yield* Runtime.watcher;
       const first = yield* Runtime.open({ fs: watch.fs });
+      yield* first.auth.setCloudLinkTrust("test-account");
       yield* first.settings.start;
       yield* first.settings.updateSettings({
         hub: { enabled: true, connectDevicesHubProxy: true },
@@ -36,6 +37,7 @@ it.effect(
         scopes: ["hub:proxy"],
         connectAccessGeneration: (yield* first.access.current).generation,
       });
+      yield* first.auth.authenticateHttpRequest(request(token.token));
       yield* sql`CREATE TRIGGER fail_connect_bump BEFORE UPDATE ON hub_connect_access BEGIN SELECT RAISE(FAIL, 'injected startup write failure'); END`;
       yield* first.settings
         .updateSettings({ hub: { connectDevicesHubProxy: false } })

@@ -12,7 +12,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
-import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
+import { CLOUD_LINKED_USER_ID, CLOUD_WITHDRAWAL_FENCE } from "../cloud/config.ts";
 import { assert, it } from "@effect/vitest";
 import * as RelayClient from "@goat/shared/relayClient";
 import * as Effect from "effect/Effect";
@@ -59,15 +59,18 @@ it.effect("does not install the relay client when the user declines the managed 
   }),
 );
 
-/** Captures console lines from a successful local disconnect report. */
-
 it.effect.each(["credential-failure", "pending-delete"] as const)(
-  "logout clears authorization and reports a retry command during %s",
+  "logout removes CLI authorization and fences retained link trust during %s",
   (mode) =>
     Effect.gen(function* () {
       const values = new Map<string, Uint8Array>([
         ["cloud-cli-desired-link", new TextEncoder().encode("managed")],
         [CLOUD_LINKED_USER_ID, new TextEncoder().encode("user-1")],
+        ["cloud-cli-oauth-token", new TextEncoder().encode("cached-oauth")],
+      ]);
+      const pendingLink = new Map([
+        [CLOUD_LINKED_USER_ID, new TextEncoder().encode("user-1")],
+        [CLOUD_WITHDRAWAL_FENCE, new TextEncoder().encode("pending")],
       ]);
       let cleared = false;
       const warnings: string[] = [];
@@ -111,6 +114,7 @@ it.effect.each(["credential-failure", "pending-delete"] as const)(
           hasCredential: Effect.succeed(true),
           store: () => Effect.die("unused"),
           clear: Effect.sync(() => {
+            values.delete("cloud-cli-oauth-token");
             cleared = true;
           }),
         }),
@@ -131,14 +135,17 @@ it.effect.each(["credential-failure", "pending-delete"] as const)(
       if (mode === "pending-delete") {
         yield* Deferred.await(started);
         assert.isTrue(cleared);
-        assert.equal(values.size, 0);
+        assert.isFalse(values.has("cloud-cli-oauth-token"));
+        assert.deepEqual(values, pendingLink);
         yield* TestClock.adjust("5 seconds");
       }
       yield* Fiber.join(fiber);
       assert.include(warnings.join("\n"), "Remote revocation pending");
       assert.include(warnings.join("\n"), "goat connect login, then goat connect unlink");
       assert.isTrue(cleared);
-      assert.equal(values.size, 0);
+      assert.isFalse(values.has("cloud-cli-oauth-token"));
+      assert.deepEqual(values, pendingLink);
+      assert.include(warnings.join("\n"), "before relinking");
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

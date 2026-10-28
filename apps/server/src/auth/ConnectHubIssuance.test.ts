@@ -64,6 +64,7 @@ it.effect.each([
           ).pipe(Effect.andThen(store.issue(input))),
       }),
     });
+    yield* runtime.auth.setCloudLinkTrust("test-account");
     yield* runtime.settings.start;
     yield* runtime.settings.updateSettings({
       hub: { enabled: true, connectDevicesHubProxy: true },

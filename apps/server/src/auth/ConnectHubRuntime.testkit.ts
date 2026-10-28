@@ -68,7 +68,6 @@ export const open = Effect.fn("ConnectHubRuntime.open")(function* (
     Effect.provideService(FileSystem.FileSystem, fs),
   );
   const auth = Context.get(context, Auth.EnvironmentAuth);
-  yield* auth.setCloudLinkTrust("test-account");
   return {
     scope,
     context: Context.merge(dependencies, context),

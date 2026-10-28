@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import { ServerSettings } from "@goat/contracts";
 import {
   computeDpopAccessTokenHash,
   computeDpopJwkThumbprint,
@@ -14,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
@@ -22,7 +24,10 @@ import { FetchHttpClient, HttpClient, HttpServerRequest, HttpServerResponse } fr
 import * as Access from "../auth/HubConnectAccess.ts";
 import * as HubRpcSocket from "../auth/HubRpcSocket.ts";
 import * as Settings from "../serverSettings.ts";
+import * as Config from "../config.ts";
 import { authLayer, phoneScopes, serve, startHub } from "./testFixtures.ts";
+
+const decodeSettings = Schema.decodeEffect(Schema.fromJsonString(ServerSettings));
 
 const socket = Effect.fn("test.connectHubSocket")(function* (url: string) {
   const opened = Promise.withResolvers<void>();
@@ -185,6 +190,10 @@ it.effect.each([
         .pipe(Effect.result);
       expect(result._tag).toBe(doubleFailure ? "Failure" : "Success");
       expect((yield* access.current).allowed).toBe(false);
+      const persisted = yield* decodeSettings(
+        yield* fs.readFileString((yield* Config.ServerConfig).settingsPath),
+      );
+      expect(persisted.hub.connectDevicesHubProxy).toBe(false);
       yield* Deferred.succeed(release, undefined);
       yield* proxy.closed;
       yield* rpc.closed;
@@ -210,6 +219,8 @@ it.effect.each([
         yield* access.awaitRecovery;
       }
       const standard = yield* mint;
+      expect(standard.scopes).not.toContain("hub:proxy");
+      expect((yield* access.current).allowed).toBe(false);
       expect(yield* fetchStatus(standard).pipe(Effect.provide(FetchHttpClient.layer))).toBe(403);
       const pairedHttp = yield* Effect.gen(function* () {
         const http = yield* HttpClient.HttpClient;
