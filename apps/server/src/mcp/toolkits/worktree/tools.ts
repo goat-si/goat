@@ -1,3 +1,5 @@
+import * as Review from "../../../review/ReviewService.ts";
+import * as ReadSchemas from "../../scopedReadSchemas.ts";
 import {
   OrchestratorMcpFailure,
   ThreadId,
@@ -113,7 +115,36 @@ const WorktreeCleanupTool = Tool.make(agentSurfaceRegistry["worktree.cleanup"].n
   dependencies: worktreeHostDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["worktree.cleanup"]));
 
+const DiffPreviewTool = Tool.make(agentSurfaceRegistry["worktree.diff_preview"].name, {
+  description: agentSurfaceRegistry["worktree.diff_preview"].description,
+  parameters: ReadSchemas.DiffPreviewInput,
+  success: ReadSchemas.DiffPreviewResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Review.ReviewService,
+    ProjectService.ProjectService,
+    ThreadManagementService.ThreadManagementService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["worktree.diff_preview"]));
+const DiffFileTool = Tool.make(agentSurfaceRegistry["worktree.diff_file"].name, {
+  description: agentSurfaceRegistry["worktree.diff_file"].description,
+  parameters: ReadSchemas.DiffFileInput,
+  success: ReadSchemas.DiffFileResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Review.ReviewService,
+    ProjectService.ProjectService,
+    ThreadManagementService.ThreadManagementService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["worktree.diff_file"]));
+
 export const WorktreeToolkit = Toolkit.make(
+  DiffPreviewTool,
+  DiffFileTool,
   WorktreeHandoffTool,
   WorktreeStatusTool,
   WorktreeListTool,

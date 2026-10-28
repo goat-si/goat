@@ -1,3 +1,5 @@
+import type * as RelayConfiguration from "../Config.ts";
+import { policyUnitLayer, identityUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,12 +9,25 @@ import { relayManagedEndpointAllocations } from "../persistence/schema.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
 
 const layerWithDb = (db: RelayDb.RelayDb["Service"]) =>
-  ManagedEndpointAllocations.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, db)));
+  ManagedEndpointAllocations.layer.pipe(
+    Layer.provide(policyUnitLayer),
+    Layer.provide(
+      identityUnitLayer({
+        managedEndpointNamespace: "prod",
+        managedEndpointBaseDomain: "example.test",
+      } as RelayConfiguration.RelayConfiguration["Service"]),
+    ),
+    Layer.provide(Layer.succeed(RelayDb.RelayDb, db)),
+  );
 
 describe("ManagedEndpointAllocations", () => {
   it.effect("returns recovery support with tunnel allocation lookups", () => {
     const base = {
       userId: "user-1",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "environment.example.test",
       tunnelName: "managed-tunnel",
       dnsRecordId: "dns-1",

@@ -39,6 +39,11 @@ for await (const line of input) {
     continue;
   }
   if (message.id === undefined) continue;
+  if (message.method === 'tools/list') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id,
+      result: { tools: [{ name: 'click', description: 'driver click' }] } }) + '\\n');
+    continue;
+  }
   const name = message.params?.name;
   if (name === 'click' && message.params?.arguments?.hold === true) {
     held.push(message);
@@ -208,6 +213,9 @@ describe("lease proxy cross-process primitive gate", () => {
               GOAT_CUA_LEASE_AUTHORIZATION: "Bearer fixture",
               GOAT_CUA_DRIVER_MCP: JSON.stringify(descriptor),
               GOAT_CUA_PROXY_CHANNEL_TOKEN: authority.proxyChannelToken,
+              // A turn with goat_screen_run: the provider sees none of the driver's tools, and
+              // server clicks still go through this proxy.
+              GOAT_CUA_DRIVER_TOOLS: "hidden",
             },
             stdio: ["pipe", "pipe", "pipe"],
           },
@@ -430,10 +438,12 @@ describe("lease proxy cross-process primitive gate", () => {
         proxy.stdin.write(
           JSON.stringify({ jsonrpc: "2.0", id: 101, method: "tools/list", params: {} }) + "\n",
         );
-        assert.equal(
-          (JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as { id: number }).id,
-          101,
-        );
+        const listed = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
+          id: number;
+          result: { tools: unknown[] };
+        };
+        assert.equal(listed.id, 101);
+        assert.deepEqual(listed.result.tools, []);
         const heldOnA = yield* channel
           .request({
             threadId,

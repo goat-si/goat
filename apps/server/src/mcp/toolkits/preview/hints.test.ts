@@ -80,3 +80,49 @@ it("restarts the diff after the caller received a cut tree", async () => {
     base: "previous",
   });
 });
+
+it("keeps only failing diagnostics in a snapshot and counts the rest", async () => {
+  const { boundSnapshotMetadata } = await import("./snapshotTransport.ts");
+  const request = (url: string, status: number | null, failed = false) => ({
+    url,
+    method: "GET",
+    status,
+    failed,
+    timestamp: "2026-10-28T00:00:00.000Z",
+  });
+  const result = boundSnapshotMetadata({
+    url: "https://snapshot.test",
+    title: "Logs",
+    visibleText: "",
+    accessibilityTree: '- button "Save" [ref=goat-ref]',
+    interactiveElements: [],
+    consoleEntries: [
+      { level: "log", text: "ready", timestamp: "t" },
+      { level: "error", text: "boom", timestamp: "t" },
+    ],
+    networkEntries: [
+      request("https://snapshot.test/app.css", 200),
+      request("https://snapshot.test/missing.js", 404),
+      request("https://snapshot.test/api", null, true),
+    ],
+    actionTimeline: [],
+    treeComplete: true,
+  });
+  expect(result.value.consoleEntries).toEqual([{ level: "error", text: "boom", timestamp: "t" }]);
+  expect(result.value.networkEntries.map((entry) => (entry as { url: string }).url)).toEqual([
+    "https://snapshot.test/missing.js",
+    "https://snapshot.test/api",
+  ]);
+  expect(result.logNote).toBe(
+    "1 console and 1 network entries without errors left out; goat_preview_logs reads them.",
+  );
+  expect(result.value).toMatchObject({ treeComplete: true });
+  expect(result.omitted).toEqual([]);
+});
+
+it("tells a confirmed click from one that changed nothing", () => {
+  expect(previewHints("click", { effect: "confirmed", evidence: ["dom"] })).toEqual({});
+  expect(previewHints("click", { effect: "suspected_noop", evidence: [] })).toEqual({
+    next: "Nothing changed right after the click: check with goat_preview_snapshot diff:true before retrying.",
+  });
+});

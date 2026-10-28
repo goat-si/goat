@@ -282,6 +282,37 @@ describe("GOAT Bot turns", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect.each([1_500, 4_500])(
+    "delivers a %i-character turn answer whole, without rewording",
+    (length) => {
+      const opening =
+        "Docker images take 41 GB, which is why the disk is full.\n\nI did not run the prune, so nothing has been deleted yet.\n\nLargest folders: ";
+      const answer = (opening + "/var/lib/docker ".repeat(length)).slice(0, length - 1) + ".";
+      const harness = harnessWith(botModel);
+      const reworded: Array<string> = [];
+      harness.script.current = (input) => {
+        if (input.mode === "task_event") reworded.push(input.taskEvent?.summary ?? "");
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("look: why is the disk full?", "t3"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        harness.world.setStatus(task.worker!.threadId, 1, "completed", answer);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.lengthOf(answer, length);
+        const texts = (yield* botMessages).messages.map((message) => message.text);
+        assert.include(texts, answer);
+        assert.deepStrictEqual(reworded, []);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("records a follow-up with its reply, then steers the running run once", () => {
     const harness = harnessWith(botModel);
     return Effect.gen(function* () {

@@ -1,7 +1,15 @@
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import type { SettingsSearchItem } from "./settingsSearch";
 
 /** Settings → Hub. Old names stay in searchTerms so earlier labels still find them. */
 export const HUB_SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "hub-connect-access",
+    title: "Allow GOAT Connect devices to reach hub devices",
+    to: "/settings/hub",
+    isVisible: isGoatConnectEnabled,
+    searchTerms: ["connect hub access grant revoke devices standing consent account"],
+  },
   {
     id: "hub-enabled",
     title: "This machine is the hub",

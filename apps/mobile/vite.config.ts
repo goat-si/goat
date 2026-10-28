@@ -12,6 +12,7 @@ const reactTests = [
   "src/features/threads/use-visible-second-clock.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
+  "src/features/cloud/AccountDeletionSection.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",

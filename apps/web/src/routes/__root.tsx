@@ -90,6 +90,8 @@ export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     // Guest links open on the owner's tunnel host in a browser with no GOAT session, and must
     // not trigger pairing or an environment connection.
+    if (location.pathname === "/account/delete")
+      return { authGateState: { status: "hosted-static" } as const };
     if (location.pathname === GUEST_PAGE_PATH) {
       return {
         authGateState: {
@@ -174,7 +176,7 @@ function RootRouteBranch() {
     authGateState.status === "hosted-static",
   );
 
-  if (pathname === GUEST_PAGE_PATH) return <Outlet />;
+  if (pathname === GUEST_PAGE_PATH || pathname === "/account/delete") return <Outlet />;
 
   if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
     return (

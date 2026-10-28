@@ -40,13 +40,13 @@ export const isRelayUnavailable = (error: unknown): boolean =>
   isRelayRequestError(error) && error.rejection === "unavailable";
 
 // Retry-After is either delay-seconds or an HTTP date (RFC 9110 §10.2.3).
-const MAX_RELAY_RETRY_AFTER_MILLIS = 15 * 60 * 1000;
 function parseRetryAfterMillis(value: string | undefined, nowMillis: number): number | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
+  if (/^[+-]?\d/.test(trimmed) && !/^\d+$/.test(trimmed)) return undefined;
   const millis = /^\d+$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - nowMillis;
   if (!Number.isFinite(millis) || millis <= 0) return undefined;
-  return Math.min(millis, MAX_RELAY_RETRY_AFTER_MILLIS);
+  return millis;
 }
 
 /** The relay's requested wait, found anywhere in a failure's cause chain. */
@@ -61,6 +61,18 @@ export function relayRetryAfterMillis(error: unknown): number | undefined {
 
 function recoveryHint(error: RelayProtectedError): string {
   switch (error._tag) {
+    case "RelayAccountAccessDeniedError":
+      return error.reason === "not_invited"
+        ? "Ask the operator for a GOAT Connect invitation."
+        : "Contact the operator about this account suspension.";
+    case "RelayEnvironmentRelinkRequiredError":
+    case "RelayAccountEpochStaleError":
+      return "Run goat connect logout, then goat connect to link this machine again.";
+    case "RelayEnvironmentOwnerConflictError":
+    case "RelayEnvironmentOwnerMismatchError":
+      return "Unlink this environment from its existing account before linking another account.";
+    case "RelayRateLimitExceededError":
+      return `Wait at least ${error.retryAfterSeconds} seconds before retrying.`;
     case "RelayEnvironmentLinkLimitExceededError":
       return "Unlink an unused environment in GOAT Connect, then restart GOAT on this machine.";
     case "RelayAuthInvalidError":

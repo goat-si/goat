@@ -1,3 +1,7 @@
+import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
+import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
+import { settingsLayers } from "./serverSettingsLayers.ts";
+import * as HubConnectAccess from "./auth/HubConnectAccess.ts";
 import {
   DEFAULT_SERVER_SETTINGS as CLIENT_DEFAULT_SERVER_SETTINGS,
   ServerSettings as ClientServerSettings,
@@ -33,8 +37,6 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
-import { supervise } from "./backgroundSupervision.ts";
-import { fileWatchResync, watchEndedError } from "./fileWatchResync.ts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -44,7 +46,6 @@ import {
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
 } from "@goat/shared/serverSettings";
-import { resolveSymlinkTarget } from "@goat/shared/symlink";
 import { normalizeThemePreference } from "@goat/shared/themePalettes";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -1268,6 +1269,7 @@ function foldLegacyProjectSettings(
 
 const make = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const connectAccess = yield* ConnectHubSettings.make;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -1357,7 +1359,7 @@ const make = Effect.gen(function* () {
   const hasCommittedHubEpoch = (view: MemoryHubSettingsSnapshot) =>
     view.version !== 0 || view.settings.mode !== "disabled";
 
-  const publishExternalHub = (raw: string) =>
+  const publishExternalHub = (raw: string, publishConnectPolicy = true) =>
     Effect.gen(function* () {
       const decoded = decodeServerSettingsJsonExit(raw);
       const projection = decodeCommittedHubJson(raw);
@@ -1369,6 +1371,13 @@ const make = Effect.gen(function* () {
         Exit.isFailure(legacy) ||
         (projection.value.memoryHubVersion === undefined && hasCommittedHubEpoch(current))
       ) {
+        // Withdrawing Connect hub access never waits on the memory-hub projection.
+        if (
+          publishConnectPolicy &&
+          Exit.isSuccess(decoded) &&
+          !(decoded.value.hub.enabled && decoded.value.hub.connectDevicesHubProxy)
+        )
+          yield* connectAccess.commit(decoded.value.hub, Effect.void);
         yield* retainCommittedHub("invalid_settings");
         yield* Effect.logWarning(
           "invalid external settings projection, retaining committed memory hub",
@@ -1382,6 +1391,7 @@ const make = Effect.gen(function* () {
         );
         return false;
       }
+      if (publishConnectPolicy) yield* connectAccess.commit(decoded.value.hub, Effect.void);
       yield* ownerPublication.initialize(decoded.value);
       const {
         memoryHubProvenance: provenance,
@@ -1493,7 +1503,9 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const loadSettingsFromDisk = Effect.gen(function* () {
+  const loadSettingsFromDisk = Effect.fn("ServerSettings.loadFromDisk")(function* (
+    publishConnectPolicy = true,
+  ) {
     let settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
@@ -1503,7 +1515,7 @@ const make = Effect.gen(function* () {
     const settingsExists = yield* readConfigExists;
     if (settingsExists) {
       const raw = yield* readRawConfig;
-      settingsFileTrusted = yield* publishExternalHub(raw);
+      settingsFileTrusted = yield* publishExternalHub(raw, publishConnectPolicy);
       const decoded = decodeServerSettingsJsonExit(raw);
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
@@ -1674,7 +1686,7 @@ const make = Effect.gen(function* () {
     return { settings: migrated, parseFailure };
   });
 
-  const settingsCache = yield* Cache.makeWith((_key: typeof cacheKey) => loadSettingsFromDisk, {
+  const settingsCache = yield* Cache.makeWith((_key: typeof cacheKey) => loadSettingsFromDisk(), {
     capacity: 1,
     timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
   });
@@ -1863,34 +1875,38 @@ const make = Effect.gen(function* () {
       const updated = yield* update(current);
       if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
       if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))
-        return yield* materializeSettingsSecrets(current).pipe(
-          Effect.map(resolveTextGenerationProvider),
+        return yield* connectAccess.commit(
+          current.hub,
+          materializeSettingsSecrets(current).pipe(Effect.map(resolveTextGenerationProvider)),
         );
       const persisted = yield* persistSettingsSecrets(current, updated);
       const next = yield* normalizeServerSettings(persisted.settings);
-      const materialized = yield* Effect.uninterruptibleMask(() =>
-        Effect.gen(function* () {
-          const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
-          const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
-          if (Exit.isFailure(materializedExit)) {
-            yield* rollbackSecretChanges;
-            return yield* Effect.failCause(materializedExit.cause);
-          }
-          const writeExit = yield* Effect.exit(writeSettingsAtomically(next, transition));
-          if (Exit.isFailure(writeExit)) {
-            yield* rollbackSecretChanges;
-            return yield* Effect.failCause(writeExit.cause);
-          }
-          if (transition) yield* Ref.set(hubMarkerRef, transition);
-          // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
-          yield* Cache.set(settingsCache, cacheKey, {
-            settings: next,
-            parseFailure: Option.none(),
-          });
-          if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
-          yield* emitChange(next);
-          return materializedExit.value;
-        }),
+      const materialized = yield* connectAccess.commit(
+        next.hub,
+        Effect.uninterruptibleMask(() =>
+          Effect.gen(function* () {
+            const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+            const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
+            if (Exit.isFailure(materializedExit)) {
+              yield* rollbackSecretChanges;
+              return yield* Effect.failCause(materializedExit.cause);
+            }
+            const writeExit = yield* Effect.exit(writeSettingsAtomically(next, transition));
+            if (Exit.isFailure(writeExit)) {
+              yield* rollbackSecretChanges;
+              return yield* Effect.failCause(writeExit.cause);
+            }
+            if (transition) yield* Ref.set(hubMarkerRef, transition);
+            // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
+            yield* Cache.set(settingsCache, cacheKey, {
+              settings: next,
+              parseFailure: Option.none(),
+            });
+            if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
+            yield* emitChange(next);
+            return materializedExit.value;
+          }),
+        ),
       );
       return resolveTextGenerationProvider(materialized);
     });
@@ -1898,9 +1914,12 @@ const make = Effect.gen(function* () {
   const updateAndPersistSettings = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
     targetIds: ReadonlyArray<ProviderInstanceId> = [],
+    authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
   ) => {
     const attempt = writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
+        // Reloading publishes Connect policy, so a denied caller must not reach it.
+        if (authorizeAtCommit) yield* authorizeAtCommit;
         const { settings: current, parseFailure } = yield* reloadSettings;
         if (Option.isSome(parseFailure))
           return yield* new ServerSettingsError({
@@ -1988,84 +2007,32 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const watchFileChanges = (filePath: string) => {
-    const directory = pathService.dirname(filePath);
-    const fileName = pathService.basename(filePath);
-    const resolvedFilePath = pathService.resolve(filePath);
-    return fileWatchResync(directory).pipe(
-      Stream.provideService(FileSystem.FileSystem, fs),
-      Stream.filter(
-        (event) =>
-          event === undefined ||
-          event.path === fileName ||
-          event.path === filePath ||
-          pathService.resolve(directory, event.path) === resolvedFilePath,
-      ),
-      Stream.concat(
-        Stream.fail(watchEndedError(filePath, "Settings filesystem watcher ended unexpectedly")),
-      ),
-    );
-  };
-
-  const startWatcher = Effect.gen(function* () {
-    yield* fs.makeDirectory(pathService.dirname(settingsPath), { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            operation: "prepare-directory",
-            cause,
-          }),
-      ),
-    );
-
-    // Watch symlink targets' directories for rewrites; re-resolve link changes to follow repointing.
-    const watchLinkTarget = Effect.gen(function* () {
-      const linkTargetPath = yield* resolveSymlinkTarget(settingsPath).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, pathService),
-      );
-      if (linkTargetPath === pathService.resolve(settingsPath)) {
-        return Option.none<string>();
-      }
-      yield* fs.makeDirectory(pathService.dirname(linkTargetPath), { recursive: true });
-      return Option.some(linkTargetPath);
-    });
-    yield* supervise("ServerSettings.watch", () =>
-      Effect.gen(function* () {
-        const initialLinkTarget = yield* watchLinkTarget;
-        const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
-          Stream.concat(
-            watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget)),
-          ),
-          Stream.changes,
-          Stream.switchMap(
-            Option.match({
-              onNone: () => Stream.empty,
-              onSome: (linkTargetPath) => watchFileChanges(linkTargetPath),
-            }),
-          ),
-        );
-        yield* Stream.merge(watchFileChanges(settingsPath), linkTargetEvents).pipe(
-          Stream.debounce(Duration.millis(100)),
-          Stream.runForEach(() => revalidateAndEmit),
-        );
-      }),
-    ).pipe(Effect.forkIn(watcherScope), Effect.asVoid);
-  });
-
   const start = Effect.gen(function* () {
     const shouldStart = yield* Ref.modify(startedRef, (started) => [!started, true]);
     if (!shouldStart) {
       return yield* Deferred.await(startedDeferred);
     }
 
-    const startup = writeSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        yield* startWatcher;
-        yield* reloadSettings;
-      }),
-    );
+    const startup = Effect.gen(function* () {
+      yield* ServerSettingsWatcher.start(settingsPath, revalidateAndEmit.pipe(Effect.asVoid)).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, pathService),
+        Effect.provideService(Scope.Scope, watcherScope),
+      );
+      yield* connectAccess.startup(
+        writeSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const loaded = yield* loadSettingsFromDisk(false);
+            yield* connectAccess.commit(
+              loaded.settings.hub,
+              Cache.set(settingsCache, cacheKey, loaded).pipe(
+                Effect.andThen(emitChange(loaded.settings)),
+              ),
+            );
+          }),
+        ),
+      );
+    });
 
     const startupExit = yield* Effect.exit(startup);
     if (startupExit._tag === "Failure") {
@@ -2103,15 +2070,19 @@ const make = Effect.gen(function* () {
             Effect.flatMap(() => stampGoatclaw(current, applyServerSettingsPatch(current, patch))),
           ),
         Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
+        authorizeAtCommit,
       ),
     updateSettingsWith: (patchFor, authorizeAtCommit) =>
-      updateAndPersistSettings((current) =>
-        Effect.gen(function* () {
-          if (authorizeAtCommit) yield* authorizeAtCommit;
-          const patch = yield* patchFor(current);
-          yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-          return yield* stampGoatclaw(current, applyServerSettingsPatch(current, patch));
-        }),
+      updateAndPersistSettings(
+        (current) =>
+          Effect.gen(function* () {
+            if (authorizeAtCommit) yield* authorizeAtCommit;
+            const patch = yield* patchFor(current);
+            yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
+            return yield* stampGoatclaw(current, applyServerSettingsPatch(current, patch));
+          }),
+        [],
+        authorizeAtCommit,
       ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
       updateAndPersistSettings(
@@ -2144,6 +2115,7 @@ const make = Effect.gen(function* () {
             return applyProviderInstanceMutation(patched, effectiveMutation);
           }),
         [mutation.instanceId],
+        authorizeAtCommit,
       ),
     applyMemoryHubTransition: (input, permit) =>
       writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
@@ -2199,26 +2171,8 @@ const make = Effect.gen(function* () {
       ownerPolicyAdministration: MemoryOwnerSourceReadPolicyAdministration["Service"];
     };
 });
-const settingsLayers = (
-  service: ServerSettingsService["Service"] &
-    MemoryHubSettingsTransitions["Service"] & {
-      adminSettings: MemoryHubAdminSettings["Service"];
-      committedHubSettings: MemoryHubCommittedSettings["Service"];
-      committedProviderPolicy: MemoryProviderCommittedPolicy["Service"];
-      committedOwnerPolicy: MemoryOwnerSourceReadCommittedPolicy["Service"];
-      ownerPolicyAdministration: MemoryOwnerSourceReadPolicyAdministration["Service"];
-    },
-) =>
-  Layer.mergeAll(
-    Layer.succeed(ServerSettingsService, service),
-    Layer.succeed(MemoryHubCommittedSettings, service.committedHubSettings),
-    Layer.succeed(MemoryProviderCommittedPolicy, service.committedProviderPolicy),
-    Layer.succeed(MemoryOwnerSourceReadCommittedPolicy, service.committedOwnerPolicy),
-    Layer.succeed(MemoryOwnerSourceReadPolicyAdministration, service.ownerPolicyAdministration),
-    Layer.succeed(MemoryHubAdminSettings, service.adminSettings),
-    Layer.succeed(MemoryHubSettingsTransitions, {
-      applyMemoryHubTransition: service.applyMemoryHubTransition,
-    }),
-  );
 
-export const layer = Layer.unwrap(make.pipe(Effect.map(settingsLayers)));
+export const layerWithConnectAccess = Layer.unwrap(make.pipe(Effect.map(settingsLayers)));
+export const layer = layerWithConnectAccess.pipe(
+  Layer.provide(Layer.unwrap(Effect.sync(() => HubConnectAccess.layer))),
+);

@@ -6,6 +6,7 @@ import type { SQL } from "drizzle-orm";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import * as RelayDb from "../db.ts";
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
 import * as ClientKeys from "./ClientKeys.ts";
 import { relayClientKeys } from "../persistence/schema.ts";
 
@@ -71,6 +72,9 @@ function run<A, E>(rows: Row[], program: Effect.Effect<A, E, ClientKeys.ClientKe
     const db = yield* memoryDatabase(rows);
     return yield* program.pipe(
       Effect.provide(ClientKeys.layer),
+      Effect.provideService(AccountTransactions, {
+        run: (_input, effect) => db.$client.withTransaction(effect),
+      }),
       Effect.provideService(ConnectAccounts.ConnectAccounts, {
         authorize: () => Effect.succeed(1),
         check: () => Effect.succeed(true),

@@ -655,8 +655,11 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "retained-tool-history",
     pattern: /t3_[a-z_]+|t3\[-_ \]\?code|t3-code|t3code/g,
-    scope: (path) => path === "packages/shared/src/goatMcpToolPresentation.ts",
-    reason: "Presentation aliases recognize tool names in existing thread history (D12).",
+    scope: (path) =>
+      path === "packages/shared/src/goatMcpToolPresentation.ts" ||
+      path === "packages/shared/src/goatMcpToolDefinition.ts",
+    reason:
+      "Presentation aliases and the tool icon recognize names in existing thread history (D12).",
   },
   {
     id: "message-attribution",

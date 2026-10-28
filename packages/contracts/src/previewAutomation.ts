@@ -128,6 +128,8 @@ export const PreviewAutomationStatus = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
   loading: Schema.Boolean,
+  /** Server hosts: moves on every main-frame navigation, so screenshot points from an older one fail. */
+  documentGeneration: Schema.optional(Schema.Number),
   control: Schema.optional(PreviewAutomationTabControl),
   dialog: Schema.optional(
     Schema.NullOr(

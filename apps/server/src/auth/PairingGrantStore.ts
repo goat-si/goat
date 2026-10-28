@@ -28,6 +28,7 @@ export interface BootstrapGrant {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
   readonly label?: string;
+  readonly connectAccessGeneration?: number;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.DateTime;
 }
@@ -202,6 +203,7 @@ export interface IssuedBootstrapCredential {
   readonly id: string;
   readonly credential: string;
   readonly label?: string;
+  readonly connectAccessGeneration?: number;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.Utc;
 }
@@ -227,6 +229,7 @@ export class PairingGrantStore extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
       readonly label?: string;
+      readonly connectAccessGeneration?: number;
       readonly proofKeyThumbprint?: string;
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialInternalError>;
@@ -239,6 +242,7 @@ export class PairingGrantStore extends Context.Service<
     readonly consume: (
       credential: string,
       input?: {
+        readonly connectAccessGeneration?: number;
         readonly proofKeyThumbprint?: string;
         readonly requestedScopes?: ReadonlyArray<AuthEnvironmentScope>;
       },
@@ -421,6 +425,7 @@ const make = Effect.gen(function* () {
         subject,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
+        connectAccessGeneration: input?.connectAccessGeneration ?? null,
         createdAt: now,
         expiresAt: expiresAt,
       })
@@ -531,6 +536,9 @@ const make = Effect.gen(function* () {
                 method: grant.method,
                 scopes: grant.scopes,
                 subject: grant.subject,
+                ...(grant.connectAccessGeneration !== undefined
+                  ? { connectAccessGeneration: grant.connectAccessGeneration }
+                  : {}),
                 ...(grant.label ? { label: grant.label } : {}),
                 ...(grant.proofKeyThumbprint
                   ? { proofKeyThumbprint: grant.proofKeyThumbprint }
@@ -569,6 +577,9 @@ const make = Effect.gen(function* () {
           method: consumed.value.method,
           scopes: consumed.value.scopes,
           subject: consumed.value.subject,
+          ...(consumed.value.connectAccessGeneration != null
+            ? { connectAccessGeneration: consumed.value.connectAccessGeneration }
+            : {}),
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           ...(consumed.value.proofKeyThumbprint
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }

@@ -10,7 +10,7 @@ export const channelEntries = {
     description:
       "Send an agent message to GOAT's front desk and return an inputId for its reply. Reuse clientRequestId to retry safely.",
     guide:
-      "Read the answer with goat_channel_input_read and the returned inputId. Agents can ask how work is going; only people can start work or answer a task's questions through the front desk.\n\nUse conversationKey to keep related messages in one conversation; it defaults to one conversation per caller. The current description says the front desk answers within seconds; that timing is unverified and is not a guaranteed deadline.",
+      "Read the answer with goat_channel_input_read and the returned inputId. Agents can ask how work is going; only people can start work or answer a task's questions through the front desk.\n\nUse conversationKey to keep related messages in one conversation; it defaults to one conversation per caller. The current description says the front desk answers within seconds; that timing is unverified and is not a guaranteed deadline. Connecting Slack and linking or unlinking a person's channel identity are a person's steps in Settings; agents have no path for them.",
     effect: "write",
     capability: "none",
     capabilityReason: "Agents can only ask the front desk; only people start work through it.",

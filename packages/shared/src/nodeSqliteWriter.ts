@@ -1,6 +1,7 @@
 import * as NodeWorkerThreads from "node:worker_threads";
 import { identity } from "effect/Function";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Duration from "effect/Duration";
@@ -74,6 +75,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   let initialized = false;
+  let closing = false;
   let retirement: Promise<number> | undefined;
   const retire = (worker: NodeWorkerThreads.Worker) => (retirement ??= worker.terminate());
   const worker = yield* Effect.acquireRelease(
@@ -94,12 +96,17 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
             ),
           },
         }),
-      catch: (cause) => failure(cause, "open"),
+      catch: (cause) => {
+        const error = failure(cause, "open");
+        options.onFatalPersistence?.(error);
+        return error;
+      },
     }),
     (worker) =>
-      Effect.promise(() => retire(worker)).pipe(
-        Effect.catchCause(() => Effect.logWarning("SQLite writer retirement failed")),
-      ),
+      Effect.promise(() => {
+        closing = true;
+        return retire(worker);
+      }).pipe(Effect.catchCause(() => Effect.logWarning("SQLite writer retirement failed"))),
   );
   const requests = yield* Semaphore.make(1);
   let sequence = 0;
@@ -115,7 +122,9 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   });
   let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
   const failPending = (cause: unknown) => {
-    stopped ??= failure(cause, "execute");
+    if (stopped !== undefined) return;
+    stopped = failure(cause, "execute");
+    if (!closing) options.onFatalPersistence?.(stopped);
     const request = pending;
     pending = undefined;
     request?.resume({
@@ -167,6 +176,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
       } catch (cause) {
         pending = undefined;
         worker.unref();
+        if (!(cause instanceof Error && cause.name === "DataCloneError")) failPending(cause);
         resume(Effect.fail(failure(cause, "execute")));
       }
     }).pipe(
@@ -177,8 +187,9 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     );
   }, Effect.uninterruptible);
   yield* Effect.addFinalizer(() =>
-    Effect.suspend(() =>
-      initialized && stopped === undefined
+    Effect.suspend(() => {
+      closing = true;
+      return initialized && stopped === undefined
         ? send({ type: "close" }).pipe(
             Effect.flatMap((reply) =>
               reply.error === undefined
@@ -188,11 +199,13 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
             Effect.catch(() => Effect.logWarning("SQLite writer close failed")),
             requests.withPermits(1),
           )
-        : Effect.void,
-    ),
+        : Effect.void;
+    }),
   );
+  let startupRefused = false;
   yield* recover(
     Effect.callback<void, SqlError>((resume) => {
+      startupRefused = false;
       const cleanup = () => {
         worker.off("message", ready);
         worker.off("error", error);
@@ -210,6 +223,7 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
           resume(Effect.void);
         }
         if (reply.type === "unavailable") {
+          startupRefused = true;
           cleanup();
           resume(Effect.fail(nativeFailure(reply, "open")));
         }
@@ -232,9 +246,11 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   ).pipe(
     Effect.timeout("10 seconds"),
     Effect.mapError((cause) => (isSqlError(cause) ? cause : failure(cause, "open"))),
-    Effect.onError(() =>
+    Effect.onError((cause) =>
       Effect.sync(() => {
+        if (!startupRefused && !Cause.hasInterruptsOnly(cause)) failPending(cause);
         // Return the startup error now; the owning scope still awaits native retirement.
+        closing = true;
         worker.unref();
         retire(worker);
       }),

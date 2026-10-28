@@ -11,6 +11,12 @@ import type { PreviewAutomationSnapshot } from "@goat/contracts";
 // Playwright single-quotes a tree line whose name contains ": ".
 const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
 
+/** State and geometry a driver reports for an element; carried to the agent unchanged. */
+export type ScreenElementDetail = Pick<
+  ScreenObservation["elements"][number],
+  "actions" | "enabled" | "selected" | "frame" | "range" | "parent"
+>;
+
 export interface ScreenObservationDraft {
   readonly targetRef: ScreenTargetRef;
   readonly targetGeneration: number;
@@ -22,12 +28,16 @@ export interface ScreenObservationDraft {
   readonly title?: string;
   readonly url?: string;
   readonly lineage?: string;
-  readonly elements: readonly {
+  /** Regions the source left out, such as frames it could not read. */
+  readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
+  readonly elements: readonly ({
     readonly role: string;
     readonly name: string;
     readonly text?: string;
     readonly driverToken: string;
-  }[];
+    /** The number the tree text shows for this element; its position when absent. */
+    readonly index?: number;
+  } & ScreenElementDetail)[];
 }
 
 class ObservationIndex {
@@ -149,6 +159,10 @@ class ObservationIndex {
   invalidateTarget(targetId: string): void {
     this.byTarget.delete(targetId);
   }
+  /** Screenshot points name pixels, which any input can scroll or replace; element refs remain. */
+  invalidatePoints(targetId: string): void {
+    this.byTarget.get(targetId)?.regions.clear();
+  }
 }
 
 export class ScreenObservations {
@@ -175,6 +189,8 @@ export class ScreenObservations {
     readonly targetGeneration: number;
     readonly connectionId: string;
     readonly controlGeneration: number;
+    /** The main-frame document the browser reported; a reload with the same URL moves it. */
+    readonly documentGeneration?: number;
     readonly snapshot: PreviewAutomationSnapshot;
   }): ScreenObservationDraft {
     const { snapshot } = input;
@@ -204,13 +220,22 @@ export class ScreenObservations {
       targetRef: input.targetRef,
       targetGeneration: input.targetGeneration,
       surfaceGeneration: generation.generation,
-      lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${snapshot.url}`,
+      lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${input.documentGeneration ?? ""}\u0000${snapshot.url}`,
       indexedText: tree,
       complete: snapshot.treeComplete === true && validGeneration,
       truncated: snapshot.treeComplete !== true || !validGeneration,
       loading: snapshot.loading,
       title: snapshot.title.slice(0, 1024),
       url: snapshot.url.slice(0, 8192),
+      ...(snapshot.omitted === undefined || snapshot.omitted.length === 0
+        ? {}
+        : {
+            omitted: snapshot.omitted.map((reason) =>
+              reason === "unread_frames"
+                ? { kind: "frames" as const }
+                : { kind: "budget" as const, detail: reason },
+            ),
+          }),
       elements: snapshot.treeComplete === true && validGeneration ? elements : [],
     };
   }
@@ -224,6 +249,8 @@ export class ScreenObservations {
     prediffed?: boolean;
     /** Why a read the caller asked to diff came back full. */
     resetReason?: string;
+    /** What the read covered; omitted means the whole window or page. */
+    scope?: string;
     limits: { readonly treeBytes: number };
   }): ScreenObservation {
     const { draft } = input;
@@ -231,6 +258,7 @@ export class ScreenObservations {
     let mode: ScreenObservation["mode"] = input.mode;
     let resetReason = input.resetReason;
     const currentLines = draft.indexedText.split("\n");
+    const scope = input.scope ?? (draft.targetRef.kind === "app" ? "window" : "page");
     let selected = draft.elements;
     let renderedText = draft.indexedText;
     let queryTruncated = false;
@@ -274,6 +302,11 @@ export class ScreenObservations {
       selected = draft.elements.filter((element) => matchingRefs.has(element.driverToken));
       renderedText = lines.filter((_, index) => included.has(index)).join("\n");
     }
+    // A diff against a read of another scope would report filtered rows as removed.
+    if (mode === "diff" && !input.prediffed && old && old.observation.scope !== scope) {
+      mode = "full";
+      resetReason = "scope_changed";
+    }
     if (mode === "diff" && !input.prediffed) {
       const valid =
         old &&
@@ -315,15 +348,24 @@ export class ScreenObservations {
     const observationId = NodeCrypto.randomUUID();
     const tokens = new Map<string, string>();
     const editable = new Set<string>();
-    const elements = selected.slice(0, 4096).map((element, index) => {
+    const elements = selected.slice(0, 4096).map((element, position) => {
       const id = NodeCrypto.randomUUID();
       tokens.set(id, element.driverToken);
       if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
+      const { actions, enabled, selected: isSelected, frame, range, parent } = element;
       return {
-        index,
+        index: element.index ?? position,
         role: element.role.slice(0, 200),
         name: element.name.slice(0, 1024),
         ...(element.text === undefined ? {} : { text: element.text.slice(0, 4096) }),
+        ...(actions === undefined
+          ? {}
+          : { actions: actions.slice(0, 16).map((action) => action.slice(0, 80)) }),
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(isSelected === undefined ? {} : { selected: isSelected }),
+        ...(frame === undefined ? {} : { frame }),
+        ...(range === undefined ? {} : { range }),
+        ...(parent === undefined ? {} : { parent }),
         ref: {
           id,
           targetId: draft.targetRef.id,
@@ -332,6 +374,16 @@ export class ScreenObservations {
         },
       };
     });
+    // A tab's tree names elements by Playwright ref; show the same numbers an app's tree shows.
+    if (draft.targetRef.kind === "tab") {
+      const numbers = new Map(
+        selected.slice(0, 4096).map((element, position) => [element.driverToken, position]),
+      );
+      renderedText = renderedText.replace(/ ?\[ref=([^\]]+)\]/g, (marker, ref: string) => {
+        const number = numbers.get(`aria-ref=${ref}`);
+        return number === undefined ? "" : ` [${number}]`;
+      });
+    }
     let text = Buffer.from(renderedText, "utf8")
       .subarray(0, Math.min(input.limits.treeBytes, 128 * 1024))
       .toString("utf8");
@@ -340,6 +392,13 @@ export class ScreenObservations {
       queryTruncated ||
       text.length !== renderedText.length ||
       elements.length !== selected.length;
+    const omittedNow = () =>
+      [
+        ...(draft.omitted ?? []),
+        ...(truncated && !draft.omitted?.some((item) => item.kind === "budget")
+          ? [{ kind: "budget" as const }]
+          : []),
+      ].slice(0, 16);
     const build = (): ScreenObservation => ({
       observationId,
       targetRef: draft.targetRef,
@@ -350,6 +409,8 @@ export class ScreenObservations {
         ? { baseObservationId: input.baseObservationId }
         : {}),
       ...(resetReason ? { resetReason } : {}),
+      scope,
+      ...(omittedNow().length === 0 ? {} : { omitted: omittedNow() }),
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,
       loading: draft.loading,

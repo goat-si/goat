@@ -61,7 +61,9 @@ const call = (
   ...(targetRef ? { targetRef } : {}),
 });
 
-const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* () {
+const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* (
+  ownedByCaller = false,
+) {
   const tab = {
     environmentId: "env",
     browserInstanceId: "server-browser",
@@ -70,8 +72,8 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     tabId: PreviewTabId.make("tab"),
     title: "Workspace",
     url: "https://example.test/",
-    owner: "unclaimed" as const,
-    ownedByCaller: false,
+    owner: ownedByCaller ? ("agent" as const) : ("unclaimed" as const),
+    ownedByCaller,
     controlGeneration: 0,
   };
   const state = {
@@ -82,6 +84,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     failure: undefined as PreviewAutomationError | undefined,
     snapshotFailure: undefined as PreviewAutomationError | undefined,
     navigateOnClick: false,
+    clickResult: { ok: true } as object,
   };
   const requests: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0][] = [];
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
@@ -94,7 +97,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
           url: state.url,
           title: tab.title,
           loading: false,
-          control: { owner: tab.owner, ownedByCaller: false, generation: state.generation },
+          control: { owner: tab.owner, ownedByCaller, generation: state.generation },
         } as A);
       if (request.operation === "snapshot") {
         if (state.snapshotFailure) return Effect.fail(state.snapshotFailure);
@@ -114,7 +117,7 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
         return Effect.succeed({ url: state.url, title: tab.title, text: "# Workspace" } as A);
       state.clicked = true;
       if (state.navigateOnClick) state.url = "https://next.test/";
-      return Effect.succeed({ ok: true } as A);
+      return Effect.succeed(state.clickResult as A);
     },
   };
   const host = yield* makePreviewTargetHost(broker);
@@ -142,7 +145,15 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     expect(reply?.outcome).toBe("ok");
     return reply?.value as ScreenObservation;
   });
-  return { state, requests, dispatch, observe, bridge, ref };
+  const rebind = Effect.fn("PreviewTargetHostTest.rebind")(function* () {
+    const reply = yield* bridge.handle(
+      { ...call("select_tab", ++callId, { tabId: tab.tabId }), cellId },
+      { ...context, cellId },
+    );
+    if (!reply || reply.outcome !== "ok") throw new Error("Expected the tab to bind again");
+    return (reply.value as { targetRef: ScreenTargetRef }).targetRef;
+  });
+  return { state, requests, dispatch, observe, bridge, ref, rebind, tab };
 });
 
 it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
@@ -177,6 +188,46 @@ it.effect("a cell reads page text from an unclaimed tab within the reply budget"
   }),
 );
 
+it.effect("a click the browser saw change something is a confirmed receipt", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.clickResult = { effect: "confirmed", evidence: ["dom"] };
+    yield* fixture.dispatch("claim_tab");
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    fixture.state.clickResult = { effect: "suspected_noop", evidence: [] };
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    const receipts = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.filter((entry) => entry.receipt.method === "click")
+      .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
+    expect(receipts).toEqual([
+      ["confirmed", ["click:dom"]],
+      ["unverifiable", ["dispatched; observe to confirm"]],
+    ]);
+  }),
+);
+
+it.effect("the caller's own tab takes input without a claim, also after its control moved", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture(true);
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    expect((yield* fixture.dispatch("click", { ref }))?.outcome).toBe("ok");
+    // Taking control moved the generation; a new binding in a later cell still acts.
+    fixture.state.generation += 1;
+    fixture.tab.controlGeneration = 1;
+    const targetRef = yield* fixture.rebind();
+    const reply = yield* fixture.bridge.handle(
+      {
+        ...call("navigate_tab", 50, { url: "https://example.test/next" }, targetRef),
+        cellId: "later",
+      },
+      { ...context, cellId: "later" },
+    );
+    expect(reply?.outcome).toBe("ok");
+  }),
+);
+
 it.effect("observe passes interactive-only and scope narrowing to the snapshot", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
@@ -188,7 +239,7 @@ it.effect("observe passes interactive-only and scope narrowing to the snapshot",
   }),
 );
 
-it.effect("actions retire refs while preserving the last complete tree for a diff", () =>
+it.effect("in-page actions keep refs and the last complete tree for a diff", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
     yield* fixture.dispatch("claim_tab");
@@ -196,12 +247,15 @@ it.effect("actions retire refs while preserving the last complete tree for a dif
     const ref = first.elements[0]!.ref;
     const clicked = yield* fixture.dispatch("click", { ref });
     expect(clicked?.outcome).toBe("ok");
-    const stale = yield* fixture.dispatch("click", { ref });
-    expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
+    // The browser itself refuses a ref from a replaced document, before any input.
+    const again = yield* fixture.dispatch("click", { ref });
+    expect(again?.outcome).toBe("ok");
     const diff = yield* fixture.observe({ mode: "diff" });
     expect(diff.mode).toBe("diff");
-    expect(diff.indexedText).toBe("+ - button Cancel [ref=e2]");
+    expect(diff.indexedText).toBe("+ - button Cancel [0]");
     expect(diff.elements).toHaveLength(1);
+    const stale = yield* fixture.dispatch("click", { ref });
+    expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
     const receipt = fixture.bridge
       .takeCellImagesNow("run", "turn", "cell")
       .journal.find((entry) => entry.receipt.method === "click")?.receipt;
@@ -363,82 +417,6 @@ it.effect("a failed observation cannot authorize input on a changed origin", () 
       "stale_reference",
     );
     expect((yield* fixture.dispatch("click", { ref: next.elements[0]!.ref }))?.outcome).toBe("ok");
-  }),
-);
-
-it.effect("refuses a full-page image point before dispatching a viewport click", () =>
-  Effect.gen(function* () {
-    const tab = {
-      environmentId: "env",
-      browserInstanceId: "server-browser",
-      connectionId: "connection",
-      threadId: "thread",
-      tabId: PreviewTabId.make("tab"),
-      title: "Page",
-      url: "https://example.test/",
-      owner: "unclaimed" as const,
-      ownedByCaller: false,
-      controlGeneration: 0,
-    };
-    const operations: string[] = [];
-    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
-      listBoundTabs: () => Effect.succeed([tab]),
-      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
-        operations.push(request.operation);
-        return Effect.succeed(
-          (request.operation === "status"
-            ? {
-                tabId: tab.tabId,
-                url: tab.url,
-                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
-              }
-            : {
-                url: tab.url,
-                title: tab.title,
-                loading: false,
-                accessibilityTree: "- button Save [ref=e1]",
-                treeComplete: true,
-                refGeneration: "1",
-                screenshot: {
-                  mimeType: "image/png",
-                  data: "AQID",
-                  width: 100,
-                  height: 2000,
-                  region: { kind: "document", x: 0, y: 0, width: 100, height: 2000 },
-                  scale: 1,
-                },
-              }) as A,
-        );
-      },
-    };
-    const host = yield* makePreviewTargetHost(broker);
-    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
-    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
-    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
-    const observed = yield* host.dispatch(
-      call("observe", 3, { screenshot: true, fullPage: true }, ref),
-      context,
-    );
-    const image = observed.imageMetadata!;
-    const result = yield* host
-      .dispatch(
-        call(
-          "click",
-          4,
-          {
-            point: { observationId: image.observationId, regionId: image.regionId, x: 20, y: 1500 },
-          },
-          ref,
-        ),
-        context,
-      )
-      .pipe(Effect.result);
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({ code: "unsupported", effectStarted: false });
-      expect(result.failure.nextStep).toContain("viewport screenshot");
-    }
-    expect(operations).not.toContain("click");
   }),
 );
 

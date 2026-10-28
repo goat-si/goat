@@ -10,7 +10,7 @@ export const cloudMachineEntries = {
     description:
       "List the Boat cloud machines managed by this environment. Listing does not resume stopped machines or extend their auto-stop timers; browsing or launching on a machine does.",
     guide:
-      "Entries include a label, Boat state and configured auto-stop duration, plus an SSH alias formed as boat- followed by the sandbox id. Pass the alias to goat_ssh_browse, goat_ssh_thread_launch and other host tools. Explicit use can resume an archived machine without a separate goat_cloud_machine_resume call. configured:false means no Boat API key was found; configure it in Settings → Connections. Machines charge the user’s Boat account while running.",
+      "Entries include a label, Boat state and configured auto-stop duration, plus an SSH alias formed as boat- followed by the sandbox id. Pass the alias to goat_ssh_browse, goat_ssh_thread_launch and other host tools. Explicit use can resume an archived machine without a separate goat_cloud_machine_resume call. configured:false means no Boat API key was found; configure it in Settings → Connections. Machines charge the user’s Boat account while running. Setting a cloud machine's credentials, disconnecting it, and deleting or forgetting it are a person's steps in Settings; agents have no path for them.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

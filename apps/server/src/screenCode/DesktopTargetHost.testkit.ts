@@ -145,8 +145,11 @@ export const goat2WindowState = (
 /** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
 export class DriverError {
   readonly structuredContent: Record<string, unknown>;
-  constructor(structuredContent: Record<string, unknown>) {
+  /** The reply's text block: what the driver or GOAT told the agent. */
+  readonly text: string | undefined;
+  constructor(structuredContent: Record<string, unknown>, text?: string) {
     this.structuredContent = structuredContent;
+    this.text = text;
   }
 }
 /** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
@@ -200,7 +203,13 @@ export const fixture = (
               connectionGeneration: connection.id,
               result:
                 value instanceof DriverError
-                  ? { isError: true, structuredContent: value.structuredContent }
+                  ? {
+                      isError: true,
+                      structuredContent: value.structuredContent,
+                      ...(value.text === undefined
+                        ? {}
+                        : { content: [{ type: "text", text: value.text }] }),
+                    }
                   : { structuredContent: value },
               ...(request.tool === "get_window_state" &&
               typeof (value as { image?: unknown }).image === "object"

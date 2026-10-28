@@ -1,3 +1,4 @@
+import * as ScopedReadMcp from "../../ScopedReadMcp.ts";
 import type {
   GoatHostStatusInput,
   GoatHubOpenCodexSyncInput,
@@ -54,6 +55,16 @@ const openCodexSync = McpToolAccess.writes((input: GoatHubOpenCodexSyncInput) =>
 );
 
 export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
+  goat_host_process_history: McpToolAccess.reads((input) =>
+    Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+      ScopedReadMcp.processHistory(scope, input),
+    ),
+  ),
+  goat_host_resource_history: McpToolAccess.reads((input) =>
+    Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+      ScopedReadMcp.resourceHistory(scope, input),
+    ),
+  ),
   // Only a Home-issued Child setup purpose passes childSetupWrite; ordinary sessions never do.
   goat_hub_child_prepare: McpToolAccess.childSetupWrite((input) =>
     Effect.gen(function* () {

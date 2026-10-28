@@ -4,10 +4,19 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Statement from "effect/sql/Statement";
 import * as ClientKeys from "./ClientKeys.ts";
-import * as ConnectAccounts from "./ConnectAccounts.ts";
 import * as RelayDb from "../db.ts";
-import { postgresFixture } from "./connectPostgres.testkit.ts";
+import * as Configuration from "../Config.ts";
+import { AccountLifecycle } from "../accounts/AccountLifecycle.ts";
+import { subjectDigest } from "../accounts/SubjectDigest.ts";
+import { testConfig } from "../accounts/test/PolicyPostgresLayers.ts";
+import {
+  allowAccount,
+  awaitPostgresMilestone,
+  postgresFixture,
+  postgresPolicyFixture,
+} from "./connectPostgres.testkit.ts";
 
 const now = 1800000000;
 const assurance = {
@@ -27,16 +36,17 @@ const request = {
   now,
 };
 const layer = ClientKeys.layer.pipe(
+  Layer.provideMerge(postgresPolicyFixture),
   Layer.provideMerge(postgresFixture),
+  Layer.provideMerge(Configuration.layer(testConfig)),
   Layer.provide(NodeCrypto.layer),
 );
 
 it.effect("PostgreSQL admissions enforce the real per-account quota, uniqueness and rollback", () =>
   Effect.gen(function* () {
     const db = yield* RelayDb.RelayDb;
-    const accounts = yield* ConnectAccounts.ConnectAccounts;
     const keys = yield* ClientKeys.ClientKeys;
-    yield* accounts.authorize("account");
+    yield* allowAccount("account");
     const results = yield* Effect.all(
       Array.from({ length: 21 }, (_, i) =>
         keys.admit({ ...request, thumbprint: `key-${i}` }).pipe(Effect.result),
@@ -50,7 +60,7 @@ it.effect("PostgreSQL admissions enforce the real per-account quota, uniqueness 
         Effect.result,
       ))._tag,
     ).toBe("Failure");
-    yield* accounts.authorize("rollback");
+    yield* allowAccount("rollback");
     yield* db.$client
       .withTransaction(
         keys
@@ -69,7 +79,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const db = yield* RelayDb.RelayDb;
-      yield* (yield* ConnectAccounts.ConnectAccounts).authorize("account");
+      yield* allowAccount("account");
       const keys = yield* ClientKeys.ClientKeys;
       const first = yield* keys.admit(request);
       yield* db.$client`UPDATE relay_client_keys SET revoked_at = ${now}`;
@@ -95,17 +105,18 @@ it.effect(
 it.effect("account suspension serialized by PostgreSQL prevents an overlapping admission", () =>
   Effect.gen(function* () {
     const db = yield* RelayDb.RelayDb;
-    yield* (yield* ConnectAccounts.ConnectAccounts).authorize("account");
+    yield* allowAccount("account");
     const keys = yield* ClientKeys.ClientKeys;
+    const digest = yield* subjectDigest("account");
     const locked = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const suspension = yield* db.$client
       .withTransaction(
         Effect.gen(function* () {
-          yield* db.$client`SELECT pg_advisory_xact_lock(hashtextextended('account', 0))`;
+          yield* db.$client`SELECT pg_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0))`;
           yield* Deferred.succeed(locked, undefined);
           yield* Deferred.await(release);
-          yield* db.$client`UPDATE relay_connect_accounts SET status = 'suspended', generation = 2 WHERE user_id = 'account'`;
+          yield* db.$client`UPDATE relay_account_access SET status = 'suspended', account_epoch = 2 WHERE user_id = 'account'`;
         }),
       )
       .pipe(Effect.forkChild);
@@ -121,7 +132,7 @@ it.effect("account suspension serialized by PostgreSQL prevents an overlapping a
 it.effect("database failure cannot become successful key admission", () =>
   Effect.gen(function* () {
     const db = yield* RelayDb.RelayDb;
-    yield* (yield* ConnectAccounts.ConnectAccounts).authorize("account");
+    yield* allowAccount("account");
     yield* db.$client`ALTER TABLE relay_client_keys RENAME TO unavailable_client_keys`;
     expect((yield* (yield* ClientKeys.ClientKeys).admit(request).pipe(Effect.flip))._tag).toBe(
       "RelayInternalError",
@@ -134,8 +145,10 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const db = yield* RelayDb.RelayDb;
-      yield* (yield* ConnectAccounts.ConnectAccounts).authorize("account");
+      yield* allowAccount("account");
       const keys = yield* ClientKeys.ClientKeys;
+      const digest = yield* subjectDigest("account");
+      const separateDigest = yield* subjectDigest("different-account");
       const admitted = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const transaction = yield* db.$client
@@ -152,15 +165,90 @@ it.effect(
         Effect.gen(function* () {
           const held = yield* db.$client<{
             acquired: boolean;
-          }>`SELECT pg_try_advisory_xact_lock(hashtextextended('account', 0)) AS acquired`;
+          }>`SELECT pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0)) AS acquired`;
           const separate = yield* db.$client<{
             acquired: boolean;
-          }>`SELECT pg_try_advisory_xact_lock(hashtextextended('different-account', 0)) AS acquired`;
+          }>`SELECT pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${separateDigest}`}, 0)) AS acquired`;
           expect(held[0]?.acquired).toBe(false);
           expect(separate[0]?.acquired).toBe(true);
         }),
       );
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(transaction);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "account erasure cannot finish ahead of an authorized admission and leave a client key",
+  () =>
+    Effect.gen(function* () {
+      const db = yield* RelayDb.RelayDb;
+      const keys = yield* ClientKeys.ClientKeys;
+      const lifecycle = yield* AccountLifecycle;
+      yield* allowAccount("account");
+      const digest = yield* subjectDigest("account");
+      const inserting = yield* Deferred.make<void>();
+      const releaseAdmission = yield* Deferred.make<void>();
+      const admission = yield* keys.admit(request).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          statement.compile()[0].startsWith('insert into "relay_client_keys"')
+            ? Deferred.succeed(inserting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseAdmission)),
+                Effect.as(statement),
+              )
+            : Effect.succeed(statement),
+        ),
+        Effect.forkChild,
+      );
+      yield* awaitPostgresMilestone(inserting, admission);
+      const deleting = yield* Deferred.make<void>();
+      const releaseDeletion = yield* Deferred.make<void>();
+      let paused = false;
+      const deletion = yield* lifecycle
+        .requestDelete({ userId: "account", idempotencyKey: "erase-during-admission" })
+        .pipe(
+          Effect.flatMap((result) =>
+            result.status === "progress"
+              ? lifecycle.resume(result.operationId)
+              : Effect.die("Expected a new deletion operation"),
+          ),
+          Effect.provideService(Statement.CurrentTransformer, (statement) => {
+            if (!paused && statement.compile()[0].includes("SELECT pg_advisory_xact_lock")) {
+              paused = true;
+              return Deferred.succeed(deleting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseDeletion)),
+                Effect.as(statement),
+              );
+            }
+            return Effect.succeed(statement);
+          }),
+          Effect.forkChild,
+        );
+      yield* awaitPostgresMilestone(deleting, deletion);
+      const [probe] = yield* db.$client.withTransaction(
+        db.$client<{
+          acquired: boolean;
+        }>`SELECT pg_try_advisory_xact_lock(hashtextextended(${`relay:account:${digest}`}, 0)) AS acquired`,
+      );
+      // Let erasure finish first when the fence is missing, reproducing resurrection without a timeout.
+      if (probe?.acquired === true) {
+        yield* Deferred.succeed(releaseDeletion, undefined);
+        yield* Fiber.join(deletion);
+        yield* Deferred.succeed(releaseAdmission, undefined);
+      } else {
+        yield* Deferred.succeed(releaseDeletion, undefined);
+        yield* Deferred.succeed(releaseAdmission, undefined);
+      }
+      yield* Fiber.join(admission);
+      expect((yield* Fiber.join(deletion)).state).toBe("completed");
+      expect(
+        yield* db.$client`SELECT * FROM relay_client_keys WHERE user_id = 'account'`,
+      ).toHaveLength(0);
+      expect((yield* keys.admit(request).pipe(Effect.flip)).reason).toBe("session_not_active");
+      const [erased] = yield* db.$client<{
+        status: string;
+        user_id: string | null;
+      }>`SELECT status, user_id FROM relay_account_access WHERE subject_digest = ${digest}`;
+      expect(erased).toMatchObject({ status: "deleted", user_id: null });
     }).pipe(Effect.provide(layer)),
 );

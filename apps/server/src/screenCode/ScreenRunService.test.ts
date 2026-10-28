@@ -7,6 +7,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
 import {
   PreviewTabId,
+  SCREEN_TARGET_CONTRACT_VERSION,
+  screenTargetApi,
   type EnvironmentId,
   type ProviderInstanceId,
   type ThreadId,
@@ -18,6 +20,7 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
 import type { AgentCursorEvent } from "@goat/contracts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { fixture } from "./DesktopTargetHost.testkit.ts";
 
 const invocation = {
   environmentId: "env" as EnvironmentId,
@@ -524,6 +527,354 @@ it.live("one cell reads a tab and an app through one Target API", () => {
     );
   });
 });
+
+it.live("a cell binds a tab by its id string and catches a failed call as a ScreenError", () => {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("tab_1"),
+    title: "Page",
+    url: "https://example.test/",
+    owner: "unclaimed" as const,
+    ownedByCaller: false,
+    controlGeneration: 0,
+  };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([tab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      request.operation === "status"
+        ? Effect.succeed({
+            tabId: tab.tabId,
+            url: tab.url,
+            control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+          } as A)
+        : Effect.die("only status is expected"),
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const request = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env" };
+      const result = yield* service.runCell({
+        ...request,
+        invocation: {
+          ...invocation,
+          capabilities: new Set(["preview" as const]),
+          reauthorize: () => Effect.void,
+        },
+        source: `const tab = await screen.tab("tab_1");
+          try { await tab.click({ ref: "missing" }); return "clicked"; }
+          catch (error) {
+            return [error instanceof Error, error.name, typeof error.code, error.effectStarted, typeof error.message];
+          }`,
+      });
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual([true, "ScreenError", "string", false, "string"]);
+      expect(result.journal.map((entry) => entry.receipt.method)).toEqual(["select_tab", "click"]);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+          tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+});
+
+it.live(
+  "one cell drives a tab and an app through the same Target methods and keeps driver detail",
+  () => {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://shopping.naver.com/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const clicks: unknown[] = [];
+    const drags: unknown[] = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        Effect.sync(() => {
+          if (request.operation === "click") clicks.push(request.input);
+          if (request.operation === "drag") drags.push(request.input);
+          return (
+            request.operation === "status"
+              ? {
+                  tabId: tab.tabId,
+                  url: tab.url,
+                  control: { owner: "unclaimed", ownedByCaller: false, generation: 0 },
+                }
+              : request.operation === "snapshot"
+                ? {
+                    url: tab.url,
+                    title: "Page",
+                    loading: false,
+                    visibleText: "",
+                    interactiveElements: [],
+                    accessibilityTree: '- button "Add Element" [ref=e1]\n- link "Home" [ref=e2]',
+                    consoleEntries: [],
+                    networkEntries: [],
+                    actionTimeline: [],
+                    treeComplete: true,
+                    refGeneration: "1",
+                  }
+                : {}
+          ) as A;
+        }),
+    };
+    const desktop = fixture({
+      get_window_state: {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s1",
+        elements_complete: true,
+        tree_markdown:
+          '- [0] AXWindow "Document"\n  - [1] AXButton "Apply" [actions=[press]]\n  - [2] AXSlider "Volume"',
+        elements: [
+          { role: "AXWindow", label: "Document", element_index: 0, element_token: "s1:0" },
+          {
+            role: "AXButton",
+            label: "Apply",
+            element_index: 1,
+            element_token: "s1:1",
+            actions: ["press"],
+            enabled: true,
+            selected: false,
+            frame: { x: 10, y: 20, w: 80, h: 24 },
+            parent_index: 0,
+          },
+          {
+            role: "AXSlider",
+            label: "Volume",
+            element_index: 2,
+            element_token: "s1:2",
+            value: "40",
+            min: 0,
+            max: 100,
+            parent_index: 0,
+          },
+        ],
+      },
+      verify_state: { status: "satisfied" },
+    });
+    return Effect.gen(function* () {
+      const tabHost = yield* makePreviewTargetHost(broker);
+      return yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const request = {
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: {
+            ...invocation,
+            capabilities: new Set(["preview" as const]),
+            reauthorize: () => Effect.void,
+          },
+        };
+        const result = yield* service.runCell({
+          ...request,
+          source: `
+        const tab = await screen.tab({tabId: 'tab'});
+        await tab.claim();
+        const page = await tab.observe({interactiveOnly: true});
+        const clicks = [];
+        for (let i = 0; i < 3; i++) clicks.push((await tab.click(0)).verdict);
+        clicks.push((await tab.click('text=Home')).verdict);
+        const dragged = (await tab.drag(0, 1)).verdict;
+        const fields = {kind: tab.kind, identity: typeof tab.identity, generation: typeof tab.generation, owner: tab.owner, reads: tab.capabilities.includes('read')};
+        const app = await screen.app({bundle_id: 'org.example.Editor'});
+        const tree = await app.observe();
+        let pointRefusal;
+        try { await app.click([10, 10]); } catch (error) { pointRefusal = {code: error.code, nothingSent: error.nothingSent}; }
+        const applied = (await app.click({role: 'AXButton', name: 'Apply'})).verdict;
+        const menu = (await app.menu(['File', 'Save'])).verdict;
+        const ready = await app.waitFor({role: 'AXButton', name: 'Apply'});
+        let missing;
+        try { await app.click(99); } catch (error) { missing = {name: error.name, code: error.code, nothingSent: error.nothingSent}; }
+        return {pageText: page.text, clicks, dragged, fields, pointRefusal, tabNote: tab.note !== undefined, elements: tree.elements, applied, menu, ready: ready.met, missing};
+      `,
+        });
+        expect(result.status).toBe("completed");
+        expect(result.api).toContain("interface App extends TargetBase");
+        expect(result.contractVersion).toBe(SCREEN_TARGET_CONTRACT_VERSION);
+        expect(result.value).toMatchObject({
+          pageText: '- button "Add Element" [0]\n- link "Home" [1]',
+          clicks: ["unverifiable", "unverifiable", "unverifiable", "unverifiable"],
+          tabNote: true,
+          // An app point needs a current screenshot; nothing goes to the driver without one.
+          pointRefusal: { code: "invalid_argument", nothingSent: true },
+          dragged: "unverifiable",
+          fields: {
+            kind: "tab",
+            identity: "string",
+            generation: "number",
+            owner: "unclaimed",
+            reads: true,
+          },
+          applied: "confirmed",
+          menu: "confirmed",
+          ready: true,
+          missing: { name: "ScreenError", code: "stale_reference", nothingSent: true },
+        });
+        // The same number clicks three times: refs hold until the next observe.
+        expect(clicks).toEqual([
+          expect.objectContaining({ locator: "aria-ref=e1" }),
+          expect.objectContaining({ locator: "aria-ref=e1" }),
+          expect.objectContaining({ locator: "aria-ref=e1" }),
+          expect.objectContaining({ locator: "text=Home" }),
+        ]);
+        expect(drags).toEqual([
+          expect.objectContaining({ source: "aria-ref=e1", target: "aria-ref=e2" }),
+        ]);
+        // DSH-11: the driver's actions, state, geometry, range and parent reach the cell.
+        expect((result.value as { elements: unknown[] }).elements).toEqual([
+          expect.objectContaining({ index: 0, role: "AXWindow", name: "Document" }),
+          expect.objectContaining({
+            index: 1,
+            name: "Apply",
+            actions: ["press"],
+            enabled: true,
+            selected: false,
+            frame: { x: 10, y: 20, width: 80, height: 24 },
+            parent: 0,
+          }),
+          expect.objectContaining({ index: 2, text: "40", range: { min: 0, max: 100 }, parent: 0 }),
+        ]);
+        expect(desktop.sent.map((sent) => sent.tool)).toEqual([
+          "list_apps",
+          "list_windows",
+          "list_apps",
+          "list_windows",
+          "get_window_state",
+          "click",
+          "invoke_menu",
+          "verify_state",
+        ]);
+        expect(desktop.sent[5]?.args).toMatchObject({ element_token: "s1:1" });
+        expect(desktop.sent[5]?.args).not.toHaveProperty("targetRef");
+        expect(desktop.sent[6]?.args).toEqual({ pid: 42, window_id: 7, path: ["File", "Save"] });
+        expect(desktop.sent[7]?.args).toMatchObject({
+          expect: [
+            { element: { selector: { role: "AXButton", label_contains: "Apply" }, exists: true } },
+          ],
+        });
+
+        const failed = yield* service.runCell({
+          ...request,
+          source: `
+        const tab = await screen.tab({tabId: 'tab'});
+        await tab.observe();
+        await tab.click(5);
+      `,
+        });
+        expect(failed.status).toBe("failed");
+        expect(failed.api).toBeUndefined();
+        expect(failed.error).toMatchObject({ name: "ScreenError" });
+        expect(failed.error?.message).toMatch(/^stale_reference \(nothing sent\)/);
+        expect(failed.value).toMatchObject({ partial: [{ call: "observe" }] });
+        yield* service.finishTurn({ ...request, reason: "test" });
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ app: desktop.host, tab: tabHost }),
+            tabHost,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    });
+  },
+);
+
+it.live(
+  "a thread gets the API for the surfaces it has, again when one appears, after reset and in a new session",
+  () => {
+    let appAvailable = false;
+    const request = {
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation,
+      source: "return 1;",
+    };
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const first = yield* service.runCell(request);
+      expect(first.contractVersion).toBe(SCREEN_TARGET_CONTRACT_VERSION);
+      expect(first.api).toContain(`contract ${SCREEN_TARGET_CONTRACT_VERSION}`);
+      expect(first.api).toContain("interface Tab extends TargetBase");
+      expect(first.api).not.toContain("interface App");
+      const neither = screenTargetApi({ app: false, tab: false });
+      expect(neither).not.toContain("interface Tab");
+      expect(neither).not.toContain("interface App");
+      expect(neither).toContain("screen.tab() is unavailable");
+      expect((yield* service.runCell(request)).api).toBeUndefined();
+      appAvailable = true;
+      expect((yield* service.runCell(request)).api).toContain("interface App extends TargetBase");
+      expect((yield* service.runCell(request)).api).toBeUndefined();
+      appAvailable = false;
+      const reset = yield* service.runCell({ ...request, resetValues: true });
+      // The bundle follows what the turn has now, not what it had before.
+      expect(reset.api).toContain("interface Tab extends TargetBase");
+      expect(reset.api).not.toContain("interface App");
+      expect(reset.api).toContain("screen.app() is unavailable");
+      appAvailable = true;
+      const reconnected = yield* service.runCell({
+        ...request,
+        invocation: { ...invocation, thread: { ...invocation.thread, providerSessionId: "s2" } },
+      });
+      expect(reconnected.api).toContain("interface App extends TargetBase");
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          dispatcher: {
+            availability: () =>
+              Effect.sync(() => [
+                { kind: "tab" as const, available: true },
+                appAvailable
+                  ? { kind: "app" as const, available: true }
+                  : { kind: "app" as const, available: false, reason: "no_lease" as const },
+              ]),
+            dispatch: () =>
+              Effect.fail({
+                code: "unsupported" as const,
+                effectStarted: false,
+                nextStep: "Unused.",
+              }),
+          },
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);
 
 it.live("a second cell in a busy turn is refused and Stop still cuts the running one", () =>
   Effect.gen(function* () {

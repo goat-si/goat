@@ -372,8 +372,8 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         ]
       : []),
     "- The machine facts describe the computer running GOAT and its agents. The person may be typing from another device, such as a phone or Slack; say which one you mean when it matters.",
-    "- When the answer needs tools but no change to a repository (looking into files or logs on this machine, comparing things, researching on the web, checking several threads, editing your notes), take a turn yourself with run_turn: you work with tools on your own model, can hand research to subagents, and answer when done. Say in one line that you are on it.",
-    "- Start a coding agent with create_task for work that changes a repository or runs in a project: fixing, building, refactoring, opening pull requests. Say in one line that it is starting; the person can keep chatting and hears back when it finishes or needs them.",
+    '- When the answer needs tools but no change to a repository (looking into files or logs on this machine, comparing things, researching on the web, checking several threads, editing your notes), take a turn yourself with run_turn: you work with tools on your own model, can hand research to subagents, and answer when done. Acknowledge in one line that names the concrete first step, such as "Checking the disk usage on this Mac now".',
+    "- Start a coding agent with create_task for work that changes a repository or runs in a project: fixing, building, refactoring, opening pull requests. Acknowledge in one line that names what it starts on; the person can keep chatting and hears back when it finishes or needs them.",
     "- When the new message adds to, corrects, or redirects work listed below as running in this conversation, choose follow_up with that task's taskId: the message goes to the agent already doing it instead of starting new work. Start new work only for a new topic.",
     "- Pick the project yourself. Use the project the conversation is about, else the project of the most recent related thread. Work about the machine itself, or not about any repository, goes to " +
       JSON.stringify(CHANNEL_HOST_WORKSPACE_LABEL) +
@@ -389,7 +389,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- When the person asks to continue a task on another machine because its remote machine stopped answering, choose move_task and pick host from allowedHosts (the other machines listed below).",
     "- Questions about which other machines you can see or reach are answered with report_only from the list of other machines below; say their reachability was not checked. Asking to connect to one, test it, or run work there starts a coding agent with host set.",
     "",
-    "Style: one to three short sentences, warm and plain, outcome first. No internal ids unless the person needs them. replyText, title, question, and instruction use the person's language, even when a note or fact is in another language.",
+    "Style: warm and plain, outcome first. Replies that start or pass on work (run_turn, create_task, follow_up) are one line naming the concrete first step. Direct answers and results are conversational and as long as their content needs: no padding, no restating the question, no narrated steps, and no cutting real content short. No internal ids unless the person needs them. replyText, title, question, and instruction use the person's language, even when a note or fact is in another language.",
     "",
     "Choose exactly one action:",
     "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below. When the person asks for several independent coding tasks in one message, put the first in title/instruction/projectId/host and up to " +
@@ -398,7 +398,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). When the message also asks for independent coding tasks alongside your turn (including while joining a running turn), put up to " +
       CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
       " coding tasks in additionalTasks. To change or forget a note this way, copy the exact words asking for it into notesChangeRequested.",
-    "- follow_up: the message belongs to running work listed below. Fill taskId; say in replyText that you passed it on.",
+    "- follow_up: the message belongs to running work listed below. Fill taskId; say in one line in replyText what you passed on.",
     '- stop_work: the person asks to stop work. Fill taskId for one listed task; leave it empty for "stop everything" or "cancel all". The server stops what they may stop and writes the reply.',
     ...(readsAllowed
       ? [
@@ -449,7 +449,11 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
         ]),
     subject,
     "",
-    ...(input.mode === "task_event" ? ["Say only what the update says happened."] : []),
+    ...(input.mode === "task_event"
+      ? [
+          "Say only what the update says happened. Keep its substance: the outcome, findings and details the person needs, worded for them instead of shrunk to a few sentences.",
+        ]
+      : []),
     // Last, and it names the script, so a model whose default is another language still follows the person.
     receptionLanguageDirective(personLanguageText(input)),
   ].join("\n");

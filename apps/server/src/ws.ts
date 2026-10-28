@@ -1,3 +1,5 @@
+import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
+import * as SettingsRpc from "./auth/SettingsRpc.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import {
@@ -51,8 +53,6 @@ import {
   FilesystemBrowseError,
   MemoryImportRpcError,
   MemoryMutationReceipt,
-  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
-  ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -73,7 +73,6 @@ import {
   ProviderSetupError,
   ProviderUploadFeedbackError,
   RpcClientId,
-  servesOrchestrationProtocol,
   ThreadId,
   WS_METHODS,
   SOURCE_CONTROL_MEDIA_ASSET,
@@ -129,12 +128,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Base64 from "effect/encoding/Base64";
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerRespondable,
-  HttpServerResponse,
-} from "effect/http";
+import { HttpServerRequest } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
@@ -164,7 +158,6 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
-import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
@@ -649,10 +642,6 @@ export const enqueuePublicOrchestrationCommand = <A, E>(
   RpcAuthorization.rejectPublicMemoryGrantCeiling(input).pipe(
     Effect.andThen(Effect.suspend(() => startup.enqueueCommand(work))),
   );
-
-function hasCompatibleOrchestrationProtocol(url: URL): boolean {
-  return servesOrchestrationProtocol(url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM));
-}
 
 function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
@@ -1325,7 +1314,6 @@ export const layerWsRpc = (
       const handoffs = yield* Handoffs.Handoffs;
       const sshHostSetup = yield* SshHostSetup.SshHostSetup;
       const providerHostSync = yield* ProviderHostSync.ProviderHostSync;
-      const codexRoutes = yield* CodexRoutes.CodexRouteService;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -1424,6 +1412,7 @@ export const layerWsRpc = (
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
+      const updateSettings = yield* SettingsRpc.make(currentSession);
       // Service permits are rechecked after waits and inside SQL; this is a token-free Ref read.
       const memoryPermit = (
         required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
@@ -2890,12 +2879,10 @@ export const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* providerInstanceMutation === undefined
-              ? serverSettings.updateSettings(nextPatch)
-              : codexRoutes.mutateProviderInstance(
-                  { mutation: providerInstanceMutation, patch: nextPatch },
-                  { kind: "client", sessionId: currentSessionId },
-                );
+            const settings = yield* updateSettings({
+              patch: nextPatch,
+              ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
+            });
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
@@ -3672,36 +3659,11 @@ export const layer = Layer.unwrap(
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
-    return HttpRouter.add(
-      "GET",
-      "/ws",
+    return HubRpcSocket.layer((session) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const requestUrl = HttpServerRequest.toURL(request);
-        if (Option.isNone(requestUrl) || !hasCompatibleOrchestrationProtocol(requestUrl.value)) {
-          return HttpServerResponse.jsonUnsafe(
-            {
-              code: "orchestration_protocol_incompatible",
-              message: `Update this client to one that supports orchestration protocol ${ORCHESTRATION_PROTOCOL_VERSION}.`,
-              orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-            },
-            { status: 426 },
-          );
-        }
-        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
         const analytics = yield* AnalyticsService.AnalyticsService;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request, "rpc").pipe(
-          Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-            failEnvironmentAuthInvalid(
-              EnvironmentAuth.serverAuthCredentialReason(error),
-              EnvironmentAuth.serverAuthDpopFailureReason(error),
-            ),
-          ),
-          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-            failEnvironmentInternal("internal_error", error),
-          ),
-        );
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
@@ -3807,27 +3769,8 @@ export const layer = Layer.unwrap(
             ),
           ),
         );
-        return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
-          () =>
-            Effect.raceFirst(
-              rpcWebSocketHttpEffect,
-              sessions.awaitInvalidation(session.sessionId).pipe(
-                Effect.as(HttpServerResponse.empty()),
-                Effect.catchTags({
-                  SessionCredentialVerificationError: (error) =>
-                    failEnvironmentInternal("internal_error", error),
-                }),
-              ),
-            ),
-          () => sessions.markDisconnected(session.sessionId),
-        );
-      }).pipe(
-        Effect.catchTags({
-          EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-          EnvironmentInternalError: HttpServerRespondable.toResponse,
-        }),
-      ),
+        return yield* rpcWebSocketHttpEffect;
+      }),
     );
   }),
 );

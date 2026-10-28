@@ -99,6 +99,7 @@ import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrows
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
@@ -345,6 +346,8 @@ interface ServerTab {
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
   navigationGeneration: number;
+  /** Moves on every main-frame navigation, same-document routes and reloads included. */
+  documentGeneration: number;
 
   abortedNavigation: {
     readonly url: string;
@@ -376,14 +379,6 @@ const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
 const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
-
-const viewportSettingsEqual = (left: PreviewViewportSetting, right: PreviewViewportSetting) =>
-  left._tag === right._tag &&
-  (left._tag === "fill" ||
-    (right._tag !== "fill" && left.width === right.width && left.height === right.height));
-
-const fixedViewportSize = (setting: PreviewViewportSetting) =>
-  setting._tag === "fill" ? null : { width: setting.width, height: setting.height };
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -716,6 +711,7 @@ const make = Effect.gen(function* () {
       recordingStart: null,
       initialNavigation: null,
       navigationGeneration: 0,
+      documentGeneration: 0,
       abortedNavigation: null,
       captureLock: Promise.resolve(),
       capturing: 0,
@@ -730,6 +726,7 @@ const make = Effect.gen(function* () {
     page.on("request", (request) => {
       if (!isMainNavigation(request)) return;
       navigationGenerations.set(request, ++tab.navigationGeneration);
+      tab.documentGeneration++;
       clearAbortedNavigation(tab);
       tab.loading = true;
       report(tab, {
@@ -743,6 +740,7 @@ const make = Effect.gen(function* () {
       void reportLoaded(tab);
     });
     page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) tab.documentGeneration++;
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
       if (!desktop) void recordFrameCopies(tab, frame);
@@ -1301,6 +1299,7 @@ const make = Effect.gen(function* () {
       url: url === "about:blank" ? null : url,
       title: null,
       loading: tab.loading,
+      documentGeneration: tab.documentGeneration,
       control: {
         owner: tabOwner(tab),
         ownedByCaller: tab.control.agentId === agentSessionId,
@@ -1969,10 +1968,10 @@ const make = Effect.gen(function* () {
         );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
-        await recordAction(tab, "click", () =>
+        const { effect, evidence } = await recordAction(tab, "click", () =>
           ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
         );
-        return undefined;
+        return { effect, evidence, url: tab.page.url() };
       }
       case "hover":
         return recordAction(tab, "hover", () =>

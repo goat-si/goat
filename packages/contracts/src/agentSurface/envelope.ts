@@ -322,6 +322,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PullRequestThreadNotFoundError: before("not_found"),
   PullRequestProjectNotFoundError: before("not_found"),
   PullRequestRepositoryAmbiguousError: before("invalid_request"),
+  PullRequestReadTooLargeError: before("invalid_request"),
   PullRequestNotOpenError: before("failed_precondition"),
   PullRequestWatchFromSubagentError: before("failed_precondition"),
   PullRequestLinkFailedError: c("internal"),
@@ -330,6 +331,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PullRequestWatchFailedError: c("internal"),
   PullRequestGuideFailedError: c("internal"),
   PullRequestReadFailedError: c("unavailable"),
+  PullRequestWriteFailedError: c("unknown_outcome"),
+  PullRequestWriteRefusedError: before("failed_precondition"),
 };
 
 const TRANSIENT: ReadonlySet<AgentSurfaceErrorCode> = new Set([

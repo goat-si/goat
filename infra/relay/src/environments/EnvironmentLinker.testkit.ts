@@ -37,6 +37,13 @@ export const config = RelayConfiguration.RelayConfiguration.of({
   managedEndpointNamespace: undefined,
 });
 
+// Account access needs a subject digest, which requires both of these; unit fixtures stay without them.
+export const postgresConfig = RelayConfiguration.RelayConfiguration.of({
+  ...config,
+  subjectDigestKey: Redacted.make("connect-postgres-subject-digest-key-32-bytes"),
+  managedEndpointNamespace: "test",
+});
+
 export function signTestJwt(payload: object, typ: string, privateKey: string): string {
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ })).toString("base64url");
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");

@@ -68,6 +68,14 @@ const presentationFields = {
 };
 
 const PreviewActionResult = Schema.Struct(presentationFields);
+const PreviewClickResult = Schema.Struct({
+  ...presentationFields,
+  /** What the server browser saw change right after the click; absent from other hosts. */
+  effect: Schema.optional(Schema.Literals(["confirmed", "suspected_noop"])),
+  evidence: Schema.optional(Schema.Array(Schema.String)),
+});
+/** The browser skill's path on a thread's first visit and a site's notes on its first visit there. */
+const guideFields = { guide: Schema.optional(Schema.String) };
 
 const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name, {
   description: agentSurfaceRegistry["preview.status"].description,
@@ -88,6 +96,7 @@ const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...guideFields,
     ...safetyFields,
   }),
   failure: PreviewToolFailure,
@@ -114,6 +123,7 @@ const PreviewNavigateTool = Tool.make(agentSurfaceRegistry["preview.navigate"].n
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...guideFields,
     ...safetyFields,
   }),
   failure: PreviewToolFailure,
@@ -217,7 +227,7 @@ const PreviewLogsTool = Tool.make(agentSurfaceRegistry["preview.logs"].name, {
 const PreviewReadTool = Tool.make(agentSurfaceRegistry["preview.read"].name, {
   description: agentSurfaceRegistry["preview.read"].description,
   parameters: PreviewAutomationReadInput,
-  success: PreviewAutomationRead,
+  success: Schema.Struct({ ...PreviewAutomationRead.fields, ...guideFields }),
   failure: PreviewToolFailure,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.read"]));
@@ -251,7 +261,7 @@ const PreviewScrollCollectTool = Tool.make(agentSurfaceRegistry["preview.scroll_
 const PreviewClickTool = Tool.make(agentSurfaceRegistry["preview.click"].name, {
   description: agentSurfaceRegistry["preview.click"].description,
   parameters: PreviewAutomationClickInput,
-  success: PreviewActionResult,
+  success: PreviewClickResult,
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,

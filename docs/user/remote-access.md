@@ -17,6 +17,14 @@ Previously linked servers start normally and keep their stored link dormant.
 Saved environments with only a GOAT Connect route show as unavailable; add a
 direct or Tailscale route, or forget the environment in connection settings.
 
+For invited builds with GOAT Connect enabled, open the GOAT Connect account page and choose
+**Delete account**, or visit the hosted app's `/account/delete` page. Verify with MFA within ten
+minutes. Relay data is deleted first; refresh status to resume, then finish deleting the sign-in
+account. If the final identity step fails, sign in to the same account and resume. Machines with
+unconfirmed cleanup can keep existing local sessions until they reconnect or you unlink them
+locally. Older machines need an update or local unlink; a machine offline until beta ends needs
+local unlink. Local projects and independent connections stay on your machines.
+
 ## Connect your phone to a hub
 
 A hub is the one GOAT server your phone pairs with, ideally a machine that stays
@@ -598,6 +606,24 @@ thread started in a new worktree runs that machine's own setup script. A machine
 asleep stays in the list as **Unreachable**, with its threads as last seen and how old that copy
 is, for example "last state 5 min ago". It reconnects on its own when the machine comes back.
 Stopped cloud machines are never started by opening them.
+
+When GOAT Connect becomes available, **Settings → Hub → Allow GOAT Connect devices to
+reach hub devices** (or **Settings → Hub devices** on mobile) gives standing consent to every
+trusted device signed in to the linked account. Any settings administrator can change it;
+this is not independent approval of each device. Both the hub and this preference must be on.
+After enabling, **sign out of GOAT Connect and sign back in**. A transport reconnect can reuse
+an existing token and does not add access.
+
+Turning off that preference or the hub ends each privileged Connect session, including its
+direct access to the hub. Sign in again for ordinary hub access. Independently paired clients
+and Connect sessions without hub access keep working. The preference stays saved while the
+hub is off; turning the hub back on grants access only to newly issued credentials.
+
+Observed withdrawals survive restart through an authorization generation and a persistent
+fence. If no persistent withdrawal fence survives (both writes failed, the process ended
+before persisting, or host storage was lost), credentials from before the withdrawal can be
+accepted again after restart. Editing the setting off and back on while GOAT is stopped is
+not an observed withdrawal.
 
 The hub holds the keys and sessions for every node, so keep its disk encrypted and its screen
 locked.

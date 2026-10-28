@@ -1,12 +1,17 @@
 import {
+  GOAT_BOT_READING_LIMIT_MS,
+  goatBotActivity,
   goatBotStampParts,
   goatBotReceiptLabel,
+  type GoatBotActivity,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
 import {
+  createContext,
   Fragment,
   type UIEvent,
+  useContext,
   useId,
   useLayoutEffect,
   useRef,
@@ -27,14 +32,8 @@ import { GoatBotTaskChip } from "./GoatBotTaskChip";
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
 
-/**
- * Reception gives up after 45 seconds and then sends a failure note, so a reply that has not
- * come by this point is not coming. The indicator stops instead of spinning forever.
- */
-const REPLYING_LIMIT_MS = 90_000;
-
-/** Each dot hops a beat after the one before it, so the three read as a wave. */
-const TYPING_DOT_DELAYS = ["0ms", "150ms", "300ms"] as const;
+/** What the acknowledged work is doing, from the bot conversation's session; null elsewhere. */
+export const GoatBotActivityContext = createContext<GoatBotActivity | null>(null);
 
 export function GoatBotTimeline({
   rows,
@@ -82,6 +81,11 @@ export function GoatBotTimeline({
   const followingRef = useRef(true);
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
+  const working = useContext(GoatBotActivityContext);
+  const activity = replying
+    ? goatBotActivity({ reading: true, task: null, worker: null })
+    : working;
+  const activityText = activity?.text ?? null;
   const updateEdges = useStableCallback(() => {
     const scroll = scrollRef.current;
     const wrapper = wrapperRef.current;
@@ -104,15 +108,15 @@ export function GoatBotTimeline({
     if (!scroll || !list) return;
     return observeResize([scroll, list], updateEdges);
   }, [updateEdges]);
-  // New rows and the replying bubble keep the view pinned to the latest message unless the
+  // New rows and the activity bubble keep the view pinned to the latest message unless the
   // reader scrolled up.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (element !== null && (rows.length > 0 || replying) && followingRef.current) {
+    if (element !== null && (rows.length > 0 || activityText !== null) && followingRef.current) {
       element.scrollTop = element.scrollHeight;
     }
     updateEdges();
-  }, [rows, replying, updateEdges]);
+  }, [rows, activityText, updateEdges]);
 
   const time = (iso: string) => formatShortTimestamp(iso, timestampFormat);
 
@@ -317,21 +321,15 @@ export function GoatBotTimeline({
                 );
             }
           })}
-          {replying ? (
+          {activityText !== null ? (
             <li className={cn("flex items-end", rows.at(-1)?.kind === "user" && "mt-3")}>
               <div
                 role="status"
-                aria-label="GOAT Bot is replying"
-                className="goat-typing-tail relative flex h-10 items-center gap-1 rounded-2xl bg-goat-bubble-in px-4"
+                aria-live="polite"
+                aria-atomic="true"
+                className="goat-typing-tail relative min-h-10 max-w-[min(75%,34rem)] rounded-2xl bg-goat-bubble-in px-4 py-2.5 text-sm leading-5 text-muted-foreground"
               >
-                {TYPING_DOT_DELAYS.map((delay) => (
-                  <span
-                    key={delay}
-                    aria-hidden
-                    className="size-[7px] animate-typing-wave rounded-full bg-muted-foreground motion-reduce:animate-none"
-                    style={{ animationDelay: delay }}
-                  />
-                ))}
+                {activityText}
               </div>
             </li>
           ) : null}
@@ -351,7 +349,7 @@ export function GoatBotTimeline({
 
 /** True from when GOAT Bot starts reading until its reply lands or the limit passes. */
 function useReplying(since: string | null): boolean {
-  const deadlineMs = (since === null ? Number.NaN : Date.parse(since)) + REPLYING_LIMIT_MS;
+  const deadlineMs = (since === null ? Number.NaN : Date.parse(since)) + GOAT_BOT_READING_LIMIT_MS;
   const getSnapshot = () => Date.now() < deadlineMs;
   const subscribe = (onChange: () => void) => {
     const remaining = deadlineMs - Date.now();

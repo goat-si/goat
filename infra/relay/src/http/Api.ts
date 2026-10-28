@@ -1,3 +1,24 @@
+import { assertEnabled } from "../auth/MintControl.ts";
+import * as EnvironmentOwnership from "../environments/EnvironmentOwnership.ts";
+import * as AccountTransactions from "../accounts/AccountTransactions.ts";
+import {
+  rethrowPolicyError,
+  appendRelayCredentialResponseHeaders,
+  isPolicyError,
+  appendPolicyHeaders,
+  currentTraceId,
+  relayInternalErrorResponse,
+  mapRelayCommonApiErrors,
+  mapErrorTags,
+} from "./ApiErrors.ts";
+export { relayDpopFailureReason } from "./ApiErrors.ts";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import { isOwnerEndpoint } from "./AccountPolicy.ts";
+import {
+  RelayEnvironmentOwnerMismatchError,
+  RelayEnvironmentRelinkRequiredError,
+  RelayAuthorizationUnavailableError,
+} from "@goat/contracts/relayErrors";
 import * as ConnectTokenExchange from "../auth/ConnectTokenExchange.ts";
 import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
@@ -40,7 +61,6 @@ import {
   RelayMobileRegistrationScope,
   RelayAuthInvalidError,
   type RelayAuthInvalidReason,
-  type RelayDpopFailureReason,
   RelayEnvironmentAuth,
   RelayEnvironmentConnectNotAuthorizedError,
   RelayEnvironmentEndpointTimedOutError,
@@ -63,8 +83,6 @@ import {
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
 
-import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
-import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
@@ -72,7 +90,6 @@ import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as HeldHooks from "../hooks/HeldHooks.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
-import * as LiveActivities from "../agentActivity/LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentConnector from "../environments/EnvironmentConnector.ts";
@@ -94,18 +111,6 @@ const decodeManagedTunnelRecoveryProof = Schema.decodeUnknownEffect(
   RelayManagedEndpointRecoveryProofPayload,
 );
 
-const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler(
-  (_request, response) =>
-    Effect.succeed(
-      HttpServerResponse.setHeaders(response, {
-        "cache-control": "no-store",
-        pragma: "no-cache",
-      }),
-    ),
-);
-
-// GOAT hosts never retry sooner than Retry-After, so during a Cloudflare
-// rate limit they wait out the pause instead of retrying into it.
 const appendCloudflareRetryAfter = (error: unknown) => {
   const retryAfterMillis = ManagedEndpointProvider.cloudflareRetryAfterMillis(error);
   if (retryAfterMillis === undefined) return Effect.void;
@@ -139,8 +144,8 @@ const appendRelayTraceContextResponseHeader = Effect.gen(function* () {
 
 const relayCorsMiddleware = HttpMiddleware.cors({
   allowedMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["authorization", "b3", "traceparent", "content-type", "dpop"],
-  exposedHeaders: ["traceparent", "www-authenticate"],
+  allowedHeaders: ["authorization", "b3", "traceparent", "content-type", "dpop", "idempotency-key"],
+  exposedHeaders: ["traceparent", "www-authenticate", "retry-after"],
   maxAge: 86_400,
 });
 
@@ -318,10 +323,14 @@ export const withoutCapturedParentSpan = <A, E, R>(
 export const layerClientAuth = Layer.effect(
   RelayClientAuth,
   Effect.gen(function* () {
+    const access = yield* AccountAccess.AccountAccess;
     const config = yield* RelayConfiguration.RelayConfiguration;
     const accounts = yield* ConnectAccounts.ConnectAccounts;
     return {
-      clientBearer: Effect.fn("relay.auth.client.bearer")(function* (httpEffect, { credential }) {
+      clientBearer: Effect.fn("relay.auth.client.bearer")(function* (
+        httpEffect,
+        { credential, endpoint },
+      ) {
         const token = readHttpAuthorizationCredential(credential);
         const request = yield* HttpServerRequest.HttpServerRequest;
         const withdrawal =
@@ -348,10 +357,18 @@ export const layerClientAuth = Layer.effect(
           "relay.auth.subject": verified.sub,
         });
 
+        const admitted = isOwnerEndpoint(endpoint.identifier)
+          ? undefined
+          : yield* access
+              .capture(verified.sub)
+              .pipe(Effect.catchIf(isPolicyError, rethrowPolicyError));
         return yield* httpEffect.pipe(
+          Effect.provideService(AccountAccess.AccountRequestAdmission, admitted),
+          Effect.tapError(appendPolicyHeaders),
           withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
+            ...(admitted ? { accountEpoch: admitted.accountEpoch } : {}),
             token,
             authentication: verified.authentication,
           }),
@@ -364,6 +381,7 @@ export const layerClientAuth = Layer.effect(
 export const layerEnvironmentAuth = Layer.effect(
   RelayEnvironmentAuth,
   Effect.gen(function* () {
+    const access = yield* AccountAccess.AccountAccess;
     const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
     return {
       environmentBearer: Effect.fn("relay.auth.environment.bearer")(function* (
@@ -374,12 +392,26 @@ export const layerEnvironmentAuth = Layer.effect(
         const principal = yield* credentials.authenticate(token).pipe(
           Effect.catchTags({
             EnvironmentCredentialAuthenticatePersistenceError: () =>
-              relayInternalErrorResponse("persistence_failed"),
+              Effect.fail(
+                new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "unavailable",
+                }),
+              ),
           }),
+          Effect.catchIf(isPolicyError, rethrowPolicyError),
         );
         if (principal._tag === "None") {
-          return yield* relayAuthInvalidError("not_authorized");
+          return yield* rethrowPolicyError(
+            new RelayEnvironmentRelinkRequiredError({
+              code: "environment_relink_required",
+              traceId: yield* currentTraceId,
+            }),
+          );
         }
+        const admitted = yield* access
+          .requireAllowed(principal.value)
+          .pipe(Effect.catchIf(isPolicyError, rethrowPolicyError));
         yield* Effect.annotateCurrentSpan({
           "relay.auth.mode": "environment_credential",
         });
@@ -388,6 +420,8 @@ export const layerEnvironmentAuth = Layer.effect(
             "relay.environment_id": principal.value.environmentId,
           }),
           Effect.provideService(RelayEnvironmentPrincipal, principal.value),
+          Effect.provideService(AccountAccess.AccountRequestAdmission, admitted),
+          Effect.tapError(appendPolicyHeaders),
         );
       }),
     };
@@ -397,10 +431,14 @@ export const layerEnvironmentAuth = Layer.effect(
 export const layerDpopClientAuth = Layer.effect(
   RelayDpopClientAuth,
   Effect.gen(function* () {
+    const access = yield* AccountAccess.AccountAccess;
     const relayTokens = yield* RelayTokens.RelayTokens;
     const keys = yield* ClientKeys.ClientKeys;
     return {
-      relayDpop: Effect.fn("relay.auth.dpop_client")(function* (httpEffect, { credential }) {
+      relayDpop: Effect.fn("relay.auth.dpop_client")(function* (
+        httpEffect,
+        { credential, endpoint },
+      ) {
         yield* appendRelayDpopChallengeHeader;
         const request = yield* HttpServerRequest.HttpServerRequest;
         if (!isDpopAuthorizationHeader(request.headers.authorization)) {
@@ -430,11 +468,23 @@ export const layerDpopClientAuth = Layer.effect(
           "relay.auth.mode": "dpop",
           "relay.auth.subject": verified.sub,
         });
+        const admitted = isOwnerEndpoint(endpoint.identifier)
+          ? undefined
+          : yield* access
+              .requireAllowed({
+                userId: verified.sub,
+                accountEpoch: verified.account_epoch,
+                credentialKind: "dpop",
+              })
+              .pipe(Effect.catchIf(isPolicyError, rethrowPolicyError));
         return yield* httpEffect.pipe(
+          Effect.provideService(AccountAccess.AccountRequestAdmission, admitted),
+          Effect.tapError(appendPolicyHeaders),
           withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
             token,
+            ...(admitted ? { accountEpoch: admitted.accountEpoch } : {}),
             proofKeyThumbprint: verified.cnf.jkt,
             dpopScopes: verified.scope,
             authentication: { source: "clerk-session", assurance: verified.assurance },
@@ -513,10 +563,11 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
   readonly environmentId: string;
   readonly environmentPublicKey: string;
 }) {
-  const transactions = yield* RelayDb.RelayTransactions;
+  const transactions = yield* AccountTransactions.AccountTransactions;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
-  return yield* transactions.withTransaction(
+  return yield* transactions.run(
+    { userIds: [input.userId] },
     Effect.gen(function* () {
       const revoked = yield* links.revokeForUser({
         userId: input.userId,
@@ -524,6 +575,7 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
       });
       if (revoked) {
         yield* credentials.revokeForEnvironmentPublicKey({
+          userId: input.userId,
           environmentId: input.environmentId,
           environmentPublicKey: input.environmentPublicKey,
         });
@@ -540,21 +592,30 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     readonly managedEndpointNamespace?: string | undefined;
   }) {
     const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
     const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    const { deprovisionTarget, unlinked } = yield* reservations.withdraw(
+    const { deprovisionTarget, link, claims, unlinked } = yield* reservations.withdraw(
       input,
       Effect.gen(function* () {
-        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision(input);
-        const link = yield* links.getForUser(input);
+        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
+          userId: input.userId,
+          environmentId: input.environmentId,
+        });
+        const link = yield* links.getForUser({
+          userId: input.userId,
+          environmentId: input.environmentId,
+        });
+        const claims = yield* ownership.beginRelease(input);
         const unlinked =
-          link !== null
-            ? yield* revokeEnvironmentLinkRecord({
-                ...input,
+          link === null
+            ? false
+            : yield* revokeEnvironmentLinkRecord({
+                userId: input.userId,
+                environmentId: link.environmentId,
                 environmentPublicKey: link.environmentPublicKey,
-              })
-            : false;
-        return { deprovisionTarget, unlinked };
+              });
+        return { deprovisionTarget, link, claims, unlinked };
       }),
     );
     return yield* reservations.exclusive(input.userId, (assertOwner) =>
@@ -575,25 +636,27 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
             : null;
         if (endpointKey !== null) {
           const inbox = yield* HookInbox.HookInbox;
-          yield* inbox.clear({ endpointKey }).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Could not clear held webhook requests", {
-                environmentId: input.environmentId,
-                errorTag: error._tag,
-              }),
-            ),
-          );
+          yield* inbox.clear({
+            endpointKey,
+            ...(deprovisionTarget?.accountEpoch !== null &&
+            deprovisionTarget !== null &&
+            link !== null
+              ? {
+                  authorization: {
+                    userId: input.userId,
+                    accountEpoch: deprovisionTarget.accountEpoch,
+                    environmentId: input.environmentId,
+                    environmentPublicKey: link.environmentPublicKey,
+                    incarnationId: deprovisionTarget.incarnationId,
+                  },
+                }
+              : {}),
+          });
         }
-        if (!deprovisioned) {
-          yield* assertOwner;
-          const key = { userId: input.userId, environmentId: input.environmentId };
-          const retryTarget = yield* managedEndpointProvider.prepareDeprovision(key);
-          if (retryTarget !== null && (yield* links.getForUser(key)) === null) {
-            yield* assertOwner;
-            yield* managedEndpointProvider.deprovision({ ...key, target: retryTarget });
-          }
-        }
-        return unlinked;
+        if (!deprovisioned) return false;
+        yield* assertOwner;
+        const released = yield* ownership.finishRelease({ ...input, claims });
+        return released && (unlinked || deprovisionTarget !== null || claims.length > 0);
       }),
     );
   },
@@ -667,6 +730,7 @@ export const registerEnvironmentTunnelRecovery = Effect.fn(
   readonly tunnelId: string;
   readonly origin: RelayManagedEndpointOrigin;
 }) {
+  yield* assertEnabled(yield* RelayConfiguration.RelayConfiguration);
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -705,6 +769,7 @@ export const recoverEnvironmentTunnelRecord = Effect.fn(
   readonly environmentPublicKey: string;
   readonly origin: RelayManagedEndpointOrigin;
 }) {
+  yield* assertEnabled(yield* RelayConfiguration.RelayConfiguration);
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -1211,9 +1276,11 @@ export const layerServerApi = HttpApiBuilder.group(
         function* (args) {
           const { params, payload } = args;
           const principal = yield* RelayEnvironmentPrincipal;
-          if (principal.environmentId !== params.environmentId) {
-            return yield* new HttpApiError.Unauthorized({});
-          }
+          if (principal.environmentId !== params.environmentId)
+            return yield* new RelayEnvironmentOwnerMismatchError({
+              code: "environment_owner_mismatch",
+              traceId: yield* currentTraceId,
+            });
           yield* publishSignatures.verify({
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
@@ -1221,6 +1288,7 @@ export const layerServerApi = HttpApiBuilder.group(
             request: payload,
           });
           return yield* publisher.publish({
+            userId: principal.userId,
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
             threadId: params.threadId,
@@ -1359,6 +1427,7 @@ export const layerServerApi = HttpApiBuilder.group(
           yield* requireOwnEnvironment(params.environmentId);
           const principal = yield* RelayEnvironmentPrincipal;
           yield* heldHooks.setHoldWhileOffline({
+            userId: principal.userId,
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
             holdWebhooksWhileOffline: payload.holdWebhooksWhileOffline,
@@ -1372,6 +1441,7 @@ export const layerServerApi = HttpApiBuilder.group(
           yield* requireOwnEnvironment(params.environmentId);
           const principal = yield* RelayEnvironmentPrincipal;
           const pending = yield* heldHooks.wake({
+            userId: principal.userId,
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
           });
@@ -1380,176 +1450,6 @@ export const layerServerApi = HttpApiBuilder.group(
       );
   }),
 );
-
-const isHttpUnauthorized = Schema.is(HttpApiError.Unauthorized);
-const isDpopProofRejected = Schema.is(DpopProofs.DpopProofRejected);
-
-const currentTraceId = Effect.currentParentSpan.pipe(
-  Effect.map((span) => span.traceId),
-  Effect.orElseSucceed(() => "unavailable"),
-);
-
-const RelayCommonPersistenceError = Schema.Union([
-  Devices.DeviceRegistrationPersistenceError,
-  Devices.DeviceUnregistrationPersistenceError,
-  Devices.DeviceListPersistenceError,
-  LiveActivities.LiveActivityRegistrationPersistenceError,
-  EnvironmentLinks.EnvironmentLinkUserListPersistenceError,
-  EnvironmentLinks.EnvironmentLinkListPersistenceError,
-  EnvironmentLinks.EnvironmentLinkLookupPersistenceError,
-  EnvironmentLinks.EnvironmentLinkRevokePersistenceError,
-  ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError,
-  EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError,
-  EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError,
-  DpopProofs.DpopProofReplayPersistenceError,
-  LiveActivities.LiveActivityTargetListPersistenceError,
-  AgentActivityRows.AgentActivityRowUpsertPersistenceError,
-  AgentActivityRows.AgentActivityRowDeletePersistenceError,
-  AgentActivityRows.AgentActivityRowListPersistenceError,
-  LiveActivities.LiveActivityDeliveryMarkPersistenceError,
-  DeliveryAttempts.DeliveryAttemptRecordPersistenceError,
-  EnvironmentLinks.EnvironmentLinkEnvironmentLookupPersistenceError,
-  HookInbox.HookInboxError,
-]);
-type RelayCommonPersistenceError = typeof RelayCommonPersistenceError.Type;
-const isRelayCommonPersistenceError = Schema.is(RelayCommonPersistenceError);
-
-type MapRelayCommonApiError<E> =
-  | Exclude<
-      E,
-      HttpApiError.Unauthorized | DpopProofs.DpopProofRejected | RelayCommonPersistenceError
-    >
-  | (Extract<E, HttpApiError.Unauthorized> extends never ? never : RelayAuthInvalidError)
-  | (Extract<E, DpopProofs.DpopProofRejected> extends never ? never : RelayAuthInvalidError)
-  | (Extract<E, RelayCommonPersistenceError> extends never ? never : RelayInternalError);
-
-export function relayDpopFailureReason(
-  code: DpopProofs.DpopProofFailureCode,
-): RelayDpopFailureReason {
-  switch (code) {
-    case "time_window":
-      return "time_window";
-    case "key_mismatch":
-      return "key_mismatch";
-    case "method_mismatch":
-    case "url_mismatch":
-      return "request_mismatch";
-    case "access_token_hash_mismatch":
-      return "token_mismatch";
-    case "replayed":
-      return "replay";
-    case "missing_proof":
-    case "malformed_proof":
-    case "invalid_signature":
-    case "invalid_proof":
-      return "invalid_proof";
-  }
-}
-
-function relayInternalErrorResponse(reason: RelayInternalError["reason"]) {
-  return currentTraceId.pipe(
-    Effect.flatMap((traceId) =>
-      Effect.fail(new RelayInternalError({ code: "internal_error", reason, traceId })),
-    ),
-  );
-}
-
-function mapRelayCommonApiErrors(authReason: RelayAuthInvalidReason) {
-  const mapError = Effect.fnUntraced(function* <E>(error: E) {
-    const traceId = yield* currentTraceId;
-    if (isDpopProofRejected(error)) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.dpop.failure_code": error.code,
-      });
-      return yield* Effect.fail(
-        new RelayAuthInvalidError({
-          code: "auth_invalid",
-          reason: authReason,
-          ...(authReason === "invalid_dpop"
-            ? { dpopFailureReason: relayDpopFailureReason(error.code) }
-            : {}),
-          traceId,
-        }) as MapRelayCommonApiError<E>,
-      );
-    }
-    if (isHttpUnauthorized(error)) {
-      if (authReason === "invalid_dpop") {
-        yield* Effect.annotateCurrentSpan({
-          "relay.dpop.failure_code": "invalid_proof",
-        });
-      }
-      return yield* Effect.fail(
-        new RelayAuthInvalidError({
-          code: "auth_invalid",
-          reason: authReason,
-          ...(authReason === "invalid_dpop" ? { dpopFailureReason: "invalid_proof" } : {}),
-          traceId,
-        }) as MapRelayCommonApiError<E>,
-      );
-    }
-    if (isRelayCommonPersistenceError(error)) {
-      return yield* Effect.fail(
-        new RelayInternalError({
-          code: "internal_error",
-          reason: "persistence_failed",
-          traceId,
-        }) as MapRelayCommonApiError<E>,
-      );
-    }
-
-    return yield* Effect.fail(error as MapRelayCommonApiError<E>);
-  });
-
-  return <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, MapRelayCommonApiError<E>, R> => effect.pipe(Effect.catch(mapError));
-}
-
-type TaggedErrorTag<E> = Extract<E, { readonly _tag: string }>["_tag"];
-
-type MapErrorTagCases<E> = {
-  readonly [K in TaggedErrorTag<E>]+?: (
-    error: Extract<E, { readonly _tag: K }>,
-    traceId: string,
-  ) => unknown;
-};
-
-type MappedTagError<Cases> = Cases[keyof Cases] extends (
-  ...args: ReadonlyArray<never>
-) => infer Error
-  ? Error
-  : never;
-
-type CatchTagCases<E, Cases> = {
-  readonly [K in TaggedErrorTag<E>]+?: (
-    error: Extract<E, { readonly _tag: K }>,
-  ) => Effect.Effect<never, MappedTagError<Cases>>;
-} & (unknown extends E ? {} : { readonly [K in Exclude<keyof Cases, TaggedErrorTag<E>>]: never });
-
-function mapErrorTags<
-  E,
-  Cases extends MapErrorTagCases<E> &
-    (unknown extends E ? {} : { readonly [K in Exclude<keyof Cases, TaggedErrorTag<E>>]: never }),
->(cases: Cases) {
-  const catchCases = Record.map(
-    cases as Record.ReadonlyRecord<
-      string,
-      (error: never, traceId: string) => MappedTagError<Cases>
-    >,
-    (makeError) => (error: never) =>
-      currentTraceId.pipe(Effect.flatMap((traceId) => Effect.fail(makeError(error, traceId)))),
-  ) as CatchTagCases<E, Cases>;
-
-  return <A, R>(
-    self: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, Exclude<E, { readonly _tag: keyof Cases }> | MappedTagError<Cases>, R> =>
-    // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off
-    Effect.catchTags(self, catchCases) as Effect.Effect<
-      A,
-      Exclude<E, { readonly _tag: keyof Cases }> | MappedTagError<Cases>,
-      R
-    >;
-}
 
 function resolveConnectClientKeyThumbprint(payload: RelayEnvironmentConnectRequest): string | null {
   const requestedThumbprint = payload.clientKeyThumbprint ?? payload.clientProofKeyThumbprint;

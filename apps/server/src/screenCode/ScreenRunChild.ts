@@ -2,6 +2,7 @@
 import * as NodeReadline from "node:readline";
 import * as NodeModule from "node:module";
 import * as Schema from "effect/Schema";
+import type { QuickJSHandle } from "quickjs-emscripten-core";
 import {
   ScreenRunBoot,
   ScreenRunCell,
@@ -11,7 +12,10 @@ import {
   ScreenRunError,
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
+import { keptCell, plainCell, sloppyProbe } from "./ScreenCellScope.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
+import { screenTargetNote } from "./ScreenTargetNotes.ts";
+import { screenTargetPrelude } from "./ScreenTargetPrelude.ts";
 
 // Both packages stay external; a single-executable resolves them from disk only through require.
 const requireForQuickJS = NodeModule.createRequire(import.meta.url);
@@ -66,6 +70,8 @@ const methods = [
   "select",
   "select_text",
   "wait_for",
+  "invoke_menu",
+  "fetch_tab",
 ] as const;
 
 type ChildResult = Pick<
@@ -112,6 +118,8 @@ export async function runScreenChild(
   let vm = runtime.newContext();
   runtime.setMemoryLimit(limits.heapBytes);
   runtime.setMaxStackSize(limits.stackBytes);
+  let runId = "";
+  let turnId = "";
   let cellId = "";
   let deadline = 0;
   let nextCallId = 0;
@@ -157,8 +165,8 @@ export async function runScreenChild(
           : undefined;
       const call: ScreenHostCall = {
         t: "call",
-        runId: boot.runId,
-        turnId: boot.turnId,
+        runId,
+        turnId,
         cellId,
         callId,
         ...(targetRef === undefined ? {} : { targetRef }),
@@ -182,80 +190,57 @@ export async function runScreenChild(
     });
     vm.setProp(vm.global, "__log", log);
     log.dispose();
-    const setup = `var __screenValues = Object.create(null);
-      const __values = new Proxy(__screenValues, {
-        set(target, key, value) {
-          const json = JSON.stringify(value);
-          if (typeof key !== 'string' || json === undefined || json.length > 65536)
-            throw new TypeError('screen.values accepts bounded JSON only');
-          target[key] = JSON.parse(json);
-          return true;
-        }
-      });
-      const __call = async (method, arg) => JSON.parse(await __host(method, JSON.stringify([arg])));
-      const __target = (binding) => {
-        const ref = binding.targetRef ?? binding;
-        const call = (method, arg = {}) => __call(method, { ...arg, targetRef: ref });
-        const common = {
-          targetRef: ref,
-          observe: (arg = {}) => call(ref.kind === 'tab' ? 'observe' : 'get_accessibility_tree', arg),
-          click: (arg = {}) => call('click', arg),
-          rightClick: (arg = {}) => call('right_click', arg),
-          drag: (arg = {}) => call('drag', arg),
-          scroll: (arg = {}) => call('scroll', arg),
-          selectText: (arg = {}) => call('select_text', arg),
-          setValue: (arg = {}) => call('set_value', arg),
-          pressKey: (arg = {}) => call('press_key', arg),
-          typeText: (arg = {}) => call('type_text', arg),
-          waitFor: (arg = {}) => call('wait_for', arg),
+    const note = vm.newFunction("__note", (kindHandle, keyHandle) => {
+      const found = screenTargetNote(vm.getString(kindHandle), vm.getString(keyHandle));
+      return found === undefined ? vm.undefined : vm.newString(found);
+    });
+    vm.setProp(vm.global, "__note", note);
+    note.dispose();
+    // Runs after the prelude so every name the prelude defines counts as the runtime's own.
+    const keepDeclarations = `      {
+        // Captured before any cell runs, so saving calls nothing a cell can replace.
+        const global = globalThis;
+        const define = Object.defineProperty;
+        const describe = Object.getOwnPropertyDescriptor;
+        const FIELDS = ['value', 'writable', 'get', 'set', 'enumerable', 'configurable'];
+        // A copy with no prototype, so redefining reads nothing a cell put on Object.prototype.
+        const bare = (descriptor) => {
+          const copy = { __proto__: null };
+          for (let i = 0; i < FIELDS.length; i++)
+            if (describe(descriptor, FIELDS[i]) !== undefined) copy[FIELDS[i]] = descriptor[FIELDS[i]];
+          return copy;
         };
-        return Object.freeze(ref.kind === 'tab' ? {
-          ...common,
-          status: () => call('tab_status'),
-          read: (arg = {}) => call('read_page', arg),
-          claim: () => call('claim_tab'),
-          keep: (reason = 'deliverable') => call('keep_tab', { reason }),
-          navigate: (url) => call('navigate_tab', { url }),
-          reload: () => call('reload_tab'),
-          back: () => call('back_tab'),
-          forward: () => call('forward_tab'),
-          close: () => call('close_tab'),
-          select: (arg = {}) => call('select', arg),
-        } : {
-          ...common,
-          getWindowState: () => call('get_window_state'),
-          verifyState: (arg = {}) => call('verify_state', arg),
-          screenshot: (arg = {}) => call('screenshot', arg),
-          bringToFront: () => call('bring_to_front'),
-          endForeground: () => call('end_foreground'),
-        });
-      };
-      globalThis.screen = Object.freeze({ values: __values, state: {},
-        discover: async () => {
-          const result = { apps: [], windows: [], tabs: [], unavailable: {} };
-          try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }
-          catch (error) { result.unavailable.desktop = String(error); }
-          try { result.tabs = await __call('list_tabs', {}); }
-          catch (error) { result.unavailable.browser = String(error); }
-          return result;
-        },
-        app: async (query = {}) => __target(await __call('bind_app', query)),
-        tab: async (query = {}) => __target(await __call('select_tab', query)),
-        openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
-        listTabs: () => __call('list_tabs', {}),
-        ${methods
-          .map(
-            (method) =>
-              `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,
-          )
-          .join(
-            ",",
-          )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});`;
+        const own = Object.create(null);
+        for (const name of Object.getOwnPropertyNames(global)) own[name] = true;
+        own.__screenKeep = true;
+        // A kept name reads and writes the cell's own binding (QuickJS refuses writes to a const),
+        // so its closures and later cells share one value. The probe runs under a throwing stand-in,
+        // so a name that is not the cell's binding reaches neither a getter nor an inherited property.
+        define(global, '__screenKeep', { __proto__: null, value: (name, read, write) => {
+          if (own[name] === true) return;
+          const found = describe(global, name);
+          const previous = found === undefined ? undefined : bare(found);
+          if (previous && previous.configurable !== true) return;
+          const absent = {};
+          const refuse = () => { throw absent; };
+          define(global, name, { __proto__: null, get: refuse, set: refuse, configurable: true });
+          try { read(); } catch {
+            delete global[name];
+            if (previous) define(global, name, previous);
+            return;
+          }
+          define(global, name, {
+            __proto__: null, get: read, set: write, configurable: true, enumerable: true,
+          });
+        } });
+      }`;
+    const setup = `${screenTargetPrelude(methods)}\n${keepDeclarations}`;
     const evaluated = vm.evalCode(setup);
     vm.unwrapResult(evaluated).dispose();
   };
   initialize();
   const reset = () => {
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
     vm.dispose();
@@ -266,11 +251,87 @@ export async function runScreenChild(
     runtime.setMaxStackSize(limits.stackBytes);
     initialize();
   };
+  /** A Target method's ScreenError: its code and whether input may have landed lead the message. */
+  const targetError = (handle: QuickJSHandle): ScreenRunResult["error"] => {
+    if (vm.typeof(handle) !== "object") return undefined;
+    const read = (key: string) => {
+      const property = vm.getProp(handle, key);
+      const value: unknown = vm.dump(property);
+      property.dispose();
+      return value;
+    };
+    const code = read("code");
+    if (read("name") !== "ScreenError" || typeof code !== "string") return undefined;
+    const message = read("message");
+    const sent = read("nothingSent") === true ? "nothing sent" : "input may have landed";
+    return {
+      name: "ScreenError",
+      message: boundedMessage(`${code.slice(0, 80)} (${sent}): ${String(message)}`),
+    };
+  };
+  /** What the cell's Target calls returned before it failed, newest kept within returnBytes. */
+  const partialValue = (): { value?: NonNullable<ScreenRunResult["value"]> } => {
+    const handle = vm.getProp(vm.global, "__screenResults");
+    const entries: unknown = vm.dump(handle);
+    handle.dispose();
+    if (!Array.isArray(entries) || entries.length === 0) return {};
+    const kept = [...entries];
+    while (
+      kept.length > 0 &&
+      screenBytes(JSON.stringify({ partial: kept })) > currentLimits.returnBytes
+    )
+      kept.shift();
+    return kept.length === 0
+      ? {}
+      : { value: { partial: kept } as NonNullable<ScreenRunResult["value"]> };
+  };
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The running cell's saver: called once it settles, or dropped unsaved when it ends otherwise. */
+  let saverHandle: ReturnType<typeof vm.getProp> | undefined;
+  const dropSaver = () => {
+    saverHandle?.dispose();
+    saverHandle = undefined;
+  };
+  const compiles = (code: string) => {
+    const result = vm.evalCode(code);
+    (result.error ?? result.value).dispose();
+    return result.error === undefined;
+  };
+  // Starts the cell and returns its promise and the saver for its top-level bindings. A cell the
+  // saver cannot wrap runs as written and keeps nothing.
+  const startCell = (source: string, suffix: string) => {
+    const strict = !compiles(sloppyProbe(source));
+    const kept = vm.evalCode(keptCell(source, suffix, strict));
+    if (kept.error !== undefined) {
+      kept.error.dispose();
+      const cellFunction = vm.unwrapResult(vm.evalCode(plainCell(source)));
+      const promise = vm.unwrapResult(vm.callFunction(cellFunction, vm.undefined));
+      cellFunction.dispose();
+      return { promise, save: () => {} };
+    }
+    const run = vm.getProp(kept.value, 0);
+    dropSaver();
+    const saver = vm.getProp(kept.value, 1);
+    saverHandle = saver;
+    kept.value.dispose();
+    const called = vm.callFunction(run, vm.undefined);
+    run.dispose();
+    const save = () => {
+      // A cell that ended by its deadline or a reset no longer owns the saver.
+      if (saverHandle !== saver) return;
+      saverHandle = undefined;
+      const result = vm.callFunction(saver, vm.undefined);
+      (result.error ?? result.value).dispose();
+      saver.dispose();
+    };
+    if (called.error !== undefined) save();
+    return { promise: vm.unwrapResult(called), save };
+  };
   const finish = (result: ChildResult) => {
     clearTimeout(deadlineTimer);
     deadlineTimer = undefined;
     admitted = false;
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
     emit(result);
@@ -284,12 +345,14 @@ export async function runScreenChild(
         throw new Error("Invalid frame");
       if (frame.t === "reply") {
         const reply = decodeUnknownScreenHostReply(frame);
-        if (reply.runId !== boot.runId || reply.cellId !== cellId) continue;
+        if (reply.runId !== runId || reply.cellId !== cellId) continue;
         const promise = pending.get(reply.callId);
         if (!promise) continue;
         pending.delete(reply.callId);
         const value = vm.newString(
-          JSON.stringify(reply.outcome === "ok" ? reply.value : reply.error),
+          JSON.stringify(
+            reply.outcome === "ok" ? { v: reply.value, c: reply.category } : reply.error,
+          ),
         );
         if (reply.outcome === "ok") promise.resolve(value);
         else promise.reject(value);
@@ -310,12 +373,17 @@ export async function runScreenChild(
       if (cell.resetValues) reset();
       runtime.setMemoryLimit(currentLimits.heapBytes);
       runtime.setMaxStackSize(currentLimits.stackBytes);
+      runId = cell.runId;
+      turnId = cell.turnId;
       cellId = cell.cellId;
       nextCallId = 0;
       callCount = 0;
       consoleBytes = 0;
       linesOut = [];
       truncated = [];
+      const results = vm.newArray();
+      vm.setProp(vm.global, "__screenResults", results);
+      results.dispose();
       deadline = cell.deadlineMillis;
       // Starting the child can use up a short cell's wall time; such a cell never runs.
       if (Date.now() >= deadline) {
@@ -339,8 +407,8 @@ export async function runScreenChild(
         Math.max(0, deadline - Date.now()),
       );
       try {
-        const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
-        const handle = vm.unwrapResult(evaluation);
+        const started = startCell(cell.source, cell.cellId.replaceAll(/[^A-Za-z0-9]/g, ""));
+        const handle = started.promise;
         const settled = vm.resolvePromise(handle);
         handle.dispose();
         runtime.executePendingJobs();
@@ -351,9 +419,21 @@ export async function runScreenChild(
                 (outcome.error ?? outcome.value)?.dispose();
                 return;
               }
+              // Saving publishes the cell's bindings as globals, so it waits until the cell's
+              // own result and error are read: a getter on them sees what it would unwrapped.
               if (outcome.error) {
-                const dumped = vm.dump(outcome.error);
+                // A host failure the guest let escape still carries its host receipt verbatim.
+                const receipt =
+                  vm.typeof(outcome.error) === "object"
+                    ? vm.getProp(outcome.error, "__receipt")
+                    : undefined;
+                const hostReceipt =
+                  receipt && vm.typeof(receipt) === "string" ? vm.getString(receipt) : undefined;
+                receipt?.dispose();
+                const thrown = hostReceipt === undefined ? targetError(outcome.error) : undefined;
+                const dumped = hostReceipt ?? vm.dump(outcome.error);
                 outcome.error.dispose();
+                started.save();
                 let error: ScreenRunResult["error"];
                 if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
                   try {
@@ -363,6 +443,7 @@ export async function runScreenChild(
                     /* An ordinary guest exception has no host error receipt. */
                   }
                 }
+                if (!error && thrown) error = thrown;
                 if (!error) {
                   const guest =
                     typeof dumped === "object" && dumped !== null
@@ -386,6 +467,7 @@ export async function runScreenChild(
                         ? "resource_exhausted"
                         : "failed",
                   ...(error ? { error } : {}),
+                  ...partialValue(),
                   ...(pending.size ? { unawaitedCallIds: [...pending.keys()] } : {}),
                   console: linesOut,
                   truncated,
@@ -395,6 +477,7 @@ export async function runScreenChild(
               const resultHandle = vm.unwrapResult(outcome);
               const value = vm.dump(resultHandle) as unknown;
               resultHandle.dispose();
+              started.save();
               const json = JSON.stringify(value);
               const bounded =
                 json === undefined || screenBytes(json) > currentLimits.returnBytes
@@ -413,9 +496,13 @@ export async function runScreenChild(
                 truncated,
               });
             },
-            () => finish({ t: "result", cellId, status: "failed", console: linesOut, truncated }),
+            () => {
+              started.save();
+              finish({ t: "result", cellId, status: "failed", console: linesOut, truncated });
+            },
           )
           .catch(() => {
+            started.save();
             if (cellId === cell.cellId)
               finish({
                 t: "result",
@@ -437,6 +524,7 @@ export async function runScreenChild(
     }
   } finally {
     lines.close();
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     vm.dispose();
     runtime.dispose();

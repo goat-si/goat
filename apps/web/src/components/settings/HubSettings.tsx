@@ -1,5 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { cloudAutoJoinSaveError } from "@goat/client-runtime/hub-devices";
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
+import { cloudAutoJoinSaveError, connectHubProxySaveError } from "@goat/client-runtime/hub-devices";
 import { hubSnapshot, type HubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import {
   AuthOrchestrationOperateScope,
@@ -153,7 +154,13 @@ function useHubSettings(environmentId: EnvironmentId) {
     saving,
     error,
     joinError,
-    save: (hub: Partial<HubSettingsValue>) => savePatch({ hub }),
+    save: async (hub: Partial<HubSettingsValue>) => {
+      const saved = await savePatch({ hub });
+      if (saved !== null && hub.connectDevicesHubProxy !== undefined)
+        setError(
+          connectHubProxySaveError(hub.connectDevicesHubProxy, saved.hub.connectDevicesHubProxy),
+        );
+    },
     /** An older hub drops the field and answers on, since it always joins its cloud machines. */
     saveCloudAutoJoin: async (autoJoinCloudMachines: boolean) => {
       setJoinError(null);
@@ -225,6 +232,24 @@ function HubControls({
             />
           }
         />
+        {isGoatConnectEnabled() && (
+          <SettingsRow
+            {...searchableSetting("hub-connect-access")}
+            serverScoped
+            settingKeys={["hub"]}
+            description="Standing consent for every trusted device signed in to the linked GOAT Connect account to reach hub devices. After enabling, sign out of GOAT Connect and sign back in. Turning this off ends privileged Connect sessions, including direct hub access. The preference stays saved while the hub is off."
+            control={
+              <Switch
+                aria-label="Allow GOAT Connect devices to reach hub devices"
+                checked={hub.settings.connectDevicesHubProxy}
+                disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
+                onCheckedChange={(connectDevicesHubProxy) =>
+                  void hub.save({ connectDevicesHubProxy })
+                }
+              />
+            }
+          />
+        )}
         <SettingsRow
           {...searchableSetting("hub-cloud-holder")}
           serverScoped

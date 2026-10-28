@@ -1,3 +1,5 @@
+import * as DeliveryAuthorization from "./DeliveryAuthorization.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Crypto from "effect/Crypto";
@@ -41,7 +43,9 @@ export class ApnsDeliveryQueueSendError extends Schema.TaggedError<ApnsDeliveryQ
   }
 }
 
-export type ApnsDeliveryQueueError = ApnsDeliveryQueueSendError;
+export type ApnsDeliveryQueueError =
+  | ApnsDeliveryQueueSendError
+  | RelayAuthorizationUnavailableError;
 
 export class ApnsDeliveryQueueSender extends Context.Service<
   ApnsDeliveryQueueSender,
@@ -58,6 +62,7 @@ export class ApnsDeliveryQueue extends Context.Service<
     readonly enqueueLiveActivity: (input: {
       readonly kind: ApnsDeliveryJobPayload["kind"];
       readonly userId: string;
+      readonly accountEpoch: number;
       readonly deviceId: string;
       readonly token: string;
       readonly bundleId?: string | null;
@@ -67,6 +72,7 @@ export class ApnsDeliveryQueue extends Context.Service<
     }) => Effect.Effect<RelayDeliveryResult, ApnsDeliveryQueueError>;
     readonly enqueuePushNotification: (input: {
       readonly userId: string;
+      readonly accountEpoch: number;
       readonly deviceId: string;
       readonly token: string;
       readonly bundleId?: string | null;
@@ -77,6 +83,7 @@ export class ApnsDeliveryQueue extends Context.Service<
 >()("goat-relay/agentActivity/ApnsDeliveryQueue") {}
 
 export const make = Effect.gen(function* () {
+  const authorization = yield* DeliveryAuthorization.DeliveryAuthorization;
   const sender = yield* ApnsDeliveryQueueSender;
   const crypto = yield* Crypto.Crypto;
   const config = yield* RelayConfiguration.RelayConfiguration;
@@ -88,6 +95,20 @@ export const make = Effect.gen(function* () {
           "relay.mobile.device_id": input.deviceId,
           "relay.delivery.kind": input.kind,
         });
+        if (
+          !(yield* authorization.eligible({
+            ...input,
+            kind: "kind" in input ? input.kind : "push_notification",
+          }))
+        )
+          return {
+            deviceId: input.deviceId,
+            kind: "kind" in input ? input.kind : "push_notification",
+            ok: false,
+            apnsStatus: null,
+            apnsReason: "Stale account delivery skipped.",
+            apnsId: null,
+          };
         const now = yield* DateTime.now;
         const jobId = yield* crypto.randomUUIDv4().pipe(
           Effect.mapError(
@@ -147,6 +168,20 @@ export const make = Effect.gen(function* () {
           "relay.environment_id": input.notification.environmentId,
           "relay.thread_id": input.notification.threadId,
         });
+        if (
+          !(yield* authorization.eligible({
+            ...input,
+            kind: "push_notification" as const,
+          }))
+        )
+          return {
+            deviceId: input.deviceId,
+            kind: "push_notification" as const,
+            ok: false,
+            apnsStatus: null,
+            apnsReason: "Stale account delivery skipped.",
+            apnsId: null,
+          };
         const now = yield* DateTime.now;
         const jobId = yield* crypto.randomUUIDv4().pipe(
           Effect.mapError(
@@ -165,6 +200,7 @@ export const make = Effect.gen(function* () {
         const payload = makeApnsDeliveryJobPayload({
           kind: "push_notification",
           userId: input.userId,
+          accountEpoch: input.accountEpoch,
           deviceId: input.deviceId,
           token: input.token,
           bundleId: input.bundleId,

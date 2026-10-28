@@ -1,3 +1,4 @@
+import { HookAuthorization } from "./HookDeliveryAuthorization.ts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -38,6 +39,7 @@ export const retrySchedule = Schedule.spaced("10 seconds").pipe(
 );
 
 export interface HeldHook {
+  readonly authorization?: HookAuthorization | undefined;
   readonly id: string;
   readonly receivedAt: string;
   readonly method: string;
@@ -52,7 +54,12 @@ export interface HeldHook {
   readonly body: Uint8Array;
 }
 
-export type DeliveryOutcome = "delivered" | "busy" | "unreachable";
+export type DeliveryOutcome =
+  | "delivered"
+  | "busy"
+  | "unreachable"
+  | "dropped"
+  | "authorization_unavailable";
 
 export const retryDelayMs = Effect.fn("HookInboxStore.retryDelayMs")(function* (failures: number) {
   const step = yield* Schedule.toStep(retrySchedule);
@@ -73,11 +80,16 @@ export const retryDelayMs = Effect.fn("HookInboxStore.retryDelayMs")(function* (
   return Duration.toMillis(delay);
 });
 
+const AuthorizationJson = Schema.fromJsonString(HookAuthorization);
+const encodeAuthorization = Schema.encodeEffect(AuthorizationJson);
+const decodeAuthorization = Schema.decodeOption(AuthorizationJson);
+
 const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const encodeHeaders = Schema.encodeSync(HeadersJson);
 const decodeHeaders = Schema.decodeUnknownOption(HeadersJson);
 
 interface HeldHookRow {
+  readonly authorization: string | null;
   readonly seq: number;
   readonly id: string;
   readonly received_at: string;
@@ -113,6 +125,10 @@ export const migrate = Effect.gen(function* () {
       body BLOB NOT NULL
     )
   `;
+  yield* sql`CREATE TABLE IF NOT EXISTS held_hooks_closed (id INTEGER PRIMARY KEY CHECK(id=1))`;
+  const columns = yield* sql<{ name: string }>`PRAGMA table_info(held_hooks)`;
+  if (!columns.some((c) => c.name === "authorization"))
+    yield* sql`ALTER TABLE held_hooks ADD COLUMN authorization TEXT`;
   yield* sql`CREATE INDEX IF NOT EXISTS held_hooks_hook ON held_hooks (hook_key)`;
 
   yield* sql`
@@ -131,11 +147,11 @@ const setTarget = Effect.fn("HookInboxStore.setTarget")(function* (
   const sql = yield* SqlClient.SqlClient;
   yield* options.resetFailures
     ? sql`
-          INSERT INTO held_hooks_target (id, base_url) VALUES (1, ${baseUrl})
+          INSERT INTO held_hooks_target (id, base_url) SELECT 1, ${baseUrl} WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed)
           ON CONFLICT (id) DO UPDATE SET base_url = excluded.base_url, failures = 0
         `
     : sql`
-          INSERT INTO held_hooks_target (id, base_url) VALUES (1, ${baseUrl})
+          INSERT INTO held_hooks_target (id, base_url) SELECT 1, ${baseUrl} WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed)
           ON CONFLICT (id) DO UPDATE SET base_url = excluded.base_url
         `;
 });
@@ -173,10 +189,10 @@ export const hold = Effect.fn("HookInboxStore.hold")(function* (hook: HeldHook, 
   // One statement enforces caps across concurrent requests.
   const inserted = yield* sql<{ readonly id: string }>`
     INSERT INTO held_hooks
-      (id, received_at, method, raw_hook_id, raw_token, hook_key, query, headers, body)
+      (id, received_at, method, raw_hook_id, raw_token, hook_key, query, headers, body, authorization)
     SELECT ${hook.id}, ${hook.receivedAt}, ${hook.method}, ${hook.rawHookId}, ${hook.rawToken},
-      ${hook.hookKey}, ${hook.query}, ${encodeHeaders(hook.headers)}, ${hook.body}
-    WHERE (SELECT count(*) FROM held_hooks) < ${HOOK_INBOX_MAX_REQUESTS}
+      ${hook.hookKey}, ${hook.query}, ${encodeHeaders(hook.headers)}, ${hook.body}, ${hook.authorization ? yield* encodeAuthorization(hook.authorization) : null}
+    WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed) AND (SELECT count(*) FROM held_hooks) < ${HOOK_INBOX_MAX_REQUESTS}
       AND (SELECT count(*) FROM held_hooks WHERE hook_key = ${hook.hookKey})
         < ${HOOK_INBOX_MAX_PER_HOOK}
       AND (SELECT coalesce(sum(length(body)), 0) FROM held_hooks) + ${hook.body.byteLength}
@@ -224,6 +240,20 @@ export const wake = Effect.fn("HookInboxStore.wake")(function* (baseUrl: string)
   return true;
 });
 
+export const isClosed = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return (yield* sql`SELECT id FROM held_hooks_closed LIMIT 1`).length > 0;
+});
+export const close = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`INSERT INTO held_hooks_closed(id) VALUES(1) ON CONFLICT DO NOTHING`;
+      yield* sql`DELETE FROM held_hooks`;
+      yield* sql`DELETE FROM held_hooks_target`;
+    }),
+  );
+});
 export const clear = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM held_hooks`;
@@ -243,7 +273,7 @@ export const deliverDue = Effect.fn("HookInboxStore.deliverDue")(function* <R>(
 
   const readPage = (afterSeq: number, skip: ReadonlySet<string>) =>
     sql<HeldHookRow>`
-      SELECT seq, id, received_at, method, raw_hook_id, raw_token, hook_key, query, headers, body
+      SELECT seq, id, received_at, method, raw_hook_id, raw_token, hook_key, query, headers, body, authorization
       FROM held_hooks
       WHERE seq > ${afterSeq}
         ${skip.size === 0 ? sql`` : sql`AND hook_key NOT IN ${sql.in([...skip])}`}
@@ -297,12 +327,17 @@ export const deliverDue = Effect.fn("HookInboxStore.deliverDue")(function* <R>(
       }
       const headers = decodeHeaders(row.headers);
       if (Option.isNone(headers)) {
-        yield* sql`DELETE FROM held_hooks WHERE id = ${row.id}`;
+        yield* sql`DELETE FROM held_hooks WHERE id = ${row.id} AND seq=${row.seq}`;
         unreadable += 1;
         continue;
       }
       sent += 1;
       const outcome = yield* send(target.base_url, {
+        ...(row.authorization
+          ? {
+              authorization: Option.getOrUndefined(decodeAuthorization(row.authorization)),
+            }
+          : {}),
         id: row.id,
         receivedAt: row.received_at,
         method: row.method,
@@ -318,6 +353,8 @@ export const deliverDue = Effect.fn("HookInboxStore.deliverDue")(function* <R>(
         yield* annotateRun("cleared");
         return null;
       }
+      if (outcome === "authorization_unavailable")
+        return (yield* Clock.currentTimeMillis) + BUSY_RETRY_MS;
       if (outcome === "unreachable") {
         failures = yield* countFailure;
         yield* annotateRun("unreachable");
@@ -331,7 +368,7 @@ export const deliverDue = Effect.fn("HookInboxStore.deliverDue")(function* <R>(
         busyHooks.add(row.hook_key);
         continue;
       }
-      yield* sql`DELETE FROM held_hooks WHERE id = ${row.id}`;
+      yield* sql`DELETE FROM held_hooks WHERE id = ${row.id} AND seq=${row.seq}`;
       delivered += 1;
       const receivedAtMs = DateTime.toEpochMillis(DateTime.makeUnsafe(row.received_at));
       longestWaitMs = Math.max(longestWaitMs, startedAt - receivedAtMs);
@@ -348,4 +385,12 @@ export const deliverDue = Effect.fn("HookInboxStore.deliverDue")(function* <R>(
   const idle = delivered === 0 && busyHooks.size > 0;
   yield* annotateRun(idle ? "busy" : "more_pending");
   return idle ? now + BUSY_RETRY_MS : now;
+});
+
+export const clearOwned = Effect.fn("HookInboxStore.clearOwned")(function* (
+  authorization: HookAuthorization,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`DELETE FROM held_hooks WHERE authorization=${yield* encodeAuthorization(authorization)}`;
+  return yield* hasPending;
 });

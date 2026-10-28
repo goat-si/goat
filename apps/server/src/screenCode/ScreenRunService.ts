@@ -17,6 +17,9 @@ import type {
 } from "@goat/contracts";
 import {
   CommandId,
+  RunId,
+  SCREEN_TARGET_CONTRACT_VERSION,
+  screenTargetApi,
   ScreenRunError as ScreenRunErrorSchema,
   ScreenTargetRef,
   ThreadId,
@@ -41,6 +44,7 @@ import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRun
 const isScreenRunErrorSchema = Schema.is(ScreenRunErrorSchema);
 
 const isScreenTargetRef = Schema.is(ScreenTargetRef);
+const OPEN_RUN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 export interface ScreenRunInput {
   readonly runId: string;
@@ -83,7 +87,6 @@ export class ScreenRunService extends Context.Service<
       environmentId: string;
       reason: string;
     }) => Effect.Effect<void, ScreenRunError>;
-    readonly resetValues: (input: { runId: string; turnId: string }) => Effect.Effect<void>;
     /** Cuts matching cells and targets synchronously; controlChanged does the slower cleanup. */
     readonly fence: (input: {
       readonly threadId?: string;
@@ -114,6 +117,8 @@ export class ScreenRunService extends Context.Service<
       readonly runId: string;
       readonly reason: string;
     }) => Effect.Effect<void, ScreenRunError>;
+    /** Boots a spare child so the next thread's first cell skips the runtime's start. */
+    readonly prewarm: Effect.Effect<void>;
   }
 >()("goat/screenCode/ScreenRunService") {
   static get layer() {
@@ -279,7 +284,51 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     );
   });
   const turns = new Map<string, { threadId: string; environmentId: string }>();
-  const resetNext = new Set<string>();
+  yield* Effect.addFinalizer(() => Effect.sync(() => supervisor?.dispose()));
+  // What each thread was last given of the cell API; the oldest thread drops out first.
+  const taught = new Map<
+    string,
+    { version: string; session: string; app: boolean; tab: boolean }
+  >();
+  /** The API bundle a result carries, when the thread lacks this version or a surface it now has. */
+  const apiFor = (
+    invocation: McpThreadInvocationScope,
+    availability: ScreenRunResult["availability"],
+    reset: boolean,
+  ): string | undefined => {
+    const threadId = invocation.thread.threadId;
+    const has = (kind: "app" | "tab") =>
+      availability.some((surface) => surface.kind === kind && surface.available);
+    const now = { app: has("app"), tab: has("tab") };
+    const before = taught.get(threadId);
+    const session = invocation.thread.providerSessionId;
+    if (
+      !reset &&
+      before !== undefined &&
+      before.version === SCREEN_TARGET_CONTRACT_VERSION &&
+      before.session === session &&
+      (before.app || !now.app) &&
+      (before.tab || !now.tab)
+    )
+      return undefined;
+    // The bundle names what the turn has now; the record keeps what this session was already given.
+    const given =
+      before !== undefined &&
+      before.session === session &&
+      before.version === SCREEN_TARGET_CONTRACT_VERSION;
+    taught.delete(threadId);
+    taught.set(threadId, {
+      version: SCREEN_TARGET_CONTRACT_VERSION,
+      session,
+      app: now.app || (given && !reset && before?.app === true),
+      tab: now.tab || (given && !reset && before?.tab === true),
+    });
+    if (taught.size > 1024) {
+      const oldest = taught.keys().next().value;
+      if (oldest !== undefined) taught.delete(oldest);
+    }
+    return screenTargetApi(now);
+  };
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
   const activeCells = new Map<string, string>();
@@ -387,7 +436,6 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
-      let touched = cut;
       if (cut && cellId) {
         bridge.cutCellNow(runId, turnId, cellId, change.kind);
         supervisor?.cutCellNow(runId, turnId, cellId);
@@ -401,28 +449,28 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           options.desktopHost?.matchesControl(targetId, change.controlId) !== true
         )
           continue;
-        touched = true;
         bridge.invalidateTargetNow(runId, turnId, targetId, change.kind);
         options.desktopHost?.invalidateTarget(targetId);
         options.tabHost?.invalidateTarget(targetId);
       }
-      // A spared cell keeps its child, so its values survive into the next cell.
-      if (touched && (cut || cellId === undefined)) resetNext.add(id);
     }
   };
   const service: ScreenRunService["Service"] = {
     runCell: Effect.fn("ScreenRunService.runCell")(function* (input: ScreenRunInput) {
       if (endedRuns.has(input.runId)) return yield* Effect.fail(fail("stale_run"));
-      if (orchestrator) {
-        const projection = yield* orchestrator
-          .getThreadProjection(ThreadId.make(input.threadId))
+      const runIsOpen = Effect.gen(function* () {
+        if (!orchestrator) return true;
+        const records = yield* orchestrator
+          .getThreadRecords(ThreadId.make(input.threadId), ["runs"], {
+            runIds: [RunId.make(input.runId)],
+          })
           .pipe(Effect.option);
-        const run = Option.isSome(projection)
-          ? projection.value.runs.find((candidate) => candidate.id === input.runId)
+        const run = Option.isSome(records)
+          ? records.value.runs.find((candidate) => candidate.id === input.runId)
           : undefined;
-        if (!run || !["preparing", "queued", "starting", "running", "waiting"].includes(run.status))
-          return yield* Effect.fail(fail("stale_run"));
-      }
+        return run !== undefined && OPEN_RUN.has(run.status);
+      });
+      if (!(yield* runIsOpen)) return yield* Effect.fail(fail("stale_run"));
       const cellLimits = yield* Effect.try({
         try: () => screenRunLimits(input.limits),
         catch: () => fail("invalid_argument"),
@@ -432,19 +480,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           ...fail("source_limit"),
           limit: { name: "sourceBytes", maximum: cellLimits.sourceBytes },
         });
+      const resolved = supervisor;
       const running = yield* getSupervisor();
       // Asset resolution can suspend while a terminal run event closes this run.
       if (endedRuns.has(input.runId)) return yield* Effect.fail(fail("stale_run"));
-      if (orchestrator) {
-        const projection = yield* orchestrator
-          .getThreadProjection(ThreadId.make(input.threadId))
-          .pipe(Effect.option);
-        const run = Option.isSome(projection)
-          ? projection.value.runs.find((candidate) => candidate.id === input.runId)
-          : undefined;
-        if (!run || !["preparing", "queued", "starting", "running", "waiting"].includes(run.status))
-          return yield* Effect.fail(fail("stale_run"));
-      }
+      if (resolved === undefined && !(yield* runIsOpen))
+        return yield* Effect.fail(fail("stale_run"));
       if (endedRuns.has(input.runId)) return yield* Effect.fail(fail("stale_run"));
       const cellId = NodeCrypto.randomUUID();
       const id = turnKey(input.runId, input.turnId);
@@ -465,11 +506,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       if (activeCells.has(id)) return yield* Effect.fail(fail("pending_limit"));
       activeCells.set(id, cellId);
       // A child's WASM memory cannot shrink, so a lower cap needs a fresh child.
-      const liveWasmBytes = running.turnWasmBytes(input.runId, input.turnId);
-      const lowered = liveWasmBytes !== undefined && cellLimits.turnWasmBytes < liveWasmBytes;
-      if (lowered) yield* running.finishTurn(input.runId, input.turnId, "turnWasmBytes");
-      // A cutoff or new message killed the child, so values the agent stored are gone; say so.
-      const contextReset = input.resetValues !== true && (resetNext.delete(id) || lowered);
+      const liveWasmBytes = running.threadWasmBytes(input.threadId);
+      if (liveWasmBytes !== undefined && cellLimits.turnWasmBytes < liveWasmBytes)
+        running.closeThread(input.threadId);
+      // The thread's child ended (a cut cell, idle time, room for another thread), so the values
+      // the agent stored are gone; say so unless it asked for a reset.
+      const contextReset = running.consumeLost(input.threadId) && input.resetValues !== true;
       return yield* running
         .runCell(
           {
@@ -521,12 +563,21 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   ...classified.error,
                   receipts: journal.slice(-16).map((entry) => entry.receipt),
                 })
-              : Effect.succeed({
-                  ...classified,
-                  journal,
-                  ...(contextReset
-                    ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }
-                    : {}),
+              : Effect.sync(() => {
+                  const api = apiFor(
+                    input.invocation,
+                    result.availability,
+                    input.resetValues === true,
+                  );
+                  return {
+                    ...classified,
+                    journal,
+                    ...(contextReset
+                      ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }
+                      : {}),
+                    ...(api === undefined ? {} : { api }),
+                    contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
+                  };
                 });
           }),
           Effect.ensuring(
@@ -603,7 +654,6 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       }
       options.desktopHost?.finishTurn(input.runId, input.turnId);
       turns.delete(turnKey(input.runId, input.turnId));
-      resetNext.delete(turnKey(input.runId, input.turnId));
       const failed = outcomes.filter((outcome) => outcome.status === "failed");
       for (const outcome of failed) recordCleanupFailure(input.runId, input.turnId, outcome.tabId);
       if (cleanup && !Exit.isSuccess(cleanup)) recordCleanupFailure(input.runId, input.turnId);
@@ -617,12 +667,6 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           nextStep: "Inspect the affected tab and close it manually if needed.",
         } satisfies ScreenRunError);
       }
-    }),
-    resetValues: Effect.fn("ScreenRunService.resetValues")(function* (input: {
-      runId: string;
-      turnId: string;
-    }) {
-      resetNext.add(turnKey(input.runId, input.turnId));
     }),
     fence: Effect.fn("ScreenRunService.fence")(function* (input: {
       threadId?: string;
@@ -654,8 +698,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         if (!runId || !turnId) continue;
         const cellId = activeCells.get(id);
         const cut = cutsCell(input, runId, turnId, cellId);
-        // With no cell running, the child holds only values, and a cutoff still resets them.
-        const endsChild = cut || cellId === undefined;
+        // With no cell running, a cutoff ends the turn's hold on the screen; values stay.
+        const releases = cut || cellId === undefined;
         const affected = (
           targetId: string,
           route: ScreenCursorRoute & { runId: string; turnId: string; cellId: string },
@@ -675,7 +719,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           yield* bridge.cutCell(runId, turnId, cellId, input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }
-        if (endsChild)
+        if (releases)
           yield* releaseForeground(
             turn.threadId,
             [...routes]
@@ -707,9 +751,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           if (cleanupFailures > before)
             yield* noticeCleanupFailure(turn.threadId, runId, turnId, cleanupFailures - before);
         }
-        // An authority cutoff closes the child, so computation values reset even if the
-        // changed target is unrelated to the active cell; the next cell must rebind.
-        if (supervisor && endsChild) yield* supervisor.finishTurn(runId, turnId, input.kind);
+        // A cut cell's child ends with it. Targets go either way, so the next cell must rebind.
+        if (supervisor && cut) yield* supervisor.finishTurn(runId, turnId, input.kind);
         for (const [targetId, route] of routes) {
           if (!cut && !affected(targetId, route)) continue;
           if (route.runId !== runId || route.turnId !== turnId) continue;
@@ -717,7 +760,6 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           options.desktopHost?.invalidateTarget(targetId);
           options.tabHost?.invalidateTarget(targetId);
         }
-        if (endsChild) resetNext.add(id);
       }
       return { cleanupFailures };
     }),
@@ -754,6 +796,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       }
       if (failed) return yield* Effect.fail(failed);
     }),
+    prewarm: getSupervisor().pipe(
+      Effect.map((running) => running.prewarm()),
+      Effect.ignoreCause,
+    ),
   };
   if (options.leases?.onAuthorityChange) {
     const unsubscribe = options.leases.onAuthorityChange((change) => {

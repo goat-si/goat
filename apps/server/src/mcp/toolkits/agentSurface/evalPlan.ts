@@ -43,6 +43,7 @@ const argIssues = (site: CallSite, schema: unknown): ReadonlyArray<string> => {
   return [
     ...site.keys.filter((key) => !known.includes(key)).map((key) => `${key} is not an argument`),
     ...(shape.required ?? [])
+      .filter((key) => key !== "clientRequestId" || !isKeyedWrite(site.entry))
       .filter((key) => !site.keys?.includes(key))
       .map((key) => `${key} is required`),
   ];

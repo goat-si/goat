@@ -8,7 +8,7 @@ import {
 } from "@goat/contracts";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
-import { listedToolName } from "@goat/contracts/agentSurface/resolve";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -42,18 +42,18 @@ const result = {
 // One probe per registered write. Declared as reads on purpose: the gate must follow the
 // registry entry, not the handler's own declaration.
 const hostKeys = hostArgumentsOf;
-const probes = writes.map((entry) =>
-  Tool.make(entry.name, {
+const probes = writes.map((entry) => {
+  const keys = [...hostKeys(entry), ...(entry.keyRequired ? ["clientRequestId"] : [])];
+  return Tool.make(entry.name, {
     ...result,
-    ...(hostKeys(entry).length > 0
-      ? {
-          parameters: Schema.Struct(
-            Object.fromEntries(hostKeys(entry).map((key) => [key, Schema.optional(Schema.String)])),
+    parameters:
+      keys.length === 0
+        ? Tool.EmptyParams
+        : Schema.Struct(
+            Object.fromEntries(keys.map((key) => [key, Schema.optional(Schema.String)])),
           ),
-        }
-      : {}),
-  }),
-);
+  });
+});
 const ProbeToolkit = Toolkit.make(
   ...probes,
   Tool.make("unregistered_write", {
@@ -162,8 +162,17 @@ const call = (
   scope: McpInvocationContext.McpInvocationScope | undefined,
   args: Record<string, unknown> = {},
 ) => {
+  const entry: AgentSurfaceEntry | undefined = resolveAgentSurfaceEntry(tool);
   const called = McpServer.McpServer.pipe(
-    Effect.flatMap((server) => server.callTool({ name: tool, arguments: args })),
+    Effect.flatMap((server) =>
+      server.callTool({
+        name: tool,
+        arguments: {
+          ...(entry?.keyRequired ? { clientRequestId: "capability-probe" } : {}),
+          ...args,
+        },
+      }),
+    ),
     Effect.flatMap(({ content }) => decodeOutcome(textOf(content))),
     Effect.provideService(McpSchema.McpServerClient, mcpClient),
   );
@@ -182,10 +191,10 @@ const caller = ThreadId.make("thread:caller");
 // Writes each built-in profile may run: the declared mapping's effect, pinned for review.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   observer: 60,
-  worker: 101,
-  manager: 115,
-  "merge-manager": 115,
-  owner: 149,
+  worker: 111,
+  manager: 125,
+  "merge-manager": 127,
+  owner: 162,
 };
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
@@ -265,7 +274,7 @@ const limitProfileTo = (id: string, hosts: ReadonlyArray<string>) =>
     return { settings, policy };
   });
 
-// #856: a host-routed write without a capability of its own still reaches another machine.
+// A host-routed write without a capability of its own still reaches another machine.
 it.effect(
   "holds a host-routed write that declares no capability to threads.remote and the allowlist",
   () =>
@@ -294,7 +303,7 @@ it.effect(
     }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "manager" }))),
 );
 
-// #805, #857: these writes name the machine they act on outside a routing `host`.
+// These writes name the machine they act on outside a routing `host`.
 it.effect("applies the host allowlist to every argument a write declares names a host", () =>
   Effect.gen(function* () {
     yield* seed(caller);
@@ -420,7 +429,7 @@ it.effect("refuses a nested call the same way as a direct one", () =>
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "observer" }))),
 );
 
-// #858: worker and manager agents may set up the projects they work in, and nothing more.
+// Worker and manager agents may set up the projects they work in, and nothing more.
 it.effect.each([
   { profile: "worker", allowed: true },
   { profile: "manager", allowed: true },

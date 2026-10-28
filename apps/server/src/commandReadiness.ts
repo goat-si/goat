@@ -1,7 +1,8 @@
 import { GOAT_ENVIRONMENT_PATH, LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
-import { HttpRouter, HttpServerRequest } from "effect/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 
 const DESCRIPTOR_PATHS: ReadonlySet<string> = new Set([
   GOAT_ENVIRONMENT_PATH,
@@ -19,12 +20,26 @@ const isDescriptorRequest = (request: HttpServerRequest.HttpServerRequest) =>
 export const layerCommandReadiness = HttpRouter.middleware(
   (httpEffect) =>
     Effect.gen(function* () {
+      const persistence = yield* PersistenceRecoveryOwner.PersistenceRecoveryOwner;
+      if (persistence !== undefined) yield* persistence.check;
       const request = yield* HttpServerRequest.HttpServerRequest;
       if (!isDescriptorRequest(request)) {
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-        yield* startup.awaitCommandReady.pipe(Effect.orDie);
+        yield* startup.awaitCommandReady.pipe(
+          Effect.catchTags({
+            ServerRuntimeStartupError: (error) =>
+              PersistenceRecoveryOwner.isFatalPersistenceError(error.cause)
+                ? Effect.fail(error.cause)
+                : Effect.die(error),
+          }),
+        );
       }
       return yield* httpEffect;
-    }),
+    }).pipe(
+      Effect.catchTags({
+        FatalPersistenceError: (error) =>
+          Effect.succeed(HttpServerResponse.text(error.message, { status: 503 })),
+      }),
+    ),
   { global: true },
 );

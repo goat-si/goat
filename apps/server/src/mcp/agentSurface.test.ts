@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools and fill_secret.
-  expect(entries).toHaveLength(233);
+  expect(entries).toHaveLength(260);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -195,6 +195,18 @@ const propertiesOf = (node: unknown, definitions: JsonSchema): JsonSchema => {
 const NOT_A_FLEET_HOST: Readonly<Record<string, string>> = {
   "connection.add_ssh": "the address of a machine being added, gated by hub.manage",
   "ssh.host_add": "the address of a machine being added, gated by hub.manage",
+  "pull_request.update": "the git forge's host",
+  "pull_request.comment": "the git forge's host",
+  "pull_request.comment_update": "the git forge's host",
+  "pull_request.review_submit": "the git forge's host",
+  "pull_request.thread_reply": "the git forge's host",
+  "pull_request.thread_resolve": "the git forge's host",
+  "pull_request.react": "the git forge's host",
+  "pull_request.labels": "the git forge's host",
+  "pull_request.reviewers": "the git forge's host",
+  "pull_request.action": "the git forge's host",
+  "pull_request.merge": "the git forge's host",
+  "pull_request.close": "the git forge's host",
   "pull_request.link": "the git forge's host",
   "pull_request.unlink": "the git forge's host",
   "pull_request.watch": "the git forge's host",
@@ -369,6 +381,9 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "pending_request.list": { scope: "launched", hosts: ["box"] },
   "provider.host_matrix": { localOnly: false },
   "host.status": { local: null },
+  // A sampled patch names no setting, which is refused before access matters.
+  "environment.settings_read": {},
+  "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
   // A sampled cursor without its query is refused before access matters.
   "surface.describe": { query: "thread" },
 };
@@ -387,6 +402,23 @@ const REASONS = {
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
+  "environment.usage": { reason: "grantChecked", readOnlyClient: "denied", fullClient: "denied" },
+  "host.process_history": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "host.resource_history": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "worktree.diff_preview": {
+    reason: "grantChecked",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
+  "worktree.diff_file": { reason: "grantChecked", readOnlyClient: "denied", fullClient: "denied" },
   "scheduler.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "pending_request.list": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "provider.host_matrix": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
@@ -401,6 +433,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "environment.settings_update": { reason: "grantChecked", fullClient: "denied" },
   "hub.child_prepare": {
     reason: "childSetupOnly",
     thread: "denied",
@@ -408,6 +441,14 @@ const ACCESS_EXCEPTIONS: Readonly<
     fullClient: "denied",
   },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
+  ...Object.fromEntries(
+    entries
+      .filter((entry) => entry.resource === "pull_request" && isKeyedWrite(entry))
+      .map((entry) => [
+        entry.path,
+        { reason: "grantChecked" as const, fullClient: "denied" as const },
+      ]),
+  ),
   "surface.eval": { reason: "dispatches", readOnlyClient: "reached" },
   "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };
@@ -443,6 +484,9 @@ const argumentsFor = Effect.fn(function* (entry: Entry) {
   const takesThread = isObject(schema["properties"]) && "threadId" in schema["properties"];
   return {
     ...encoded,
+    ...("keyRequired" in entry && entry.keyRequired
+      ? { clientRequestId: "required-fixture-key" }
+      : {}),
     ...(entry.hostRoutable && "host" in encoded && !hostRequired ? { host: null } : {}),
     // Outside clients name their target thread; without one they stop at target resolution.
     ...(takesThread && (encoded["threadId"] ?? null) === null ? { threadId: TARGET_THREAD } : {}),

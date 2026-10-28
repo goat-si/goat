@@ -26,6 +26,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "./config.ts";
+import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -66,6 +67,7 @@ export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeS
   },
 ) {
   override get message(): string {
+    if (PersistenceRecoveryOwner.isFatalPersistenceError(this.cause)) return this.cause.message;
     return "Server runtime startup failed before command readiness.";
   }
 }
@@ -110,12 +112,18 @@ export const makeCommandGate = Effect.gen(function* () {
     onNone: () => ({ mode: "web" as const, host: null, port: 0 }),
     onSome: (config) => ({ mode: config.mode, host: config.host ?? null, port: config.port }),
   });
+  const persistence = yield* PersistenceRecoveryOwner.PersistenceRecoveryOwner;
+  const checkPersistence =
+    persistence?.check.pipe(
+      Effect.mapError((cause) => new ServerRuntimeStartupError({ ...errorContext, cause })),
+    ) ?? Effect.void;
   const commandReady = yield* Deferred.make<void, ServerRuntimeStartupError>();
   const pending = new Map<symbol, QueuedCommand>();
   let readiness: CommandReadinessState = "pending";
 
   const awaitCommandReady = Deferred.await(commandReady).pipe(
     Effect.andThen(Effect.suspend(() => (typeof readiness === "string" ? Effect.void : readiness))),
+    Effect.andThen(checkPersistence),
   );
 
   const failCommandReady = Effect.fn("serverRuntimeStartup.failCommandReady")(
@@ -129,6 +137,15 @@ export const makeCommandGate = Effect.gen(function* () {
         for (const command of abandoned) command.fail(error);
       }),
   );
+
+  if (persistence !== undefined) {
+    yield* persistence.awaitFailure.pipe(
+      Effect.flatMap((cause) =>
+        failCommandReady(new ServerRuntimeStartupError({ ...errorContext, cause })),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+  }
 
   const commandWorker = Effect.gen(function* () {
     yield* awaitCommandReady;
@@ -154,11 +171,12 @@ export const makeCommandGate = Effect.gen(function* () {
   const enqueueCommand = Effect.fn("serverRuntimeStartup.enqueueCommand")(function* <A, E>(
     effect: Effect.Effect<A, E>,
   ): Effect.fn.Return<A, E | ServerRuntimeStartupError> {
+    yield* checkPersistence;
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.suspend(() => {
         if (typeof readiness !== "string") return readiness;
         const execute = Effect.suspend((): Effect.Effect<A, E | ServerRuntimeStartupError> =>
-          typeof readiness === "string" ? effect : readiness,
+          typeof readiness === "string" ? checkPersistence.pipe(Effect.andThen(effect)) : readiness,
         );
         if (readiness === "ready") return restore(execute);
         if (pending.size >= MAX_PENDING_STARTUP_COMMANDS) {

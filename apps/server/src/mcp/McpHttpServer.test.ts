@@ -34,8 +34,6 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
-import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -47,6 +45,7 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { inertPullRequestServices } from "./toolkits/pullRequests/pullRequestServices.testkit.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -93,8 +92,7 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(ProjectService.ProjectService)({}),
-      Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
-      Layer.mock(PullRequestService.PullRequestService)({}),
+      inertPullRequestServices,
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
       NodeServices.layer,
@@ -570,7 +568,7 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
         ],
         accessibilityTree: { nodes: Array.from({ length: 2_000 }, (_, i) => ({ nodeId: `${i}` })) },
         consoleEntries: Array.from({ length: 100 }, (_, i) => ({
-          level: "log",
+          level: "error",
           text: `entry ${i}`,
           timestamp: "t",
         })),
@@ -622,7 +620,7 @@ it.effect("bounds the snapshot text even when nothing but logs and the title are
         ...snapshotResult,
         title: "t".repeat(70_000),
         interactiveElements: [],
-        consoleEntries: [{ level: "log", text: "x".repeat(70_000), timestamp: "t" }],
+        consoleEntries: [{ level: "error", text: "x".repeat(70_000), timestamp: "t" }],
       };
       yield* serveSnapshots("mcp-bounded-logs-client", oversized);
 
@@ -949,7 +947,9 @@ it.effect("registers annotated tools and preserves authenticated request context
             : { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }),
         };
         expect(result.structuredContent).toMatchObject(expected);
-        expect(routedRequests.at(-1)?.operation).toBe("status");
+        expect(routedRequests.at(-1)?.operation).toBe(
+          request.name === "goat_preview_click" ? "click" : "status",
+        );
         const text = result.content[0];
         const decodedText = text?.type === "text" ? decodeJsonText(text.text) : null;
         expect(decodedText).toMatchObject(expected);

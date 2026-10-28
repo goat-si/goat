@@ -48,6 +48,7 @@ export const holdInitialCheckpoint = (worker: NodeWorkerThreads.Worker) => {
   const gate = new SharedArrayBuffer(4);
   const arrived = Deferred.makeUnsafe<void>();
   let retirement: Promise<number> | undefined;
+  let aliveAtRetirement: boolean | undefined;
   const listener = (reply: { type?: string }) => {
     if (reply.type === "checkpoint-held") Deferred.doneUnsafe(arrived, Effect.void);
   };
@@ -58,6 +59,8 @@ export const holdInitialCheckpoint = (worker: NodeWorkerThreads.Worker) => {
   });
   const terminate = worker.terminate.bind(worker);
   const retiring = vi.spyOn(worker, "terminate").mockImplementation(() => {
+    // Read before termination starts: its exit event can land during any later event-loop turn.
+    aliveAtRetirement ??= worker.threadId !== -1;
     retirement = terminate();
     return retirement;
   });
@@ -70,6 +73,9 @@ export const holdInitialCheckpoint = (worker: NodeWorkerThreads.Worker) => {
     release,
     get retirement() {
       return retirement;
+    },
+    get aliveAtRetirement() {
+      return aliveAtRetirement;
     },
     [Symbol.dispose]() {
       release();

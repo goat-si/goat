@@ -46,6 +46,10 @@ function allocation(input: {
   return {
     userId: "user-1",
     environmentId: `environment-${input.tunnelId ?? "pending"}`,
+    incarnationId: "10000000-0000-4000-8000-000000000001",
+    accountEpoch: 1,
+    endpointGeneration: 0,
+    capacityReleasedAt: null,
     hostname: `${input.tunnelId ?? "pending"}.example.test`,
     tunnelId: input.tunnelId,
     tunnelName: `${PREFIX}aaaaaaaaaaaaaaaa`,
@@ -54,7 +58,6 @@ function allocation(input: {
     origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
     updatedAt: "2026-08-25T11:00:00.000Z",
     generation: 1,
-    incarnationId: "allocation-test",
     tunnelReleasedAt: null,
     recoveryEnabled: input.recoveryEnabled,
   };
@@ -187,6 +190,7 @@ function harness(input?: {
     claimRelease: () => Effect.die("unused"),
     withClaimedTunnel: () => Effect.die("unused"),
     claimDeprovision: () => Effect.die("unused"),
+    markCapacityReleased: () => Effect.succeed(true),
     remove: () => Effect.die("unused"),
     removeClaimed: () => Effect.die("unused"),
   });

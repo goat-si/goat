@@ -23,6 +23,11 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import "../../index.css";
 
+vi.mock("@goat/shared/goatConnect", async (original) => ({
+  ...(await original<typeof import("@goat/shared/goatConnect")>()),
+  isGoatConnectEnabled: () => true,
+}));
+
 const state = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
   hosts: undefined as unknown,
@@ -256,7 +261,7 @@ function setup() {
         hub: { ...next.hub, ...target.input.patch.hub },
         goatclaw: { ...next.goatclaw, ...target.input.patch.goatclaw },
       });
-      return { _tag: "Success", value: undefined };
+      return { _tag: "Success", value: registry.get(atom) };
     },
   );
   state.verify.mockReset().mockImplementation(async () => {
@@ -281,7 +286,7 @@ function setup() {
   });
   for (const command of [state.join, state.leave, state.repair]) command.mockReset();
   state.completeChild.mockReset().mockResolvedValue({ _tag: "Success", value: { kind: "ok" } });
-  return { registry, source, [Symbol.dispose]: () => registry.dispose() };
+  return { registry, source, settings, [Symbol.dispose]: () => registry.dispose() };
 }
 
 const device = (screen: Awaited<ReturnType<typeof render>>, alias: string) =>
@@ -763,6 +768,33 @@ it("lists the hosts goatclaw has not reached first and folds the rest into +N", 
   await expect
     .element(screen.getByText("lidge-ts needs a GOAT update · studio-mini waiting · +2"))
     .toBeVisible();
+});
+
+it("saves Connect standing consent on the selected hub and requires a fresh sign-in", async () => {
+  using fixture = setup();
+  const saved = fixture.settings.get(environmentId)!;
+  fixture.registry.set(saved, {
+    ...DEFAULT_SERVER_SETTINGS,
+    hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled: true },
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const consent = screen.getByRole("switch", {
+    name: "Allow GOAT Connect devices to reach hub devices",
+  });
+  await expect.element(consent).not.toBeChecked();
+  await userEvent.click(consent);
+  await expect.element(consent).toBeChecked();
+  expect(state.update.mock.calls.at(-1)?.[1]).toEqual({
+    environmentId,
+    input: { patch: { hub: { connectDevicesHubProxy: true } } },
+  });
+  await expect.element(screen.getByText(/sign out of GOAT Connect and sign back in/)).toBeVisible();
+  await userEvent.click(consent);
+  await expect.element(consent).not.toBeChecked();
 });
 
 function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {

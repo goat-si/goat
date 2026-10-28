@@ -156,6 +156,7 @@ export class RelayClientPrincipal extends Context.Service<
   RelayClientPrincipal,
   {
     readonly userId: string;
+    readonly accountEpoch?: number;
     readonly token: string;
     readonly authentication?: typeof ConnectAuthenticationContext.Type;
     readonly proofKeyThumbprint?: string;

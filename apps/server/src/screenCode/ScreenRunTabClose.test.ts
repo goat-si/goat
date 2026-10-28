@@ -130,6 +130,10 @@ const temporaryTabFixture = (beforeClose?: (control: SessionControl) => void) =>
           Effect.succeed({
             runs: [{ id: "run", status: "running" }],
           } as unknown as OrchestrationV2ThreadProjection),
+        getThreadRecords: (() =>
+          Effect.succeed({
+            runs: [{ id: "run", status: "running" }],
+          } as unknown as OrchestrationV2ThreadProjection)) as never,
         dispatch: (command) =>
           Effect.sync(() => {
             state.commands.push(command);

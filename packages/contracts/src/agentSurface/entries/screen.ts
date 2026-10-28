@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { SCREEN_TARGET_API } from "../../screenTargetApi.ts";
 
 export const screenEntries = {
   "surface.screen_run": entry({
@@ -9,8 +10,9 @@ export const screenEntries = {
     summary: "Run one bounded JavaScript cell against available screen targets.",
     description:
       "Run one bounded JavaScript cell against available GOAT browser tabs or admitted desktop apps. Input: code, optional reset and lowering-only limits. Returns receipts and availability; images are separate content blocks.",
-    guide:
-      "Call with {code:string, reset?:boolean, limits?:Partial<ScreenRunLimits>}. Discover available targets inside the cell, bind a tab or app by its live identity, await each effect, and inspect the journal. A mention is only a binding hint, never permission. Browser and desktop admission are checked separately for each effect. If a dispatched input has an unknown outcome, re-observe before deciding whether to act again; do not replay the cell blindly.",
+    guide: `Call with {code:string, reset?:boolean, limits?:Partial<ScreenRunLimits>}. A mention is only a binding hint, never permission; browser and desktop admission are checked separately for each effect. If a dispatched input has an unknown outcome, re-observe before deciding whether to act again; do not replay the cell blindly.
+
+${SCREEN_TARGET_API}`,
     listing: "core",
     effect: "write",
     capability: "none",

@@ -27,6 +27,7 @@ import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentConnector from "./EnvironmentConnector.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 
 const cloudKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -163,6 +164,7 @@ function layerConnectorTest(
   },
 ) {
   return EnvironmentConnector.layer.pipe(
+    Layer.provide(policyUnitLayer),
     Layer.provide(NodeCryptoLayer.layer),
     Layer.provide(Layer.succeed(EnvironmentLinks.EnvironmentLinks, options?.links ?? makeLinks())),
     Layer.provide(
@@ -180,6 +182,10 @@ function makeAllocations(
   allocation: ManagedEndpointAllocations.ManagedEndpointAllocation | null = {
     userId: "user_123",
     environmentId: "env-connector-test",
+    incarnationId: "10000000-0000-4000-8000-000000000001",
+    accountEpoch: 1,
+    endpointGeneration: 0,
+    capacityReleasedAt: null,
     hostname: "env.example.test",
     tunnelId: "tunnel-id",
     tunnelName: "tunnel-name",
@@ -188,7 +194,6 @@ function makeAllocations(
     origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
     updatedAt: "2026-05-25T00:00:00.000Z",
     generation: 1,
-    incarnationId: "allocation-test",
     tunnelReleasedAt: null,
   },
 ): ManagedEndpointAllocations.ManagedEndpointAllocations["Service"] {
@@ -202,6 +207,7 @@ function makeAllocations(
     enableRecovery: () => Effect.die("unused"),
     listByTunnelNames: () => Effect.die("unused"),
     claimRelease: () => Effect.die("unused"),
+    markCapacityReleased: () => Effect.die("unused markCapacityReleased"),
     withClaimedTunnel: () => Effect.die("unused"),
     claimDeprovision: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
@@ -420,6 +426,10 @@ describe("EnvironmentConnector", () => {
           allocations: makeAllocations({
             userId: "user_123",
             environmentId: "env-connector-test",
+            incarnationId: "10000000-0000-4000-8000-000000000001",
+            accountEpoch: 1,
+            endpointGeneration: 0,
+            capacityReleasedAt: null,
             hostname: "env.example.test",
             tunnelId: "tunnel-id",
             tunnelName: "tunnel-name",
@@ -428,7 +438,6 @@ describe("EnvironmentConnector", () => {
             origin: null,
             updatedAt: "2026-05-25T00:00:00.000Z",
             generation: 1,
-            incarnationId: "allocation-test",
             tunnelReleasedAt: null,
           }),
         }),
@@ -480,6 +489,9 @@ describe("EnvironmentConnector", () => {
     const allocations = makeAllocations({
       userId: "user_123",
       environmentId: "env-connector-test",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
       hostname: "env.example.test",
       tunnelId: "tunnel-id",
       tunnelName: "tunnel-name",

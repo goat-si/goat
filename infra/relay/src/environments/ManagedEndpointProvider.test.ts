@@ -1,3 +1,10 @@
+import { RelayRateLimitExceededError } from "@goat/contracts/relayErrors";
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { AccountLifecycle } from "../accounts/AccountLifecycle.ts";
+import { EnvironmentOwnership } from "./EnvironmentOwnership.ts";
+import * as RetiredCollector from "./RetiredEndpointCollector.ts";
+import { layerPostgresProvider } from "./ManagedEndpointProvider.testkit.ts";
+import { policyUnitLayer, identityUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { describe, expect, it } from "@effect/vitest";
@@ -7,218 +14,28 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
+import * as Statement from "effect/sql/Statement";
 
 import * as RelayConfiguration from "../Config.ts";
 import * as CloudflareApiPause from "./CloudflareApiPause.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
-import { makeAllocations, type AllocationCall } from "./ManagedEndpointProvider.testkit.ts";
 import * as ManagedTunnelLimits from "./ManagedTunnelLimits.ts";
 
-const config = RelayConfiguration.RelayConfiguration.of({
-  relayIssuer: "https://relay.example.test",
-  apns: {
-    environment: "sandbox",
-    teamId: "team-id",
-    keyId: "key-id",
-    privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.t3code.dev",
-  },
-  apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "goat-relay",
-  cloudMintPrivateKey: Redacted.make("cloud-private-key"),
-  cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: "t3code.test",
-  managedEndpointNamespace: "dev_alex",
-});
-
-interface TunnelCall {
-  readonly operation: "get" | "list" | "create" | "putConfiguration" | "getToken" | "delete";
-  readonly input: unknown;
-}
-
-interface DnsCall {
-  readonly operation: "listRecords" | "createRecord" | "updateRecord" | "deleteRecord";
-  readonly input: unknown;
-}
-
-function makeTunnelClient(calls: TunnelCall[] = []) {
-  return ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
-    get: (tunnelId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "get", input: tunnelId });
-        return {
-          id: tunnelId,
-          name: "managed-tunnel",
-          status: "down",
-          connsInactiveAt: "2026-06-01T00:00:00.000Z",
-        };
-      }),
-    list: (request) =>
-      Effect.sync(() => {
-        calls.push({ operation: "list", input: request });
-        return { result: [] };
-      }),
-    create: (request) =>
-      Effect.sync(() => {
-        calls.push({ operation: "create", input: request });
-        return { id: "tunnel-id", name: request.name };
-      }),
-    putConfiguration: (tunnelId, tunnelConfig) =>
-      Effect.sync(() => {
-        calls.push({ operation: "putConfiguration", input: { tunnelId, tunnelConfig } });
-      }),
-    getToken: (tunnelId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "getToken", input: tunnelId });
-        return "connector-token";
-      }),
-    delete: (tunnelId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "delete", input: tunnelId });
-      }),
-  });
-}
-
-function makePersistentTunnelClient(calls: TunnelCall[] = []) {
-  let tunnel: { readonly id: string; readonly name: string } | null = null;
-  return ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
-    get: (tunnelId) =>
-      Effect.suspend(() => {
-        calls.push({ operation: "get", input: tunnelId });
-        return tunnel === null
-          ? Effect.fail(
-              new ManagedEndpointProvider.ManagedEndpointTunnelClientError({
-                operation: "get",
-                tunnelId,
-                cause: { _tag: "NotFound" },
-              }),
-            )
-          : Effect.succeed({
-              ...tunnel,
-              status: "down",
-              connsInactiveAt: "2026-06-01T00:00:00.000Z",
-            });
-      }),
-    list: (request) =>
-      Effect.sync(() => {
-        calls.push({ operation: "list", input: request });
-        return { result: tunnel === null ? [] : [tunnel] };
-      }),
-    create: (request) =>
-      Effect.sync(() => {
-        calls.push({ operation: "create", input: request });
-        tunnel = { id: "tunnel-id", name: request.name };
-        return tunnel;
-      }),
-    putConfiguration: (tunnelId, tunnelConfig) =>
-      Effect.sync(() => {
-        calls.push({ operation: "putConfiguration", input: { tunnelId, tunnelConfig } });
-      }),
-    getToken: (tunnelId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "getToken", input: tunnelId });
-        return "connector-token";
-      }),
-    delete: (tunnelId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "delete", input: tunnelId });
-        tunnel = null;
-      }),
-  });
-}
-
-function makeDnsClient(
-  calls: DnsCall[] = [],
-  records: ReadonlyArray<{ readonly id: string }> = [],
-) {
-  let currentRecords = [...records];
-  return ManagedEndpointProvider.ManagedEndpointDnsClient.of({
-    listRecords: (hostname) =>
-      Effect.sync(() => {
-        calls.push({ operation: "listRecords", input: hostname });
-        return currentRecords;
-      }),
-    createRecord: (request) =>
-      Effect.sync(() => {
-        calls.push({ operation: "createRecord", input: request });
-        const record = { id: "created-record-id" };
-        currentRecords = [record];
-        return record;
-      }),
-    updateRecord: (dnsRecordId, request) =>
-      Effect.gen(function* () {
-        calls.push({ operation: "updateRecord", input: { dnsRecordId, request } });
-        if (!currentRecords.some((record) => record.id === dnsRecordId)) {
-          return yield* new ManagedEndpointProvider.ManagedEndpointDnsClientError({
-            operation: "update-record",
-            hostname: request.name,
-            dnsRecordId,
-            cause: { _tag: "NotFound", dnsRecordId },
-          });
-        }
-      }),
-    deleteRecord: (dnsRecordId) =>
-      Effect.sync(() => {
-        calls.push({ operation: "deleteRecord", input: dnsRecordId });
-        currentRecords = currentRecords.filter((record) => record.id !== dnsRecordId);
-      }),
-  });
-}
-
-function makeTunnelLimits(
-  calls: Array<{ readonly userId: string; readonly environmentId: string }> = [],
-  result: ManagedTunnelLimits.ManagedTunnelLimitExceeded | null = null,
-) {
-  return ManagedTunnelLimits.ManagedTunnelLimits.of({
-    ensureCapacity: (input) =>
-      Effect.suspend(() => {
-        calls.push(input);
-        return result === null ? Effect.void : Effect.fail(result);
-      }),
-  });
-}
-
-function layerProvider(
-  tunnelClient = makeTunnelClient(),
-  dnsClient = makeDnsClient(),
-  allocations = makeAllocations(),
-  tunnelLimits = makeTunnelLimits(),
-) {
-  return ManagedEndpointProvider.layer.pipe(
-    Layer.provideMerge(NodeServices.layer),
-    Layer.provide(RelayConfiguration.layer(config)),
-    Layer.provide(ManagedEndpointProvider.layerTunnelClient(tunnelClient)),
-    Layer.provide(ManagedEndpointProvider.layerDnsClient(dnsClient)),
-    Layer.provide(
-      Layer.succeed(ManagedEndpointAllocations.ManagedEndpointAllocations, allocations),
-    ),
-    Layer.provide(Layer.succeed(ManagedTunnelLimits.ManagedTunnelLimits, tunnelLimits)),
-  );
-}
-
-const MANAGED_ENDPOINT_HASHES: Record<string, string> = {
-  "user_ABC:env_ABC": "fe70a0e4f4b8eb87",
-  "user_ABC:env_shared": "388b28a52f055d1a",
-  "user_DEF:env_shared": "c416de8b81d55645",
-};
-
-function expectedManagedEndpointHash(environmentId: string, userId: string): string {
-  const hash = MANAGED_ENDPOINT_HASHES[`${userId}:${environmentId}`];
-  if (hash === undefined) throw new Error(`No pinned hash for ${userId}:${environmentId}`);
-  return hash;
-}
-
-function expectedManagedHostname(environmentId: string, userId = "user_ABC"): string {
-  return `dev-alex-${expectedManagedEndpointHash(environmentId, userId)}.t3code.test`;
-}
-
-function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
-  return `goatrelay-managedendpoint-dev-alex-${expectedManagedEndpointHash(environmentId, userId)}`;
-}
+import {
+  config,
+  type TunnelCall,
+  type DnsCall,
+  type AllocationCall,
+  makeTunnelClient,
+  makePersistentTunnelClient,
+  makeDnsClient,
+  makeAllocations,
+  makeTunnelLimits,
+  layerProvider,
+  expectedManagedHostname,
+  expectedManagedTunnelName,
+} from "./ManagedEndpointProvider.testkit.ts";
 
 describe("ManagedEndpointProvider", () => {
   it.effect("provisions a Cloudflare tunnel endpoint and connector token", () => {
@@ -236,6 +53,13 @@ describe("ManagedEndpointProvider", () => {
       });
 
       expect(result).toEqual({
+        allocationClaim: {
+          incarnationId: "10000000-0000-4000-8000-000000000001",
+          generation: 3,
+          accountEpoch: 1,
+          endpointGeneration: 0,
+          tunnelId: "tunnel-id",
+        },
         endpoint: {
           httpBaseUrl: `https://${hostname}/`,
           wsBaseUrl: `wss://${hostname}/ws`,
@@ -510,7 +334,9 @@ describe("ManagedEndpointProvider", () => {
 
       expect(recovered).toEqual(provisioned);
       expect(tunnelCalls.map((call) => call.operation)).toEqual(["get", "getToken"]);
-      expect(dnsCalls).toEqual([]);
+      expect(dnsCalls).toEqual([
+        { operation: "listRecords", input: new URL(provisioned.endpoint.httpBaseUrl).hostname },
+      ]);
       expect(allocationCalls.map((call) => call.operation)).toEqual(["reserve"]);
     }).pipe(Effect.provide(layer));
   });
@@ -575,6 +401,8 @@ describe("ManagedEndpointProvider", () => {
         {} as Cloudflare.DNS.ReadWriteDnsClient,
         {} as Alchemy.BaseRuntimeContext,
       ).pipe(
+        Layer.provide(policyUnitLayer),
+        Layer.provide(identityUnitLayer(config)),
         Layer.provideMerge(NodeServices.layer),
         Layer.provide(RelayConfiguration.layer(config)),
         Layer.provide(
@@ -622,7 +450,12 @@ describe("ManagedEndpointProvider", () => {
       listRecords: (hostname) =>
         Effect.sync(() => {
           dnsCalls.push({ operation: "listRecords", input: hostname });
-          return records;
+          return records.map((record) => ({
+            ...record,
+            name: hostname,
+            type: "CNAME",
+            content: "tunnel-id.cfargotunnel.com",
+          }));
         }),
       createRecord: (request) =>
         Effect.sync(() => {
@@ -1324,7 +1157,12 @@ describe("ManagedEndpointProvider", () => {
       listRecords: (hostname) =>
         Effect.sync(() => {
           dnsCalls.push({ operation: "listRecords", input: hostname });
-          return records;
+          return records.map((record) => ({
+            ...record,
+            name: hostname,
+            type: "CNAME",
+            content: "tunnel-id.cfargotunnel.com",
+          }));
         }),
       createRecord: (request) =>
         Effect.gen(function* () {
@@ -1393,3 +1231,306 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(layerProvider(tunnelClient, makeDnsClient(dnsCalls))));
   });
 });
+
+it.live.each(["create", "configure", "token"] as const)(
+  "a delayed %s across suspend and allow cannot hand out retired credentials or alter the replacement",
+  (boundary) =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const crossing = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      let blocked = false;
+      let resumed = false;
+      let held = false;
+      const pause = (at: typeof boundary) =>
+        Effect.gen(function* () {
+          if (at === boundary && !blocked) {
+            blocked = true;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+            resumed = true;
+          }
+        });
+      const tunnels = new Map<string, { id: string; name: string }>();
+      const configured = new Map<string, unknown>();
+      const disconnected: string[] = [];
+      let sequence = 0;
+      const tunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+        ...makeTunnelClient(),
+        list: (input) =>
+          Effect.succeed({ result: [...tunnels.values()].filter((t) => t.name === input.name) }),
+        create: (input) =>
+          Effect.gen(function* () {
+            const id = `tunnel-${++sequence}`;
+            yield* pause("create");
+            const tunnel = { id, name: input.name };
+            tunnels.set(id, tunnel);
+            return tunnel;
+          }),
+        putConfiguration: (id, config) =>
+          pause("configure").pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                configured.set(id, config);
+              }),
+            ),
+          ),
+        getToken: (id) => pause("token").pipe(Effect.as(`secret-for-${id}`)),
+      });
+      const runtime = layerPostgresProvider(pg, tunnelClient, makeDnsClient());
+      yield* Effect.gen(function* () {
+        const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const lifecycle = yield* AccountLifecycle;
+        const owners = yield* EnvironmentOwnership;
+        const input = {
+          userId: "owner",
+          environmentId: "env",
+          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+        };
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "invite" });
+        yield* owners.claim({ ...input, accountEpoch: 1, environmentPublicKey: "key" });
+        const stale = yield* provider.provision(input).pipe(
+          // Hold the stale worker at its next account lock after the boundary, outside any transaction lock.
+          Effect.provideService(Statement.CurrentTransformer, (statement) => {
+            if (!resumed || held || !statement.compile()[0].includes("pg_advisory_xact_lock"))
+              return Effect.succeed(statement);
+            held = true;
+            return Deferred.succeed(crossing, undefined).pipe(
+              Effect.andThen(Deferred.await(proceed)),
+              Effect.as(statement),
+            );
+          }),
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(entered);
+        const suspension = lifecycle.request({
+          userId: "owner",
+          kind: "suspend",
+          idempotencyKey: "suspend",
+        });
+        // Configuration runs under the allocation claim, which holds the account lock, so suspension
+        // commits after the call returns and before the stale worker takes its next claim.
+        const op =
+          boundary === "configure"
+            ? yield* Effect.gen(function* () {
+                const suspending = yield* suspension.pipe(Effect.forkChild);
+                yield* Deferred.succeed(release, undefined);
+                yield* Deferred.await(crossing);
+                return yield* Fiber.join(suspending);
+              })
+            : yield* suspension;
+        yield* lifecycle.resume(op.id);
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "allow" });
+        yield* owners.claim({ ...input, accountEpoch: 3, environmentPublicKey: "key" });
+        const fresh = yield* provider.provision(input);
+        expect(fresh.runtime.connectorToken).toBe("secret-for-tunnel-2");
+        const freshConfiguration = configured.get("tunnel-2");
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.succeed(proceed, undefined);
+        expect((yield* Fiber.join(stale))._tag).toBe("Failure");
+        expect(configured.get("tunnel-2")).toEqual(freshConfiguration);
+        expect(
+          pg
+            .query(
+              "SELECT state FROM relay_managed_provisioning_intents WHERE tunnel_id='tunnel-1'",
+            )
+            .trim(),
+        ).toBe("abandoned");
+        const inventory = Layer.succeed(RetiredCollector.RetiredEndpointInventory, {
+          tunnels: () => Effect.succeed([...tunnels.values()]),
+          dns: () => Effect.succeed([]),
+          disconnect: (id) =>
+            Effect.sync(() => {
+              disconnected.push(id);
+            }),
+          deleteTunnel: (id) =>
+            Effect.sync(() => {
+              tunnels.delete(id);
+            }),
+          deleteDns: () => Effect.void,
+        });
+        yield* Effect.flatMap(
+          RetiredCollector.RetiredEndpointCollector,
+          (collector) => collector.sweep,
+        ).pipe(Effect.provide(RetiredCollector.layer.pipe(Layer.provide(inventory))));
+        expect(disconnected).toEqual(["tunnel-1"]);
+        expect([...tunnels.keys()]).toEqual(["tunnel-2"]);
+      }).pipe(Effect.provide(runtime));
+    }),
+);
+
+it.live(
+  "ready recovery and matching-origin registration repair DNS only with connect budget, and missing tunnels require link budget",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      let missingTunnel = false;
+      let creates = 0;
+      let record: { id: string; name: string; type: string; content: string } | null = null;
+      let denied: "link" | "connect" | null = null;
+      const charges: string[] = [];
+      const dns = ManagedEndpointProvider.ManagedEndpointDnsClient.of({
+        listRecords: () => Effect.succeed(record ? [record] : []),
+        createRecord: (input) =>
+          Effect.sync(() => {
+            record = { id: "record", ...input };
+            return { id: "record" };
+          }),
+        updateRecord: (id, input) =>
+          Effect.sync(() => {
+            record = { id, ...input };
+          }),
+        deleteRecord: () =>
+          Effect.sync(() => {
+            record = null;
+          }),
+      });
+      const tunnels = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+        ...makeTunnelClient(),
+        create: (input) =>
+          Effect.sync(() => {
+            creates++;
+            return { id: "tunnel-id", name: input.name };
+          }),
+        get: (id) =>
+          missingTunnel
+            ? Effect.fail(
+                new ManagedEndpointProvider.ManagedEndpointTunnelClientError({
+                  operation: "get",
+                  tunnelId: id,
+                  cause: { _tag: "NotFound" },
+                }),
+              )
+            : Effect.succeed({ id, name: "fixture", status: "healthy" }),
+      });
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* AccountLifecycle;
+        const owners = yield* EnvironmentOwnership;
+        const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const input = {
+          userId: "owner",
+          environmentId: "env",
+          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+        };
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "invite" });
+        yield* owners.claim({ ...input, accountEpoch: 1, environmentPublicKey: "key" });
+        const initial = yield* provider.provision(input);
+        record = null;
+        yield* provider.provision({ ...input, reuseReadyTunnel: true });
+        expect(record).toMatchObject({ content: "tunnel-id.cfargotunnel.com" });
+        record = {
+          id: "record",
+          name: new URL(initial.endpoint.httpBaseUrl).hostname,
+          type: "CNAME",
+          content: "wrong.cfargotunnel.com",
+        };
+        yield* provider.reconcileOrigin({
+          ...input,
+          tunnelId: "tunnel-id",
+          endpoint: initial.endpoint,
+        });
+        expect(record).toMatchObject({ content: "tunnel-id.cfargotunnel.com" });
+        expect(charges).toEqual(["link", "connect", "connect"]);
+        yield* provider.provision({ ...input, reuseReadyTunnel: true });
+        expect(charges).toEqual(["link", "connect", "connect"]);
+        record = null;
+        denied = "connect";
+        expect(
+          yield* Effect.flip(provider.provision({ ...input, reuseReadyTunnel: true })),
+        ).toMatchObject({
+          _tag: "RelayRateLimitExceededError",
+          operation: "connect",
+          retryAfterSeconds: 60,
+        });
+        expect(record).toBeNull();
+        missingTunnel = true;
+        denied = "link";
+        expect(
+          yield* Effect.flip(provider.provision({ ...input, reuseReadyTunnel: true })),
+        ).toMatchObject({ _tag: "RelayRateLimitExceededError", operation: "link" });
+        expect(creates).toBe(1);
+      }).pipe(
+        Effect.provide(
+          layerPostgresProvider(pg, tunnels, dns, {
+            charge: (input) =>
+              Effect.suspend(() => {
+                charges.push(input.operation);
+                return denied === input.operation
+                  ? Effect.fail(
+                      new RelayRateLimitExceededError({
+                        code: "rate_limit_exceeded",
+                        operation: input.operation,
+                        retryAfterSeconds: 60,
+                        traceId: "fixture",
+                      }),
+                    )
+                  : Effect.void;
+              }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.live(
+  "optimized token recovery rejects a superseded allocation incarnation at the handoff fence",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let block = false;
+      const tunnels = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+        ...makeTunnelClient(),
+        getToken: () =>
+          block
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as("retained-token"),
+              )
+            : Effect.succeed("original-token"),
+      });
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* AccountLifecycle;
+        const owners = yield* EnvironmentOwnership;
+        const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
+        const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const input = {
+          userId: "owner",
+          environmentId: "env",
+          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+        };
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "invite" });
+        yield* owners.claim({ ...input, accountEpoch: 1, environmentPublicKey: "key" });
+        yield* provider.provision(input);
+        block = true;
+        const stale = yield* provider
+          .provision({ ...input, reuseReadyTunnel: true })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(entered);
+        const original = yield* allocations.get(input);
+        if (!original) throw new Error("Missing ready allocation");
+        yield* allocations.markCapacityReleased(original);
+        yield* allocations.remove(original);
+        const replacement = yield* allocations.reserve({
+          ...input,
+          hostname: "ignored",
+          tunnelName: "ignored",
+        });
+        expect(replacement.incarnationId).not.toBe(original.incarnationId);
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* Fiber.join(stale);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "RelayEnvironmentOwnerMismatchError" },
+        });
+        expect((yield* allocations.get(input))?.incarnationId).toBe(replacement.incarnationId);
+      }).pipe(Effect.provide(layerPostgresProvider(pg, tunnels, makeDnsClient())));
+    }),
+);

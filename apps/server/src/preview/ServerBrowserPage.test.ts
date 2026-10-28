@@ -406,6 +406,40 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     ]);
   });
 
+  it("confirms a click only when the page visibly changed", async () => {
+    await page.setContent(
+      `<label><input type="checkbox"> agree</label><p id="still">static</p><button onclick="this.textContent='saved'">save</button>`,
+    );
+    await expect(
+      ServerBrowserPage.click(page, { selector: "input[type=checkbox]" }),
+    ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["input"]) });
+    await expect(ServerBrowserPage.click(page, { selector: "button" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+      evidence: [],
+    });
+  });
+
+  it("confirms a click that starts a navigation before the new page loads", async () => {
+    // A served page, as agents browse: an initial about:blank document fires no navigate events.
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<a href="https://slow.test/next">next</a>',
+      }),
+    );
+    await page.route("https://slow.test/next", () => {});
+    await page.goto("https://page.test/");
+    await expect(ServerBrowserPage.click(page, { selector: "a" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["navigation"]),
+    });
+    await page.unroute("https://slow.test/next");
+  });
+
   it("returns from a click once it opens a dialog", async () => {
     await page.setContent(
       `<button onclick="document.body.dataset.answer = String(confirm('sure?'))">Confirm</button>`,
@@ -928,7 +962,11 @@ describe("a gate reused across a click's presses", () => {
     const presses: Array<string> = [];
     const page = {
       once: () => undefined,
+      on: () => undefined,
       off: () => undefined,
+      url: () => "about:blank",
+      mainFrame: () => undefined,
+      evaluateHandle: async () => Promise.reject(new Error("no document")),
       mouse: {
         click: async () => {
           presses.push("first");

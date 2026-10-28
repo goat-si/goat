@@ -21,6 +21,7 @@ import {
 import * as Socket from "effect/socket/Socket";
 
 import { authenticateMediaRequest } from "../auth/http.ts";
+import * as Lifetime from "../auth/SessionSocketLifetime.ts";
 import { assetResponseHeaders } from "../http.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -199,7 +200,10 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
       const receiveInput = reader.pull.pipe(
         Effect.flatMap((chunks) => Effect.forEach(chunks, receive, { discard: true })),
       );
-      return yield* Effect.raceFirst(Effect.forever(sendOutput), Effect.forever(receiveInput));
+      return yield* Lifetime.guard(
+        session,
+        Effect.raceFirst(Effect.forever(sendOutput), Effect.forever(receiveInput)),
+      );
     }),
   ).pipe(
     Effect.catchTags({

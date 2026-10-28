@@ -50,6 +50,7 @@ export interface AgentSurfaceEntry {
   readonly capability?: AgentSurfaceCapability;
   readonly capabilityReason?: string;
   readonly idempotency?: "key" | "domain";
+  readonly keyRequired?: true;
   readonly reconcile?: string;
   /** Why a write's key is not ToolAdmission's: idempotency.test.ts requires "key" or this. */
   readonly idempotencyReason?: string;
@@ -90,24 +91,28 @@ export type CapabilityDeclaration =
 export type IdempotencyDeclaration =
   | {
       readonly idempotency?: undefined;
+      readonly keyRequired?: undefined;
       readonly reconcile?: undefined;
       readonly idempotencyReason?: undefined;
       readonly keyIgnoredWith?: undefined;
     }
   | {
       readonly idempotency: "key";
+      readonly keyRequired?: true;
       readonly reconcile: string;
       readonly idempotencyReason?: undefined;
       readonly keyIgnoredWith?: undefined;
     }
   | {
       readonly idempotency: "domain";
+      readonly keyRequired?: undefined;
       readonly reconcile?: undefined;
       readonly idempotencyReason: string;
       readonly keyIgnoredWith?: ReadonlyArray<string>;
     }
   | {
       readonly idempotency?: undefined;
+      readonly keyRequired?: undefined;
       readonly reconcile?: undefined;
       readonly idempotencyReason: string;
       readonly keyIgnoredWith?: undefined;

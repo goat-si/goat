@@ -4,9 +4,8 @@
 campaign of provider tasks decide whether it joins the core listing
 ([composition campaigns](#composition-campaigns)). The
 separate `goat_screen_run` is bundled on this branch without that pre-ship gate.
-A screen-task regression campaign can reuse this method only after defining
-browser/desktop tasks and answer oracles; this runner's provider tasks do not
-measure screen work.
+This runner's provider tasks do not measure screen work; browser and desktop tasks
+with observer-based oracles are measured by the [computer use eval](computer-use-eval.md).
 
 The same runner checks the context diet's core listing against the full one
 ([listing campaigns](#listing-campaigns)). The task set, runner and report live in

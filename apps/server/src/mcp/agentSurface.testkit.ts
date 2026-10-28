@@ -1,3 +1,7 @@
+import * as Usage from "../usage/UsageService.ts";
+import * as Processes from "../diagnostics/ProcessResourceMonitor.ts";
+import * as Telemetry from "../resourceTelemetry/ResourceTelemetry.ts";
+import * as Review from "../review/ReviewService.ts";
 import {
   type AgentToolListing,
   DEFAULT_AGENT_TOOL_LISTING,
@@ -81,6 +85,8 @@ import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestSync from "../orchestration-v2/PullRequestSyncReactor.ts";
+import * as ThreadDiffMcpService from "./ThreadDiffMcpService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -96,6 +102,7 @@ import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import { FleetToolkit } from "./toolkits/fleet/tools.ts";
 import { FleetResourcesToolkit } from "./toolkits/fleet/resources/tools.ts";
 import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
+import { ThreadDiffToolkit } from "./toolkits/threadDiff/tools.ts";
 import { FleetHealthToolkit } from "./toolkits/fleet/healthTools.ts";
 import * as HostHealthMonitor from "../fleet/health/HostHealthMonitor.ts";
 import * as FleetHostStates from "../fleet/health/FleetHostStates.ts";
@@ -137,6 +144,7 @@ export const toolkits = {
   fleet: FleetToolkit,
   fleetResources: FleetResourcesToolkit,
   hostStatus: HostStatusToolkit,
+  threadDiff: ThreadDiffToolkit,
   fleetHealth: FleetHealthToolkit,
   html: HtmlToolkit,
   memory: MemoryToolkit,
@@ -165,6 +173,8 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(PullRequestService.PullRequestService)({}),
+  Layer.mock(PullRequestSync.PullRequestSyncReactor)({}),
+  Layer.mock(ThreadDiffMcpService.ThreadDiffMcpService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
   Layer.mock(StorageReclaim.StorageReclaim)({}),
   Layer.mock(StorageConsent.StorageConsent)({}),
@@ -230,6 +240,10 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
   Layer.mock(PreviewManager.PreviewManager)({}),
   Layer.mock(PreviewHandoffs.PreviewHandoffs)({}),
+  Layer.mock(Usage.UsageService)({}),
+  Layer.mock(Processes.ProcessResourceMonitor)({}),
+  Layer.mock(Telemetry.ResourceTelemetry)({}),
+  Layer.mock(Review.ReviewService)({}),
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(ProviderDiagnosisRouting.ProviderDiagnosisRouting)({}),
   Layer.mock(CloudAgentService.CloudAgentService)({}),
@@ -270,6 +284,15 @@ const inertDependencies = Layer.mergeAll(
 const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
 const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+
+export const dependenciesWithPullRequests = (
+  service: Partial<PullRequestService.PullRequestService["Service"]>,
+) =>
+  Layer.mergeAll(
+    inertDependencies,
+    Profiles.layer,
+    Layer.mock(PullRequestService.PullRequestService)(service),
+  );
 /**
  * The calling thread's project exists and grants Agent device access, so a device handler runs
  * past its per-call access check. Merge it after `dependencies`.

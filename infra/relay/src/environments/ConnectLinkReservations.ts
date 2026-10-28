@@ -1,4 +1,5 @@
 import { EnvironmentId } from "@goat/contracts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import {
   RelayInternalError,
   RelayManagedEndpoint,
@@ -23,6 +24,7 @@ import * as RelayDb from "../db.ts";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as Config from "../Config.ts";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import { strengthRequired } from "../auth/ConnectAuthentication.ts";
 import { relayConnectLinkReservations } from "../persistence/schema.ts";
@@ -49,8 +51,11 @@ const unavailable = () =>
     reason: "persistence_failed",
     traceId: "connect-reservation",
   });
-const sqlUnavailable = <E>(error: E | SqlError.SqlError): E | RelayInternalError =>
-  SqlError.isSqlError(error) ? unavailable() : error;
+const isAuthorizationUnavailable = Schema.is(RelayAuthorizationUnavailableError);
+const sqlUnavailable = <E>(
+  error: E | SqlError.SqlError | RelayAuthorizationUnavailableError,
+): E | RelayInternalError =>
+  SqlError.isSqlError(error) || isAuthorizationUnavailable(error) ? unavailable() : error;
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(UnknownJson);
 const decodeJson = Schema.decodeSync(UnknownJson);
@@ -94,6 +99,7 @@ const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
   const { subtle } = yield* WebCrypto.WebCrypto;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
+  const transactions = yield* AccountTransactions;
   const crypto = yield* Crypto.Crypto;
   const config = yield* Config.RelayConfiguration;
   const key = yield* Effect.tryPromise({
@@ -112,10 +118,6 @@ const make = Effect.gen(function* () {
     and(
       eq(relayConnectLinkReservations.userId, input.userId),
       eq(relayConnectLinkReservations.challengeId, input.challengeId),
-    );
-  const lock = (userId: string) =>
-    db.$client`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`.pipe(
-      Effect.mapError(unavailable),
     );
   const authorize = Effect.fn("ConnectLinkReservations.authorize")(function* (input: Reservation) {
     const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
@@ -166,10 +168,10 @@ const make = Effect.gen(function* () {
   const reserve: ConnectLinkReservations["Service"]["reserve"] = Effect.fn(
     "ConnectLinkReservations.reserve",
   )(function* (input, consume) {
-    return yield* db.$client
-      .withTransaction(
+    return yield* transactions
+      .run(
+        { userIds: [input.userId] },
         Effect.gen(function* () {
-          yield* lock(input.userId);
           yield* authorize(input);
           const rows = yield* db
             .select()
@@ -189,20 +191,6 @@ const make = Effect.gen(function* () {
             Effect.mapError(unavailable),
           );
           if (busy.length > 0) return yield* strengthRequired("unsupported_authentication_flow");
-          if (input.managedTunnelsEnabled) {
-            const quota = yield* db.$client<{ total: number; maximum: number }>`SELECT
-          (SELECT count(DISTINCT environment_id)::int FROM (
-            SELECT environment_id FROM relay_environment_links WHERE user_id = ${input.userId}
-              AND revoked_at IS NULL AND managed_tunnels_enabled = true
-            UNION SELECT environment_id FROM relay_connect_link_reservations WHERE user_id = ${input.userId}
-              AND status IN ('running', 'recovering', 'withdrawn')
-          ) AS occupied WHERE environment_id <> ${input.environmentId}) AS total,
-          COALESCE((SELECT max_tunnels FROM relay_managed_tunnel_limits WHERE user_id = ${input.userId}), 3) AS maximum`.pipe(
-              Effect.mapError(unavailable),
-            );
-            if (!quota[0] || quota[0].total >= quota[0].maximum)
-              return yield* strengthRequired("unsupported_authentication_flow");
-          }
           if (row) {
             yield* db
               .update(relayConnectLinkReservations)
@@ -231,10 +219,10 @@ const make = Effect.gen(function* () {
   const complete: ConnectLinkReservations["Service"]["complete"] = Effect.fn(
     "ConnectLinkReservations.complete",
   )(function* (input, commit) {
-    return yield* db.$client
-      .withTransaction(
+    return yield* transactions
+      .run(
+        { userIds: [input.userId] },
         Effect.gen(function* () {
-          yield* lock(input.userId);
           yield* authorize(input);
           const rows = yield* db
             .select()
@@ -305,10 +293,10 @@ const make = Effect.gen(function* () {
     // Only recover identities captured while this execution still owns the account.
     yield* assertOwner;
     // Fence completion durably before touching resources; failed cleanup continues to hold capacity.
-    const rows = yield* db.$client
-      .withTransaction(
+    const rows = yield* transactions
+      .run(
+        { userIds: [userId] },
         Effect.gen(function* () {
-          yield* lock(userId);
           const claimed = yield* Effect.forEach(candidates, (row) =>
             db.$client<typeof row>`UPDATE relay_connect_link_reservations
               SET status = CASE WHEN status = 'running' THEN 'recovering' ELSE status END
@@ -325,21 +313,26 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(sqlUnavailable));
     for (const row of rows) {
       yield* cleanup(row.environment_id);
-      yield* db.$client`UPDATE relay_connect_link_reservations
+      yield* transactions
+        .run(
+          { userIds: [userId] },
+          db.$client`UPDATE relay_connect_link_reservations
           SET status = CASE WHEN status = 'withdrawn' THEN 'cancelled' ELSE 'failed' END
           WHERE user_id = ${userId} AND challenge_id = ${row.challenge_id}
             AND attempt_id IS NOT DISTINCT FROM ${row.attempt_id} AND status IN ('recovering', 'withdrawn')`.pipe(
-        Effect.mapError(unavailable),
-      );
+            Effect.mapError(unavailable),
+          ),
+        )
+        .pipe(Effect.mapError(sqlUnavailable));
     }
   });
   const withdraw: ConnectLinkReservations["Service"]["withdraw"] = Effect.fn(
     "ConnectLinkReservations.withdraw",
   )((input, revoke) =>
-    db.$client
-      .withTransaction(
+    transactions
+      .run(
+        { userIds: [input.userId] },
         Effect.gen(function* () {
-          yield* lock(input.userId);
           yield* db
             .update(relayConnectLinkReservations)
             .set({
@@ -365,17 +358,22 @@ const make = Effect.gen(function* () {
     complete,
     withdraw,
     failed: Effect.fn("ConnectLinkReservations.failed")((input) =>
-      db
-        .update(relayConnectLinkReservations)
-        .set({ status: "failed" })
-        .where(
-          and(
-            binding(input),
-            eq(relayConnectLinkReservations.attemptId, input.attemptId),
-            eq(relayConnectLinkReservations.status, "running"),
-          ),
+      transactions
+        .run(
+          { userIds: [input.userId] },
+          db
+            .update(relayConnectLinkReservations)
+            .set({ status: "failed" })
+            .where(
+              and(
+                binding(input),
+                eq(relayConnectLinkReservations.attemptId, input.attemptId),
+                eq(relayConnectLinkReservations.status, "running"),
+              ),
+            )
+            .pipe(Effect.asVoid, Effect.mapError(unavailable)),
         )
-        .pipe(Effect.asVoid, Effect.mapError(unavailable)),
+        .pipe(Effect.mapError(sqlUnavailable)),
     ),
   });
 });

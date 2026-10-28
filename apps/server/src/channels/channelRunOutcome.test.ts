@@ -32,6 +32,16 @@ const task = Schema.decodeUnknownSync(ChannelTask)({
   updatedAt: now,
 });
 const runId = RunId.make("run-1");
+const turn = Schema.decodeUnknownSync(ChannelTask)({
+  ...Schema.encodeSync(ChannelTask)(task),
+  kind: "turn",
+});
+
+const completedSummary = (event: ReturnType<typeof settleCompletedRun>) => {
+  if (event.type !== "task.completed")
+    throw new Error("expected task.completed, got " + event.type);
+  return event.payload.summary;
+};
 
 const decodeEventJson = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
@@ -159,5 +169,67 @@ describe("completed run outcomes", () => {
     if (!retried.ok) throw new Error(retried.reason);
     assert.strictEqual(retried.task.status, "received");
     assert.notProperty(retried.task, "completionReport");
+  });
+});
+
+describe("a bot turn's answer", () => {
+  const longAnswer = [
+    "The disk is full because Docker keeps 41 GB of old images.",
+    "",
+    "Pruning unused images frees about 38 GB; the rest belongs to running containers.",
+    "I did not run the prune, so nothing has been deleted yet.",
+  ].join("\n");
+
+  it.each([
+    {
+      case: "a full answer over a shorter report",
+      text: longAnswer,
+      report: "Docker images fill the disk.",
+    },
+    {
+      case: "a concise answer over a longer report",
+      text: "Docker images take 41 GB.",
+      report:
+        "Investigated disk usage across volumes, listed the largest folders and found Docker images at 41 GB.",
+    },
+    {
+      case: "its own proposed completion when it wrote no final message",
+      text: "Docker images take 41 GB; prune them.",
+      report: "Done.",
+    },
+  ])("delivers the turn's own text: $case", ({ text, report }) => {
+    const event = settleCompletedRun({
+      task: turn,
+      runId,
+      reported: { outcome: "succeeded", summary: report },
+      fallbackSummary: text,
+      now,
+    });
+    assert.strictEqual(completedSummary(event), text);
+  });
+
+  it.each([
+    { case: "the no-final-text placeholder", fallback: "Finished." },
+    { case: "blank text", fallback: " \n " },
+  ])("settles with the report summary when the caller has $case", ({ fallback }) => {
+    const event = settleCompletedRun({
+      task: turn,
+      runId,
+      reported: { outcome: "succeeded", summary: "Docker images take 41 GB." },
+      fallbackSummary: fallback,
+      now,
+    });
+    assert.strictEqual(completedSummary(event), "Docker images take 41 GB.");
+  });
+
+  it("keeps a coding task's report summary over its final message", () => {
+    const event = settleCompletedRun({
+      task,
+      runId,
+      reported: { outcome: "succeeded", summary: "Deployed." },
+      fallbackSummary: longAnswer,
+      now,
+    });
+    assert.strictEqual(completedSummary(event), "Deployed.");
   });
 });

@@ -52,6 +52,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ConnectLinkTrust",
   "McpEvalJournal",
   "DecisionRoutes",
+  "HubConnectAccess",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -43,6 +43,10 @@
       "types": "./src/server/builtinSkills/computerUseSkillFiles.ts",
       "import": "./src/server/builtinSkills/computerUseSkillFiles.ts"
     },
+    "./server/builtinSkills/browserSkillFiles": {
+      "types": "./src/server/builtinSkills/browserSkillFiles.ts",
+      "import": "./src/server/builtinSkills/browserSkillFiles.ts"
+    },
     "./server/collectStreamText": {
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"

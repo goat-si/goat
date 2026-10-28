@@ -1,3 +1,8 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
+import type { ManagedEndpointAllocation } from "./ManagedEndpointAllocations.ts";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import type {
   RelayEnvironmentLinkProofPayload,
@@ -31,29 +36,52 @@ import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import * as ConnectLinkReservations from "./ConnectLinkReservations.ts";
 const isEnvironmentLinkProofInvalid = Schema.is(EnvironmentLinker.EnvironmentLinkProofInvalid);
 
+const reservationsPassThrough = Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+  exclusive: (_userId, use) => use(Effect.void),
+  recover: () => Effect.void,
+  reserve: (_input, consume) => consume.pipe(Effect.as(null)),
+  complete: (_input, commit) => commit,
+  failed: () => Effect.void,
+});
+const accountsPassThrough = Layer.succeed(ConnectAccounts.ConnectAccounts, {
+  authorize: () => Effect.succeed(1),
+  check: () => Effect.succeed(true),
+});
+const makeManagedRequest = Effect.gen(function* () {
+  const { request, payload } = yield* makeRequest;
+  const managed = { ...request, managedTunnelsEnabled: true };
+  const challenge = yield* (yield* RelayTokens.RelayTokens).issueLinkChallenge({
+    assurance: makeAssurance(payload.iat),
+    intent: { ...intent, managedTunnelsEnabled: true },
+    userId: "user_123",
+    request: managed,
+    jti: "managed-challenge",
+    issuedAtEpochSeconds: payload.iat,
+    expiresAtEpochSeconds: payload.exp,
+  });
+  return {
+    ...managed,
+    proof: signTestJwt(
+      { ...payload, challenge },
+      RELAY_LINK_PROOF_TYP,
+      environmentKeyPair.privateKey,
+    ),
+  };
+});
+
 function layerTest(input?: {
+  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
+  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
+    Layer.provide(policyUnitLayer),
     Layer.provide(NodeCryptoLayer.layer),
-    Layer.provide(
-      Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
-        exclusive: (_userId, use) => use(Effect.void),
-        recover: () => Effect.void,
-        reserve: (_input, consume) => consume.pipe(Effect.as(null)),
-        complete: (_input, commit) => commit,
-        failed: () => Effect.void,
-      }),
-    ),
-    Layer.provide(
-      Layer.succeed(ConnectAccounts.ConnectAccounts, {
-        authorize: () => Effect.succeed(1),
-        check: () => Effect.succeed(true),
-      }),
-    ),
-    Layer.provideMerge(RelayTokens.layer),
+    Layer.provide(reservationsPassThrough),
+    Layer.provide(accountsPassThrough),
+    Layer.provideMerge(RelayTokens.layer.pipe(Layer.provide(policyUnitLayer))),
     Layer.provide(
       Layer.mergeAll(
         RelayConfiguration.layer(config),
@@ -78,18 +106,20 @@ function layerTest(input?: {
         }),
         Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
           reconcileOrigin: () => Effect.succeed("ready"),
-          prepareDeprovision: () => Effect.succeed(null),
+          prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
           deprovision: input?.deprovision ?? (() => Effect.succeed(true)),
           release: () => Effect.succeed(true),
-          provision: () =>
-            Effect.succeed({
-              endpoint: {
-                httpBaseUrl: "https://managed.example.test/",
-                wsBaseUrl: "wss://managed.example.test/ws",
-                providerKind: "cloudflare_tunnel",
-              },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
-            }),
+          provision:
+            input?.provision ??
+            (() =>
+              Effect.succeed({
+                endpoint: {
+                  httpBaseUrl: "https://managed.example.test/",
+                  wsBaseUrl: "wss://managed.example.test/ws",
+                  providerKind: "cloudflare_tunnel",
+                },
+                runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
+              })),
         }),
       ),
     ),
@@ -334,3 +364,120 @@ describe("EnvironmentLinker", () => {
     }).pipe(Effect.provide(layerTest({ consume: () => Effect.succeed(false) }))),
   );
 });
+
+it.effect.each([true, false])(
+  "failed finalization compensates only the captured allocation (matching=%s)",
+  (matching) => {
+    let removed: ManagedEndpointAllocation | undefined;
+    const target: ManagedEndpointAllocation = {
+      userId: "user_123",
+      environmentId: "env-link-test",
+      incarnationId: "10000000-0000-4000-8000-000000000001",
+      accountEpoch: 1,
+      endpointGeneration: 0,
+      capacityReleasedAt: null,
+      hostname: "managed.example.test",
+      tunnelId: "fixture-tunnel",
+      tunnelName: "fixture-name",
+      dnsRecordId: "fixture-dns",
+      readyAt: "1970-01-01T00:00:00.000Z",
+      origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      generation: 3,
+      tunnelReleasedAt: null,
+    };
+    return Effect.gen(function* () {
+      const request = yield* makeManagedRequest;
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const failure = yield* Effect.flip(linker.link({ userId: "user_123", request }));
+      expect(failure._tag).toBe("EnvironmentLinkUpsertPersistenceError");
+      expect(removed?.generation).toBe(matching ? 3 : undefined);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          upsert: () =>
+            Effect.fail(
+              new EnvironmentLinks.EnvironmentLinkUpsertPersistenceError({
+                userId: "user_123",
+                environmentId: "env-link-test",
+                cause: new Error("fixture finalization failure"),
+              }),
+            ),
+          provision: () =>
+            Effect.succeed({
+              endpoint: {
+                httpBaseUrl: "https://managed.example.test/",
+                wsBaseUrl: "wss://managed.example.test/ws",
+                providerKind: "cloudflare_tunnel",
+              },
+              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "fixture-connector" },
+              allocationClaim: {
+                incarnationId: target.incarnationId,
+                generation: 3,
+                accountEpoch: 1,
+                endpointGeneration: 0,
+                tunnelId: "fixture-tunnel",
+              },
+            }),
+          prepareDeprovision: () => Effect.succeed({ ...target, generation: matching ? 3 : 4 }),
+          deprovision: (input) =>
+            Effect.sync(() => {
+              removed = input.target ?? undefined;
+              return true;
+            }),
+        }),
+      ),
+    );
+  },
+);
+
+it.live(
+  "a credential insert failure rolls back the link and owner activation in the actual signed-link service",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('user_123','allowed',1)",
+      );
+      pg.query(
+        "CREATE FUNCTION reject_fixture_credentials() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture credential outage'; END $$; CREATE TRIGGER reject_fixture_credentials BEFORE INSERT ON relay_environment_credentials FOR EACH ROW EXECUTE FUNCTION reject_fixture_credentials()",
+      );
+      const policy = postgresPolicyLayer(pg);
+      const rates = Layer.succeed(RelayRateLimits, { charge: () => Effect.void });
+      const configuration = RelayConfiguration.layer(config);
+      const tokens = RelayTokens.layer.pipe(
+        Layer.provide(configuration),
+        Layer.provide(rates),
+        Layer.provide(policy),
+      );
+      const runtime = EnvironmentLinker.layer.pipe(
+        Layer.provide(
+          Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {
+            prepareDeprovision: () => Effect.succeed(null),
+            deprovision: () => Effect.succeed(true),
+          }),
+        ),
+        Layer.provide(DpopProofs.layer.pipe(Layer.provide(policy))),
+        Layer.provide(NodeCryptoLayer.layer),
+        Layer.provide(reservationsPassThrough),
+        Layer.provide(accountsPassThrough),
+        Layer.provideMerge(tokens),
+        Layer.provide(configuration),
+        Layer.provide(rates),
+        Layer.provide(policy),
+      );
+      yield* Effect.gen(function* () {
+        const { request } = yield* makeRequest;
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* linker.link({ userId: "user_123", request }).pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "EnvironmentCredentialCreatePersistenceError" },
+        });
+        expect(pg.query("SELECT count(*) FROM relay_environment_links").trim()).toBe("0");
+        expect(pg.query("SELECT count(*) FROM relay_environment_credentials").trim()).toBe("0");
+        expect(pg.query("SELECT state FROM relay_environment_owners").trim()).toBe("pending");
+      }).pipe(Effect.provide(runtime));
+    }),
+);

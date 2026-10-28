@@ -1,6 +1,11 @@
+import { pullRequestToolDefinitions } from "./goatMcpPullRequestToolPresentation.ts";
 import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+
+import { type GoatMcpToolDefinition, tool } from "./goatMcpToolDefinition.ts";
+
+export type { GoatMcpToolDefinition, GoatMcpToolSummaryAction } from "./goatMcpToolDefinition.ts";
 
 export type GoatMcpToolLogo = "t3-code";
 
@@ -9,163 +14,13 @@ export interface GoatMcpToolPresentation {
   readonly logo: GoatMcpToolLogo;
 }
 
-export type GoatMcpToolSummaryAction =
-  | "capabilities"
-  | "delegate"
-  | "task-status"
-  | "task-cancel"
-  | "schedule-run"
-  | "schedule-create"
-  | "schedule-list"
-  | "schedule-update"
-  | "schedule-delete"
-  | "thread-create"
-  | "thread-list"
-  | "thread-read"
-  | "thread-send"
-  | "thread-wait"
-  | "thread-watch"
-  | "thread-unwatch"
-  | "thread-watch-list"
-  | "thread-interrupt"
-  | "workflow-stop"
-  | "background-wait"
-  | "thread-configuration"
-  | "thread-configure"
-  | "thread-fork"
-  | "thread-merge"
-  | "thread-search"
-  | "thread-transfers"
-  | "thread-organize"
-  | "thread-update"
-  | "queue-list"
-  | "queue-read"
-  | "queue-edit"
-  | "queue-cancel"
-  | "queue-reorder"
-  | "queue-steer"
-  | "question-list"
-  | "question-read"
-  | "question-respond"
-  | "secret-request"
-  | "worktree-handoff"
-  | "worktree-list"
-  | "worktree-status"
-  | "worktree-inventory"
-  | "worktree-remove"
-  | "worktree-cleanup"
-  | "storage-usage"
-  | "storage-clean"
-  | "project-list"
-  | "project-read"
-  | "repository-snapshot"
-  | "project-create"
-  | "project-update"
-  | "project-delete"
-  | "project-clone"
-  | "environment-read"
-  | "environment-update"
-  | "host-status"
-  | "provider-diagnose"
-  | "ssh-host-list"
-  | "ssh-browse"
-  | "ssh-thread-launch"
-  | "cloud-machine-list"
-  | "cloud-machine-change"
-  | "connection-list"
-  | "connection-add"
-  | "connection-remove"
-  | "attachment-prepare"
-  | "attachment-list"
-  | "attachment-discard"
-  | "attachment-send"
-  | "link-pr"
-  | "unlink-pr"
-  | "list-prs"
-  | "watch-pr"
-  | "unwatch-pr"
-  | "write-pr-guides"
-  | "read-pr-guide"
-  | "read-pr"
-  | "read-pr-checks"
-  | "browser"
-  | "device"
-  | "html-preview"
-  | "html-list"
-  | "html-render"
-  | "channel-message"
-  | "channel-reply"
-  | "channel-task-read"
-  | "channel-task-report"
-  | "channel-task-move"
-  | "channel-bot-home-read"
-  | "channel-bot-home-claim";
-
-export interface GoatMcpToolDefinition {
-  readonly displayName: string;
-  readonly labels: readonly [action: string, running: string, completed: string, detail: string];
-  readonly icon: "t3-code" | "browser" | "device" | "pull-request";
-  readonly summaryAction: GoatMcpToolSummaryAction;
-}
-
-function tool(
-  labels: GoatMcpToolDefinition["labels"],
-  summaryAction: GoatMcpToolSummaryAction,
-  icon: GoatMcpToolDefinition["icon"] = "t3-code",
-  displayName = `${labels[0]} ${labels[3]}`,
-): GoatMcpToolDefinition {
-  return { displayName, labels, icon, summaryAction };
-}
-
 const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ...lifecycleToolDefinitions(tool),
-  link_pull_request: tool(
-    ["Link", "Linking", "Linked", "a pull request"],
-    "link-pr",
-    "pull-request",
-  ),
-  unlink_pull_request: tool(
-    ["Unlink", "Unlinking", "Unlinked", "a pull request"],
-    "unlink-pr",
-    "pull-request",
-  ),
-  list_thread_pull_requests: tool(
-    ["Check", "Checking", "Checked", "linked pull requests"],
-    "list-prs",
-    "pull-request",
-  ),
-  watch_pull_request: tool(
-    ["Watch", "Watching", "Watching", "a pull request"],
-    "watch-pr",
-    "pull-request",
-  ),
-  unwatch_pull_request: tool(
-    ["Stop watching", "Unwatching", "Stopped watching", "a pull request"],
-    "unwatch-pr",
-    "pull-request",
-  ),
-  write_pull_request_guides: tool(
-    ["Write", "Writing", "Started writing", "review guides"],
-    "write-pr-guides",
-    "pull-request",
-  ),
-  read_pull_request_guide: tool(
-    ["Read", "Reading", "Read", "a review guide"],
-    "read-pr-guide",
-    "pull-request",
-  ),
-  goat_pull_request_read: tool(
-    ["Read", "Reading", "Read", "a pull request"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_checks: tool(
-    ["Check", "Checking", "Checked", "pull request checks"],
-    "read-pr-checks",
-    "pull-request",
-  ),
+  ...pullRequestToolDefinitions,
+  goat_thread_turn_diff: tool(["Read", "Reading", "Read", "a turn's diff"], "read-diff"),
+  goat_thread_diff: tool(["Read", "Reading", "Read", "a thread's diff"], "read-diff"),
   orchestrator_capabilities: tool(
     ["Get", "Getting", "Got", "orchestration capabilities"],
     "capabilities",
@@ -478,12 +333,40 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_environment_usage: tool(
+    ["Read", "Reading", "Read", "environment usage"],
+    "environment-usage",
+  ),
+  goat_host_process_history: tool(
+    ["Read", "Reading", "Read", "process resource history"],
+    "host-process-history",
+  ),
+  goat_host_resource_history: tool(
+    ["Read", "Reading", "Read", "host resource history"],
+    "host-resource-history",
+  ),
+  goat_worktree_diff_preview: tool(
+    ["Read", "Reading", "Read", "worktree diff preview"],
+    "worktree-diff-preview",
+  ),
+  goat_worktree_diff_file: tool(
+    ["Read", "Reading", "Read", "worktree file contents"],
+    "worktree-diff-file",
+  ),
   goat_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",
   ),
   goat_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
+    "environment-update",
+  ),
+  goat_environment_settings_read: tool(
+    ["Read", "Reading", "Read", "environment settings"],
+    "environment-read",
+  ),
+  goat_environment_settings_update: tool(
+    ["Update", "Updating", "Updated", "environment settings"],
     "environment-update",
   ),
   goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),

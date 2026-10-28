@@ -1,0 +1,24 @@
+---
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { LINKS } from "../lib/links";
+
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const t = messages(locale).accountDeletion;
+---
+
+<Base locale={locale} path="/account/delete/" title={`${t.title} | GOAT`} description={t.description}>
+  <article class="page-head container prose" aria-labelledby="deletion-title">
+    <h1 id="deletion-title">{t.title}</h1>
+    <p class="lede">{t.description}</p>
+    <p><a class="text-link" href={LINKS.deleteAccount}>{t.action}</a></p>
+    <p>{t.instructions}</p>
+    <h2>{t.dataTitle}</h2>
+    {t.data.map((paragraph) => <p>{paragraph}</p>)}
+    <h2>{t.retentionTitle}</h2>
+    {t.retention.map((paragraph) => <p>{paragraph}</p>)}
+    <h2>{t.machinesTitle}</h2>
+    {t.machines.map((paragraph) => <p>{paragraph}</p>)}
+  </article>
+</Base>

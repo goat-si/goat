@@ -455,6 +455,7 @@ describe("bounded binary previews", () => {
   });
 });
 import { OFFICE_PREVIEW_MAX_COLUMNS, type OfficeWorkerResult } from "./officePreviewProtocol";
+import type { TextPreviewResult } from "./largeTextProtocol";
 
 describe("large text preview recovery", () => {
   it("retains the workspace viewer across URL renewals and reloads revisions and manual refreshes", async () => {
@@ -462,12 +463,22 @@ describe("large text preview recovery", () => {
     const original = URL.createObjectURL(new Blob(["original\n".repeat(1000)]));
     const changed = URL.createObjectURL(new Blob(["changed\n".repeat(1000)]));
     const workers: Worker[] = [];
+    // Indexing ends with the worker's complete meta reply; under load that outlasts a polling wait.
+    const indexed: Promise<void>[] = [];
     using _worker = stubGlobal(
       "Worker",
       class extends Worker {
         constructor(...args: ConstructorParameters<typeof Worker>) {
           super(...args);
           workers.push(this);
+          indexed.push(
+            new Promise((resolve, reject) =>
+              this.addEventListener("message", ({ data }: MessageEvent<TextPreviewResult>) => {
+                if (data.type === "meta" && data.complete) resolve();
+                if (data.type === "error") reject(new Error(data.message));
+              }),
+            ),
+          );
         }
       },
     );
@@ -499,6 +510,7 @@ describe("large text preview recovery", () => {
       await using screen = await render(preview("first"));
       await vi.waitFor(() => expect(workers).toHaveLength(1));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("original"));
+      await indexed[0];
       await vi.waitFor(() => expect(screen.container.textContent).toContain("1,000 lines"));
       const viewport = screen.container.querySelector<HTMLElement>('[tabindex="0"]')!;
       await act(() =>

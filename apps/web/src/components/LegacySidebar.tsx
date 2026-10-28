@@ -241,6 +241,8 @@ import {
 } from "./sidebar/launchFold";
 import { SidebarLaunchGroup } from "./sidebar/SidebarLaunchGroup";
 import { useLaunchGroups } from "./sidebar/useLaunchGroups";
+import { withoutBotThreads } from "./sidebar/botVisibility";
+import { useBotThreadKeys } from "./sidebar/useBotThreadKeys";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -3212,6 +3214,7 @@ function useSortedLegacySidebarProjects(input: {
   const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const allThreadShells = useThreadShells();
   const sidebarThreads = excludeGlobalAgentThreads(allThreadShells, globalAgentRef, goatBotRef);
+  const { hidden: hiddenBotThreadKeys } = useBotThreadKeys();
   const sidebarProjectByKey = new Map(
     sidebarProjects.map((project) => [project.projectKey, project] as const),
   );
@@ -3219,7 +3222,7 @@ function useSortedLegacySidebarProjects(input: {
     ...project,
     id: project.projectKey,
   }));
-  const sortableThreads = sidebarThreads
+  const sortableThreads = withoutBotThreads(sidebarThreads, hiddenBotThreadKeys)
     .filter(
       (thread) =>
         thread.archivedAt === null &&
@@ -3272,6 +3275,7 @@ function useLegacySidebarThreads(input: {
   const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const allThreadShells = useThreadShells();
   const sidebarThreads = excludeGlobalAgentThreads(allThreadShells, globalAgentRef, goatBotRef);
+  const listableThreads = withoutBotThreads(sidebarThreads, useBotThreadKeys().hidden);
   const childAttentionByKey = useSidebarSubagentIndex().attentionByOwnerKey;
   const openSubagentOwnerKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? null;
   const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
@@ -3297,7 +3301,7 @@ function useLegacySidebarThreads(input: {
     ? logicalProjectKeyForThread(activeRouteThread)
     : null;
   const threadsByProjectKey = new Map<string, SidebarThreadSummary[]>();
-  for (const thread of sidebarThreads) {
+  for (const thread of listableThreads) {
     const logicalKey = logicalProjectKeyForThread(thread);
     const existing = threadsByProjectKey.get(logicalKey);
     if (existing) {
@@ -3306,7 +3310,7 @@ function useLegacySidebarThreads(input: {
       threadsByProjectKey.set(logicalKey, [thread]);
     }
   }
-  const visibleThreads = sidebarThreads.filter(
+  const visibleThreads = listableThreads.filter(
     (thread) =>
       thread.archivedAt === null &&
       thread.lineage.relationshipToParent !== "subagent" &&

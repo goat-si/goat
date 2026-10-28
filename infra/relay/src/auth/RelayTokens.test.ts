@@ -1,3 +1,7 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
 
@@ -53,7 +57,10 @@ const intent = {
   liveActivitiesEnabled: false as const,
   managedTunnelsEnabled: true,
 };
-const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
+const layer = RelayTokens.layer.pipe(
+  Layer.provide(policyUnitLayer),
+  Layer.provide(RelayConfiguration.layer(config)),
+);
 
 describe("RelayTokens", () => {
   it.effect("issues a user-bound environment link challenge", () =>
@@ -208,3 +215,115 @@ describe("RelayTokens", () => {
     }).pipe(Effect.provide(layer)),
   );
 });
+
+it.live.each(["challenge", "dpop"] as const)(
+  "%s issuance denies missing invitations, suspension and an epoch changed during charging",
+  (kind) =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      let changeEpoch = false;
+      const runtime = RelayTokens.layer.pipe(
+        Layer.provide(RelayConfiguration.layer(config)),
+        Layer.provide(
+          Layer.succeed(RelayRateLimits, {
+            charge: () =>
+              Effect.sync(() => {
+                if (changeEpoch) pg.query("UPDATE relay_account_access SET account_epoch=3");
+              }),
+          }),
+        ),
+        Layer.provide(postgresPolicyLayer(pg)),
+      );
+      yield* Effect.gen(function* () {
+        const tokens = yield* RelayTokens.RelayTokens;
+        const input = {
+          userId: "owner",
+          assurance: { ...assurance, userId: "owner" },
+          jti: "fixture",
+          issuedAtEpochSeconds: 100,
+          expiresAtEpochSeconds: 200,
+        };
+        const issue =
+          kind === "challenge"
+            ? tokens.issueLinkChallenge({
+                ...input,
+                intent,
+                request: {
+                  notificationsEnabled: false,
+                  liveActivitiesEnabled: false,
+                  managedTunnelsEnabled: true,
+                },
+              })
+            : tokens.issueDpopAccessToken({
+                ...input,
+                clientKeyAuthorizedAt: 100,
+                clientKeyAdmissionId: "admission-1",
+                proofKeyThumbprint: "fixture-key",
+                clientId: "goat-web",
+                scopes: ["environment:connect"],
+              });
+        expect(yield* Effect.flip(issue)).toMatchObject({
+          _tag: "RelayAccountAccessDeniedError",
+          reason: "not_invited",
+        });
+        pg.query(
+          "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','suspended',2)",
+        );
+        expect(yield* Effect.flip(issue)).toMatchObject({
+          _tag: "RelayAccountAccessDeniedError",
+          reason: "suspended",
+        });
+        pg.query("UPDATE relay_account_access SET status='allowed',account_epoch=1");
+        changeEpoch = true;
+        expect(yield* Effect.flip(issue)).toMatchObject({ _tag: "RelayAccountEpochStaleError" });
+        changeEpoch = false;
+        expect(typeof (yield* issue)).toBe("string");
+      }).pipe(Effect.provide(runtime));
+    }),
+);
+
+it.effect(
+  "the issuance pause rejects direct service minting and disabling the pause restores signed credential issuance",
+  () =>
+    Effect.gen(function* () {
+      const issue = Effect.gen(function* () {
+        const service = yield* RelayTokens.RelayTokens;
+        return yield* service.issueLinkChallenge({
+          userId: "fixture-owner",
+          assurance: { ...assurance, userId: "fixture-owner" },
+          intent,
+          request: {
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
+            managedTunnelsEnabled: false,
+          },
+          jti: "fixture-nonce",
+          issuedAtEpochSeconds: 100,
+          expiresAtEpochSeconds: 200,
+        });
+      });
+      const makeLayer = (mintDisabled: boolean) =>
+        RelayTokens.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(RelayConfiguration.layer({ ...config, mintDisabled })),
+        );
+      expect((yield* issue.pipe(Effect.provide(makeLayer(true)), Effect.flip))._tag).toBe(
+        "RelayMintDisabledError",
+      );
+      const token = yield* issue.pipe(Effect.provide(makeLayer(false)));
+      const verified = yield* Effect.gen(function* () {
+        return yield* (yield* RelayTokens.RelayTokens).verifyLinkChallenge({
+          token,
+          userId: "fixture-owner",
+          request: {
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
+            managedTunnelsEnabled: false,
+          },
+          nowEpochSeconds: 150,
+        });
+      }).pipe(Effect.provide(makeLayer(false)));
+      expect(verified?.sub).toBe("fixture-owner");
+    }),
+);

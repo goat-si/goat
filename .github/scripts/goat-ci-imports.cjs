@@ -175,6 +175,7 @@ function listWorkspaceFiles(root) {
   };
   walk("apps");
   walk("packages");
+  walk("infra/relay");
   walk("scripts");
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (entry.isFile() && isSource(entry.name)) files.push(entry.name);
@@ -185,7 +186,7 @@ function listWorkspaceFiles(root) {
 /** Workspace packages by name: { dir, manifest }. */
 function readPackages(root) {
   const packages = new Map();
-  for (const parent of ["apps", "packages"]) {
+  for (const parent of ["apps", "packages", "infra"]) {
     let entries = [];
     try {
       entries = fs.readdirSync(path.join(root, parent), { withFileTypes: true });
@@ -193,6 +194,7 @@ function readPackages(root) {
       continue;
     }
     for (const entry of entries) {
+      if (parent === "infra" && entry.name !== "relay") continue;
       const file = path.join(root, parent, entry.name, "package.json");
       if (!entry.isDirectory() || !fs.existsSync(file)) continue;
       const manifest = JSON.parse(fs.readFileSync(file, "utf8"));

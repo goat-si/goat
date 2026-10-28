@@ -9,7 +9,12 @@ import {
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { cloudAutoJoinSaveError, hubDeviceList, presentChildSetup } from "./hubDevices.ts";
+import {
+  connectHubProxySaveError,
+  cloudAutoJoinSaveError,
+  hubDeviceList,
+  presentChildSetup,
+} from "./hubDevices.ts";
 import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
 
 function node(
@@ -262,6 +267,13 @@ describe("cloudAutoJoinSaveError", () => {
     expect(cloudAutoJoinSaveError(false, false)).toBeNull();
     expect(cloudAutoJoinSaveError(true, true)).toBeNull();
   });
+});
+
+it("requires a hub upgrade when an older server silently drops Connect consent", () => {
+  expect(connectHubProxySaveError(true, undefined)).toMatch(/Update GOAT on the hub/);
+  expect(connectHubProxySaveError(true, false)).toMatch(/Update GOAT/);
+  expect(connectHubProxySaveError(false, undefined)).toBeNull();
+  expect(connectHubProxySaveError(true, true)).toBeNull();
 });
 
 function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {

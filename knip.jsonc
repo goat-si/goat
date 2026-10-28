@@ -26,6 +26,7 @@
         "fixtures/*/*.js",
         "knip-schemas.ts",
         "agent-surface/eval/replay-run.ts",
+        "computer-use-eval/run.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
         "worktree-add.ts",

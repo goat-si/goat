@@ -7,11 +7,10 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
 import { HubProxyAuthSource } from "../connection/hubProxyAuthSource.ts";
-import { hubProxyHttpBaseUrl, requestHubProxyJson } from "../connection/hubProxyHttp.ts";
+import { requestHubProxyJson } from "../connection/hubProxyHttp.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { connectionRoutes } from "../connection/routes.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import type { OrchestrationV2ShellSnapshot } from "@goat/contracts";
 
 const decodeHubSnapshot = Schema.decodeUnknownEffect(Schema.toCodecJson(HubProxySnapshot));
@@ -22,10 +21,10 @@ export const hydrateHubProxySnapshot = Effect.fn("hydrateHubProxySnapshot")(func
 ) {
   const auth = yield* HubProxyAuthSource;
   const authorization = yield* auth.resolve(profile);
-  const base = hubProxyHttpBaseUrl(authorization.httpBaseUrl, profile.nodeId);
   const snapshot = yield* requestHubProxyJson(
     authorization,
-    environmentEndpointUrl(base, "/snapshot"),
+    profile.nodeId,
+    "/snapshot",
     decodeHubSnapshot,
   );
   return snapshot.nodeId === profile.nodeId

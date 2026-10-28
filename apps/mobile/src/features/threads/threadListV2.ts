@@ -255,13 +255,16 @@ export function getThreadListV2OrderedSection(input: {
   readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly queuedThreadKeys?: ReadonlySet<string>;
+  /** GOAT Bot's observation threads, by `environmentId:threadId`; they get no row. */
+  readonly hiddenBotThreadKeys?: ReadonlySet<string>;
 }): EnvironmentThreadShell[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threads = input.threads.filter((thread) => {
     if (
       thread.archivedAt !== null ||
       thread.lineage.relationshipToParent === "subagent" ||
-      isSideChatThread(thread)
+      isSideChatThread(thread) ||
+      input.hiddenBotThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true
     )
       return false;
     if (
@@ -614,6 +617,8 @@ export function buildThreadListV2Items(input: {
   readonly isListedSettled?: (thread: EnvironmentThreadShell) => boolean;
   /** Settled threads in scope that are not local (older settled threads not loaded). */
   readonly unloadedSettledCount?: number;
+  /** GOAT Bot's observation threads, by `environmentId:threadId`; search still finds them. */
+  readonly hiddenBotThreadKeys?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -641,11 +646,13 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
+  const hiddenBotThreadKeys = query.length > 0 ? undefined : input.hiddenBotThreadKeys;
   const listedThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       thread.lineage.relationshipToParent !== "subagent" &&
       !isSideChatThread(thread) &&
+      hiddenBotThreadKeys?.has(`${thread.environmentId}:${thread.id}`) !== true &&
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null ||
         projectKeys.has(`${thread.environmentId}:${thread.projectId}`) ||

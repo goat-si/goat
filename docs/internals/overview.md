@@ -60,6 +60,15 @@ the accepted command receipt, and outbox effects in one database transaction. Su
 events after that commit. This keeps command retries idempotent and prevents a persisted projection
 from getting ahead of the event log.
 
+A permanent SQLite writer failure closes command admission and
+[exits 80](../../apps/server/src/persistence/PersistenceRecoveryOwner.ts), keeping the CLI's
+outer owner lock until process exit so the supervisor can restart the environment.
+In-process reconstruction is deferred: [provider scope closure](../../apps/server/src/orchestration-v2/ProviderSessionScopeClose.ts)
+can time out without confirming native retirement, and replacing the server graph also requires
+retiring auxiliary SQLite, attachment cleanup, and Provider Home hydration owners. Scope closure
+alone must never authorize a second generation. Recovery neither repairs corruption nor replays
+operations with uncertain commit results.
+
 The [effect worker](../../apps/server/src/orchestration-v2/EffectWorker.ts) performs side effects
 after intent has been recorded, then feeds results back into orchestration. A command acknowledgement
 therefore means the intent committed, not that the provider, checkpoint, or other follow-up work

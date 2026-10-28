@@ -1,3 +1,5 @@
+import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import * as Fiber from "effect/Fiber";
 import { EnvironmentSupervisor } from "./supervisor.ts";
 import { fetchEnvironmentSessionState } from "../state/session.ts";
@@ -45,7 +47,8 @@ export function reconcileHubProxyRoutes(input: {
     const profile = Option.getOrNull(route.profile);
     return (
       profile?._tag === "HubProxyConnectionProfile" &&
-      profile.hubEnvironmentId === input.hubEnvironmentId
+      profile.hubEnvironmentId === input.hubEnvironmentId &&
+      profile.hubConnectionId === input.hubConnectionId
     );
   });
   const register: HubProxyConnectionRegistration[] = [];
@@ -108,7 +111,7 @@ export interface HubProxyDiscoveryUpdate {
   readonly hubLabel: string;
   readonly nodes: ReadonlyArray<HubProxyNode>;
   readonly sessionScopes: ReadonlyArray<AuthEnvironmentScope>;
-  readonly config: Pick<ServerConfig, "environment">;
+  readonly config?: Pick<ServerConfig, "environment">;
 }
 
 export const watchHubProxyDiscovery = <E, R>(
@@ -119,15 +122,18 @@ export const watchHubProxyDiscovery = <E, R>(
     yield* updates.pipe(
       Stream.runForEach((update) =>
         Effect.gen(function* () {
-          if (
-            !update.sessionScopes.includes(AuthHubProxyScope) ||
-            update.config.environment.capabilities.hubProxy !== true
-          )
-            return;
+          const authorized =
+            update.sessionScopes.includes(AuthHubProxyScope) &&
+            update.config?.environment.capabilities.hubProxy === true;
           const entries = yield* SubscriptionRef.get(registry.entries);
           if (!entries.has(update.hubEnvironmentId)) return;
-          if ((yield* registry.state(update.hubEnvironmentId)).phase !== "connected") return;
-          const changes = reconcileHubProxyRoutes({ ...update, existing: [...entries.values()] });
+          if (authorized && (yield* registry.state(update.hubEnvironmentId)).phase !== "connected")
+            return;
+          const changes = reconcileHubProxyRoutes({
+            ...update,
+            nodes: authorized ? update.nodes : [],
+            existing: [...entries.values()],
+          });
           for (const id of changes.remove) {
             for (const entry of entries.values())
               if (connectionRoutes(entry).some((route) => connectionRouteId(route.target) === id)) {
@@ -207,8 +213,11 @@ const discoveryRetry = Schedule.spaced("1 second").pipe(
 export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
   const watchers = new Map<EnvironmentId, Fiber.Fiber<void>>();
-  const updates = (environmentId: EnvironmentId) =>
-    registry.followStream(
+  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+  const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+  const updates = (environmentId: EnvironmentId) => {
+    let lastUpdate: HubProxyDiscoveryUpdate | undefined;
+    return registry.followStream(
       environmentId,
       Stream.unwrap(
         Effect.gen(function* () {
@@ -220,14 +229,53 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
             Stream.mapEffect(() =>
               Effect.gen(function* () {
                 const state = yield* SubscriptionRef.get(supervisor.state);
-                return state.phase === "connected"
-                  ? yield* SubscriptionRef.get(supervisor.session)
-                  : Option.none();
+                return {
+                  session:
+                    state.phase === "connected"
+                      ? yield* SubscriptionRef.get(supervisor.session)
+                      : Option.none(),
+                  denied:
+                    state.phase === "blocked" &&
+                    (state.lastFailure?.reason === "authentication" ||
+                      state.lastFailure?.reason === "permission"),
+                };
               }),
             ),
-            Stream.changesWith((left, right) => Option.getOrNull(left) === Option.getOrNull(right)),
-            Stream.switchMap((current) => {
-              if (Option.isNone(current)) return Stream.empty;
+            Stream.changesWith(
+              (left, right) =>
+                Option.getOrNull(left.session) === Option.getOrNull(right.session) &&
+                left.denied === right.denied,
+            ),
+            Stream.switchMap(({ session: current, denied }) => {
+              if (Option.isNone(current)) {
+                if (!denied) return Stream.empty;
+                return Stream.fromEffect(
+                  Effect.gen(function* () {
+                    if (lastUpdate !== undefined)
+                      return Option.some({ ...lastUpdate, nodes: [], sessionScopes: [] });
+                    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+                    const target = Option.isSome(prepared)
+                      ? prepared.value.target
+                      : supervisor.target;
+                    if (
+                      target._tag !== "PrimaryConnectionTarget" &&
+                      target._tag !== "BearerConnectionTarget" &&
+                      target._tag !== "RelayConnectionTarget"
+                    )
+                      return Option.none();
+                    return Option.some({
+                      hubEnvironmentId: target.environmentId,
+                      hubConnectionId: connectionRouteId(target),
+                      hubLabel: target.label,
+                      nodes: [],
+                      sessionScopes: [],
+                    } satisfies HubProxyDiscoveryUpdate);
+                  }),
+                ).pipe(
+                  Stream.filter(Option.isSome),
+                  Stream.map((update) => update.value),
+                );
+              }
               const session = current.value;
               return Stream.fromEffect(session.initialConfig).pipe(
                 Stream.merge(
@@ -241,25 +289,43 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                 Stream.switchMap((config) =>
                   Stream.unwrap(
                     Effect.gen(function* () {
-                      if (config.environment.capabilities.hubProxy !== true) return Stream.empty;
                       const prepared = yield* SubscriptionRef.get(supervisor.prepared);
                       if (Option.isNone(prepared)) return Stream.empty;
                       const target = prepared.value.target;
                       if (
                         target._tag !== "PrimaryConnectionTarget" &&
-                        target._tag !== "BearerConnectionTarget"
+                        target._tag !== "BearerConnectionTarget" &&
+                        target._tag !== "RelayConnectionTarget"
                       )
                         return Stream.empty;
-                      if (prepared.value.httpAuthorization?._tag === "Dpop") return Stream.empty;
+                      const emptyUpdate = Effect.gen(function* () {
+                        const entries = yield* SubscriptionRef.get(registry.entries);
+                        return {
+                          hubEnvironmentId: target.environmentId,
+                          hubConnectionId: connectionRouteId(target),
+                          hubLabel:
+                            entries.get(environmentId)?.target.label ?? config.environment.label,
+                          nodes: [],
+                          sessionScopes: [],
+                          config,
+                        } satisfies HubProxyDiscoveryUpdate;
+                      });
+                      if (config.environment.capabilities.hubProxy !== true)
+                        return Stream.fromEffect(emptyUpdate);
                       const subscribeNodes = session.client[WS_METHODS.hubNodesSubscribe];
                       if (typeof subscribeNodes !== "function") return Stream.empty;
                       const auth = yield* fetchEnvironmentSessionState({
                         prepared: prepared.value,
-                        signer: Option.none(),
-                      });
+                        signer,
+                        remoteAuthorization,
+                      }).pipe(
+                        Effect.catchIf(isTerminalDiscoveryError, () =>
+                          Effect.succeed({ authenticated: false, permissions: [], scopes: [] }),
+                        ),
+                      );
                       const sessionScopes = auth.permissions ?? auth.scopes ?? [];
                       if (!auth.authenticated || !sessionScopes.includes(AuthHubProxyScope))
-                        return Stream.empty;
+                        return Stream.fromEffect(emptyUpdate);
                       return subscribeNodes({}).pipe(
                         Stream.filter(
                           (snapshot) => snapshot.hubEnvironmentId === target.environmentId,
@@ -277,6 +343,11 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                               config,
                             })),
                           ),
+                        ),
+                        Stream.tap((update) =>
+                          Effect.sync(() => {
+                            lastUpdate = update;
+                          }),
                         ),
                       );
                     }),
@@ -305,6 +376,7 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
         }),
       ),
     );
+  };
   yield* SubscriptionRef.changes(registry.entries).pipe(
     Stream.runForEach((entries) =>
       Effect.gen(function* () {

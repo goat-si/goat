@@ -43,6 +43,8 @@ describe("RemoteEnvironmentAuthorization with Connect disabled", () => {
           }),
           Effect.provideService(ManagedRelay.ManagedRelayClient, {
             relayUrl: "https://relay.example.test",
+            deleteAccount: unexpected,
+            getAccountDeletion: unexpected,
             listEnvironments: unexpected,
             listDevices: unexpected,
             createEnvironmentLinkChallenge: unexpected,
@@ -124,6 +126,8 @@ describe("RemoteEnvironmentAuthorization with Connect disabled", () => {
         }),
         Effect.provideService(ManagedRelay.ManagedRelayClient, {
           relayUrl: "https://relay.example.test",
+          deleteAccount: unused,
+          getAccountDeletion: unused,
           listEnvironments: unused,
           listDevices: unused,
           createEnvironmentLinkChallenge: unused,

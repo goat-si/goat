@@ -29,6 +29,8 @@ describe("RelayEnvironmentDiscovery with Connect disabled", () => {
         const discovery = yield* Discovery.make().pipe(
           Effect.provideService(ManagedRelay.ManagedRelayClient, {
             relayUrl: "https://relay.example.test",
+            deleteAccount: unexpected,
+            getAccountDeletion: unexpected,
             listEnvironments: unexpected,
             listDevices: unexpected,
             createEnvironmentLinkChallenge: unexpected,
