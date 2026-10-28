@@ -21,6 +21,13 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { pointerInterception } from "./pointerInterception.ts";
+import {
+  actionDeadline,
+  remaining,
+  waitUntilSelectable,
+  waitUntilWritable,
+  type Readiness,
+} from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
@@ -194,6 +201,8 @@ const noPointer: PointerReporter = async () => {};
 export interface DispatchGate {
   (): void;
   readonly linger?: (work: Promise<unknown>) => void;
+  /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
+  readonly deadline?: number;
 }
 const open: DispatchGate = () => {};
 
@@ -692,14 +701,16 @@ export const type = async (
   page: Page,
   input: PreviewAutomationTypeInput,
   gate: DispatchGate = open,
+  readiness: Readiness = {},
 ) => {
-  const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
   const locator = targetLocator(page, input);
-  if (locator !== null) await locator.waitFor({ state: "visible", timeout });
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
+  const present = locator !== null || (await target.count()) > 0;
+  if (present) await waitUntilWritable(target, deadline, readiness);
   const focused =
-    (locator !== null || (await target.count()) > 0) &&
+    present &&
     (await target.evaluate(
       (element, clear) => {
         // Like the desktop host: an enabled text control or contenteditable
@@ -749,7 +760,7 @@ export const type = async (
         return owned;
       },
       input.clear === true,
-      { timeout },
+      { timeout: remaining(deadline) },
     ));
   if (focused !== true) {
     throw new ServerBrowserOperationError(
@@ -757,6 +768,7 @@ export const type = async (
       "The target is not an enabled text field, so no text was typed.",
     );
   }
+  remaining(deadline);
   gate();
   // One input after the gate: a key press is held off by the input fence; inserted text is a
   // single call with nothing to wait for.
@@ -790,19 +802,21 @@ export const select = async (
   page: Page,
   input: PreviewAutomationSelectInput,
   gate: DispatchGate = open,
+  readiness: Readiness = {},
 ): Promise<PreviewAutomationSelectResult> => {
-  const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const handle = await elementOf(targetLocator(page, input)!, timeout);
+  const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
+  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline));
   try {
+    const ready = await waitUntilSelectable(handle, input.values, deadline, readiness);
     const found = await handle.evaluate((element) => {
       if (element.tagName !== "SELECT") return null;
       const select = element as unknown as {
-        readonly disabled: boolean;
+        matches(selector: string): boolean;
         readonly multiple: boolean;
         readonly options: ArrayLike<{ value: string; label: string }>;
       };
       return {
-        disabled: select.disabled,
+        disabled: select.matches(":disabled"),
         multiple: select.multiple,
         options: Array.from(select.options, ({ value, label }) => ({ value, label: label.trim() })),
       };
@@ -811,6 +825,11 @@ export const select = async (
       throw new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
         "This element is not a <select>. Click a custom dropdown, then click its option.",
+      );
+    if (found.disabled && !ready)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "This <select> stayed disabled until the deadline, so nothing was selected.",
       );
     if (found.disabled) throw targetChanged();
     const values = input.values.map(
@@ -825,9 +844,10 @@ export const select = async (
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         missing !== -1
-          ? `This <select> has no option "${input.values[missing]}".`
+          ? `This <select> ${ready ? "has" : "still has"} no option "${input.values[missing]}"${ready ? "" : " after waiting for it"}.`
           : "This <select> takes one option.",
       );
+    remaining(deadline);
     gate();
     // What Playwright's selectOption does once the options exist, without its wait for them.
     const selected = await handle.evaluate((element, chosen) => {

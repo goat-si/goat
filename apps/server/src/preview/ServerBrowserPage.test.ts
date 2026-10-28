@@ -130,7 +130,12 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     );
     await page.focus("#other");
     await expect(
-      ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "WRONG" }),
+      ServerBrowserPage.type(page, {
+        locator: "#target",
+        clear: true,
+        text: "WRONG",
+        timeoutMs: 200,
+      }),
     ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
     expect(await page.evaluate("[target.value, other.value]")).toEqual(["old", "keep"]);
 
@@ -234,7 +239,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       throw new Error("stopped");
     };
     await expect(
-      ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }),
+      ServerBrowserPage.select(page, { locator: "#s", values: ["b"], timeoutMs: 200 }),
     ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
     await page.evaluate("s.add(new Option('B', 'b'))");
     await expect(

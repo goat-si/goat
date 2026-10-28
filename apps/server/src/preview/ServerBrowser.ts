@@ -1882,7 +1882,8 @@ const make = Effect.gen(function* () {
     const input = request.input;
     await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
-    const actionGate = () => ServerBrowserScreen.screenActionGate(tab, request);
+    const actionGate = () =>
+      Object.assign(ServerBrowserScreen.screenActionGate(tab, request), { deadline: deadlineMs });
     switch (request.operation) {
       case "back":
       case "forward":
