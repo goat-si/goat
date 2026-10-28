@@ -761,7 +761,9 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
 `;
     nativeFixture.onStart = (worker) =>
       worker.on("message", (reply) => {
-        if (reply?.backpressure) Deferred.doneUnsafe(refusals[refusalCount++]!, Effect.void);
+        // Retries may produce more refusals than the milestones this test awaits.
+        const refusal = reply?.backpressure ? refusals[refusalCount++] : undefined;
+        if (refusal !== undefined) Deferred.doneUnsafe(refusal, Effect.void);
         if (reply?.type === "ready") ready = true;
         if (reply?.type === "checkpoint-observed" && !ready) startupCheckpoints.push(reply.sql);
       });
