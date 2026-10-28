@@ -153,6 +153,19 @@ describe("buildImportGraph", () => {
     write("apps/server/src/cycle/b.ts", 'import "./a.ts";');
     write("apps/server/src/cycle/entry.ts", 'import "./leaf.ts";');
     write("apps/server/src/cycle/leaf.ts");
+    write(
+      "apps/server/src/mixed/a.ts",
+      'import "./shared.test.ts";\nspawn("node", ["src/mixed/entry.ts"]);',
+    );
+    write("apps/server/src/mixed/shared.test.ts", 'import "./a.ts";');
+    write("apps/server/src/mixed/runner.test.ts", 'import "./a.ts";');
+    write("apps/server/src/mixed/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/mixed/leaf.ts");
+    write("apps/server/src/typed/tool.ts", 'spawn("node", ["src/typed/entry.ts"]);');
+    write("apps/server/src/typed/tool.test.ts", 'import "./tool.ts";');
+    write("apps/server/src/typed/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/typed/leaf.ts");
+    write("apps/server/src/typed/consumer.ts", 'import type { Helper } from "./tool.ts";');
     write("apps/server/src/ws.ts");
     write("apps/server/src/nested/deep.ts");
     write(
@@ -231,6 +244,11 @@ describe("buildImportGraph", () => {
 
   it("follows names from test helpers that import each other", () => {
     assert.ok(reaches("apps/server/src/cycle/leaf.ts", "apps/server/src/cycle.test.ts"));
+    assert.ok(reaches("apps/server/src/mixed/leaf.ts", "apps/server/src/mixed/runner.test.ts"));
+  });
+
+  it("does not let a type-only import keep a test helper out of test code", () => {
+    assert.ok(reaches("apps/server/src/typed/leaf.ts", "apps/server/src/typed/tool.test.ts"));
   });
 
   it("does not spread a change through a production module that names the server entry", () => {

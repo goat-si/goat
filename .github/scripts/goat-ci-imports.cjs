@@ -81,6 +81,9 @@ function withoutComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\x60\\])\/\/.*$/gm, "$1");
 }
 
+/** import type and export type statements, which never run, so they name nothing a run executes. */
+const TYPE_ONLY_MODULE = /\b(?:import|export)\s+type\s[^;]*?\bfrom\s+["'][^"'\n]+["']/g;
+
 /**
  * Files a source names in strings: a path ending in a file name (a fixture it reads, a script it
  * spawns), resolved against the source's directory, else by its trailing path segments, else by a
@@ -90,7 +93,7 @@ function withoutComments(source) {
  */
 function namedFilesOf(source, from, { byBase, byStem, fileSet, packageDirFor }) {
   const found = new Set();
-  const code = withoutComments(source);
+  const code = withoutComments(source).replace(TYPE_ONLY_MODULE, "");
   const addAll = (matches) => {
     if (matches.length > 0 && matches.length <= MAX_NAME_MATCHES)
       for (const file of matches) found.add(file);
@@ -268,7 +271,7 @@ function testCodeOf(files, importers, rawNamers) {
   while (grew) {
     grew = false;
     for (const group of groups) {
-      if (testCode.has(group[0])) continue;
+      if (group.every((file) => testCode.has(file))) continue;
       const members = new Set(group);
       const users = group
         .flatMap((file) => [...(importers.get(file) ?? []), ...(rawNamers.get(file) ?? [])])
