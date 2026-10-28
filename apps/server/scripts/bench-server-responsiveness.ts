@@ -138,17 +138,19 @@ try {
   const load = await runLoad(fixture.origin, fixture.credential, rounds);
   report.workloadMs = NodePerfHooks.performance.now() - loadStarted;
   report.load = load;
+  if (load.error) {
+    failure = new Error(load.error);
+    report.error = load.error;
+  }
+  process.stdout.write(shortTable(Object.entries(load.latencies), load.operations) + "\n");
   const snapshot = Schema.decodeUnknownSync(Snapshot)(
     await fixture.receipt("snapshot", "snapshot"),
   );
   report.eventLoop = snapshot.loop;
   report.slowSql = snapshot.slowSql;
   report.rssBytes = snapshot.rssBytes;
-  report.status = "completed";
-  process.stdout.write(
-    shortTable([["Target loop (raw 10 ms)", snapshot.loop], ...Object.entries(load.latencies)]) +
-      "\n",
-  );
+  report.status = failure ? "incomplete" : "completed";
+  process.stdout.write(shortTable([["Target loop (raw 10 ms)", snapshot.loop]]) + "\n");
 } catch (error) {
   failure = error;
   report.error = fixture

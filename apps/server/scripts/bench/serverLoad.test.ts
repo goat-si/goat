@@ -1,10 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 import { runLoad } from "./serverLoad.ts";
 
 const rpc = vi.hoisted(() => ({ make: vi.fn() }));
+class CreateRefused extends Data.TaggedError("CreateRefused")<{ readonly message: string }> {}
 vi.mock("effect/rpc/RpcClient", () => ({
   make: rpc.make,
   layerProtocolSocket: () => Layer.empty,
@@ -16,7 +18,8 @@ it("returns successful and failed operation measurements when a later request fa
       "server.getConfig": () => Effect.succeed({}),
       "orchestration.getThreadProjection": () =>
         Effect.succeed({ messages: [{ text: "fixture simple ok" }] }),
-      "orchestration.dispatchCommand": () => Effect.fail(new Error("create refused")),
+      "orchestration.dispatchCommand": () =>
+        Effect.fail(new CreateRefused({ message: "create refused" })),
     }),
   );
   using _fetch = vi

@@ -13,6 +13,13 @@ export interface Distribution {
   readonly maxMs: number;
 }
 
+export interface OperationMeasurements {
+  offered: number;
+  completed: number;
+  failed: number;
+  errors: string[];
+}
+
 /** Nearest-rank percentiles include every completed operation, including failures. */
 export function distribution(samples: ReadonlyArray<number>): Telemetry<Distribution> {
   if (samples.length === 0) return missing("No samples collected");
@@ -32,6 +39,7 @@ export function distribution(samples: ReadonlyArray<number>): Telemetry<Distribu
 
 export function shortTable(
   rows: ReadonlyArray<readonly [string, Telemetry<Distribution>]>,
+  operations: Readonly<Record<string, OperationMeasurements>> = {},
 ): string {
   const lines = ["Measurement                 count    p50 ms    p95 ms    p99 ms    max ms"];
   for (const [name, measurement] of rows) {
@@ -43,6 +51,12 @@ export function shortTable(
     lines.push(
       `${name.padEnd(28)}${String(row.count).padStart(5)}${[row.p50Ms, row.p95Ms, row.p99Ms, row.maxMs].map((value) => value.toFixed(2).padStart(10)).join("")}`,
     );
+  }
+  for (const [name, counters] of Object.entries(operations)) {
+    lines.push(
+      `${name}: offered=${counters.offered} completed=${counters.completed} failed=${counters.failed}`,
+    );
+    for (const error of counters.errors) lines.push(`  ERROR: ${error}`);
   }
   return lines.join("\n");
 }

@@ -24,9 +24,9 @@ import * as EffectWorker from "../../src/orchestration-v2/EffectWorker.ts";
 import { CodexOrchestratorReplayHarness } from "../../src/orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
 import { layerProviderReplay } from "../../src/orchestration-v2/testkit/ProviderReplayHarness.ts";
 
-export const projectId = ProjectId.make("benchmark-project");
+const projectId = ProjectId.make("benchmark-project");
 export const replayThreadId = ThreadId.make("benchmark-replay");
-export const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" };
+const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" };
 
 export function createThread(threadId: ThreadId) {
   return {

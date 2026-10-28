@@ -25,11 +25,16 @@ it("keeps unavailable or invalid telemetry distinct from measured zero", () => {
     distribution([0]),
     available({ count: 1, p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0 }),
   );
-  const table = shortTable([
-    ["trace", missing("Observer unavailable")],
-    ["RPC", distribution([0])],
-  ]);
+  const table = shortTable(
+    [
+      ["trace", missing("Observer unavailable")],
+      ["RPC", distribution([0])],
+    ],
+    { RPC: { offered: 2, completed: 1, failed: 1, errors: ["request refused"] } },
+  );
   assert.include(table, "trace: MISSING (Observer unavailable)");
   assert.include(table, "RPC");
   assert.include(table, "0.00");
+  assert.include(table, "RPC: offered=2 completed=1 failed=1");
+  assert.include(table, "ERROR: request refused");
 });
