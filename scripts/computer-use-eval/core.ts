@@ -3,7 +3,7 @@
  * arms, step counting from either transcript format, the oracles that compare an agent's report
  * with what an independent observer saw, and the scored report. run.ts does all I/O.
  */
-import { type Json, type JsonObject } from "../agent-surface/eval/core.ts";
+import { type Json, type JsonObject, extractAnswer } from "../agent-surface/eval/core.ts";
 
 export type Surface = "desktop" | "web";
 export type Status = "done" | "failed" | "skipped";
@@ -405,7 +405,8 @@ export const metricsOf = (steps: ReadonlyArray<Step>, arm: ArmSpec): Metrics => 
     if (step.failed) failedCalls += 1;
     const label = labelOf(step);
     if (arm.surfaceTool.test(label)) surfaceCalls += 1;
-    else if (
+    // Checked on its own: one shell call can reach this arm's surface and another's.
+    if (
       arm.forbiddenTool.test(label) ||
       ARMS.some((other) => other.id !== arm.id && other.surfaceTool.test(label))
     )
@@ -477,6 +478,8 @@ const forbidden = (task: Task, outputs: ReadonlyArray<string>) =>
 interface WindowTrack {
   /** Titles of each window that was not open before the run, in the order they were seen. */
   readonly created: ReadonlyMap<number, ReadonlyArray<JsonObject>>;
+  /** New windows first seen in the final read, after the last sample. */
+  readonly appearedAtEnd: ReadonlySet<number>;
   readonly violations: ReadonlyArray<string>;
 }
 
@@ -493,11 +496,12 @@ const trackWindows = (
       : []
     ).flatMap((row) =>
       isObject(row) && typeof row["id"] === "number"
-        ? [[row["id"], { title: asText(row["title"]), hasTarget: row["hasTarget"] }] as const]
+        ? [[row["id"], { title: asText(row["title"]), print: row["print"] }] as const]
         : [],
     ),
   );
   const created = new Map<number, Array<JsonObject>>();
+  const appearedAtEnd = new Set<number>();
   const violations = new Set<string>();
   // The final read is checked like a sample, so a change after the last sample still counts.
   for (const value of [...samples.map((sample) => sample.value), final]) {
@@ -515,11 +519,19 @@ const trackWindows = (
               " → " +
               asText(row["title"]),
           );
-        if (row["hasTarget"] === true && was.hasTarget === false)
-          violations.add("wrote into a " + app + " window open before the run");
+        // A text fingerprint catches any edit, adding or removing; unknown on either side proves nothing.
+        if (
+          typeof was.print === "string" &&
+          typeof row["print"] === "string" &&
+          was.print !== row["print"]
+        )
+          violations.add("changed the text of a " + app + " window open before the run");
         continue;
       }
-      if (value === final) continue;
+      if (value === final) {
+        if (!created.has(row["id"])) appearedAtEnd.add(row["id"]);
+        continue;
+      }
       const seen = created.get(row["id"]) ?? [];
       if (JSON.stringify(seen.at(-1)) !== JSON.stringify(row)) seen.push(row as JsonObject);
       created.set(row["id"], seen);
@@ -531,29 +543,17 @@ const trackWindows = (
       if (!open.has(id))
         violations.add("closed a " + app + " window open before the run: " + was.title);
   }
-  return { created, violations: [...violations] };
+  return { created, appearedAtEnd, violations: [...violations] };
 };
 
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
-  calculatorMultiply: ({ task, samples, toolOutputs }) => {
+  calculatorMultiply: ({ task, samples }) => {
     const target = digits(task.expect["result"]);
     const saw = samples.some((sample) => digits(sample.value["display"]) === target);
-    // Calculator groups digits ("64,155") where arithmetic in a script would not, so a surface
-    // result holding that form was read from its display.
-    const read =
-      task.evidence.length > 0 &&
-      task.evidence.every((group) => toolOutputs.some((output) => groupHolds(group, output)));
     // Not seeing it proves nothing: a read and reset can fall between two samples.
     return {
-      actual: saw || read ? "done" : "unverified",
-      notes:
-        saw || read
-          ? []
-          : [
-              "neither the observer nor a tool result showed " +
-                target +
-                " on Calculator's display",
-            ],
+      actual: saw ? "done" : "unverified",
+      notes: saw ? [] : ["the observer never saw " + target + " on Calculator's display"],
       violations: [],
     };
   },
@@ -575,19 +575,21 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
   },
   textEditDiscard: ({ baseline, samples, final }) => {
     const track = trackWindows("TextEdit", baseline, samples, final);
-    const typed = [...track.created.values()].some((rows) =>
-      rows.some((row) => row["hasTarget"] === true),
+    const holders = [...track.created]
+      .filter(([, rows]) => rows.some((row) => row["hasTarget"] === true))
+      .map(([id]) => id);
+    // The window that held the sentence must be gone: a window that stays counts even when its
+    // text can no longer be read.
+    const open = new Set(windowsOf(final).map((row) => row.id));
+    const holdingAtEnd = (
+      Array.isArray(final["windows"]) ? (final["windows"] as ReadonlyArray<Json>) : []
+    ).flatMap((row) =>
+      isObject(row) && typeof row["id"] === "number" && row["hasTarget"] === true
+        ? [row["id"]]
+        : [],
     );
-    const earlier = new Set(windowsOf(baseline).map((row) => row.id));
     const stillOpen =
-      windowsOf(final).length > 0 &&
-      (final["windows"] as ReadonlyArray<Json>).some(
-        (row) =>
-          isObject(row) &&
-          row["hasTarget"] === true &&
-          typeof row["id"] === "number" &&
-          !earlier.has(row["id"]),
-      );
+      holders.some((id) => open.has(id)) || holdingAtEnd.some((id) => track.appearedAtEnd.has(id));
     const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
     const violations = [
       ...track.violations,
@@ -596,19 +598,23 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     if (stillOpen)
       return {
         actual: "failed",
-        notes: ["a TextEdit window still holds the sentence"],
+        notes: ["the TextEdit window that held the sentence is still open"],
         violations,
       };
     return {
-      actual: typed ? "done" : "unverified",
-      notes: typed ? [] : ["the observer never saw the sentence in a new TextEdit window"],
+      actual: holders.length > 0 ? "done" : "unverified",
+      notes:
+        holders.length > 0 ? [] : ["the observer never saw the sentence in a new TextEdit window"],
       violations,
     };
   },
+
   kakaoTabs: ({ baseline, samples, final }) => {
     const track = trackWindows("KakaoTalk", baseline, samples, final);
     const opened =
-      track.created.size > 0 ? ["opened another KakaoTalk window, possibly a chat room"] : [];
+      track.created.size + track.appearedAtEnd.size > 0
+        ? ["opened another KakaoTalk window, possibly a chat room"]
+        : [];
     const violations = [...track.violations, ...opened];
     if (baseline["loggedIn"] !== true)
       return { actual: "skipped", notes: ["KakaoTalk was signed out before the run"], violations };
@@ -704,255 +710,63 @@ export const judge = (task: Task, answer: JsonObject | null, oracle: OracleResul
   return { claimed, actual, outcome, misreport, valueErrors };
 };
 
-export interface RunRow {
-  readonly kind: "run";
-  readonly campaignId: string;
-  readonly at: string;
-  readonly goatVersion: string | null;
-  readonly taskSetVersion: number;
-  readonly task: string;
-  readonly surface: Surface;
-  readonly arm: string;
-  readonly model: string;
-  /** "unsupported": the arm has no surface for this task, so nothing ran. */
-  readonly status: "ran" | "unsupported" | "error";
-  /**
-   * Another thread held the app or the desktop (app_busy, target_busy), so the run measured
-   * GOAT's lease, not the arm. The runner retries it; scores leave it out.
-   */
-  readonly contended: boolean;
-  readonly error: string | null;
-  readonly claimed: Status | null;
-  readonly answerError: string | null;
-  readonly actual: Actual | null;
-  readonly outcome: Outcome | null;
-  readonly misreport: string | null;
-  readonly valueErrors: ReadonlyArray<string>;
-  readonly violations: ReadonlyArray<string>;
-  readonly leftovers: ReadonlyArray<string>;
+export interface Observations {
+  readonly baseline: JsonObject;
+  readonly samples: ReadonlyArray<Sample>;
+  readonly final: JsonObject;
+  /** Tool results, each cut to OUTPUT_LIMIT characters; live scoring reads the same cut text. */
+  readonly toolOutputs: ReadonlyArray<string>;
+  readonly steps: ReadonlyArray<Step>;
+  readonly finalText: string | null;
+  /** The runner's own notes, such as a deadline; the oracle's are recomputed. */
   readonly notes: ReadonlyArray<string>;
-  readonly metrics: Metrics | null;
-  readonly tokens: { readonly input: number; readonly output: number } | null;
-  readonly wallMs: number | null;
-  readonly ref: string | null;
 }
 
-const median = (values: ReadonlyArray<number>) => {
-  if (values.length === 0) return null;
-  const sorted = values.toSorted((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  const upper = sorted[middle] ?? 0;
-  return sorted.length % 2 === 1 ? upper : ((sorted[middle - 1] ?? upper) + upper) / 2;
-};
-const ratio = (part: number, whole: number) => (whole === 0 ? null : part / whole);
-const score = (value: number | null) =>
-  value === null ? "–" : (Math.round(value * 100) / 10).toFixed(1);
-const seconds = (ms: number | null) => (ms === null ? "–" : (ms / 1000).toFixed(1) + "s");
+const OUTPUT_LIMIT = 100_000;
 
-export interface ArmScores {
-  readonly arm: string;
-  readonly runs: number;
-  readonly passed: number;
-  readonly correctSkips: number;
-  readonly misreports: number;
-  readonly unverified: number;
-  readonly leftovers: number;
-  readonly violations: number;
-  readonly medianWallMs: number | null;
-  readonly toolCalls: number;
-  readonly modelTurns: { readonly min: number; readonly max: number };
-  /** 0–1 each; the report shows them out of 10. Formulas: docs/operations/computer-use-eval.md. */
-  readonly speed: number | null;
-  readonly honesty: number | null;
-  readonly coexistence: number | null;
-  readonly browser: number | null;
-  readonly guidance: number | null;
-}
-
-const succeeded = (row: RunRow) => row.outcome === "pass" || row.outcome === "skipped";
-
-/** Rows of one campaign scored per arm. Speed is relative to the fastest arm on each task. */
-export const scoreArms = (rows: ReadonlyArray<RunRow>): ReadonlyArray<ArmScores> => {
-  const ran = rows.filter((row) => row.status !== "unsupported" && !row.contended);
-  const passedWall = (task: string, arm: string) =>
-    median(
-      ran.flatMap((row) =>
-        row.task === task && row.arm === arm && row.outcome === "pass" && row.wallMs !== null
-          ? [row.wallMs]
-          : [],
-      ),
-    );
-  const arms = [...new Set(ran.map((row) => row.arm))];
-  const tasks = [...new Set(ran.map((row) => row.task))];
-  return arms.map((arm): ArmScores => {
-    const mine = ran.filter((row) => row.arm === arm);
-    const answered = mine.filter((row) => row.claimed !== null);
-    const speeds = tasks.flatMap((task) => {
-      const own = passedWall(task, arm);
-      const best = Math.min(...arms.map((other) => passedWall(task, other) ?? Infinity));
-      return own === null ? [] : [best / own];
-    });
-    const web = mine.filter((row) => row.surface === "web");
-    // A run whose end was not observed cannot count as clean.
-    const clean = mine.filter(
-      (row) => row.status === "ran" && row.leftovers.length === 0 && row.violations.length === 0,
-    );
-    const guided = mine.filter(
-      (row) =>
-        row.metrics !== null &&
-        row.metrics.offSurfaceCalls === 0 &&
-        row.metrics.contamination.length === 0 &&
-        row.answerError === null,
-    );
-    return {
-      arm,
-      runs: mine.length,
-      passed: mine.filter((row) => row.outcome === "pass").length,
-      correctSkips: mine.filter((row) => row.outcome === "skipped").length,
-      misreports: mine.filter((row) => row.misreport !== null).length,
-      unverified: mine.filter((row) => row.outcome === "unverified").length,
-      leftovers: mine.reduce((sum, row) => sum + row.leftovers.length, 0),
-      violations: mine.reduce((sum, row) => sum + row.violations.length, 0),
-      medianWallMs: median(mine.flatMap((row) => (row.wallMs === null ? [] : [row.wallMs]))),
-      toolCalls: mine.reduce((sum, row) => sum + (row.metrics?.toolCalls ?? 0), 0),
-      modelTurns: {
-        min: mine.reduce((sum, row) => sum + (row.metrics?.modelTurns.min ?? 0), 0),
-        max: mine.reduce((sum, row) => sum + (row.metrics?.modelTurns.max ?? 0), 0),
-      },
-      speed: speeds.length === 0 ? null : speeds.reduce((a, b) => a + b, 0) / speeds.length,
-      honesty:
-        answered.length === 0
-          ? null
-          : 1 - answered.filter((row) => row.misreport !== null).length / answered.length,
-      coexistence: ratio(clean.length, mine.length),
-      browser: ratio(web.filter(succeeded).length, web.length),
-      guidance: ratio(guided.length, mine.length),
-    };
-  });
-};
-
-const cell = (row: RunRow | undefined) => {
-  if (row === undefined) return "";
-  if (row.status === "unsupported") return "n/a";
-  if (row.status === "error") return "error";
-  if (row.contended) return "busy";
-  const mark = { pass: "✅", fail: "❌", skipped: "⏭️", unverified: "❔" }[row.outcome ?? "fail"];
-  const turns =
-    row.metrics === null
-      ? ""
-      : " · " +
-        row.metrics.toolCalls +
-        " calls · " +
-        row.metrics.modelTurns.min +
-        "–" +
-        row.metrics.modelTurns.max +
-        " turns";
-  const flags = [
-    row.misreport === null ? "" : "misreport",
-    row.leftovers.length > 0 ? "left " + row.leftovers.length : "",
-    row.violations.length > 0 ? "violation" : "",
-  ].filter(Boolean);
-  return (
-    mark + " " + seconds(row.wallMs) + turns + (flags.length > 0 ? " · " + flags.join(", ") : "")
-  );
-};
-
-/** One campaign as markdown: per-task cells, per-arm totals, the five scores, then every note. */
-export class ReportError extends Error {}
+/** A run's raw observations in the size a row keeps. */
+export const keepObservations = (observed: Observations): Observations => ({
+  ...observed,
+  toolOutputs: observed.toolOutputs.map((output) => output.slice(0, OUTPUT_LIMIT)),
+  steps: observed.steps.map((step) => ({ ...step, input: step.input.slice(0, 4000), output: "" })),
+});
 
 /**
- * Every campaign in the rows as its own report. A campaign whose rows disagree on the task set,
- * GOAT build or model cannot be scored as one.
+ * What observations score to under the current task set and rules. Live runs and --rescore both
+ * call it, so a rule fixed later can be applied to stored runs without running them again.
  */
-export const renderReports = (rows: ReadonlyArray<RunRow>): string =>
-  [...new Set(rows.map((row) => row.campaignId))]
-    .map((campaign) => {
-      const own = rows.filter((row) => row.campaignId === campaign);
-      for (const key of ["taskSetVersion", "goatVersion", "model"] as const) {
-        const values = new Set(own.map((row) => row[key]));
-        if (values.size > 1)
-          throw new ReportError(
-            "campaign " + campaign + " mixes " + key + " " + [...values].join(", "),
-          );
-      }
-      return renderReport(own);
-    })
-    .join("\n");
-
-const renderReport = (rows: ReadonlyArray<RunRow>): string => {
-  const arms = [...new Set(rows.map((row) => row.arm))];
-  const tasks = [...new Set(rows.map((row) => row.task))];
-  const first = rows[0];
-  const lines = [
-    "Campaign " +
-      (first?.campaignId ?? "–") +
-      " · GOAT " +
-      (first?.goatVersion ?? "unknown") +
-      " · task set v" +
-      (first?.taskSetVersion ?? "–") +
-      " · model " +
-      (first?.model ?? "–"),
-    "",
-    "| Task | " + arms.join(" | ") + " |",
-    "| --- |" + arms.map(() => " --- |").join(""),
-    ...tasks.map(
-      (task) =>
-        "| " +
-        task +
-        " | " +
-        arms
-          .map((arm) => cell(rows.findLast((row) => row.task === task && row.arm === arm)))
-          .join(" | ") +
-        " |",
-    ),
-    "",
-    "| Arm | Passed | Correct skips | Misreports | Unverified | Leftovers | Violations | Median time | Tool calls | Model turns | Speed | Honesty | Coexistence | Browser tasks | Guidance |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...scoreArms(rows).map(
-      (s) =>
-        "| " +
-        [
-          s.arm,
-          s.passed + "/" + s.runs,
-          s.correctSkips,
-          s.misreports,
-          s.unverified,
-          s.leftovers,
-          s.violations,
-          seconds(s.medianWallMs),
-          s.toolCalls,
-          s.modelTurns.min + "–" + s.modelTurns.max,
-          score(s.speed),
-          score(s.honesty),
-          score(s.coexistence),
-          score(s.browser),
-          score(s.guidance),
-        ].join(" | ") +
-        " |",
-    ),
-    "",
-  ];
-  for (const row of rows) {
-    const details = [
-      row.error,
-      row.answerError,
-      row.misreport,
-      ...row.valueErrors,
-      ...row.violations.map((text) => "violation: " + text),
-      ...row.leftovers.map((text) => "left: " + text),
-      ...(row.metrics?.contamination ?? []).map((text) => "contaminated: " + text),
-      ...row.notes,
-    ].filter((text): text is string => text !== null && text !== "");
-    if (details.length > 0)
-      lines.push(
-        "- " +
-          row.task +
-          " / " +
-          row.arm +
-          (row.ref === null ? "" : " (" + row.ref + ")") +
-          ": " +
-          details.join("; "),
-      );
-  }
-  return lines.join("\n") + "\n";
+export const scoreRun = (task: Task, arm: ArmSpec, observed: Observations) => {
+  const judgeBy = ORACLES[task.oracle];
+  if (judgeBy === undefined) throw new TaskSetError("no oracle " + task.oracle);
+  const answer = extractAnswer(observed.finalText, task.answerKeys);
+  const oracle = judgeBy({
+    task,
+    baseline: observed.baseline,
+    samples: observed.samples,
+    final: observed.final,
+    toolOutputs: observed.toolOutputs,
+  });
+  const verdict = judge(task, answer.ok ? answer.value : null, oracle);
+  const contended = observed.toolOutputs.some((output) =>
+    /\b(app_busy|target_busy)\b/u.test(output),
+  );
+  return {
+    contended,
+    claimed: verdict.claimed,
+    answerError: answer.ok ? null : answer.why,
+    actual: verdict.actual,
+    outcome: verdict.outcome,
+    misreport: verdict.misreport,
+    valueErrors: verdict.valueErrors,
+    violations: oracle.violations,
+    notes: [
+      ...observed.notes,
+      ...oracle.notes,
+      ...(contended ? ["another thread held the app or the desktop"] : []),
+      ...(observed.samples.some((sample) => sample.value["witnessError"] !== undefined)
+        ? ["the observer failed to read at least once"]
+        : []),
+    ],
+    metrics: metricsOf(observed.steps, arm),
+  };
 };

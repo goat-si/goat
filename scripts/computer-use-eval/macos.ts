@@ -62,15 +62,15 @@ const CALCULATOR =
 // so text is unknown (null) for windows whose title is not unique.
 const textEdit = (target: string) =>
   "const procs = se.processes.whose({ name: 'TextEdit' });" +
-  "const texts = procs.length === 0 ? [] : procs[0].windows().map((w) => { let hasTarget = null;" +
-  "try { hasTarget = String(w.scrollAreas[0].textAreas[0].value()).includes(" +
+  "const texts = procs.length === 0 ? [] : procs[0].windows().map((w) => { let hasTarget = null; let print = null;" +
+  "try { const text = String(w.scrollAreas[0].textAreas[0].value()); hasTarget = text.includes(" +
   JSON.stringify(target) +
-  "); } catch (e) {}" +
-  "return { title: w.name(), hasTarget }; });" +
+  "); let h = 5381; for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0; print = text.length + ':' + h; } catch (e) {}" +
+  "return { title: w.name(), hasTarget, print }; });" +
   "const own = cgWindows().filter((w) => w.owner === 'TextEdit');" +
   "return { running: procs.length > 0, windows: own.map(({ id, title }) => { const same = texts.filter((t) => t.title === title);" +
   "const unique = same.length === 1 && own.filter((w) => w.title === title).length === 1;" +
-  "return { id, title, hasTarget: unique ? same[0].hasTarget : null }; }) };";
+  "return { id, title, hasTarget: unique ? same[0].hasTarget : null, print: unique ? same[0].print : null }; }) };";
 
 const KAKAO =
   "const windows = cgWindows().filter((w) => w.owner === 'KakaoTalk').map(({ id, title }) => ({ id, title }));" +
@@ -184,8 +184,17 @@ export const sampleUntil = (witness: Witness) => {
   );
   return {
     stop: async () => {
-      child.kill("SIGTERM");
-      await closed;
+      for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+        if (child.exitCode !== null || child.signalCode !== null) break;
+        child.kill(signal);
+        const ended = await Promise.race([
+          closed.then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
+        ]);
+        if (ended) break;
+      }
+      if (child.exitCode === null && child.signalCode === null)
+        throw new Error("the observer process " + child.pid + " did not stop");
       return samples;
     },
   };

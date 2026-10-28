@@ -11,23 +11,22 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { answerInstruction, extractAnswer, type JsonObject } from "../agent-surface/eval/core.ts";
+import { answerInstruction, type JsonObject } from "../agent-surface/eval/core.ts";
 import {
   ARMS,
   type ArmSpec,
   COMMON_RULES,
   ORACLES,
-  type RunRow,
   type Task,
   type TimelineEntry,
   type Transcript,
   codexTranscript,
   goatTranscript,
-  judge,
-  metricsOf,
-  renderReports,
+  keepObservations,
+  scoreRun,
   validateTaskSet,
 } from "./core.ts";
+import { type RunRow, renderReports } from "./report.ts";
 import {
   WITNESSES,
   chromeTabCount,
@@ -50,16 +49,33 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 class HaltError extends Error {}
 
 /** What the current run started, so an operator's Ctrl-C stops it before the runner exits. */
-const active: { client: Client | null; threadId: string | null; group: number | null } = {
-  client: null,
-  threadId: null,
-  group: null,
-};
+const active: {
+  client: Client | null;
+  /** A launch in flight, by the unique title that finds its thread if the answer never comes. */
+  launching: string | null;
+  threadId: string | null;
+  group: number | null;
+  observer: { readonly stop: () => Promise<unknown> } | null;
+} = { client: null, launching: null, threadId: null, group: null, observer: null };
 
 const stopActive = async () => {
   if (active.group !== null) await stopGroup(active.group);
+  if (active.client !== null && active.threadId === null && active.launching !== null)
+    active.threadId = await findLaunched(active.client, active.launching);
   if (active.client !== null && active.threadId !== null)
     await settleThread(active.client, active.threadId);
+  await active.observer?.stop();
+};
+
+/** The thread an unanswered launch started, if the server has it; read-only, so nothing new starts. */
+const findLaunched = async (client: Client, title: string) => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const listed = await client.call("thread.list", { allProjects: true, titleContains: title });
+    const [found] = asObjects(listed["threads"]);
+    if (found !== undefined) return String(found["threadId"]);
+    await pause(1000);
+  }
+  return null;
 };
 
 interface Client {
@@ -207,10 +223,12 @@ const runGoat = async (
 ): Promise<Ran> => {
   // The same clientRequestId returns the same thread, so a launch whose answer was lost can be
   // asked again to learn which thread to stop.
+  const clientRequestId = NodeCrypto.randomUUID();
+  const tagged = title + " · " + clientRequestId.slice(0, 8);
   const launch = {
-    clientRequestId: NodeCrypto.randomUUID(),
+    clientRequestId,
     scratch: true,
-    title,
+    title: tagged,
     runtimeMode: "full-access",
     modelSelection: {
       instanceId: options.instanceId,
@@ -223,6 +241,7 @@ const runGoat = async (
     notifyOnCompletion: false,
     message: prompt,
   };
+  active.launching = tagged;
   const launched = await client.call("thread.launch", launch).catch(async (first: unknown) => {
     try {
       return await client.call("thread.launch", launch);
@@ -237,6 +256,7 @@ const runGoat = async (
   });
   const threadId = String(launched["threadId"]);
   active.threadId = threadId;
+  active.launching = null;
   const runId = String(launched["runId"]);
   try {
     return await followGoat(client, task, threadId, runId);
@@ -515,6 +535,7 @@ const runStep = async (
   const before = await snapshot(arm, task);
   const baseline = read === null ? {} : await read();
   const sampler = witness === null ? null : sampleUntil(witness);
+  active.observer = sampler;
   const startedMs = Date.now();
   let ran: Ran;
   try {
@@ -530,6 +551,7 @@ const runStep = async (
     } else ran = await runCodex(task, promptFor(task, arm), options);
   } catch (error) {
     await sampler?.stop();
+    active.observer = null;
     if (error instanceof HaltError) throw error;
     const after = await snapshot(arm, task).catch(() => null);
     const left = after === null ? null : await leftoversOf(null, arm, task, before, after, [], {});
@@ -542,6 +564,7 @@ const runStep = async (
     };
   }
   const samples = (await sampler?.stop()) ?? [];
+  active.observer = null;
   const final: JsonObject =
     read === null
       ? {}
@@ -550,42 +573,39 @@ const runStep = async (
           ...(task.oracle === "textEditDiscard" ? { savedFiles: documentsSince(startedMs) } : {}),
         };
   const after = await snapshot(arm, task);
-  const outputs = ran.transcript.steps
-    .filter((step) => step.kind === "tool")
-    .map((step) => step.output);
-  const answer = extractAnswer(ran.transcript.finalText, task.answerKeys);
-  const judgeBy = ORACLES[task.oracle];
-  if (judgeBy === undefined) return { ...head, status: "error", error: "no oracle " + task.oracle };
-  const oracle = judgeBy({ task, baseline, samples, final, toolOutputs: outputs });
-  const verdict = judge(task, answer.ok ? answer.value : null, oracle);
-  const leftovers = await leftoversOf(client, arm, task, before, after, outputs, final);
-  const contended = outputs.some((output) => /\b(app_busy|target_busy)\b/u.test(output));
-  const witnessErrors = samples.some((sample) => sample.value["witnessError"] !== undefined)
-    ? ["the observer failed to read at least once"]
-    : [];
+  const observed = keepObservations({
+    baseline,
+    samples,
+    final,
+    toolOutputs: ran.transcript.steps
+      .filter((step) => step.kind === "tool")
+      .map((step) => step.output),
+    steps: ran.transcript.steps,
+    finalText: ran.transcript.finalText,
+    notes: ran.notes,
+  });
+  const leftovers = await leftoversOf(
+    client,
+    arm,
+    task,
+    before,
+    after,
+    observed.toolOutputs,
+    final,
+  );
+  const scored = scoreRun(task, arm, {
+    ...observed,
+    notes: [...observed.notes, ...leftovers.notes],
+  });
   return {
     ...head,
     status: "ran",
-    contended,
-    claimed: verdict.claimed,
-    answerError: answer.ok ? null : answer.why,
-    actual: verdict.actual,
-    outcome: verdict.outcome,
-    misreport: verdict.misreport,
-    valueErrors: verdict.valueErrors,
-    violations: oracle.violations,
+    ...scored,
     leftovers: leftovers.left,
-    notes: [
-      ...ran.notes,
-      ...oracle.notes,
-      ...leftovers.notes,
-      ...(contended ? ["another thread held the app or the desktop"] : []),
-      ...witnessErrors,
-    ],
-    metrics: metricsOf(ran.transcript.steps, arm),
     tokens: ran.transcript.tokens,
     wallMs: ran.wallMs,
     ref: ran.ref,
+    observations: { ...observed, notes: [...observed.notes, ...leftovers.notes] },
   };
 };
 
@@ -608,6 +628,13 @@ const EMPTY = {
 } as const;
 
 const main = async () => {
+  const taskSet = validateTaskSet(
+    JSON.parse(NodeFS.readFileSync(new URL("tasks.json", import.meta.url), "utf8")),
+    {
+      witnesses: new Set(Object.keys(WITNESSES)),
+      oracles: new Set(Object.keys(ORACLES)),
+    },
+  );
   const reportPath = argument("--report");
   if (reportPath !== undefined) {
     const campaign = argument("--campaign");
@@ -616,16 +643,25 @@ const main = async () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as RunRow)
       .filter((row) => campaign === undefined || row.campaignId === campaign);
-    process.stdout.write(renderReports(rows));
+    // --rescore judges stored observations with the current rules; the run itself is not repeated.
+    const rescored = process.argv.includes("--rescore")
+      ? rows.map((row) => {
+          const task = taskSet.tasks.find((candidate) => candidate.id === row.task);
+          const arm = ARMS.find((candidate) => candidate.id === row.arm);
+          if (
+            row.status !== "ran" ||
+            row.observations == null ||
+            task === undefined ||
+            arm === undefined
+          )
+            return row;
+          return { ...row, ...scoreRun(task, arm, row.observations) };
+        })
+      : rows;
+    process.stdout.write(renderReports(rescored));
     return;
   }
-  const taskSet = validateTaskSet(
-    JSON.parse(NodeFS.readFileSync(new URL("tasks.json", import.meta.url), "utf8")),
-    {
-      witnesses: new Set(Object.keys(WITNESSES)),
-      oracles: new Set(Object.keys(ORACLES)),
-    },
-  );
+
   const taskIds = list("--tasks");
   const armIds = list("--arms");
   const tasks = taskSet.tasks.filter((task) => taskIds === undefined || taskIds.includes(task.id));

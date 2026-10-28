@@ -48,7 +48,7 @@ Desktop tasks have an observer: one long-lived osascript that samples the app th
 and CoreGraphics (Calculator every 50 ms, the others every 250 ms), so it never needs a per-app
 Automation permission. It follows windows by their CoreGraphics id and leaves a window's text
 unknown when its title is not unique. A run passes only when the result was seen: the product on
-Calculator's display, or Calculator's grouped form "64,155" in a surface tool result; one new Finder
+Calculator's display; one new Finder
 window showing Downloads and then Recents; the sentence in a new TextEdit window that is gone at the
 end with no new document file. Not seeing a result proves nothing, since a short state can fall
 between samples, so that run is unverified; only positive evidence, such as the sentence still open,
@@ -102,10 +102,14 @@ server. A GOAT thread already has the endpoint; elsewhere set `GOAT_EVAL_ENDPOIN
 ```sh
 node scripts/computer-use-eval/run.ts                         # validate and print the schedule
 node scripts/computer-use-eval/run.ts --live --out runs.jsonl [--tasks a,b] [--arms x,y]
-node scripts/computer-use-eval/run.ts --report runs.jsonl [--campaign <id>]
+node scripts/computer-use-eval/run.ts --report runs.jsonl [--campaign <id>] [--rescore]
 ```
 
 Runs are sequential because they share one screen. `--report` prints one report per campaign and
 refuses a campaign whose rows mix task set versions, GOAT builds or models. Leave Calculator open;
 the task resets it.
 The KakaoTalk task expects a skip while KakaoTalk is signed out.
+
+Each row keeps the run's raw observations: the observer's samples and final read, the tool
+results and the agent's final answer. `--rescore` judges stored rows with the current rules, so
+a fixed oracle applies to past runs without repeating them; a changed prompt still needs a new run.

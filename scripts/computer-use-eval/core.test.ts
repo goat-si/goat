@@ -6,18 +6,17 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ARMS,
   ORACLES,
-  type RunRow,
   type Task,
   TaskSetError,
   codexTranscript,
   goatTranscript,
   judge,
+  keepObservations,
   metricsOf,
-  ReportError,
-  renderReports,
-  scoreArms,
+  scoreRun,
   validateTaskSet,
 } from "./core.ts";
+import { ReportError, type RunRow, renderReports, scoreArms } from "./report.ts";
 
 const implemented = {
   witnesses: new Set(["calculator", "finder", "textEdit", "kakao"]),
@@ -310,13 +309,13 @@ describe("oracles", () => {
       }).violations,
     ).toHaveLength(1);
     const theirs = oracle("textedit-korean-discard", {
-      baseline: { windows: [{ id: 4, title: "notes.rtf", hasTarget: false }] },
-      samples: [at({ windows: [{ id: 4, title: "notes.rtf", hasTarget: true }] })],
+      baseline: { windows: [{ id: 4, title: "notes.rtf", hasTarget: false, print: "10:1" }] },
+      samples: [at({ windows: [{ id: 4, title: "notes.rtf", hasTarget: true, print: "40:2" }] })],
       final: { windows: [], savedFiles: [] },
     });
     expect(theirs.actual).toBe("unverified");
     expect(theirs.violations).toEqual([
-      "wrote into a TextEdit window open before the run",
+      "changed the text of a TextEdit window open before the run",
       "closed a TextEdit window open before the run: notes.rtf",
     ]);
   });
@@ -546,17 +545,69 @@ describe("round two fixes", () => {
     expect(ambiguous.actual).toBe("unverified");
   });
 
-  it("takes Calculator's grouped result from a tool result when no sample caught it", () => {
+  it("does not accept a computed 64,155 in a tool result as Calculator's display", () => {
     expect(
-      oracle("calculator-multiply", {
-        samples: [at({ display: "0" })],
-        toolOutputs: ['{"display":"64,155"}'],
-      }).actual,
-    ).toBe("done");
-    expect(
-      oracle("calculator-multiply", { samples: [at({ display: "0" })], toolOutputs: ["64155"] })
+      oracle("calculator-multiply", { samples: [at({ display: "0" })], toolOutputs: ["64,155"] })
         .actual,
     ).toBe("unverified");
+  });
+
+  it("flags an edit that removes text from an earlier TextEdit document", () => {
+    const result = oracle("textedit-korean-discard", {
+      baseline: { windows: [{ id: 4, title: "notes.rtf", hasTarget: true, print: "40:2" }] },
+      samples: [
+        at({
+          windows: [
+            { id: 4, title: "notes.rtf", hasTarget: false, print: "10:1" },
+            { id: 9, title: "Untitled", hasTarget: true, print: "18:3" },
+          ],
+        }),
+      ],
+      final: {
+        windows: [{ id: 4, title: "notes.rtf", hasTarget: false, print: "10:1" }],
+        savedFiles: [],
+      },
+    });
+    expect(result.violations).toEqual([
+      "changed the text of a TextEdit window open before the run",
+    ]);
+  });
+
+  it("fails TextEdit when the window that held the sentence stays open, even if its text is unreadable", () => {
+    const result = oracle("textedit-korean-discard", {
+      samples: [at({ windows: [{ id: 9, title: "Untitled", hasTarget: true }] })],
+      final: { windows: [{ id: 9, title: "Untitled", hasTarget: null }], savedFiles: [] },
+    });
+    expect(result.actual).toBe("failed");
+  });
+
+  it("counts a KakaoTalk window that first appears in the final read", () => {
+    const result = oracle("kakaotalk-tabs", {
+      baseline: { loggedIn: false, windows: [{ id: 5, title: "Log in" }] },
+      final: {
+        windows: [
+          { id: 5, title: "Log in" },
+          { id: 6, title: "Chat" },
+        ],
+      },
+    });
+    expect(result.violations).toEqual(["opened another KakaoTalk window, possibly a chat room"]);
+  });
+
+  it("flags another surface in the same shell call as the arm's own", () => {
+    const steps = [
+      {
+        kind: "tool",
+        name: "shell",
+        failed: false,
+        input: "aside repl 'x'\ncodemode --code-file y",
+        output: "",
+      },
+    ] as const;
+    expect(metricsOf(steps, arm("aside-repl"))).toMatchObject({
+      surfaceCalls: 1,
+      contamination: ["used shell aside repl 'x'\ncodemode --code-file y"],
+    });
   });
 
   it("refuses an unselected Medium radio as the form's size", () => {
@@ -607,5 +658,39 @@ describe("round two fixes", () => {
     } as const;
     const [only] = scoreArms([{ ...base, status: "error", error: "RPC failed" }]);
     expect(only?.coexistence).toBe(0);
+  });
+});
+
+describe("stored observations", () => {
+  it("score the same way live and on --rescore, including contention", () => {
+    const eight = Array.from({ length: 8 }, () => '- button "Delete"').join("\n");
+    const observed = keepObservations({
+      baseline: {},
+      samples: [],
+      final: {},
+      toolOutputs: [eight],
+      steps: [
+        {
+          kind: "tool",
+          name: "goat.goat_screen_run",
+          failed: false,
+          input: "x".repeat(9000),
+          output: eight,
+        },
+      ],
+      finalText: 'EVAL_JSON {"status":"done","deleteButtons":8}',
+      notes: [],
+    });
+    expect(observed.steps[0]?.input).toHaveLength(4000);
+    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), observed)).toMatchObject({
+      outcome: "pass",
+      contended: false,
+      metrics: { surfaceCalls: 1 },
+    });
+    const busy = { ...observed, toolOutputs: ['{"detail":"app_busy"}'] };
+    expect(scoreRun(task("web-add-remove"), arm("goat-screen-run"), busy)).toMatchObject({
+      outcome: "unverified",
+      contended: true,
+    });
   });
 });

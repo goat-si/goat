@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "tasks": [
     {
       "id": "calculator-multiply",
@@ -9,14 +9,6 @@
       "expect": {
         "result": "64155"
       },
-      "evidence": [
-        [
-          {
-            "pattern": "64,155",
-            "label": "64,155 read from Calculator"
-          }
-        ]
-      ],
       "witness": "calculator",
       "oracle": "calculatorMultiply",
       "deadlineMs": 300000
