@@ -105,7 +105,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked; a write that answers one fails its call. */
-export const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
+const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
   "refused",

@@ -27,7 +27,7 @@ export const MIN_CALL_MS = 250;
 const record = (args: unknown): Readonly<Record<string, unknown>> =>
   typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
 
-export const driverCallCapMs = (tool: string, args: unknown): number => {
+const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") return given.include_screenshot === true ? 7_000 : 4_000;
   if (tool === "verify_state")
