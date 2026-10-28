@@ -7,17 +7,11 @@ import {
   type ComputerUseRun,
   type ComputerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
-import {
-  turnItemNeedsDetailFetch,
-  turnItemOutputImages,
-} from "@goat/client-runtime/work-log/item-detail";
+import { turnItemNeedsDetailFetch } from "@goat/client-runtime/work-log/item-detail";
 import { View } from "react-native";
 
-import { FilePreviewGallery } from "../../components/FilePreviewGallery";
-import type { FilePreviewSource } from "../../components/FilePreviewModal";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useTurnItemDetail } from "../../state/queries";
-import { ThreadMarkdownImage } from "./ThreadMarkdownImage";
 
 const STATUS_CLASS = {
   running: "text-foreground-muted",
@@ -29,27 +23,23 @@ const STATUS_CLASS = {
 } as const satisfies Record<ComputerUseRunStatus, string>;
 
 /**
- * A computer-use call's status, target, and the screenshots its result gave the model. Expanded,
- * the row's own gallery shows the screenshots, so this card shows them only while collapsed.
+ * An expanded computer-use call's status and target. The row's own gallery shows the screenshots
+ * its result gave the model, so a collapsed row stays one line.
  */
 export function ThreadComputerUseCard(props: {
   readonly run: ComputerUseRun;
   readonly status: ComputerUseRunStatus | null;
   readonly row: OrchestrationV2ProjectedTurnItem;
   readonly environmentId: EnvironmentId;
-  readonly showScreenshots: boolean;
-  readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const wireOutput = props.row.item.type === "dynamic_tool" ? props.row.item.output : undefined;
   const detail = useTurnItemDetail(
-    (props.showScreenshots || computerUseNeedsResultDetail(props.run, wireOutput)) &&
-      turnItemNeedsDetailFetch(props.row.item)
+    computerUseNeedsResultDetail(props.run, wireOutput) && turnItemNeedsDetailFetch(props.row.item)
       ? { environmentId: props.environmentId, row: props.row }
       : null,
   );
   const fetched = detail.data?.item;
   const item = fetched?.type === props.row.item.type ? fetched : props.row.item;
-  const images = props.showScreenshots ? turnItemOutputImages(item) : [];
   const target =
     (item.type === "dynamic_tool" ? computerUseObservedTarget(item.output) : null) ??
     props.run.target;
@@ -59,7 +49,7 @@ export function ThreadComputerUseCard(props: {
     wireOutput,
     fetched?.type === "dynamic_tool" ? fetched.output : undefined,
   );
-  if (status === null && target === null && images.length === 0) return null;
+  if (status === null && target === null) return null;
   return (
     <View className="ml-7 gap-1.5 pb-1.5">
       <View className="flex-row items-center gap-2">
@@ -75,25 +65,6 @@ export function ThreadComputerUseCard(props: {
         )}
       </View>
       {note === null ? null : <Text className="text-xs text-foreground-muted">{note}</Text>}
-      {images.length === 0 ? null : (
-        <FilePreviewGallery
-          value={images.map((resource) => ({
-            kind: "image",
-            environmentId: props.environmentId,
-            resource,
-          }))}
-        >
-          {images.map((resource) => (
-            <ThreadMarkdownImage
-              key={resource.index}
-              environmentId={props.environmentId}
-              resource={resource}
-              alt="Screenshot the agent saw"
-              onPressPreview={props.onPressPreview}
-            />
-          ))}
-        </FilePreviewGallery>
-      )}
     </View>
   );
 }

@@ -15,6 +15,7 @@ import { callResource, type makeCallReservations } from "./ComputerUseCallReserv
 import { markActed } from "./ComputerUseControl.ts";
 import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { takesScreen } from "./ComputerUseScope.ts";
+import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
@@ -170,6 +171,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
             ? { status: "admitted", reservationId: request.reservationId }
             : reservations.reserve(threadId, call);
         if (decision.status === "admitted") {
+          if (request.action === "reserve")
+            (yield* ComputerUseCallApps).admitted(request.args, request.appLabel);
           // Admitted after its proxy went away: it can only be stopping, from now.
           if (gone.has(call.controlId)) reservations.markStopped(threadId, call.controlId, now);
           else appLeases.hold(threadId, call.controlId, need, now);

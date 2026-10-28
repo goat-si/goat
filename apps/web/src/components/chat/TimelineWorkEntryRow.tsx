@@ -609,15 +609,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
-      {computerUse && workEntry.projectedItem && (expanded || computerUse.observes) ? (
-        // Expanded, the inspector below shows the screenshots with the rest of the output.
+      {computerUse && workEntry.projectedItem && expanded ? (
+        // The inspector below shows the screenshots at full size with the rest of the output.
         <ComputerUseRunCard
           run={computerUse}
           status={computerUseRunStatus(workEntry.toolLifecycleStatus)}
           projectedItem={workEntry.projectedItem}
           environmentId={ctx.activeThreadEnvironmentId}
-          showScreenshots={!expanded}
-          onImageExpand={onImageExpand}
         />
       ) : null}
       {expanded && viewedImage && threadRef ? (

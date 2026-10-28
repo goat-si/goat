@@ -747,6 +747,16 @@ const strictTicketValidation = Schema.declareConstructor<
   },
 );
 
+/**
+ * The app a call's pid runs as the driver's answers named it, so the timeline can show that
+ * app's name and icon. Display only: scope checks never read it.
+ */
+export const ComputerUseCallAppLabel = Schema.Struct({
+  bundleId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
+  name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+});
+export type ComputerUseCallAppLabel = typeof ComputerUseCallAppLabel.Type;
+
 /** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
 export const ComputerUseCallReservation = Schema.Union([
   Schema.Struct({
@@ -760,6 +770,7 @@ export const ComputerUseCallReservation = Schema.Union([
     foregroundGrantId: Schema.optionalKey(TurnItemId),
     /** The app the proxy judged this call to act on, by the id its scope check uses (#1484). */
     app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
+    appLabel: Schema.optionalKey(ComputerUseCallAppLabel),
   }),
   strictTicketValidation,
   Schema.Struct({

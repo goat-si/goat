@@ -38,6 +38,7 @@ import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
@@ -144,6 +145,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const listed = new Map<number, ListedApp>();
+  const labels = makeAppLabels();
   const sessions = new Set<string>();
   // The control's window survives pauses: the server keeps it until the control ends.
   let reported: ComputerUseCallTarget | undefined;
@@ -266,7 +268,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const listing = own
           ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
           : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-        learnApps(message.result, listed, listing, options.executableOf);
+        learnApps(message.result, listed, listing, options.executableOf, labels);
         if (own) {
           const waiter = ownAnswers.get(message.id);
           ownAnswers.delete(message.id);
@@ -861,7 +863,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
         foreground,
-        scope: { listed, apps },
+        scope: { listed, apps, labels },
       });
       selectedForeground = admission.selectedForeground;
       reservationId = admission.reservationId;
