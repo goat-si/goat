@@ -201,6 +201,8 @@ const INSTALL = `(() => {
   // listener may cancel it after this one ran.
   const onNavigate = (event) => {
     if (!armed || !(event.userInitiated || handled())) return;
+    // A fragment link to where the page already is changes nothing.
+    if (event.destination.sameDocument && event.destination.url === location.href) return;
     const channel = new MessageChannel();
     channel.port1.onmessage = () => {
       channel.port1.close();

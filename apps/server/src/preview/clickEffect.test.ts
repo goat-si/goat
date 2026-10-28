@@ -603,3 +603,24 @@ it("does not confirm a new-window link the frame's sandbox blocks", () =>
     ).resolves.toMatchObject({ effect: "suspected_noop" });
     expect(page.context().pages()).toHaveLength(1);
   }));
+
+it("does not confirm a link to the fragment the page is already at", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<a id="top" href="#">Back to top</a> <h2><a id="self" href="#self">Section</a></h2>`,
+      }),
+    );
+    await page.goto("https://page.test/");
+    await page.click("#top");
+    await page.focus("#top");
+    await expect(ServerBrowserPage.click(page, { selector: "#top" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.click("#self");
+    await page.focus("#self");
+    await expect(ServerBrowserPage.click(page, { selector: "#self" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+  }));
