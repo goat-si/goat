@@ -24,4 +24,13 @@ export const AGENT_SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
     searchTerms: ["goat discipline skill built in code changes guidance inherit on off"],
   },
+  {
+    id: "goat-docs-skill",
+    title: "GOAT Docs",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: [
+      "goat docs skill built in user guides documentation answer questions inherit on off",
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

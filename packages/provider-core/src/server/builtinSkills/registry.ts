@@ -18,6 +18,7 @@ import {
 } from "./computerUse.ts";
 import { BROWSER_SKILL_CORE } from "./browser.ts";
 import { GOAT_DISCIPLINE_SKILL } from "./goatDiscipline.ts";
+import { GOAT_DOCS_SKILL } from "./goatDocs.ts";
 import { SCREEN_CODE_SKILL_CORE } from "./screenCode.ts";
 
 const SECTIONS: Readonly<
@@ -30,6 +31,7 @@ const SECTIONS: Readonly<
   },
   browser: () => [BROWSER_SKILL_CORE],
   "goat-discipline": () => [GOAT_DISCIPLINE_SKILL],
+  "goat-docs": () => [GOAT_DOCS_SKILL],
   "screen-code": () => [SCREEN_CODE_SKILL_CORE],
 };
 

@@ -1,6 +1,9 @@
 import {
+  environmentDeliversBuiltInSkill,
   isNullableProjectSettingsOverride,
+  MESSAGE_NAMED_BUILTIN_SKILLS,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
+  type BuiltInSkillName,
   type EnvironmentId,
   type ProjectId,
   type ProjectScopedServerSettingKey,
@@ -108,7 +111,7 @@ export function uniformMobileSetting<K extends keyof ServerSettings>(
 export function planMobileScopedSettingsClear(
   targets: readonly ScopedMobileSettingsTarget[],
   keys: readonly ProjectScopedServerSettingKey[],
-  skills: readonly string[] = [],
+  skills: readonly BuiltInSkillName[] = [],
 ) {
   const writes = new Map<EnvironmentId, Record<string, unknown>>();
   for (const target of targets) {
@@ -124,11 +127,23 @@ export function planMobileScopedSettingsClear(
       keys,
     );
     if (
-      skills.length > 0 &&
-      target.environment.serverConfig.environment.capabilities.devDisciplineSkill === true
+      skills.some((skill) =>
+        environmentDeliversBuiltInSkill(
+          target.environment.serverConfig.environment.capabilities,
+          skill,
+        ),
+      )
     ) {
       const builtInSkills = { ...entry?.builtInSkills };
-      for (const skill of skills) delete builtInSkills[skill];
+      for (const skill of skills) {
+        if (
+          environmentDeliversBuiltInSkill(
+            target.environment.serverConfig.environment.capabilities,
+            skill,
+          )
+        )
+          delete builtInSkills[skill];
+      }
       entry = { ...entry, builtInSkills };
     }
     overrides[target.projectId] = entry;
@@ -139,6 +154,10 @@ export function planMobileScopedSettingsClear(
     patch: { projectSettingsOverrides } as ServerSettingsPatch,
   }));
 }
+
+/** A skill a message loads by name, which only a server that lists it delivers. */
+const isMessageNamedSkill = (skill: string): skill is BuiltInSkillName =>
+  (MESSAGE_NAMED_BUILTIN_SKILLS as ReadonlyArray<string>).includes(skill);
 
 /**
  * Switches one built-in skill on or off in every selected environment. Each environment keeps
@@ -152,8 +171,11 @@ export function planMobileBuiltInSkillToggle(
   const writes = new Map<EnvironmentId, ServerSettingsPatch>();
   for (const target of targets) {
     if (
-      skill === "goat-discipline" &&
-      target.environment.serverConfig.environment.capabilities.devDisciplineSkill !== true
+      isMessageNamedSkill(skill) &&
+      !environmentDeliversBuiltInSkill(
+        target.environment.serverConfig.environment.capabilities,
+        skill,
+      )
     )
       continue;
     writes.set(
@@ -180,7 +202,11 @@ export function planMobileBuiltInSkillProjectPatch(
   for (const target of targets) {
     if (
       target.projectId === null ||
-      target.environment.serverConfig.environment.capabilities.devDisciplineSkill !== true
+      (isMessageNamedSkill(skill) &&
+        !environmentDeliversBuiltInSkill(
+          target.environment.serverConfig.environment.capabilities,
+          skill,
+        ))
     )
       continue;
     writes.set(target.environment.environmentId, {

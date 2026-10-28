@@ -152,6 +152,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    * the switch, so clients list the skill and show its settings only when this is true.
    */
   devDisciplineSkill: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Message-named built-in skills this server delivers to a turn that names them, and whose
+   * project switch it honors. Plain strings, so names from a newer server decode. Absent on older
+   * servers: clients then fall back to `devDisciplineSkill` for goat-discipline and offer no other.
+   */
+  builtInSkills: Schema.optionalKey(Schema.Array(Schema.String)),
   threadSnooze: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.promote. Same version-skew contract as threadSettlement. */
   threadPromotion: Schema.optionalKey(Schema.Boolean),

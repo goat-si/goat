@@ -369,6 +369,8 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment settings"],
     "environment-update",
   ),
+  goat_docs_search: tool(["Search", "Searching", "Searched", "GOAT docs"], "environment-read"),
+  goat_docs_read: tool(["Read", "Reading", "Read", "GOAT docs"], "environment-read"),
   goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),
   goat_hub_device_verify: tool(["Verify", "Verifying", "Verified", "device parity"], "host-status"),
   goat_hub_device_join: tool(

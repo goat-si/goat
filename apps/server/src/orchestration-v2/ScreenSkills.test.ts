@@ -18,6 +18,6 @@ it.effect("a browser-only turn carries screen-code without a desktop driver", ()
       projectId: undefined,
       requested: ["browser"],
     });
-    assert.deepEqual(builtInSkills, ["screen-code"]);
+    assert.deepEqual(builtInSkills, ["browser", "screen-code"]);
   }),
 );

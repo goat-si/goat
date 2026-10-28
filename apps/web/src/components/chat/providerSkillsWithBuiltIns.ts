@@ -17,7 +17,7 @@ const NO_PROVIDER_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 
 /**
  * The selected provider's skills for this workspace, with GOAT's built-in skills it can carry.
- * goat-discipline is offered only when the destination server delivers it.
+ * Message-named skills are offered only when the destination server delivers each one.
  */
 export function useOfferedSkills(
   provider: ServerProvider | null,
@@ -31,13 +31,14 @@ export function useOfferedSkills(
     readonly projectId: ProjectId | null | undefined;
   },
 ): ReadonlyArray<ServerProviderSkill> {
-  const devDisciplineSkill = useAtomValue(
+  const capabilities = useAtomValue(
     serverEnvironment.configValueAtom(scope.environmentId),
-    (config) => config?.environment.capabilities.devDisciplineSkill === true,
+    (config) => config?.environment.capabilities,
   );
   const skills = provider ? resolveProviderSkillsForCwd(provider, cwd) : NO_PROVIDER_SKILLS;
   return withBuiltInProviderSkills(skills, provider, settings, {
-    devDisciplineSkill,
+    builtInSkills: capabilities?.builtInSkills,
+    devDisciplineSkill: capabilities?.devDisciplineSkill,
     projectId: scope.projectId,
   });
 }

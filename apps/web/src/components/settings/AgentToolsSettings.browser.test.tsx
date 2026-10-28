@@ -9,6 +9,10 @@ const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_SERVER_SETTINGS,
   mixed: false,
   projectScope: false,
+  capabilities: {
+    devDisciplineSkill: true,
+    builtInSkills: ["goat-discipline", "goat-docs"] as string[],
+  },
   updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: undefined })),
 }));
 
@@ -40,7 +44,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
       connection: { phase: "connected" },
       serverConfig: {
         settings: state.settings,
-        environment: { capabilities: { devDisciplineSkill: true } },
+        environment: { capabilities: state.capabilities },
       },
     };
     return {
@@ -82,7 +86,7 @@ vi.mock(import("./settingsLayout"), async (original) => ({
   ),
 }));
 
-import { AgentToolListingSetting, DevelopmentDisciplineSetting } from "./AgentToolsSettings";
+import { AgentToolListingSetting, AgentToolsSettings } from "./AgentToolsSettings";
 
 const shippedDefault = DEFAULT_SERVER_SETTINGS.agentToolListing;
 const otherListing: AgentToolListing = shippedDefault === "core" ? "full" : "core";
@@ -92,6 +96,10 @@ function setup(agentToolListing: AgentToolListing, mixed = false) {
   state.settings = { ...DEFAULT_SERVER_SETTINGS, agentToolListing };
   state.mixed = mixed;
   state.projectScope = false;
+  state.capabilities = {
+    devDisciplineSkill: true,
+    builtInSkills: ["goat-discipline", "goat-docs"],
+  };
   state.updateSettings.mockClear();
 }
 
@@ -116,6 +124,17 @@ it("writes the chosen listing to the environment and resets to the shipped defau
   });
 });
 
+it("shows GOAT Docs only when the server advertises it", async () => {
+  setup(shippedDefault);
+  {
+    await using screen = await render(<AgentToolsSettings />);
+    expect(screen.getByRole("switch", { name: "GOAT Docs" }).query()).not.toBeNull();
+  }
+  state.capabilities = { devDisciplineSkill: true, builtInSkills: ["goat-discipline"] };
+  await using screen = await render(<AgentToolsSettings />);
+  expect(screen.getByRole("switch", { name: "GOAT Docs" }).query()).toBeNull();
+});
+
 it("writes Off to the selected project and removes that skill override with Inherit", async () => {
   setup(shippedDefault);
   state.projectScope = true;
@@ -124,7 +143,7 @@ it("writes Off to the selected project and removes that skill override with Inhe
     ...state.settings,
     projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
   };
-  await using screen = await render(<DevelopmentDisciplineSetting />);
+  await using screen = await render(<AgentToolsSettings />);
   await userEvent.click(screen.getByRole("combobox", { name: "Development discipline" }));
   await userEvent.click(screen.getByRole("option", { name: "Off", exact: true }));
   await vi.waitFor(() =>
@@ -151,7 +170,7 @@ it("writes Off to the selected project and removes that skill override with Inhe
       },
     },
   };
-  await screen.rerender(<DevelopmentDisciplineSetting />);
+  await screen.rerender(<AgentToolsSettings />);
   await expect
     .element(screen.getByRole("combobox", { name: "Development discipline" }))
     .not.toBeDisabled();
