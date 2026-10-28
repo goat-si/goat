@@ -30,6 +30,7 @@ import { connectionTone } from "../connection/connectionTone";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsSection } from "./components/SettingsSection";
+import { AgentTerminalClientBindingsSection } from "./AgentTerminalClientBindingsSection";
 
 const ICON_SIZE = Platform.OS === "android" ? 24 : 22;
 const REMOVE_SIZE = 20;
@@ -128,91 +129,98 @@ export function EnvironmentRoutesSection({
   const dragTo = drag === null ? -1 : dropIndex(dragFrom, drag.translation);
 
   return (
-    <SettingsSection
-      title="Routes"
-      trailing={
-        routes.length > 1 ? (
-          <Button
-            label={editing ? "Done" : "Edit"}
-            tone="text"
-            onPress={() => setEditing((value) => !value)}
-          />
-        ) : undefined
-      }
-    >
-      <SettingsActionRow
-        icon="checkmark.circle"
-        label="Your permissions"
-        onPress={() => setPermissionsOpen((open) => !open)}
-      />
-      {permissionsOpen ? (
-        <View className="gap-2 px-4 py-3">
-          {activeRouteId !== null &&
-          sessionResult._tag !== "Failure" &&
-          !sessionResult.waiting &&
-          session?.authenticated ? (
-            <>
-              <Text className="text-sm text-foreground-muted">
-                Applies to the route marked In use. Other routes may have different permissions and
-                have not been checked.
-              </Text>
-              {AUTH_SCOPE_OPTIONS.map(({ scope, title }) => (
-                <Text key={scope} className="text-sm text-foreground">
-                  {title}: {sessionGrantsScope(session, scope) ? "Allowed" : "Not granted"}
+    <>
+      <SettingsSection
+        title="Routes"
+        trailing={
+          routes.length > 1 ? (
+            <Button
+              label={editing ? "Done" : "Edit"}
+              tone="text"
+              onPress={() => setEditing((value) => !value)}
+            />
+          ) : undefined
+        }
+      >
+        <SettingsActionRow
+          icon="checkmark.circle"
+          label="Your permissions"
+          onPress={() => setPermissionsOpen((open) => !open)}
+        />
+        {permissionsOpen ? (
+          <View className="gap-2 px-4 py-3">
+            {activeRouteId !== null &&
+            sessionResult._tag !== "Failure" &&
+            !sessionResult.waiting &&
+            session?.authenticated ? (
+              <>
+                <Text className="text-sm text-foreground-muted">
+                  Applies to the route marked In use. Other routes may have different permissions
+                  and have not been checked.
                 </Text>
-              ))}
-            </>
-          ) : (
-            <Text className="text-sm text-foreground-muted">
-              Permissions not checked. Connect to this environment to view this session’s
-              permissions.
-            </Text>
-          )}
-        </View>
-      ) : null}
-      {routes.map((route, index) => {
-        const id = connectionRouteId(route.target);
-        const lifted = drag === null ? 0 : (heights.get(drag.id) ?? 0);
-        const shift =
-          dragFrom === -1 || index === dragFrom
-            ? 0
-            : dragFrom < dragTo && index > dragFrom && index <= dragTo
-              ? -lifted
-              : dragFrom > dragTo && index < dragFrom && index >= dragTo
-                ? lifted
-                : 0;
-        return (
-          <RouteRow
-            key={`${id}:${drops}`}
-            route={route}
-            position={index + 1}
-            count={routes.length}
-            inUse={id === activeRouteId}
-            editing={editing}
-            offset={index === dragFrom ? (drag?.translation ?? 0) : shift}
-            lifted={index === dragFrom}
-            onHeight={(height) =>
-              setHeights((current) =>
-                current.get(id) === height ? current : new Map(current).set(id, height),
-              )
-            }
-            onDragStart={() => setDrag({ id, translation: 0 })}
-            onDragMove={(translation) => setDrag({ id, translation })}
-            onDragEnd={(translation, cancelled) => {
-              setDrag(null);
-              setDrops((count) => count + 1);
-              if (!cancelled) move(index, dropIndex(index, translation));
-            }}
-            onStep={(direction) => move(index, direction === "up" ? index - 1 : index + 1)}
-            // A learned route would be learned again, so it is only reordered.
-            onRemove={
-              routes.length > 1 && !isLearned(route) ? () => confirmRemove(route) : undefined
-            }
-          />
-        );
-      })}
-      <SettingsActionRow icon="plus" label="Add route" onPress={onAddRoute} />
-    </SettingsSection>
+                {AUTH_SCOPE_OPTIONS.map(({ scope, title }) => (
+                  <Text key={scope} className="text-sm text-foreground">
+                    {title}: {sessionGrantsScope(session, scope) ? "Allowed" : "Not granted"}
+                  </Text>
+                ))}
+              </>
+            ) : (
+              <Text className="text-sm text-foreground-muted">
+                Permissions not checked. Connect to this environment to view this session’s
+                permissions.
+              </Text>
+            )}
+          </View>
+        ) : null}
+        {routes.map((route, index) => {
+          const id = connectionRouteId(route.target);
+          const lifted = drag === null ? 0 : (heights.get(drag.id) ?? 0);
+          const shift =
+            dragFrom === -1 || index === dragFrom
+              ? 0
+              : dragFrom < dragTo && index > dragFrom && index <= dragTo
+                ? -lifted
+                : dragFrom > dragTo && index < dragFrom && index >= dragTo
+                  ? lifted
+                  : 0;
+          return (
+            <RouteRow
+              key={`${id}:${drops}`}
+              route={route}
+              position={index + 1}
+              count={routes.length}
+              inUse={id === activeRouteId}
+              editing={editing}
+              offset={index === dragFrom ? (drag?.translation ?? 0) : shift}
+              lifted={index === dragFrom}
+              onHeight={(height) =>
+                setHeights((current) =>
+                  current.get(id) === height ? current : new Map(current).set(id, height),
+                )
+              }
+              onDragStart={() => setDrag({ id, translation: 0 })}
+              onDragMove={(translation) => setDrag({ id, translation })}
+              onDragEnd={(translation, cancelled) => {
+                setDrag(null);
+                setDrops((count) => count + 1);
+                if (!cancelled) move(index, dropIndex(index, translation));
+              }}
+              onStep={(direction) => move(index, direction === "up" ? index - 1 : index + 1)}
+              // A learned route would be learned again, so it is only reordered.
+              onRemove={
+                routes.length > 1 && !isLearned(route) ? () => confirmRemove(route) : undefined
+              }
+            />
+          );
+        })}
+        <SettingsActionRow icon="plus" label="Add route" onPress={onAddRoute} />
+      </SettingsSection>
+      <AgentTerminalClientBindingsSection
+        key={environmentId}
+        environmentId={environmentId}
+        connected={connected}
+      />
+    </>
   );
 }
 

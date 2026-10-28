@@ -1,3 +1,4 @@
+import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
@@ -70,6 +71,7 @@ import {
   ProjectSearchContentsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
+  ServerSettingsError,
   ProviderSetupError,
   ProviderUploadFeedbackError,
   RpcClientId,
@@ -2870,8 +2872,13 @@ export const layerWsRpc = (
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
-          Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
+          Effect.fnUntraced(function* ({ patch, providerInstanceMutation, agentTerminalBinding }) {
             yield* ServerSettings.rejectMemoryHubSettingsPatch(patch, config.settingsPath);
+            if (providerInstanceMutation !== undefined && agentTerminalBinding !== undefined)
+              return yield* new ServerSettingsError({
+                settingsPath: config.settingsPath,
+                operation: "normalize",
+              });
             if (patch.enableCua === true) yield* ComputerUseSettings.admitEnable();
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
@@ -2882,7 +2889,25 @@ export const layerWsRpc = (
             const settings = yield* updateSettings({
               patch: nextPatch,
               ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
-            });
+              ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
+            }).pipe(
+              Effect.provideService(SessionStore.SessionStore, sessions),
+              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(AgentWorkspaceTerminalPolicyThreadLookup, {
+                read: (threadId) =>
+                  orchestrationEngine.getThreadProjection(threadId).pipe(
+                    Effect.map((projection) => projection.thread),
+                    Effect.mapError(
+                      (cause) =>
+                        new ServerSettingsError({
+                          settingsPath: config.settingsPath,
+                          operation: "normalize",
+                          cause,
+                        }),
+                    ),
+                  ),
+              }),
+            );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,

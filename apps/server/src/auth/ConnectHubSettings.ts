@@ -17,9 +17,10 @@ export const make = Effect.gen(function* () {
     commit: Effect.fn("ConnectHubSettings.commit")(function <A, E, R>(
       hub: HubSettings,
       commit: Effect.Effect<A, E, R>,
+      authorizeBeforeWithdrawal?: Effect.Effect<void, E, R>,
     ) {
       return access
-        .commitPolicy(hub.enabled && hub.connectDevicesHubProxy, commit)
+        .commitPolicy(hub.enabled && hub.connectDevicesHubProxy, commit, authorizeBeforeWithdrawal)
         .pipe(Effect.mapError((cause) => (isAccessError(cause) ? failure(cause) : cause)));
     }),
     startup: Effect.fn("ConnectHubSettings.startup")(function* <A, R>(

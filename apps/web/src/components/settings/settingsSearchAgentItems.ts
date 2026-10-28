@@ -2,6 +2,20 @@ import type { SettingsSearchItem } from "./settingsSearch";
 
 export const AGENT_SETTINGS_SEARCH_ITEMS = [
   {
+    id: "agent-workspace-access",
+    title: "Agent workspace access",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["mcp files filesystem read write off project policy workspace"],
+  },
+  {
+    id: "agent-terminal-access",
+    title: "Agent terminal access",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["mcp shell terminal pty read operate off project policy sandbox"],
+  },
+  {
     id: "agent-browser-access",
     title: "Agent browser access",
     to: "/settings/integrations",

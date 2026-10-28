@@ -480,6 +480,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
       const record = yield* stored(journal.readStep(evalRunId, at), at);
       let envelope: Envelope | undefined;
       let restored = false;
+      const featureRecheck = ["workspace", "terminal"].includes(entry.resource);
       if (record !== undefined) {
         if (record.path !== entry.path || record.args_digest !== digest)
           return yield* halt(
@@ -490,12 +491,21 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
             ),
             at,
           );
-        if (record.state === "completed" && record.result_json !== null) {
+        if (
+          featureRecheck &&
+          entry.effect !== "read" &&
+          !DateTime.isLessThan(
+            yield* DateTime.now,
+            DateTime.add(DateTime.makeUnsafe(record.created_at), { hours: KEY_LIFETIME_HOURS }),
+          )
+        )
+          return yield* halt(unknownOutcome(entry.path, reconcile), at);
+        if (!featureRecheck && record.state === "completed" && record.result_json !== null) {
           yield* authorize(entry, args, record.grant_json, at);
           envelope = fromJson(record.result_json) as Envelope;
           collect(envelope, entry, at);
           restored = true;
-        } else if (entry.effect !== "read") {
+        } else if (!featureRecheck && entry.effect !== "read") {
           const settledUnknown = (from?: ErrorEnvelope) =>
             stored(journal.settleStep(evalRunId, at, "unknown", null), at).pipe(
               Effect.andThen(

@@ -17,7 +17,7 @@ append orchestration events themselves. That write is the [command commit](serve
 
 The directories under `apps/server/src/mcp/toolkits/` are `agentSurface`, `attachment`, `channel`, `connection`,
 `decision`, `device`, `environment`, `hostStatus`, `html`, `memory`, `memoryAdministration`, `note`, `orchestrator`, `preview`, `previewControls`, `project`,
-`provider`, `pullRequests`, `remoteReport`, `ssh`, `thread`, and `worktree`. `provider` is
+`provider`, `pullRequests`, `remoteReport`, `ssh`, `terminal`, `thread`, `workspace`, and `worktree`. `provider` is
 composed beside `McpHttpServer.layer` in `apps/server/src/server.ts`, which provides
 `ProviderDiagnosisService` from the provider registry and host; `goat provider diagnose` runs the
 same checks in-process (`apps/server/src/provider/ProviderDiagnosis.ts`).
@@ -30,6 +30,12 @@ instead (`McpHttpServer` `withListedNames`). When the registered name differs, `
 `tools/call` without listing it and marks the result deprecated
 ([`ToolDispatch.ts`](../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`). Schemas
 remain with their owning toolkit or contracts module.
+
+Live workspace and PTY access has its own explicit scopes and human-controlled policy, including
+reads. These services validate the destination and authenticated opener independently of runtime
+mode; the ordinary agent grant does not imply file or shell access. They deliberately accept
+direct destination MCP connections only: generic host forwarding loses opener-thread identity.
+The file API confines paths, while terminal execution retains the server process's OS authority.
 
 `McpToolAccess` declarations carry the effect class. Registration derives the read-only and
 destructive hints from those declarations, overriding presentation metadata. The catalog test

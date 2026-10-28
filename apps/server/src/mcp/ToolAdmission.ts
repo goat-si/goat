@@ -454,7 +454,17 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
       );
       const principal = scope === undefined ? undefined : principalOf(scope);
-      if (scope === undefined || principal === undefined) return yield* unkeyed(handle(args));
+      if (scope === undefined || principal === undefined)
+        return yield* entry.keyRequired
+          ? Effect.succeed(
+              refusalResult(
+                new OrchestratorMcpFailure({
+                  code: "capability_denied",
+                  message: "An authenticated principal is required for this write.",
+                }),
+              ),
+            )
+          : unkeyed(handle(args));
       const decided = yield* Deferred.make<McpSchema.CallToolResult>();
       const held = yield* Ref.make<string | undefined>(undefined);
       const admittedOnce = yield* Ref.make(false);

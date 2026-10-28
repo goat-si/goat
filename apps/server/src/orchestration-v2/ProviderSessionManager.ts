@@ -448,8 +448,10 @@ export const layerWithOptions = (
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
-        function* (threadId: ThreadId) {
-          if (Option.isNone(serverSettings)) return { browser: true, device: false };
+        function* (threadId: ThreadId, readOnly: boolean) {
+          const noWorkspaceScopes: ReadonlyArray<AuthEnvironmentScope> = [];
+          if (Option.isNone(serverSettings))
+            return { browser: true, device: false, workspaceTerminalScopes: noWorkspaceScopes };
           return yield* Effect.gen(function* () {
             const settings = yield* serverSettings.value.getSettings;
             const thread = yield* projectionStore.getThread(threadId);
@@ -466,21 +468,32 @@ export const layerWithOptions = (
                 : Option.none();
               if (Option.isNone(project))
                 return {
+                  workspaceTerminalScopes: noWorkspaceScopes,
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
                   device: deviceOverridden ? false : settings.enableAgentDeviceAccess,
                 };
             }
             const effective = resolveProjectSettings(settings, thread.projectId).settings;
             return {
+              workspaceTerminalScopes: AdapterInfrastructure.agentWorkspaceTerminalScopes(
+                effective,
+                readOnly,
+              ),
               browser: effective.enableAgentBrowserAccess,
               device: effective.enableAgentDeviceAccess,
             };
           }).pipe(
             Effect.catch((cause) =>
-              Effect.logWarning(
-                "Could not resolve agent access; withholding browser and device tools.",
-                { threadId, cause },
-              ).pipe(Effect.as({ browser: false, device: false })),
+              Effect.logWarning("Could not resolve agent access; withholding environment tools.", {
+                threadId,
+                cause,
+              }).pipe(
+                Effect.as({
+                  browser: false,
+                  device: false,
+                  workspaceTerminalScopes: noWorkspaceScopes,
+                }),
+              ),
             ),
           );
         },
@@ -638,7 +651,9 @@ export const layerWithOptions = (
                     : { dispatchScopes: preparedInput.dispatchScopes }),
                 });
                 const issuedPolicy = { grant, policyEpoch: committed.epoch };
+                const agentAccess = yield* agentAccessSettings(threadId, readOnly);
                 const grantedScopes: ReadonlyArray<AuthEnvironmentScope> = [
+                  ...(usableThread ? agentAccess.workspaceTerminalScopes : []),
                   ...(grant === "none" ? [] : ["memory:read" as const]),
                   ...(grant === "read_write" ? ["memory:write" as const] : []),
                   ...(threadReadAllowed ? ["orchestration:read" as const] : []),
@@ -689,10 +704,7 @@ export const layerWithOptions = (
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
                 const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
-                  withTurnAgentAccess(
-                    yield* agentAccessSettings(threadId),
-                    preparedInput.turnCapabilities,
-                  );
+                  withTurnAgentAccess(agentAccess, preparedInput.turnCapabilities);
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
                 >(["orchestration", "worktree", "pull-requests"]);

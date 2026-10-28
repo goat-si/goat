@@ -5,6 +5,7 @@ import {
   type AuthMcpAuthorizationRequest,
   type AuthMcpAuthorizationServerMetadata,
   type AuthMcpClientAccess,
+  AuthMcpWorkspaceTerminalScope,
   type AuthMcpClientRegistration,
   type AuthMcpProtectedResourceMetadata,
   AuthMcpRegistrationError,
@@ -51,7 +52,13 @@ const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CODE_VERIFIER_PATTERN = /^[A-Za-z0-9\-._~]{43,128}$/;
 
-const MCP_OAUTH_SCOPES = [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
+const MCP_OAUTH_SCOPES = [
+  AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
+  "memory:read",
+  "memory:write",
+  ...AuthMcpWorkspaceTerminalScope.literals,
+] as const;
 
 export interface McpOAuthUrls {
   readonly issuer: string;
@@ -177,6 +184,7 @@ interface PendingCode {
   readonly resource: string;
   readonly access: AuthMcpClientAccess;
   readonly memoryScopes: ReadonlyArray<"memory:read" | "memory:write">;
+  readonly workspaceTerminalScopes: ReadonlyArray<AuthMcpWorkspaceTerminalScope>;
   readonly expiresAtMs: number;
 }
 
@@ -377,6 +385,7 @@ const make = Effect.gen(function* () {
     authorization: AuthorizationRequest,
     access: AuthMcpClientAccess,
     memoryScopes: ReadonlyArray<"memory:read" | "memory:write">,
+    workspaceTerminalScopes: ReadonlyArray<AuthMcpWorkspaceTerminalScope>,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const code = Buffer.from(yield* crypto.randomBytes(32).pipe(Effect.orDie)).toString(
@@ -392,6 +401,7 @@ const make = Effect.gen(function* () {
         resource: authorization.resource,
         access,
         memoryScopes: [...memoryScopes],
+        workspaceTerminalScopes: [...workspaceTerminalScopes],
         expiresAtMs: now + AUTHORIZATION_CODE_TTL_MS,
       });
       return next;
@@ -403,7 +413,12 @@ const make = Effect.gen(function* () {
     const { decision } = input;
     if (decision._tag === "pairing-code") {
       yield* environmentAuth
-        .consumeMcpApprovalCode(decision.code, decision.access, decision.memoryScopes)
+        .consumeMcpApprovalCode(
+          decision.code,
+          decision.access,
+          decision.memoryScopes,
+          decision.workspaceTerminalScopes,
+        )
         .pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (cause) =>
             Effect.logError("MCP approval code check failed.", { cause }).pipe(
@@ -422,16 +437,23 @@ const make = Effect.gen(function* () {
       if (
         session === undefined ||
         !timingSafeEqualBase64Url(decision.csrfToken, session.csrfToken) ||
-        !EnvironmentAuth.mcpClientScopes(decision.access, decision.memoryScopes).every((scope) =>
-          session.scopes.includes(scope),
-        )
+        !EnvironmentAuth.mcpClientScopes(
+          decision.access,
+          decision.memoryScopes,
+          decision.workspaceTerminalScopes,
+        ).every((scope) => session.scopes.includes(scope))
       ) {
         return yield* new McpOAuthPageError({
           description: "Your session cannot approve this request. Enter a pairing code instead.",
         });
       }
     }
-    const code = yield* mintCode(input.authorization, decision.access, decision.memoryScopes ?? []);
+    const code = yield* mintCode(
+      input.authorization,
+      decision.access,
+      decision.memoryScopes ?? [],
+      decision.workspaceTerminalScopes ?? [],
+    );
     yield* Effect.logInfo("Approved an MCP client sign-in.", {
       client: input.authorization.client.name,
       access: decision.access,
@@ -494,6 +516,7 @@ const make = Effect.gen(function* () {
           label: pending.clientName,
           access: pending.access,
           memoryScopes: pending.memoryScopes,
+          workspaceTerminalScopes: pending.workspaceTerminalScopes,
           client: deriveAuthClientMetadata({ request }),
         })
         .pipe(
@@ -510,7 +533,11 @@ const make = Effect.gen(function* () {
         token_type: "Bearer",
         expires_in: Math.max(0, Math.floor((issued.expiresAt.epochMilliseconds - now) / 1000)),
         scope: encodeOAuthScope(
-          EnvironmentAuth.mcpClientScopes(pending.access, pending.memoryScopes),
+          EnvironmentAuth.mcpClientScopes(
+            pending.access,
+            pending.memoryScopes,
+            pending.workspaceTerminalScopes,
+          ),
         ),
       };
     },

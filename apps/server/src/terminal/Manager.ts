@@ -1,6 +1,21 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
 
+import {
+  createAgentTerminalState,
+  resetAgentTerminal,
+  makeAgentTerminalOperations,
+  type AgentTerminalMethods,
+  type AgentTerminalSession,
+  type AgentTerminalMutateInput,
+} from "./AgentTerminalState.ts";
+import { BoundedTerminalHistory, DEFAULT_HISTORY_BYTE_LIMIT } from "./BoundedTerminalHistory.ts";
+import {
+  neutralizeInheritedHistory,
+  sanitizeTerminalHistoryChunk,
+} from "./terminalHistoryReplay.ts";
+export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
+
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   DEFAULT_TERMINAL_ID,
@@ -10,6 +25,7 @@ import {
   TerminalCwdNotFoundError,
   TerminalCwdStatError,
   TerminalError,
+  type OrchestratorMcpFailure,
   TerminalHistoryError,
   TerminalNotRunningError,
   TerminalProviderInstanceNotFoundError,
@@ -96,8 +112,6 @@ export {
 };
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
-const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
-const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const MAX_SUBPROCESS_POLL_INTERVAL_MS = 60_000;
@@ -150,6 +164,11 @@ class TerminalProcessSignalError extends Schema.TaggedError<TerminalProcessSigna
 export class TerminalManager extends Context.Service<
   TerminalManager,
   {
+    readonly agentList?: AgentTerminalMethods["agentList"];
+    readonly agentOpen?: AgentTerminalMethods["agentOpen"];
+    readonly agentRead?: AgentTerminalMethods["agentRead"];
+    readonly agentMutate?: AgentTerminalMethods["agentMutate"];
+
     readonly open: (
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
@@ -243,7 +262,7 @@ export interface TerminalStartInput extends TerminalOpenInput {
   rows: number;
 }
 
-interface TerminalSessionState {
+interface TerminalSessionState extends AgentTerminalSession {
   threadId: string;
   terminalId: string;
   cwd: string;
@@ -806,441 +825,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
     return processTableSnapshotFromProcesses(processes);
   },
 );
-
-interface TerminalHistoryChunk {
-  data: string;
-  byteLength: number;
-  lineBreaks: number;
-}
-
-export class BoundedTerminalHistory {
-  private readonly maxLines: number;
-  private readonly maxBytes: number;
-  private chunks: Array<TerminalHistoryChunk | undefined> = [];
-  private start = 0;
-  private byteLength = 0;
-  private lineBreaks = 0;
-  // Reading the old string's tail on each append can force chunk concatenation.
-  private lastCodeUnit: number | undefined;
-  private cachedValue: string | null = "";
-
-  constructor(maxLines: number, initial: string, maxBytes = DEFAULT_HISTORY_BYTE_LIMIT) {
-    this.maxLines = maxLines;
-    this.maxBytes = maxBytes;
-    this.append(initial);
-  }
-
-  append(text: string): void {
-    if (text.length === 0) return;
-    this.cachedValue = null;
-    if (this.maxBytes <= 0 || this.maxLines <= 0) {
-      this.clear();
-      if (this.maxBytes > 0 && text.endsWith("\n")) this.appendChunk("\n");
-      return;
-    }
-
-    let offset = 0;
-    const previous = this.chunks.at(-1);
-    const lastCode = this.lastCodeUnit;
-    const firstCode = text.charCodeAt(0);
-    if (
-      previous &&
-      lastCode !== undefined &&
-      lastCode >= 0xd800 &&
-      lastCode <= 0xdbff &&
-      firstCode >= 0xdc00 &&
-      firstCode <= 0xdfff
-    ) {
-      // Joining a split surrogate changes its UTF-8 size from 3 to 4 bytes.
-      previous.data += text[0];
-      previous.byteLength += 1;
-      this.byteLength += 1;
-      this.lastCodeUnit = firstCode;
-      offset = 1;
-      this.trim();
-    }
-
-    while (offset < text.length) {
-      let end = Math.min(offset + MAX_HISTORY_CHUNK_LENGTH, text.length);
-      const before = text.charCodeAt(end - 1);
-      const after = text.charCodeAt(end);
-      if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) {
-        end -= 1;
-      }
-      const data = text.slice(offset, end);
-      // Detach small chunks from large input strings so evicted prefixes can be collected.
-      this.appendChunk(
-        text.length > MAX_HISTORY_CHUNK_LENGTH
-          ? Buffer.from(data, "utf16le").toString("utf16le")
-          : data,
-      );
-      this.trim();
-      offset = end;
-    }
-  }
-
-  private appendChunk(data: string): void {
-    const byteLength = Buffer.byteLength(data);
-    let lineBreaks = 0;
-    for (let index = data.indexOf("\n"); index !== -1; index = data.indexOf("\n", index + 1)) {
-      lineBreaks += 1;
-    }
-    const previous = this.chunks.at(-1);
-    if (previous && previous.data.length + data.length <= MAX_HISTORY_CHUNK_LENGTH) {
-      previous.data += data;
-      previous.byteLength += byteLength;
-      previous.lineBreaks += lineBreaks;
-    } else {
-      this.chunks.push({ data, byteLength, lineBreaks });
-    }
-    this.byteLength += byteLength;
-    this.lineBreaks += lineBreaks;
-    this.lastCodeUnit = data.charCodeAt(data.length - 1);
-    this.cachedValue = null;
-  }
-
-  private discardChunk(): void {
-    const first = this.chunks[this.start]!;
-    this.byteLength -= first.byteLength;
-    this.lineBreaks -= first.lineBreaks;
-    this.chunks[this.start++] = undefined;
-  }
-
-  private trimChunk(offset: number, byteLength: number, lineBreaks: number): void {
-    const first = this.chunks[this.start]!;
-    if (offset === first.data.length) {
-      this.discardChunk();
-      return;
-    }
-    first.data = first.data.slice(offset);
-    first.byteLength -= byteLength;
-    first.lineBreaks -= lineBreaks;
-    this.byteLength -= byteLength;
-    this.lineBreaks -= lineBreaks;
-  }
-
-  private trim(): void {
-    const trailingNewline = this.lastCodeUnit === 10;
-    let linesToDrop = this.lineBreaks + (trailingNewline ? 0 : 1) - this.maxLines;
-    while (linesToDrop > 0) {
-      const first = this.chunks[this.start]!;
-      if (first.lineBreaks < linesToDrop) {
-        linesToDrop -= first.lineBreaks;
-        this.discardChunk();
-        continue;
-      }
-      let offset = 0;
-      for (let line = 0; line < linesToDrop; line += 1) {
-        offset = first.data.indexOf("\n", offset) + 1;
-      }
-      this.trimChunk(offset, Buffer.byteLength(first.data.slice(0, offset)), linesToDrop);
-      linesToDrop = 0;
-    }
-
-    while (this.byteLength > this.maxBytes) {
-      const first = this.chunks[this.start]!;
-      const bytesToDrop = this.byteLength - this.maxBytes;
-      if (first.byteLength <= bytesToDrop) {
-        this.discardChunk();
-        continue;
-      }
-      if (first.byteLength === first.data.length && first.lineBreaks === 0) {
-        this.trimChunk(bytesToDrop, bytesToDrop, 0);
-        continue;
-      }
-      let offset = 0;
-      let bytes = 0;
-      let lineBreaks = 0;
-      while (bytes < bytesToDrop) {
-        const codePoint = first.data.codePointAt(offset)!;
-        bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-        offset += codePoint <= 0xffff ? 1 : 2;
-        if (codePoint === 10) lineBreaks += 1;
-      }
-      this.trimChunk(offset, bytes, lineBreaks);
-    }
-    if (
-      this.start === this.chunks.length ||
-      (this.start > 2_048 && this.start * 2 >= this.chunks.length)
-    ) {
-      this.chunks = this.chunks.slice(this.start);
-      this.start = 0;
-      if (this.chunks.length === 0) this.lastCodeUnit = undefined;
-    }
-  }
-
-  clear(): void {
-    this.chunks = [];
-    this.start = 0;
-    this.byteLength = 0;
-    this.lineBreaks = 0;
-    this.lastCodeUnit = undefined;
-    this.cachedValue = "";
-  }
-
-  value(): string {
-    if (this.cachedValue !== null) return this.cachedValue;
-    this.cachedValue = this.chunks
-      .slice(this.start)
-      .map((chunk) => chunk!.data)
-      .join("");
-    return this.cachedValue;
-  }
-}
-
-// Pop beyond Ghostty's eight-entry Kitty stacks on both screens before clearing
-// flags. A 1049 round trip preserves the main cursor, text, and scrollback.
-const INHERITED_INPUT_RESET =
-  "\u001b[?1049h\u001b[<100u\u001b[=0;1u\u001b[?1049l" +
-  "\u001b[?1;9;66;67;1000;1002;1003;1004;1005;1006;1015;2004l" +
-  "\u001b[?25;1035;1036h\u001b[<100u\u001b[=0;1u\u001b[>4m";
-
-function neutralizeInheritedHistory(history: string, maxLines: number, maxBytes: number): string {
-  // Scan exactly the cold replay window, reserving the entire longest reset so
-  // neither the server nor the client can trim away the entry after we choose its exit.
-  const resetBytes = history.includes("\u001b")
-    ? Buffer.byteLength(INHERITED_INPUT_RESET + "\u001b7\u001b[?1049l")
-    : 0;
-  history = new BoundedTerminalHistory(
-    // The suffix occupies the empty line after a trailing newline, too.
-    resetBytes > 0 && history.endsWith("\n") ? maxLines - 1 : maxLines,
-    history,
-    Math.max(0, maxBytes - resetBytes),
-  ).value();
-  if (!history.includes("\u001b")) return history;
-  // An unconditional 1049 reset restores a stale saved cursor on the main
-  // screen. The exit must match the inherited screen's cursor-save behavior.
-  let alternateScreen: number | undefined;
-  for (const match of history.matchAll(/\u001b(?:\[\?([0-9;]+)([hl])|(c))/gu)) {
-    if (match[3]) alternateScreen = undefined;
-    for (const parameter of (match[1] ?? "").split(";")) {
-      const mode = Number(parameter);
-      if (mode === 47 || mode === 1047 || mode === 1049) {
-        alternateScreen = match[2] === "h" ? (alternateScreen ?? mode) : undefined;
-      }
-    }
-  }
-  // A client may trim away the entry, leaving us on main: save its current
-  // cursor before exiting. On alternate this saves only the alternate cursor.
-  const leaveAlternateScreen =
-    alternateScreen === undefined ? "" : `\u001b7\u001b[?${alternateScreen}l`;
-  return history + leaveAlternateScreen + INHERITED_INPUT_RESET;
-}
-
-function isCsiFinalByte(codePoint: number): boolean {
-  return codePoint >= 0x40 && codePoint <= 0x7e;
-}
-
-function shouldStripCsiSequence(body: string, finalByte: string): boolean {
-  if (finalByte === "n") {
-    return true;
-  }
-  if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
-    return true;
-  }
-  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
-    return true;
-  }
-  // Strip DECRQM/DECRPM query traffic to prevent echoed replies during replay; $ guards preserve setters.
-  if ((finalByte === "p" || finalByte === "y") && /^[0-9;?]*\$$/.test(body)) {
-    return true;
-  }
-  // XTVERSION query (>q). DECSCUSR (space-intermediate q) stays.
-  if (finalByte === "q" && /^>[0-9;]*$/.test(body)) {
-    return true;
-  }
-  // Kitty keyboard protocol query/reply (?u). Restore-cursor (bare u) stays.
-  if (finalByte === "u" && body.startsWith("?")) {
-    return true;
-  }
-  return false;
-}
-
-// Strip DECRQSS/XTGETTCAP query traffic; replaying queries triggers fresh replies without visual value.
-function shouldStripDcsSequence(content: string): boolean {
-  return /^[01]?[$+][qr]/.test(content);
-}
-
-function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
-}
-
-function stripStringTerminator(value: string): string {
-  if (value.endsWith("\u001b\\")) {
-    return value.slice(0, -2);
-  }
-  const lastCharacter = value.at(-1);
-  if (lastCharacter === "\u0007" || lastCharacter === "\u009c") {
-    return value.slice(0, -1);
-  }
-  return value;
-}
-
-function findStringTerminatorIndex(input: string, start: number): number | null {
-  for (let index = start; index < input.length; index += 1) {
-    const codePoint = input.charCodeAt(index);
-    if (codePoint === 0x07 || codePoint === 0x9c) {
-      return index + 1;
-    }
-    if (codePoint === 0x1b && input.charCodeAt(index + 1) === 0x5c) {
-      return index + 2;
-    }
-  }
-  return null;
-}
-
-function isEscapeIntermediateByte(codePoint: number): boolean {
-  return codePoint >= 0x20 && codePoint <= 0x2f;
-}
-
-function isEscapeFinalByte(codePoint: number): boolean {
-  return codePoint >= 0x30 && codePoint <= 0x7e;
-}
-
-function findEscapeSequenceEndIndex(input: string, start: number): number | null {
-  let cursor = start;
-  while (cursor < input.length && isEscapeIntermediateByte(input.charCodeAt(cursor))) {
-    cursor += 1;
-  }
-  if (cursor >= input.length) {
-    return null;
-  }
-  return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
-}
-
-const HISTORY_SEQUENCE_START = /[\u001b\u0090\u009b\u009d\u009e\u009f]/;
-const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g");
-
-function sanitizeTerminalHistoryChunk(
-  pendingControlSequence: string,
-  data: string,
-): { visibleText: string; pendingControlSequence: string } {
-  if (pendingControlSequence.length === 0 && !HISTORY_SEQUENCE_START.test(data)) {
-    return { visibleText: data, pendingControlSequence: "" };
-  }
-
-  const input = `${pendingControlSequence}${data}`;
-  // Only the pending prefix's final ESC can begin a terminator split across chunks.
-  const pendingScanStart = Math.max(0, pendingControlSequence.length - 1);
-  let visibleText = "";
-  let index = 0;
-
-  const append = (value: string) => {
-    visibleText += value;
-  };
-
-  while (index < input.length) {
-    const codePoint = input.charCodeAt(index);
-
-    if (codePoint === 0x1b) {
-      const nextCodePoint = input.charCodeAt(index + 1);
-      if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-
-      if (nextCodePoint === 0x5b) {
-        let cursor = index + 2;
-        while (cursor < input.length) {
-          if (isCsiFinalByte(input.charCodeAt(cursor))) {
-            const sequence = input.slice(index, cursor + 1);
-            const body = input.slice(index + 2, cursor);
-            if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
-              append(sequence);
-            }
-            index = cursor + 1;
-            break;
-          }
-          cursor += 1;
-        }
-        if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
-        }
-        continue;
-      }
-
-      if (
-        nextCodePoint === 0x5d ||
-        nextCodePoint === 0x50 ||
-        nextCodePoint === 0x5e ||
-        nextCodePoint === 0x5f
-      ) {
-        const terminatorIndex = findStringTerminatorIndex(
-          input,
-          Math.max(index + 2, pendingScanStart),
-        );
-        if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
-        }
-        const sequence = input.slice(index, terminatorIndex);
-        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
-        const strip =
-          (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
-          (nextCodePoint === 0x50 && shouldStripDcsSequence(content));
-        if (!strip) {
-          append(sequence);
-        }
-        index = terminatorIndex;
-        continue;
-      }
-
-      const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
-      if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      append(input.slice(index, escapeSequenceEndIndex));
-      index = escapeSequenceEndIndex;
-      continue;
-    }
-
-    if (codePoint === 0x9b) {
-      let cursor = index + 1;
-      while (cursor < input.length) {
-        if (isCsiFinalByte(input.charCodeAt(cursor))) {
-          const sequence = input.slice(index, cursor + 1);
-          const body = input.slice(index + 1, cursor);
-          if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
-            append(sequence);
-          }
-          index = cursor + 1;
-          break;
-        }
-        cursor += 1;
-      }
-      if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      continue;
-    }
-
-    if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
-      const terminatorIndex = findStringTerminatorIndex(
-        input,
-        Math.max(index + 1, pendingScanStart),
-      );
-      if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
-      }
-      const sequence = input.slice(index, terminatorIndex);
-      const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
-      const strip =
-        (codePoint === 0x9d && shouldStripOscSequence(content)) ||
-        (codePoint === 0x90 && shouldStripDcsSequence(content));
-      if (!strip) {
-        append(sequence);
-      }
-      index = terminatorIndex;
-      continue;
-    }
-
-    // One slice per printable run: every chunk of coloured output reaches this loop.
-    NEXT_HISTORY_SEQUENCE_START.lastIndex = index + 1;
-    const nextSequenceStart = NEXT_HISTORY_SEQUENCE_START.exec(input)?.index ?? input.length;
-    append(input.slice(index, nextSequenceStart));
-    index = nextSequenceStart;
-  }
-
-  return { visibleText, pendingControlSequence: "" };
-}
 
 function legacySafeThreadId(threadId: string): string {
   return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -1927,10 +1511,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const evictInactiveSessionsIfNeeded = Effect.fn("terminal.evictInactiveSessionsIfNeeded")(
     function* () {
       yield* modifyManagerState((state) => {
-        const inactiveSessions = [...state.sessions.values()].filter(
+        const inactive = [...state.sessions.values()].filter(
           (session) => session.status !== "running",
         );
-        if (inactiveSessions.length <= maxRetainedInactiveSessions) {
+        const inactiveSessions = inactive.filter(
+          (session) => session.status !== "starting" && !session.agentBusy,
+        );
+        if (inactive.length <= maxRetainedInactiveSessions) {
           return [undefined, state] as const;
         }
 
@@ -1943,9 +1530,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         const sessions = new Map(state.sessions);
 
-        const toEvict = inactiveSessions.length - maxRetainedInactiveSessions;
+        const toEvict = inactive.length - maxRetainedInactiveSessions;
         for (const session of inactiveSessions.slice(0, toEvict)) {
           const key = toSessionKey(session.threadId, session.terminalId);
+          resetAgentTerminal(session);
+          session.agentRetired = true;
           sessions.delete(key);
           closedSessionKeys.add(key);
         }
@@ -2070,44 +1659,57 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
   });
 
-  const stopProcess = Effect.fn("terminal.stopProcess")(function* (session: TerminalSessionState) {
+  const stopProcess = Effect.fn("terminal.stopProcess")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
+    session: TerminalSessionState,
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<void, E> {
     const process = session.process;
     if (!process) return;
 
-    const updatedAt = yield* nowIso;
-    yield* modifyManagerState((state) => {
-      cleanupProcessHandles(session);
-      session.process = null;
-      session.pid = null;
-      session.hasRunningSubprocess = false;
-      session.childCommandLabel = null;
-      session.status = "exited";
-      session.pendingHistoryControlSequence = "";
-      session.pendingProcessEvents = [];
-      session.pendingProcessEventIndex = 0;
-      session.processEventDrainRunning = false;
-      session.updatedAt = updatedAt;
-      return [undefined, state] as const;
-    });
-
     yield* clearKillFiber(process);
+    const updatedAt = yield* nowIso;
+    yield* authorize;
+    // An accepted stop must schedule its kill before interruption can leave a detached process.
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* modifyManagerState((state) => {
+          cleanupProcessHandles(session);
+          session.process = null;
+          session.pid = null;
+          session.hasRunningSubprocess = false;
+          session.childCommandLabel = null;
+          session.status = "exited";
+          session.pendingHistoryControlSequence = "";
+          session.pendingProcessEvents = [];
+          session.pendingProcessEventIndex = 0;
+          session.processEventDrainRunning = false;
+          session.updatedAt = updatedAt;
+          return [undefined, state] as const;
+        });
+        yield* startKillEscalation(process, session.threadId, session.terminalId);
+      }),
+    );
     yield* unregisterTerminal({
       threadId: session.threadId,
       terminalId: session.terminalId,
     });
-    yield* startKillEscalation(process, session.threadId, session.terminalId);
     yield* evictInactiveSessionsIfNeeded();
   });
 
-  const trySpawn = Effect.fn("terminal.trySpawn")(function* (
+  const trySpawn = Effect.fn("terminal.trySpawn")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
     shellCandidates: ReadonlyArray<ShellCandidate>,
     spawnEnv: NodeJS.ProcessEnv,
     session: TerminalSessionState,
+    authorize: Effect.Effect<void, E> = Effect.void,
     index = 0,
     lastError: PtyAdapter.PtySpawnError | null = null,
   ): Effect.fn.Return<
     { process: PtyAdapter.PtyProcess; shellLabel: string },
-    PtyAdapter.PtySpawnError
+    PtyAdapter.PtySpawnError | E
   > {
     if (index >= shellCandidates.length) {
       return yield* new PtyAdapter.PtySpawnError({
@@ -2135,6 +1737,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       env: spawnEnv,
       survivesRestart: true,
     });
+    yield* authorize;
     const attempt = yield* Effect.result(
       options.ptyAdapter.spawn({
         shell: launch.command,
@@ -2158,15 +1761,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       return yield* spawnError;
     }
 
-    return yield* trySpawn(shellCandidates, spawnEnv, session, index + 1, spawnError);
+    return yield* trySpawn(shellCandidates, spawnEnv, session, authorize, index + 1, spawnError);
   });
 
-  const startSession = Effect.fn("terminal.startSession")(function* (
+  const startSession = Effect.fn("terminal.startSession")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
     session: TerminalSessionState,
     input: TerminalStartInput,
     eventType: "started" | "restarted",
-  ) {
-    yield* stopProcess(session);
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<void, E> {
+    yield* stopProcess(session, authorize);
     yield* Effect.annotateCurrentSpan({
       "terminal.thread_id": session.threadId,
       "terminal.id": session.terminalId,
@@ -2175,6 +1781,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
 
     const startingAt = yield* nowIso;
+    yield* authorize;
     yield* modifyManagerState((state) => {
       session.status = "starting";
       session.cwd = input.cwd;
@@ -2241,7 +1848,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                 }
               }
             }
-            const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
+            const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session, authorize);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;
 
@@ -2318,6 +1925,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       yield* evictInactiveSessionsIfNeeded();
 
+      if (error._tag === "OrchestratorMcpFailure") return yield* error;
       const message = error.message;
       yield* publishEvent({
         type: "error",
@@ -2335,17 +1943,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
   });
 
-  const closeSession = Effect.fn("terminal.closeSession")(function* (
+  const closeSession = Effect.fn("terminal.closeSession")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
     threadId: string,
     terminalId: string,
     deleteHistoryOnClose: boolean,
-  ) {
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<void, TerminalError | E> {
     const key = toSessionKey(threadId, terminalId);
     const session = yield* getSession(threadId, terminalId);
     const closedEventSequence = Option.isSome(session) ? session.value.eventSequence + 1 : 0;
 
+    yield* authorize;
     if (Option.isSome(session)) {
-      yield* stopProcess(session.value);
+      yield* stopProcess(session.value, authorize);
+      resetAgentTerminal(session.value);
+      session.value.agentRetired = true;
       yield* unregisterTerminal({ threadId, terminalId });
       yield* persistHistory(threadId, terminalId, session.value.history);
     }
@@ -2596,9 +2210,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }).pipe(Effect.ignoreCause({ log: true })),
   );
 
-  const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* (
+  const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
     input: TerminalOpenInput,
-  ) {
+    owner: string | null = null,
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<TerminalSessionState, TerminalError | E> {
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
@@ -2619,6 +2237,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const cols = input.cols ?? DEFAULT_OPEN_COLS;
       const rows = input.rows ?? DEFAULT_OPEN_ROWS;
       const session: TerminalSessionState = {
+        ...createAgentTerminalState(),
+        agentOwner: owner,
         threadId: input.threadId,
         terminalId,
         cwd: input.cwd,
@@ -2645,6 +2265,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
 
+      yield* authorize;
       const createdSession = session;
       yield* modifyManagerState((state) => {
         const sessions = new Map(state.sessions);
@@ -2666,11 +2287,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           ...(input.env ? { env: input.env } : {}),
         },
         "started",
+        authorize,
       );
-      return snapshot(session);
+      return session;
     }
 
     const liveSession = existing.value;
+    yield* authorize;
+    resetAgentTerminal(liveSession, owner);
     const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
     const currentRuntimeEnv = liveSession.runtimeEnv;
     const targetCols = input.cols ?? liveSession.cols;
@@ -2684,7 +2308,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath !== nextWorktreePath;
 
     if (launchContextChanged) {
-      yield* stopProcess(liveSession);
+      yield* stopProcess(liveSession, authorize);
       liveSession.cwd = input.cwd;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.runtimeEnv = nextRuntimeEnv;
@@ -2718,24 +2342,26 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           ...(input.env ? { env: input.env } : {}),
         },
         "started",
+        authorize,
       );
-      return snapshot(liveSession);
+      return liveSession;
     }
 
     if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
+      yield* authorize;
       yield* resizePtyProcess(liveSession, liveSession.process, targetCols, targetRows);
       liveSession.cols = targetCols;
       liveSession.rows = targetRows;
       liveSession.updatedAt = yield* nowIso;
     }
 
-    return snapshot(liveSession);
+    return liveSession;
   });
 
   const openLocked = (input: TerminalOpenInput) =>
     withWorkspaceLease(
       path.resolve(input.worktreePath ?? input.cwd),
-      openWithWorkspaceLease(input),
+      openWithWorkspaceLease(input).pipe(Effect.map(snapshot)),
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
@@ -3023,12 +2649,25 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
   };
 
-  const write: TerminalManager["Service"]["write"] = Effect.fn("terminal.write")(function* (input) {
+  const writeLocked = Effect.fn("terminal.write")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
+    input: TerminalWriteInput,
+    authorize: Effect.Effect<void, E> = Effect.void,
+    requireRunning = false,
+  ): Effect.fn.Return<void, TerminalError | E> {
     const terminalId = input.terminalId;
     const session = yield* requireSession(input.threadId, terminalId);
     const process = session.process;
     if (!process || session.status !== "running") {
-      if (session.status === "exited") return;
+      if (session.status === "exited" && !requireRunning) return;
+      return yield* new TerminalNotRunningError({
+        threadId: input.threadId,
+        terminalId,
+      });
+    }
+    yield* authorize;
+    if (session.process !== process || session.status !== "running") {
       return yield* new TerminalNotRunningError({
         threadId: input.threadId,
         terminalId,
@@ -3046,6 +2685,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }),
     });
   });
+
+  const write: TerminalManager["Service"]["write"] = (input) =>
+    withThreadLock(input.threadId, writeLocked<never>(input, Effect.void));
 
   const resizeLocked = Effect.fn("terminal.resize")(function* (input: TerminalResizeInput) {
     const session = yield* getSession(input.threadId, input.terminalId);
@@ -3065,42 +2707,56 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const resize: TerminalManager["Service"]["resize"] = (input) =>
     withThreadLock(input.threadId, resizeLocked(input));
 
-  const clear: TerminalManager["Service"]["clear"] = (input) =>
-    withThreadLock(
-      input.threadId,
-      Effect.gen(function* () {
-        const terminalId = input.terminalId;
-        const session = yield* requireSession(input.threadId, terminalId);
-        session.history.clear();
-        session.pendingHistoryControlSequence = "";
-        session.pendingProcessEvents = [];
-        session.pendingProcessEventIndex = 0;
-        session.processEventDrainRunning = false;
-        const eventStamp = advanceEventSequence(session);
-        yield* persistHistory(input.threadId, terminalId, session.history);
-        yield* publishEvent({
-          type: "cleared",
-          threadId: input.threadId,
-          terminalId,
-          sequence: eventStamp.sequence,
-        });
-      }),
-    );
+  const clearLocked = Effect.fn("terminal.clear")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
+    input: TerminalClearInput,
+    owner: string | null = null,
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<void, TerminalError | E> {
+    const terminalId = input.terminalId;
+    const session = yield* requireSession(input.threadId, terminalId);
+    yield* authorize;
+    resetAgentTerminal(session, owner);
+    session.history.clear();
+    session.pendingHistoryControlSequence = "";
+    session.pendingProcessEvents = [];
+    session.pendingProcessEventIndex = 0;
+    session.processEventDrainRunning = false;
+    const eventStamp = advanceEventSequence(session);
+    yield* persistHistory(input.threadId, terminalId, session.history);
+    yield* publishEvent({
+      type: "cleared",
+      threadId: input.threadId,
+      terminalId,
+      sequence: eventStamp.sequence,
+    });
+  });
 
-  const restartResolved = Effect.fn("Manager.restartResolved")(function* (
+  const clear: TerminalManager["Service"]["clear"] = (input) =>
+    withThreadLock(input.threadId, clearLocked<never>(input, null, Effect.void));
+
+  const restartResolved = Effect.fn("Manager.restartResolved")(function* <
+    E extends OrchestratorMcpFailure = never,
+  >(
     input: TerminalRestartInput,
-  ) {
+    owner: string | null = null,
+    authorize: Effect.Effect<void, E> = Effect.void,
+  ): Effect.fn.Return<TerminalSessionState, TerminalError | E> {
     yield* increment(terminalRestartsTotal, { scope: "thread" });
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
     const sessionKey = toSessionKey(input.threadId, terminalId);
     const existingSession = yield* getSession(input.threadId, terminalId);
+    yield* authorize;
     let session: TerminalSessionState;
     if (Option.isNone(existingSession)) {
       const cols = input.cols ?? DEFAULT_OPEN_COLS;
       const rows = input.rows ?? DEFAULT_OPEN_ROWS;
       session = {
+        ...createAgentTerminalState(),
+        agentOwner: owner,
         threadId: input.threadId,
         terminalId,
         cwd: input.cwd,
@@ -3136,7 +2792,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       yield* evictInactiveSessionsIfNeeded();
     } else {
       session = existingSession.value;
-      yield* stopProcess(session);
+      yield* stopProcess(session, authorize);
       session.cwd = input.cwd;
       session.worktreePath = input.worktreePath ?? null;
       session.runtimeEnv = normalizedRuntimeEnv(input.env);
@@ -3145,6 +2801,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const cols = input.cols ?? session.cols;
     const rows = input.rows ?? session.rows;
 
+    yield* authorize;
+    resetAgentTerminal(session, owner);
     session.history.clear();
     session.pendingHistoryControlSequence = "";
     session.pendingProcessEvents = [];
@@ -3163,8 +2821,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ...(input.env ? { env: input.env } : {}),
       },
       "restarted",
+      authorize,
     );
-    return snapshot(session);
+    return session;
   });
 
   const restart: TerminalManager["Service"]["restart"] = (input) =>
@@ -3174,7 +2833,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.flatMap((resolved) =>
           withWorkspaceLease(
             path.resolve(resolved.worktreePath ?? resolved.cwd),
-            restartResolved(resolved),
+            restartResolved(resolved).pipe(Effect.map(snapshot)),
           ),
         ),
       ),
@@ -3202,46 +2861,116 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
-  const closeIdle: TerminalManager["Service"]["closeIdle"] = (input) =>
-    withThreadLock(
-      input.threadId,
-      Effect.gen(function* () {
-        const running = (yield* sessionsForThread(input.threadId)).filter(
-          (session): session is TerminalSessionState & { pid: number } =>
+  const closeIdle = Effect.fn("terminal.closeIdle")(
+    function* (input: Parameters<TerminalManager["Service"]["closeIdle"]>[0]) {
+      const candidates = yield* withThreadLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const sessions = yield* sessionsForThread(input.threadId);
+          return sessions.flatMap((session) =>
             session.status === "running" &&
+            typeof session.pid === "number" &&
             Number.isInteger(session.pid) &&
-            (input.terminalId === undefined || session.terminalId === input.terminalId),
-        );
-        if (running.length === 0) return;
-        const marks = new Map(
-          running.map((session) => [session.terminalId, terminalActivityMark(session)]),
-        );
-        // Inspect now so commands started after the last poll still protect their terminals.
-        const { inspector } = yield* acquireSubprocessInspector;
-        yield* Effect.forEach(
-          running,
-          (session) =>
-            inspector(session.pid).pipe(
-              Effect.flatMap((result) =>
-                result.hasRunningSubprocess ||
-                terminalActivityMark(session) !== marks.get(session.terminalId)
-                  ? Effect.void
-                  : closeSession(input.threadId, session.terminalId, false),
-              ),
-            ),
-          { discard: true },
-        );
-      }),
-    ).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("failed to close idle terminals", {
-          threadId: input.threadId,
-          error: error.message,
+            (input.terminalId === undefined || session.terminalId === input.terminalId)
+              ? [
+                  {
+                    session,
+                    pid: session.pid,
+                    process: session.process,
+                    mark: terminalActivityMark(session),
+                  },
+                ]
+              : [],
+          );
         }),
+      );
+      if (candidates.length === 0) return;
+      const { inspector } = yield* acquireSubprocessInspector;
+      yield* Effect.forEach(
+        candidates,
+        (candidate) =>
+          Effect.gen(function* () {
+            const result = yield* inspector(candidate.pid);
+            if (result.hasRunningSubprocess) return;
+            yield* withThreadLock(
+              input.threadId,
+              Effect.gen(function* () {
+                const live = yield* getSession(input.threadId, candidate.session.terminalId);
+                if (
+                  Option.isNone(live) ||
+                  live.value !== candidate.session ||
+                  live.value.status !== "running" ||
+                  live.value.pid !== candidate.pid ||
+                  live.value.process !== candidate.process ||
+                  terminalActivityMark(live.value) !== candidate.mark
+                )
+                  return;
+                yield* closeSession(input.threadId, candidate.session.terminalId, false);
+              }),
+            );
+          }),
+        { discard: true },
+      );
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to close idle terminals", {
+            threadId: input.threadId,
+            error: error.message,
+          }),
+        ),
       ),
-    );
+  );
+
+  const agentOperations = makeAgentTerminalOperations({
+    withThreadLock,
+    sessionsForThread,
+    requireSession,
+    open: (input) =>
+      withWorkspaceLease(
+        path.resolve(input.cwd),
+        openWithWorkspaceLease(input, input.owner, input.authorize),
+      ),
+    mutate: Effect.fn("terminal.agentMutateLocked")(function* (
+      session: TerminalSessionState,
+      input: AgentTerminalMutateInput,
+    ) {
+      switch (input.operation) {
+        case "write":
+          return yield* writeLocked(
+            { threadId: input.threadId, terminalId: input.terminalId, data: input.data ?? "" },
+            input.authorize,
+            true,
+          );
+        case "clear":
+          return yield* clearLocked(input, input.owner, input.authorize);
+        case "restart":
+          yield* withWorkspaceLease(
+            path.resolve(session.worktreePath ?? session.cwd),
+            restartResolved(
+              {
+                threadId: input.threadId,
+                terminalId: input.terminalId,
+                cwd: session.cwd,
+                worktreePath: session.worktreePath,
+                cols: session.cols,
+                rows: session.rows,
+                ...(session.runtimeEnv ? { env: session.runtimeEnv } : {}),
+              },
+              input.owner,
+              input.authorize,
+            ),
+          );
+          return;
+        case "close":
+          return yield* closeSession(input.threadId, input.terminalId, false, input.authorize);
+      }
+    }),
+  });
 
   return TerminalManager.of({
+    ...agentOperations,
     open,
     attachStream,
     observeStream,

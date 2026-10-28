@@ -23,6 +23,7 @@ import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -40,6 +41,7 @@ export function AgentToolsSettings() {
   return (
     <SettingsSection id="agent-tools" title="Agent tools">
       <AgentToolListingSetting />
+      <AgentWorkspaceTerminalSettings />
       <BuiltInSkillSetting
         name="goat-discipline"
         label="Development discipline"

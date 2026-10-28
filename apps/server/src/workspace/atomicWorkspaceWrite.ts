@@ -134,12 +134,13 @@ async function operation<A>(
 /** Stage bytes beside the canonical destination, then publish with one rename.
  * The caller must first validate the target lexically against workspaceRoot.
  */
-export async function atomicWorkspaceWrite(input: {
+export async function prepareAtomicWorkspaceWrite(input: {
   readonly workspaceRoot: string;
   readonly absolutePath: string;
   readonly contents: Uint8Array;
   readonly platform: string;
   readonly expectedVersion?: string;
+  readonly createOnly?: boolean;
 }) {
   const realRoot = await operation("realpath-workspace-root", input.workspaceRoot, () =>
     NodeFS.promises.realpath(input.workspaceRoot),
@@ -214,6 +215,7 @@ export async function atomicWorkspaceWrite(input: {
       cause: new Error("Workspace write target is not a regular file."),
     });
   }
+  if (input.createOnly && existing !== null) throw new WorkspaceFileChangedOnDiskError({});
   if (existing !== null) {
     // Replacing a directory entry must not bypass the old write's file-mode check.
     await operation("open", target, () => NodeFS.promises.access(target, NodeFS.constants.W_OK));
@@ -234,6 +236,21 @@ export async function atomicWorkspaceWrite(input: {
   );
   let identity: { dev: number; ino: number } | undefined;
   let closed = false;
+  let prepared = false;
+  const cleanup = async () => {
+    if (!closed) await handle.close().catch(() => undefined);
+    if (identity !== undefined) {
+      try {
+        if ((await NodeFS.promises.realpath(parent)) === parent) {
+          const current = await NodeFS.promises.lstat(temporary);
+          if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino)
+            await NodeFS.promises.unlink(temporary);
+        }
+      } catch {
+        // Preserve the publication's result if our temporary path has already gone.
+      }
+    }
+  };
   try {
     identity = await operation("stat", temporary, () => handle.stat());
     const validateTemporary = async () => {
@@ -271,22 +288,21 @@ export async function atomicWorkspaceWrite(input: {
     if (input.expectedVersion !== undefined) {
       await assertVersion(target, input.expectedVersion);
     }
-    await operation("write-file", target, () => NodeFS.promises.rename(temporary, target));
-  } finally {
-    if (!closed) await handle.close().catch(() => undefined);
-    // Only remove the exact inode we created, through its still-canonical
-    // parent. In particular, never recursively remove a staging directory.
-    if (identity !== undefined) {
-      try {
-        if ((await NodeFS.promises.realpath(parent)) === parent) {
-          const current = await NodeFS.promises.lstat(temporary);
-          if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino) {
-            await NodeFS.promises.unlink(temporary);
+    prepared = true;
+    return {
+      cleanup,
+      publish: () =>
+        operation("write-file", target, async () => {
+          if (!input.createOnly) return NodeFS.promises.rename(temporary, target);
+          try {
+            await NodeFS.promises.link(temporary, target);
+          } catch (cause) {
+            if (hasCode(cause, "EEXIST")) throw new WorkspaceFileChangedOnDiskError({});
+            throw cause;
           }
-        }
-      } catch {
-        // Preserve the original failure (or successful rename) on cleanup failure.
-      }
-    }
+        }),
+    };
+  } finally {
+    if (!prepared) await cleanup();
   }
 }

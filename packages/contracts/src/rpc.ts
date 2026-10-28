@@ -126,6 +126,7 @@ import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
+  AgentTerminalBinding,
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import {
@@ -1114,11 +1115,13 @@ const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
+export const ServerSettingsUpdateInput = Schema.Struct({
+  patch: ServerSettingsPatch,
+  agentTerminalBinding: Schema.optionalKey(AgentTerminalBinding),
+  providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
+});
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
-  payload: Schema.Struct({
-    patch: ServerSettingsPatch,
-    providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
-  }),
+  payload: ServerSettingsUpdateInput,
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });

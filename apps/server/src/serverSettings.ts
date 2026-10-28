@@ -5,6 +5,8 @@ import * as HubConnectAccess from "./auth/HubConnectAccess.ts";
 import {
   DEFAULT_SERVER_SETTINGS as CLIENT_DEFAULT_SERVER_SETTINGS,
   ServerSettings as ClientServerSettings,
+  type AgentTerminalBinding,
+  type AuthSessionId,
   type EnvironmentId,
   goatclawPolicyContent,
   matchesMemorySourceReadRevokeAck,
@@ -78,6 +80,10 @@ import {
   type HubConsentGenerations,
   makeHubConsentGenerations,
 } from "./hub/hubConsentGenerations.ts";
+import {
+  agentWorkspaceTerminalSettingsMethods,
+  rejectAgentWorkspaceTerminalPolicyChange,
+} from "./AgentWorkspaceTerminalPolicy.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
@@ -798,6 +804,12 @@ export class ServerSettingsService extends Context.Service<
     /** Hub and cloud consent generations, advanced inside each commit; doubles may leave it out. */
     readonly hubConsentGenerations?: Effect.Effect<HubConsentGenerations>;
 
+    readonly updateAgentWorkspaceTerminalPolicy?: (
+      patch: ServerSettingsPatch,
+      actorSessionId: AuthSessionId,
+      agentTerminalBinding?: AgentTerminalBinding,
+      authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
     readonly updateSettings: (
       patch: ServerSettingsPatch,
       /** Runs inside the write lock before the patch applies, so a revoked grant cannot commit. */
@@ -889,10 +901,12 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
 
   const updateTestSettingsLocked = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
+    beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Ref.get(currentSettingsRef).pipe(
       Effect.flatMap(update),
       Effect.flatMap(normalizeServerSettings),
+      Effect.tap(() => beforeCommit ?? Effect.void),
       Effect.tap((nextSettings) =>
         Effect.uninterruptible(
           Ref.set(currentSettingsRef, nextSettings).pipe(
@@ -906,6 +920,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     );
   const updateTestSettings = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
+    _targetIds: ReadonlyArray<ProviderInstanceId> = [],
+    beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ) =>
     checkpointAdmission.retry(
       writeSemaphore.withPermits(1)(
@@ -915,7 +931,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           return yield* checkpointAdmission.tryCommit(
             current,
             next,
-            updateTestSettingsLocked(() => Effect.succeed(next)),
+            updateTestSettingsLocked(() => Effect.succeed(next), beforeCommit),
           );
         }),
       ),
@@ -968,32 +984,18 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     getSettings,
     committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,
-    updateSettings: (patch, authorizeAtCommit) =>
-      updateTestSettings((currentSettings) =>
-        (authorizeAtCommit ?? Effect.void).pipe(
-          Effect.andThen(rejectMemoryHubSettingsPatch(patch, "test settings")),
-          Effect.flatMap(() =>
-            stampGoatclaw(currentSettings, applyServerSettingsPatch(currentSettings, patch)),
-          ),
-        ),
-      ),
-    updateSettingsWith: (patchFor, authorizeAtCommit) =>
-      updateTestSettings((currentSettings) =>
-        Effect.gen(function* () {
-          if (authorizeAtCommit) yield* authorizeAtCommit;
-          const patch = yield* patchFor(currentSettings);
-          yield* rejectMemoryHubSettingsPatch(patch, "test settings");
-          return yield* stampGoatclaw(
-            currentSettings,
-            applyServerSettingsPatch(currentSettings, patch),
-          );
-        }),
-      ),
+    ...agentWorkspaceTerminalSettingsMethods(
+      updateTestSettings,
+      "test settings",
+      rejectMemoryHubSettingsPatch,
+      stampGoatclaw,
+    ),
     updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
           if (authorizeAtCommit) yield* authorizeAtCommit;
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
+          yield* rejectAgentWorkspaceTerminalPolicyChange(currentSettings, patch, "test settings");
           yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
           const patched = applyServerSettingsPatch(currentSettings, patch);
           return applyProviderInstanceMutation(patched, mutation);
@@ -1862,8 +1864,10 @@ const make = Effect.gen(function* () {
   const updateSettingsWhileLocked = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
     transition?: HubTransitionMarker,
+    beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Effect.gen(function* () {
+      if (beforeCommit) yield* beforeCommit;
       const { settings: current, parseFailure } = yield* reloadSettings;
       if (Option.isSome(parseFailure)) {
         return yield* new ServerSettingsError({
@@ -1878,35 +1882,44 @@ const make = Effect.gen(function* () {
         return yield* connectAccess.commit(
           current.hub,
           materializeSettingsSecrets(current).pipe(Effect.map(resolveTextGenerationProvider)),
+          beforeCommit,
         );
       const persisted = yield* persistSettingsSecrets(current, updated);
       const next = yield* normalizeServerSettings(persisted.settings);
-      const materialized = yield* connectAccess.commit(
-        next.hub,
-        Effect.uninterruptibleMask(() =>
-          Effect.gen(function* () {
-            const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
-            const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
-            if (Exit.isFailure(materializedExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(materializedExit.cause);
-            }
-            const writeExit = yield* Effect.exit(writeSettingsAtomically(next, transition));
-            if (Exit.isFailure(writeExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(writeExit.cause);
-            }
-            if (transition) yield* Ref.set(hubMarkerRef, transition);
-            // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
-            yield* Cache.set(settingsCache, cacheKey, {
-              settings: next,
-              parseFailure: Option.none(),
-            });
-            if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
-            yield* emitChange(next);
-            return materializedExit.value;
-          }),
-        ),
+      const materialized = yield* Effect.uninterruptibleMask(() =>
+        Effect.gen(function* () {
+          const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+          const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
+          if (Exit.isFailure(materializedExit)) {
+            yield* rollbackSecretChanges;
+            return yield* Effect.failCause(materializedExit.cause);
+          }
+          let fileCommitted = false;
+          const writeExit = yield* Effect.exit(
+            connectAccess.commit(
+              next.hub,
+              Effect.gen(function* () {
+                yield* writeSettingsAtomically(next, transition);
+                fileCommitted = true;
+                if (transition) yield* Ref.set(hubMarkerRef, transition);
+                // A post-commit Hub error must preserve this file's secrets and publication.
+                yield* Cache.set(settingsCache, cacheKey, {
+                  settings: next,
+                  parseFailure: Option.none(),
+                });
+                if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
+                yield* emitChange(next);
+                return materializedExit.value;
+              }),
+              beforeCommit,
+            ),
+          );
+          if (Exit.isFailure(writeExit)) {
+            if (!fileCommitted) yield* rollbackSecretChanges;
+            return yield* Effect.failCause(writeExit.cause);
+          }
+          return writeExit.value;
+        }),
       );
       return resolveTextGenerationProvider(materialized);
     });
@@ -1914,12 +1927,12 @@ const make = Effect.gen(function* () {
   const updateAndPersistSettings = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
     targetIds: ReadonlyArray<ProviderInstanceId> = [],
-    authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
+    beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ) => {
     const attempt = writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         // Reloading publishes Connect policy, so a denied caller must not reach it.
-        if (authorizeAtCommit) yield* authorizeAtCommit;
+        if (beforeCommit) yield* beforeCommit;
         const { settings: current, parseFailure } = yield* reloadSettings;
         if (Option.isSome(parseFailure))
           return yield* new ServerSettingsError({
@@ -1932,7 +1945,11 @@ const make = Effect.gen(function* () {
           current,
           next,
           Effect.gen(function* () {
-            const settings = yield* updateSettingsWhileLocked(() => Effect.succeed(next));
+            const settings = yield* updateSettingsWhileLocked(
+              () => Effect.succeed(next),
+              undefined,
+              beforeCommit,
+            );
             const changed = [
               ...new Set([
                 ...Object.keys(current.providerInstances),
@@ -2062,28 +2079,12 @@ const make = Effect.gen(function* () {
     ),
     committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,
-    updateSettings: (patch, authorizeAtCommit) =>
-      updateAndPersistSettings(
-        (current) =>
-          (authorizeAtCommit ?? Effect.void).pipe(
-            Effect.andThen(rejectMemoryHubSettingsPatch(patch, settingsPath)),
-            Effect.flatMap(() => stampGoatclaw(current, applyServerSettingsPatch(current, patch))),
-          ),
-        Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
-        authorizeAtCommit,
-      ),
-    updateSettingsWith: (patchFor, authorizeAtCommit) =>
-      updateAndPersistSettings(
-        (current) =>
-          Effect.gen(function* () {
-            if (authorizeAtCommit) yield* authorizeAtCommit;
-            const patch = yield* patchFor(current);
-            yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-            return yield* stampGoatclaw(current, applyServerSettingsPatch(current, patch));
-          }),
-        [],
-        authorizeAtCommit,
-      ),
+    ...agentWorkspaceTerminalSettingsMethods(
+      updateAndPersistSettings,
+      settingsPath,
+      rejectMemoryHubSettingsPatch,
+      stampGoatclaw,
+    ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
       updateAndPersistSettings(
         (current) =>
@@ -2110,6 +2111,7 @@ const make = Effect.gen(function* () {
                 ? { ...mutation, operation: "upsert" as const, instance: canonicalInstance }
                 : mutation;
             yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
+            yield* rejectAgentWorkspaceTerminalPolicyChange(current, patch, settingsPath);
             yield* ensureProviderInstanceMutationAllowed(current, effectiveMutation, settingsPath);
             const patched = applyServerSettingsPatch(current, patch);
             return applyProviderInstanceMutation(patched, effectiveMutation);

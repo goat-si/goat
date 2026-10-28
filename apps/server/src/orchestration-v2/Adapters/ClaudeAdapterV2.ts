@@ -4407,7 +4407,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       const policy = memoryRegistry?.currentMemoryPolicy
         ? yield* memoryRegistry.currentMemoryPolicy(config.providerSessionId)
         : undefined;
-      return !policy || policy.grant === "none" ? { ...config, grantedScopes: [] } : config;
+      const grantedScopes = (config.grantedScopes ?? []).filter(
+        (scope) => scope !== "memory:read" && scope !== "memory:write",
+      );
+      return !policy || policy.grant === "none" ? { ...config, grantedScopes } : config;
     });
 
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);

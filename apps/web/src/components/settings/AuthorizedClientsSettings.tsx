@@ -66,6 +66,7 @@ import {
   endpointShareHint,
 } from "./ConnectionsSettings.logic";
 import { buildClientPairingQrPayload } from "./ConnectionsSettings.logic";
+import { AgentTerminalClientBinding } from "./AgentTerminalClientBinding";
 
 function AccessScopeSummary({
   scopes,
@@ -560,6 +561,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
             ) : null}
             <AccessScopeSummary scopes={clientSession.scopes} label="Client scopes" />
           </p>
+          <AgentTerminalClientBinding clientSession={clientSession} />
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
           {!clientSession.current ? (
