@@ -12,7 +12,7 @@ import { screenCellSummary, screenCellTitle, type ScreenCellEnd } from "../cua/S
 import type { ScreenHostBridge } from "./ScreenHostBridge.ts";
 
 /** How a cell ended, by the code that ended it (before an effect made it unknown_outcome). */
-export const screenCellEndOf = (code: string): ScreenCellEnd =>
+const screenCellEndOf = (code: string): ScreenCellEnd =>
   code === "wall_limit" || code === "deadline"
     ? "deadline"
     : code === "stopped"
