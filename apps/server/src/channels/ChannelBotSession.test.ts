@@ -34,6 +34,7 @@ import {
   goatInput,
   makeHarness,
   modelSelection,
+  owner,
   rpcContext,
   setupBot,
 } from "./testkit/ChannelHarness.ts";
@@ -91,13 +92,13 @@ const sessionHarness = () => {
 };
 
 /** One message from the person, read and dispatched, with worker runs reconciled. */
-const ask = (text: string, key: string) =>
+const ask = (text: string, key: string, context: typeof rpcContext = rpcContext) =>
   Effect.gen(function* () {
     const gateway = yield* ChannelGateway.ChannelGateway;
     const runtime = yield* ChannelRuntime.ChannelRuntime;
     const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
     const ledger = yield* ChannelLedger.ChannelLedger;
-    const ingested = yield* gateway.ingest(goatInput(text, key), rpcContext);
+    const ingested = yield* gateway.ingest(goatInput(text, key), context);
     yield* runtime.drain;
     yield* reports.reconcile(runtime.ownerToken);
     // A stop or follow-up creates no task; callers that started one read it.
@@ -185,6 +186,40 @@ describe("GOAT Bot sessions", () => {
         assert.strictEqual(second.worker?.runId, runs[1]!.id);
         // The first run still works, so the second waits as its own run instead of joining it.
         assert.strictEqual(runs[1]!.status, "queued");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "gives a second requester in the conversation their own session at their own ceiling",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const guest = {
+          ...rpcContext,
+          principalId: "guest",
+          displayName: "Guest",
+          runtimeModeCeiling: "auto-accept-edits" as const,
+        };
+        const first = yield* ask("look: owner's task", "r1");
+        const second = yield* ask("look: guest's task", "r2", guest);
+        const third = yield* ask("look: owner again", "r3");
+        const ownerThread = first.worker!.threadId;
+        const guestThread = second.worker!.threadId;
+        assert.isTrue(isGoatBotSessionThreadId(guestThread));
+        assert.notStrictEqual(guestThread, ownerThread);
+        assert.strictEqual(third.worker?.threadId, ownerThread);
+        const launchOf = (thread: ThreadId) =>
+          harness.world.launches.find((launch) => launch.threadId === thread);
+        assert.strictEqual(launchOf(ownerThread)?.runtimeMode, owner.runtimeModeCeiling);
+        assert.strictEqual(launchOf(guestThread)?.runtimeMode, "auto-accept-edits");
+        // The owner's session never received the guest's request.
+        const ownerTexts = harness.world.sends
+          .filter((send) => send.threadId === ownerThread)
+          .map((send) => JSON.stringify(send));
+        assert.isFalse(ownerTexts.some((text) => text.includes("guest's task")));
+        assert.notInclude(launchOf(ownerThread)!.initialMessage!.text, "guest's task");
       }).pipe(Effect.provide(harness.layer));
     },
   );

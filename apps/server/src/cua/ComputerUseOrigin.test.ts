@@ -240,6 +240,32 @@ describe("channel workers before the ledger binds them", () => {
       });
     }),
   );
+
+  it.effect("a GOAT Bot session thread and the children it starts are unattended", () =>
+    Effect.gen(function* () {
+      // The session's first message is the bot's typed-looking brief, and nothing binds it yet.
+      const session = "goat-bot-session:7d1e";
+      const world: World = {
+        threads: {
+          [session]: {},
+          observer: {
+            createdAt: at(2),
+            lineage: { parentThreadId: ThreadId.make(session), relationshipToParent: "subagent" },
+          },
+        },
+        runs: { [session]: [run("turn", "brief", 0)] },
+        messages: { brief: typed(0) },
+      };
+      assert.deepEqual(yield* classify(world, session, "turn"), {
+        _tag: "unattended",
+        reason: "channel_task",
+      });
+      assert.deepEqual(yield* classify(world, "observer"), {
+        _tag: "unattended",
+        reason: "launched_by_unattended",
+      });
+    }),
+  );
 });
 
 describe("gateUnattendedSteering", () => {
