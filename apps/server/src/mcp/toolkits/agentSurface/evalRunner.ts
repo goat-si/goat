@@ -10,6 +10,7 @@ import {
   type EvalStepRef,
 } from "@goat/contracts/agentSurface/eval";
 import { isKeyedWrite } from "@goat/contracts/agentSurface/resolve";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -32,7 +33,7 @@ import {
 } from "../../ToolAdmission.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { storedEnvelope } from "./dispatchEnvelope.ts";
-import { type EvalJournal, makeEvalJournal } from "./evalJournal.ts";
+import { type EvalJournal, makeEvalJournal, type RunRow } from "./evalJournal.ts";
 import { makeEvalPlan } from "./evalPlan.ts";
 import {
   analyzeProgram,
@@ -105,6 +106,17 @@ const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const toJson = Schema.encodeSync(UnknownJson);
 const fromJson = Schema.decodeSync(UnknownJson);
 
+/** JSON with finite numbers only: what the journal stores is what a resumed run reads back. */
+const isFiniteJson = (value: unknown): boolean =>
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "boolean" ||
+  (typeof value === "number" && Number.isFinite(value)) ||
+  (Array.isArray(value) && value.every(isFiniteJson)) ||
+  (typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.values(value as object).every(isFiniteJson));
 const bytesOf = (value: unknown) => Buffer.byteLength(toJson(value ?? null), "utf8");
 const isRecord = (value: unknown): value is Readonly<Record<string, Json>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -173,52 +185,106 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
     if (Option.isNone(database))
       return refused("internal", "storage_failed", "goat_eval needs this server's database.");
     const journal = makeEvalJournal(database.value, admission.bootId);
+    const started = yield* Clock.currentTimeMillis;
+    const storageRefusal = (cause: unknown) =>
+      Effect.logError("goat_eval could not open its run", { cause }).pipe(
+        Effect.as(
+          refused(
+            "internal",
+            "storage_failed",
+            "GOAT could not record this run, so it did not run.",
+          ),
+        ),
+      );
+    // Looking up and hashing stay interruptible and inside the deadline; no claim exists yet.
+    const prepared = yield* prepare(journal, input, parsed, principal).pipe(
+      Effect.timeoutOrElse({
+        duration: EVAL_LIMITS.timeoutMs,
+        orElse: () =>
+          Effect.succeed(
+            refused(
+              "timeout",
+              "eval_timeout",
+              "GOAT could not open this run in time; nothing ran.",
+            ),
+          ),
+      }),
+      Effect.catchCause(storageRefusal),
+    );
+    if ("status" in prepared) return prepared;
     // A claim, once taken, is always settled: interrupting the call or a defect halts the run,
     // so a later resume is not refused as in progress until the server restarts.
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const opened = yield* open(journal, input, parsed, principal).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("goat_eval could not open its run", { cause }).pipe(
-              Effect.as(
-                refused(
-                  "internal",
-                  "storage_failed",
-                  "GOAT could not record this run, so it did not run.",
-                ),
-              ),
-            ),
-          ),
-        );
-        if ("status" in opened) return opened;
-        return yield* restore(execute(journal, opened)).pipe(
+        const claimId = NodeCrypto.randomUUID();
+        const claimed = yield* take(journal, prepared, claimId).pipe(Effect.result);
+        if (claimed._tag === "Failure") return yield* storageRefusal(claimed.failure);
+        if (!claimed.success)
+          return refused(
+            "conflict",
+            "in_progress",
+            `Run ${prepared.evalRunId} is still running. Call again for its result once it ends.`,
+          );
+        const opened: Opened = { ...prepared, claimId };
+        const elapsed = (yield* Clock.currentTimeMillis) - started;
+        return yield* restore(
+          execute(journal, opened, Math.max(0, EVAL_LIMITS.timeoutMs - elapsed)),
+        ).pipe(
           Effect.onExit((exit) =>
             exit._tag === "Success"
               ? Effect.void
               : journal
-                  .settleRun(opened.evalRunId, opened.claimId, "halted")
-                  .pipe(Effect.catchCause(() => journal.abandonRun(opened.claimId))),
+                  .settleRun(opened.evalRunId, claimId, "halted")
+                  .pipe(Effect.catchCause(() => journal.abandonRun(claimId))),
           ),
         );
       }),
     );
   });
 
-  interface Opened {
+  interface Prepared {
     readonly evalRunId: string;
-    readonly claimId: string;
+    readonly environmentId: string;
+    readonly principal: string;
+    readonly existing: RunRow | undefined;
+    readonly clientRequestId: string | null;
+    readonly node: Node;
+    readonly digest: string;
     readonly program: Program;
     readonly bindings: Readonly<Record<string, Json>>;
   }
+  interface Opened extends Prepared {
+    readonly claimId: string;
+  }
 
-  const open = Effect.fnUntraced(function* (
+  /** Takes the run for this call: creates it, or claims a stored one nobody is running. */
+  const take = (journal: EvalJournal, prepared: Prepared, claimId: string) =>
+    prepared.existing !== undefined
+      ? journal.claimRun(prepared.existing, claimId)
+      : journal.createRun({
+          evalRunId: prepared.evalRunId,
+          environmentId: prepared.environmentId,
+          principal: prepared.principal,
+          clientRequestId: prepared.clientRequestId,
+          programDigest: prepared.digest,
+          programJson: toJson(prepared.node),
+          bindingsJson: toJson(prepared.bindings),
+          claimId,
+        });
+
+  const prepare = Effect.fnUntraced(function* (
     journal: EvalJournal,
     input: EvalInput,
     parsed: Node | undefined,
     principal: string,
   ) {
     const scope = yield* McpInvocationContext;
-    const claimId = NodeCrypto.randomUUID();
+    if (input.bindings !== undefined && !isFiniteJson(input.bindings))
+      return refused(
+        "invalid_request",
+        "eval_bindings",
+        "bindings must be JSON values, and every number finite.",
+      );
     const stored =
       input.resume ??
       (input.clientRequestId === undefined
@@ -262,40 +328,26 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
               "idempotency_mismatch",
               `clientRequestId ${input.clientRequestId} already named another program. Use a new clientRequestId for a different program.`,
             );
-      if (!(yield* journal.claimRun(existing, claimId)))
-        return refused(
-          "conflict",
-          "in_progress",
-          `Run ${existing.eval_run_id} is still running. Call again for its result once it ends.`,
-        );
-      return {
-        evalRunId: existing.eval_run_id,
-        claimId,
-        program: analyzed,
-        bindings,
-      } satisfies Opened;
     }
     const evalRunId = stored ?? `evr_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
-    const created = yield* journal.createRun({
-      evalRunId,
+    return {
+      evalRunId: existing?.eval_run_id ?? evalRunId,
       environmentId: scope.environmentId,
       principal,
+      existing,
       clientRequestId: input.clientRequestId ?? null,
-      programDigest: digest,
-      programJson: toJson(node),
-      bindingsJson: toJson(bindings),
-      claimId,
-    });
-    if (!created)
-      return refused(
-        "conflict",
-        "in_progress",
-        `Run ${evalRunId} is still running. Call again for its result once it ends.`,
-      );
-    return { evalRunId, claimId, program: analyzed, bindings } satisfies Opened;
+      node,
+      digest,
+      program: analyzed,
+      bindings,
+    } satisfies Prepared;
   });
 
-  const execute = Effect.fnUntraced(function* (journal: EvalJournal, opened: Opened) {
+  const execute = Effect.fnUntraced(function* (
+    journal: EvalJournal,
+    opened: Opened,
+    timeoutMs: number,
+  ) {
     const state = {
       calls: 0,
       bytes: 0,
@@ -334,6 +386,12 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
             ),
           )
         : Effect.void;
+    };
+
+    /** Taken as a result arrives, before any write that could stop the run. */
+    const collect = (envelope: Envelope, entry: CallSite["entry"], at: string) => {
+      const operation = envelope.meta?.operation;
+      if (operation !== undefined) state.operations.push({ step: at, path: entry.path, operation });
     };
 
     /** The caller must still hold the grant a recorded step ran under (D3). */
@@ -408,6 +466,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         if (record.state === "completed" && record.result_json !== null) {
           yield* authorize(entry, args, record.grant_json, at);
           envelope = fromJson(record.result_json) as Envelope;
+          collect(envelope, entry, at);
           restored = true;
         } else if (entry.effect !== "read") {
           const settledUnknown = (from?: ErrorEnvelope) =>
@@ -427,6 +486,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
                 entry,
                 storedEnvelope(entry.name, args, entry.effect, outcome.result, outcome.failure),
               );
+              collect(envelope, entry, at);
               yield* stored(journal.settleStep(evalRunId, at, "completed", toJson(envelope)), at);
               restored = true;
               break;
@@ -497,6 +557,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         );
         state.inflightWrite = undefined;
         state.live += 1;
+        collect(answered, entry, at);
         let settlement: "completed" | "released" | "unknown" =
           answered.status === "error" ? settlementOf(answered) : "completed";
         // A read changes nothing, so an unsettled one is simply asked again.
@@ -522,9 +583,6 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
         state.restored += 1;
         state.completed.push({ step: at, path: entry.path });
       }
-      // Collected before anything can stop the run, so running work is never hidden.
-      const operation = envelope.meta?.operation;
-      if (operation !== undefined) state.operations.push({ step: at, path: entry.path, operation });
       yield* account(envelope, at);
       if (envelope.status === "ok") return (envelope.value ?? null) as Json;
       if (envelope.status === "needs_human") {
@@ -687,7 +745,7 @@ export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
     ).pipe(
       Effect.tap((value) => account(value, "run")),
       Effect.timeoutOrElse({
-        duration: EVAL_LIMITS.timeoutMs,
+        duration: timeoutMs,
         orElse: () =>
           Effect.fail(
             state.inflightWrite === undefined

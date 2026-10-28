@@ -361,6 +361,13 @@ it.effect("refuses recursion and over-limit programs before anything runs", () =
       ],
       [{ program: '(project.delete :projectId "a" :clientRequestId "mine")' }, "eval_explicit_key"],
       [{ program: "(if 1e999 (project.list) (project.list))" }, "eval_parse"],
+      [
+        {
+          program: "(if x (project.list) (project.list))",
+          bindings: { x: Number.POSITIVE_INFINITY },
+        },
+        "eval_bindings",
+      ],
     ] as const;
     for (const [input, reason] of refusals) {
       const result = yield* evaluate(input);
