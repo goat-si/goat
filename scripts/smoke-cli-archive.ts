@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Duration from "effect/Duration";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -145,6 +146,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
       detail: "screen-code/quickjs.wasm is invalid",
     });
   }
+  const cellStartedAt = yield* Clock.currentTimeMillis;
   const childInput =
     [
       {
@@ -161,6 +163,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
         source: "return 7;",
         resetValues: false,
         limits: DEFAULT_SCREEN_RUN_LIMITS,
+        deadlineMillis: cellStartedAt + DEFAULT_SCREEN_RUN_LIMITS.cellWallMs,
       },
     ]
       .map((frame) => JSON.stringify(frame))
