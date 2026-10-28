@@ -76,6 +76,14 @@ function HostCard({
           {card.message ? (
             <p className="break-words text-muted-foreground">{card.message}</p>
           ) : null}
+          {card.omitted === null ? null : (
+            <div className="flex flex-col gap-0.5 break-words text-muted-foreground">
+              <p className="text-foreground">{card.omitted.summary}</p>
+              {card.omitted.messages.map((message) => (
+                <p key={message}>{message}</p>
+              ))}
+            </div>
+          )}
           {card.meters === null ? null : (
             <div className="grid grid-cols-[5.5rem_minmax(3rem,1fr)_minmax(0,auto)] items-center gap-x-3 gap-y-1.5">
               {card.meters.map((meter) => (

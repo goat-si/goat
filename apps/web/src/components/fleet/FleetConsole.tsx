@@ -27,7 +27,7 @@ import { environmentServerConfigsAtom } from "~/state/server";
 import { environmentThreadShells } from "~/state/threads";
 import { useUiStateStore } from "~/uiStateStore";
 
-import { platformLabel } from "../settings/hostStatusView";
+import { omittedSectionsView, platformLabel } from "../settings/hostStatusView";
 import { BoatIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -235,6 +235,7 @@ function HostRow({
   now,
   answeringLate,
   viaHub,
+  inferred,
 }: {
   readonly row: FleetHostRow;
   readonly boat: BoatMachineIdentity | null;
@@ -250,8 +251,12 @@ function HostRow({
   /** The host is connected but not answering, or froze recently: its alert's tone. */
   readonly answeringLate: FleetAlertTone | null;
   readonly viaHub: string | null | undefined;
+  /** Its pool routing is a driver guess because it reports no route markers. */
+  readonly inferred: boolean;
 }) {
   const metrics = row.entry?.metrics;
+  const omitted = row.entry === null ? null : omittedSectionsView(row.entry);
+  const hub = viaHub === undefined ? null : `via Hub${viaHub === null ? "" : ` ${viaHub}`}`;
   const stale = row.tone === "stale";
   const statusText =
     row.tone === "none"
@@ -271,7 +276,7 @@ function HostRow({
   const loadMax = Math.max(cores, ...samples.map((sample) => sample.load ?? 0));
   const loadTone = tone("load", load === null ? null : load / cores);
   return (
-    <li className="grid h-7 grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+    <li className="grid h-7 grid-cols-[minmax(0,7.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
       <span className="flex min-w-0 items-center gap-1.5 text-xs">
         <span
           aria-hidden
@@ -290,23 +295,48 @@ function HostRow({
                   : "border border-muted-foreground",
           )}
         />
-        {boat !== null ? (
-          <BoatIcon role="img" aria-label="Boat" className="size-3 shrink-0" />
-        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={<span className="min-w-0 font-medium outline-hidden" tabIndex={0} />}
           >
-            <span className="block truncate">{row.label}</span>
-            {viaHub === undefined ? null : (
-              <span className="block truncate font-mono text-3xs text-muted-foreground">
-                via Hub{viaHub === null ? "" : ` ${viaHub}`}
+            {/* The Boat icon sits on the name line so the marker line keeps the full column. */}
+            <span className="flex min-w-0 items-center gap-1">
+              {boat !== null ? (
+                <BoatIcon role="img" aria-label="Boat" className="size-3 shrink-0" />
+              ) : null}
+              <span className="min-w-0 truncate">{row.label}</span>
+            </span>
+            {/* Markers never shrink; the Hub name truncates first, and the tooltip has the full text. */}
+            {hub === null && omitted === null ? null : (
+              <span className="flex min-w-0 gap-1 overflow-hidden font-mono text-3xs text-muted-foreground">
+                {inferred ? <span className="shrink-0 text-warning">inferred</span> : null}
+                {omitted === null ? null : (
+                  <span className="shrink-0 text-warning">{omitted.count} omitted</span>
+                )}
+                {hub === null ? null : <span className="min-w-0 truncate">{hub}</span>}
               </span>
             )}
           </TooltipTrigger>
           <TooltipPopup side="top">
             {hostDetail(row, lastSeen, observedAt)}
-            {viaHub === undefined ? null : ` · via Hub${viaHub === null ? "" : ` ${viaHub}`}`}
+            {hub === null ? null : ` · ${hub}`}
+            {inferred ? (
+              <span className="mt-1 block">
+                Quota routing inferred: this host did not report which instances use the pool, so
+                Fleet matched them by provider driver. Hosts on an older GOAT report it after an
+                update.
+              </span>
+            ) : null}
+            {omitted === null ? null : (
+              <span className="mt-1 block">
+                {omitted.summary}
+                {omitted.messages.map((message) => (
+                  <span key={message} className="block text-muted-foreground">
+                    {message}
+                  </span>
+                ))}
+              </span>
+            )}
           </TooltipPopup>
         </Tooltip>
       </span>
@@ -568,7 +598,7 @@ function FleetConsoleExpanded(props: {
           aria-label="Hosts"
           className="flex min-h-0 flex-col border-b p-3 md:border-r md:border-b-0"
         >
-          <div className="mb-1 grid grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+          <div className="mb-1 grid grid-cols-[minmax(0,7.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
             <span className="flex min-w-0 items-center gap-1">
               <Label>
                 Hosts {hostCount.reporting}/{totals.machines}
@@ -589,6 +619,7 @@ function FleetConsoleExpanded(props: {
                   row={row}
                   boat={row.machineId === null ? null : (boatByMachine.get(row.machineId) ?? null)}
                   viaHub={viaHub(row)}
+                  inferred={quota.inferredRows.has(row.key)}
                   lastSeen={status.lastSeen}
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
@@ -685,6 +716,11 @@ function FleetConsoleExpanded(props: {
                         )}
                         style={{ width: Math.max(2, quota.peak) + "%" }}
                       />
+                    </span>
+                  )}
+                  {quota.inferred === undefined ? null : (
+                    <span className="truncate font-mono text-2xs text-muted-foreground">
+                      Routing inferred for {quota.inferred.join(", ")}
                     </span>
                   )}
                 </div>
