@@ -546,7 +546,7 @@ const windowsOf = (value: JsonObject | undefined): ReadonlyArray<WindowRow> =>
       )
     : [];
 /** The windows of a read that can judge closing: none when it failed or holds a malformed row. */
-const finalWindows = (value: JsonObject): ReadonlyArray<WindowRow> | null =>
+export const finalWindows = (value: JsonObject): ReadonlyArray<WindowRow> | null =>
   Object.keys(value).some((key) => /error/iu.test(key)) ||
   !Array.isArray(value["windows"]) ||
   !(value["windows"] as ReadonlyArray<Json>).every(

@@ -11,6 +11,7 @@ import {
   type Sample,
   type Task,
   type Transcript,
+  finalWindows,
   keepObservations,
   scoreRun,
 } from "./core.ts";
@@ -159,20 +160,29 @@ export const runStep = async <Snapshot>(
     truncated: ran.transcript.incomplete,
   };
   const leftovers = await deps.leftoversOf(arm, task, before, after, final);
-  const scored = scoreRun(task, arm, {
-    ...observed,
-    notes: [...observed.notes, ...leftovers.notes],
-  });
+  // A failed or malformed final read hides closed or changed windows, so the end counts as unobserved.
+  const endUnobserved =
+    read !== null &&
+    (Object.keys(final).some((key) => /error/iu.test(key)) ||
+      ("windows" in final && finalWindows(final) === null));
+  const notes = [
+    ...observed.notes,
+    ...leftovers.notes,
+    ...(endUnobserved
+      ? ["the observer's final read failed, so the end of the run was not observed"]
+      : []),
+  ];
+  const scored = scoreRun(task, arm, { ...observed, notes });
   return {
     ...head,
     status: "ran",
     ...scored,
     leftovers: leftovers.left,
-    cleanupUnobserved: leftovers.unobserved,
+    cleanupUnobserved: leftovers.unobserved || endUnobserved,
     tokens: ran.transcript.tokens,
     wallMs: ran.wallMs,
     ref: ran.ref,
     // Scored from the full observations; the row keeps a cut copy that is marked when cut.
-    observations: keepObservations({ ...observed, notes: [...observed.notes, ...leftovers.notes] }),
+    observations: keepObservations({ ...observed, notes }),
   };
 };

@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ARMS, ORACLES, type Task, validateTaskSet } from "./core.ts";
+import { scoreArms } from "./report.ts";
 import { EMPTY_ROW, HaltError, type Ran, type StepDeps, runStep } from "./step.ts";
 
 const taskSet = validateTaskSet(
@@ -80,6 +81,29 @@ describe("runStep", () => {
       witnessError: "Error: osascript timed out",
       savedFiles: ["Documents/Untitled.rtf"],
     });
+    expect(row.cleanupUnobserved).toBe(true);
+  });
+
+  it("does not count a run whose final read failed as clean coexistence", async () => {
+    let reads = 0;
+    const { deps } = fakeDeps({
+      readWitness: async () => {
+        reads += 1;
+        if (reads > 1) throw new Error("osascript timed out");
+        return { windows: [] };
+      },
+    });
+    const row = await runStep(task("textedit-korean-discard"), codex, base, deps);
+    expect(row).toMatchObject({
+      status: "ran",
+      violations: [],
+      leftovers: [],
+      cleanupUnobserved: true,
+    });
+    expect(scoreArms([row])[0]?.coexistence).toBeNull();
+    const clean = await runStep(task("textedit-korean-discard"), codex, base, fakeDeps().deps);
+    expect(clean.cleanupUnobserved).toBe(false);
+    expect(scoreArms([clean])[0]?.coexistence).toBe(1);
   });
 
   it("registers its observer where shutdown can stop it, and clears it after a return or a throw", async () => {
