@@ -159,6 +159,8 @@ const make = Effect.gen(function* () {
             sql`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id=${meta.sourceThread.threadId} AND deleted_at IS NULL`,
           );
           if (!thread.length) return yield* new MemoryWorkerError({ code: "source_invalidated" });
+          if (yield* query(SourceScan.isDelegatedChildThread(sql, meta.sourceThread.threadId)))
+            return yield* new MemoryWorkerError({ code: "source_invalidated" });
           const newer = yield* query(
             sql`SELECT 1 FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${meta.sourceThread.threadId} AND sequence>${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence} AND (event_type='thread.deleted' OR event_type='message.updated' OR (event_type='run.updated' AND json_extract(payload_json,'$.status') IN ('completed','failed','interrupted','cancelled','rolled_back'))) LIMIT 1`,
           );
@@ -363,6 +365,7 @@ const make = Effect.gen(function* () {
             // Memory is off. Still process deletion/rollback and advance the hook;
             // continuations recover these summaries once memory is turned back on.
             if (modelSelection === null) continue;
+            if (yield* query(SourceScan.isDelegatedChildThread(sql, row.stream_id))) continue;
             const source = yield* query(
               sql<{
                 event_id: string;

@@ -845,6 +845,36 @@ describe("MemoryWorker", () => {
       );
     }).pipe(Effect.provide(live())),
   );
+  it.effect("never summarizes or consolidates a delegated child thread", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_events VALUES (0,${id(9)},${threadId},'thread.created','{"creationSource":"mcp","lineage":{"relationshipToParent":"subagent"}}',${now},2,'thread')`;
+      const worker = yield* Worker.MemoryWorker;
+      const store = yield* Store.MemoryStore;
+      yield* worker.sweepDue();
+      // A later recovery scan, past the consolidation age, must not pick the thread up either.
+      yield* TestClock.adjust(86400000 + Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+      yield* worker.sweepDue();
+      yield* worker.drain;
+      assert.strictEqual(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE kind IN ('summary','consolidate') AND status!='cancelled'`)[0]!
+          .count,
+        0,
+      );
+      assert.deepStrictEqual(
+        yield* store.list({
+          memorySpaceId: space,
+          scope: { kind: "thread", thread: { environmentId, threadId } },
+          limit: 20,
+        }),
+        [],
+      );
+    }).pipe(Effect.provide(live())),
+  );
   it.effect("consolidates delayed terminal events using the processing clock", () =>
     Effect.gen(function* () {
       yield* seed;
@@ -1535,9 +1565,13 @@ it.effect("r3 previous summary plus thread lineage exceeding 100 never reaches g
 });
 
 it.effect.each(threadProvenanceCases(threadId))(
-  "production origin $name: $state gates summary generation",
+  "production origin $name: $state lineage and delegation gate summary generation",
   (origin) => {
     let generated = 0;
+    // Delegated children report to their parent; the parent's summary keeps what lasts.
+    const summarized =
+      origin.state === "tracked" &&
+      !origin.createdJson.includes('"relationshipToParent":"subagent"');
     return Effect.gen(function* () {
       yield* lineageSetup;
       const sql = yield* SqlClient.SqlClient;
@@ -1559,10 +1593,10 @@ it.effect.each(threadProvenanceCases(threadId))(
         ),
       );
       yield* (yield* Worker.MemoryWorker).sweepDue();
-      assert.strictEqual(generated, origin.state === "tracked" ? 1 : 0);
+      assert.strictEqual(generated, summarized ? 1 : 0);
       assert.strictEqual(
         (yield* store.loadAggregate(space, summaryMemoryId)).heads.length,
-        origin.state === "tracked" ? 1 : 0,
+        summarized ? 1 : 0,
       );
     }).pipe(
       Effect.provide(
