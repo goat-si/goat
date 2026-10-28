@@ -28,6 +28,7 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { FAILED_CATEGORIES, observationReplyBudget } from "./ScreenHostBridge.ts";
+import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import {
   BATCH_METHODS,
@@ -681,7 +682,11 @@ export const createDesktopTargetHost = (deps: {
             pid: bound.pid,
             window_id: bound.windowId,
             expect: [expectation],
-            timeout_ms: Math.max(0, Math.min(requested, 10_000, call.deadlineMillis - now - 250)),
+            // The driver call's own cap is this wait plus 2 s, within the cell's reserve.
+            timeout_ms: Math.max(
+              0,
+              Math.min(requested, 10_000, call.deadlineMillis - now - CELL_RESERVE_MS - 2_000),
+            ),
           },
           call,
           context,

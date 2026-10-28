@@ -4,6 +4,7 @@
  * answers what it held and releases its reservations; the next call reaches a fresh driver.
  */
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Semaphore from "effect/Semaphore";
@@ -51,6 +52,15 @@ export const makeUnansweredWatch = <E>(
   const replied = new Set<string>();
   // The chain a private or taken-over target closed; no call reaches it until it is replaced.
   let fenced: string | undefined;
+  // Calls past their deadline, by key, until a reply lands or their grace ends. A new call to the
+  // same chain waits for that outcome instead of queueing behind a child that may be stuck.
+  const overdue = new Map<string, string>();
+  let settled = Deferred.makeUnsafe<void>();
+  const settle = (key: string) => {
+    if (!overdue.delete(key)) return;
+    Deferred.doneUnsafe(settled, Effect.void);
+    settled = Deferred.makeUnsafe<void>();
+  };
   const replace = Effect.fn("ComputerUseLeaseProxy.replaceUnanswered")(function* (key: string) {
     if (replied.delete(key)) return;
     const call = proxy.outstanding.get(key);
@@ -83,20 +93,46 @@ export const makeUnansweredWatch = <E>(
       proxy.lock
         .withPermits(1)(closeTarget(reason, connectionId).pipe(Effect.uninterruptible))
         .pipe(Effect.catchCause(() => act.end("lost"))),
+    /**
+     * Waits while this chain has an overdue call: its late reply sends the waiting call on to the
+     * same child, while a replacement, failure or end leaves it to be refused, nothing sent.
+     */
+    hold: Effect.fn("ComputerUseLeaseProxy.holdForOverdue")(function* (
+      connectionId: string,
+      untilMillis: number,
+    ) {
+      while ([...overdue.values()].includes(connectionId)) {
+        const now = yield* Clock.currentTimeMillis;
+        if (now >= untilMillis) return;
+        const wake = Deferred.await(settled);
+        yield* Number.isFinite(untilMillis)
+          ? wake.pipe(
+              Effect.timeoutOrElse({ duration: untilMillis - now, orElse: () => Effect.void }),
+            )
+          : wake;
+      }
+    }),
     /** Every line the driver writes, as it arrives. */
     received: (line: string) =>
       Effect.sync(() => {
         const key = replyKey(line);
-        if (key !== undefined && proxy.outstanding.has(key)) replied.add(key);
+        if (key === undefined) return;
+        if (proxy.outstanding.has(key)) replied.add(key);
+        settle(key);
       }),
     watch: (key: string, deadlineMillis: number) =>
       Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) => {
-          const wait = deadlineMillis + UNANSWERED_GRACE_MS - now;
-          return wait > 0 ? Effect.sleep(wait) : Effect.void;
-        }),
+        Effect.flatMap((now) => Effect.sleep(Math.max(0, deadlineMillis - now))),
+        Effect.andThen(
+          Effect.sync(() => {
+            const call = proxy.outstanding.get(key);
+            if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
+          }),
+        ),
+        Effect.andThen(Effect.sleep(UNANSWERED_GRACE_MS)),
         Effect.andThen(proxy.lock.withPermits(1)(replace(key).pipe(Effect.uninterruptible))),
         Effect.catchCause(() => act.end("lost")),
+        Effect.ensuring(Effect.sync(() => settle(key))),
         Effect.forkIn(proxy.scope),
         Effect.asVoid,
       ),

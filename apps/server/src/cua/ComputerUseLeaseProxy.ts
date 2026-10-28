@@ -780,6 +780,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }
+    if (isRequest && lifecycle.current !== undefined)
+      yield* unanswered.hold(lifecycle.current.connectionId, primitiveDeadline);
     // Paused: no driver until control comes back. The handshake is still answered (#1604), in
     // the background so a cancel or Stop on the input reaches it; tool calls hear the pause.
     if (lifecycle.current === undefined) {

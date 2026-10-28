@@ -23,6 +23,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -314,6 +315,14 @@ export const make = Effect.gen(function* () {
         effectStarted: false,
         nextStep: "Bind the desktop app again after the driver reconnects.",
       });
+    // The proxy waits on this deadline too, so a driver that never answers is replaced after it.
+    const deadlineMillis = driverCallDeadline(input.tool, input.args, input.deadlineMillis, now);
+    if (deadlineMillis - now < MIN_CALL_MS)
+      return yield* Effect.fail({
+        code: "deadline" as const,
+        effectStarted: false,
+        nextStep: "This cell has too little time left for this call; run it in a new cell.",
+      });
     const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
     const request: ComputerUsePrimitiveRequest = {
       state: "primitive-request",
@@ -324,7 +333,7 @@ export const make = Effect.gen(function* () {
       runId: input.runId,
       turnId: input.turnId,
       callId: input.callId,
-      deadlineMillis: input.deadlineMillis,
+      deadlineMillis,
       tool: input.tool,
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
@@ -338,12 +347,14 @@ export const make = Effect.gen(function* () {
     }
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
-        duration: Math.max(0, input.deadlineMillis - now),
+        duration: deadlineMillis - now,
         orElse: () =>
           Effect.fail({
             code: "deadline" as const,
             effectStarted: pending.sent,
-            nextStep: "Observe the desktop before any later action.",
+            nextStep: pending.sent
+              ? `The driver did not answer within ${seconds(deadlineMillis - now)}, so GOAT is restarting it. Observe before acting again; do not resend input.`
+              : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
           }),
       }),
       Effect.ensuring(
