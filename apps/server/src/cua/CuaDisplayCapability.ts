@@ -276,7 +276,7 @@ export const MAC_GRANTS_REASON =
  * grants would land on the wrong app; the desktop app runs the driver under its own helper.
  */
 export const MAC_STANDALONE_REASON =
-  "This thread runs on a standalone GOAT server (one the GOAT desktop app does not host), and on a Mac computer use runs only through the desktop app's own server, so threads here cannot use it.";
+  "This GOAT server is standalone (the GOAT desktop app does not host it), and on a Mac computer use runs only through the desktop app's own server, so threads on this server cannot use it.";
 
 /**
  * The driver needs this user's GUI session, which exists only while they own the console. The
