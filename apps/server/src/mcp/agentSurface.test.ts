@@ -509,7 +509,42 @@ const asDirectResult = (result: McpSchema.CallToolResult) => {
 };
 
 // goat_eval's own refusals and journal failures, which say nothing about the target's access.
-const EVAL_OWN_FAILURE = /^(eval_[a-z_]+|grant_lost|storage_failed|unknown_outcome)$/;
+const EVAL_OWN_FAILURE =
+  /^(eval_[a-z_]+|grant_[a-z_]+|storage_failed|in_progress|idempotency_mismatch|unknown_outcome)$/;
+
+/**
+ * The outcome a route's result stands for. The envelope turns a refusal inside a successful
+ * value into an error; that is a domain answer after access passed, so it still counts as
+ * reaching the handler, unless goat_eval itself refused before or around the call.
+ */
+const routeOutcome = (options: {
+  readonly route: Route;
+  readonly path: string;
+  readonly effect: string;
+  readonly classified: Outcome;
+  readonly text: string;
+  readonly directOutcome: Outcome | undefined;
+}): Outcome => {
+  const { route, path, effect, classified, text, directOutcome } = options;
+  const code = refusalCode(text) ?? "";
+  // goat_eval halts a write as unknown only after calling it, so a halt naming this path is the
+  // target's answer; it reached the handler when the direct call did.
+  if (
+    route === "goat_eval" &&
+    directOutcome === "reached" &&
+    effect !== "read" &&
+    code === "unknown_outcome" &&
+    text.includes(`"message":"${path} may have run`)
+  )
+    return "reached";
+  if (route === "goat_eval" && EVAL_OWN_FAILURE.test(code)) return classified;
+  return route !== "direct" &&
+    route !== "legacy" &&
+    classified === "unexpected" &&
+    directOutcome === "reached"
+    ? "reached"
+    : classified;
+};
 
 const via = {
   direct: (name: string, args: Record<string, unknown>) =>
@@ -600,26 +635,16 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
-            // The envelope turns a refusal inside a successful value into an error; that is a
-            // domain answer after access passed, so it still counts as reaching the handler.
             const content = result.content[0];
             const text = content?.type === "text" ? content.text : "";
-            const outcome =
-              // goat_eval halts a write as unknown only after calling it, so a halt naming this
-              // path is the target's answer; it reached the handler when the direct call did.
-              route === "goat_eval" &&
-              directOutcome === "reached" &&
-              entry.effect !== "read" &&
-              refusalCode(text) === "unknown_outcome" &&
-              text.includes(`"message":"${entry.path} may have run`)
-                ? "reached"
-                : route !== "direct" &&
-                    route !== "legacy" &&
-                    !(route === "goat_eval" && EVAL_OWN_FAILURE.test(refusalCode(text) ?? "")) &&
-                    classified === "unexpected" &&
-                    directOutcome === "reached"
-                  ? "reached"
-                  : classified;
+            const outcome = routeOutcome({
+              route,
+              path: entry.path,
+              effect: entry.effect,
+              classified,
+              text,
+              directOutcome,
+            });
             if (route === "direct") directOutcome = outcome;
             const expected = expectedOutcome(entry, caller);
             if (outcome !== expected) {
@@ -634,6 +659,43 @@ describe("agent surface access", () => {
       expect(mismatches).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(registered, NodeHttpServer.layerTest))),
   );
+
+  it("never counts goat_eval's own refusals as the target answering", () => {
+    const refused = (code: string) => JSON.stringify({ code, message: "goat_eval refused." });
+    for (const code of [
+      "eval_explicit_key",
+      "grant_unresolved",
+      "grant_lost",
+      "storage_failed",
+      "in_progress",
+      "idempotency_mismatch",
+    ])
+      expect(
+        routeOutcome({
+          route: "goat_eval",
+          path: "thread.send",
+          effect: "destructive",
+          classified: "unexpected",
+          text: refused(code),
+          directOutcome: "reached",
+        }),
+        code,
+      ).toBe("unexpected");
+    // An unknown outcome counts only when it names the target it called.
+    const unknown = (path: string) =>
+      JSON.stringify({ code: "unknown_outcome", message: `${path} may have run, so ...` });
+    const halted = (text: string) =>
+      routeOutcome({
+        route: "goat_eval",
+        path: "thread.send",
+        effect: "destructive",
+        classified: "unexpected",
+        text,
+        directOutcome: "reached",
+      });
+    expect(halted(unknown("thread.send"))).toBe("reached");
+    expect(halted(unknown("thread.read"))).toBe("unexpected");
+  });
 
   it("documents every access exception", () => {
     for (const [path, exception] of Object.entries(ACCESS_EXCEPTIONS)) {
