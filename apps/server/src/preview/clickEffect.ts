@@ -54,27 +54,28 @@ const INSTALL = `(() => {
           (elementIn(record.addedNodes) || elementIn(record.removedNodes))))
         return note("dom");
   };
-  // While a click event is dispatched, its handlers' microtasks included, element changes anywhere
-  // are its own. It ends where propagation ends, a stopped one too; timers after it are ambient.
-  let handling = false;
-  let settleTask;
-  const observer = new MutationObserver((records) => consider(records, handling));
-  observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  const finish = () => {
-    consider(observer.takeRecords(), true);
-    handling = false;
-    clearTimeout(settleTask);
+  // A change made while one of the click's own events is still being dispatched, handlers'
+  // microtasks included, is its own wherever it lands. Dispatch ends with eventPhase NONE, however
+  // propagation stopped, so timers after it are ambient. Nested dispatches each count.
+  const dispatching = new Set();
+  const handled = () => {
+    for (const event of dispatching) if (event.eventPhase === 0) dispatching.delete(event);
+    return dispatching.size > 0;
   };
+  const observer = new MutationObserver((records) => consider(records, handled()));
+  const options = { subtree: true, childList: true, attributes: true, characterData: true };
+  const observed = new Set();
+  const watch = (root) => {
+    if (root && !observed.has(root)) {
+      observed.add(root);
+      observer.observe(root, options);
+    }
+  };
+  watch(document);
   const begin = (event) => {
-    consider(observer.takeRecords(), handling);
-    handling = true;
-    clearTimeout(settleTask);
-    // Only if a handler stopped immediate propagation does no listener below end it.
-    settleTask = setTimeout(finish, 0);
-    const check = (seen) => {
-      if (seen === event && handling && (seen.cancelBubble || seen.currentTarget === window)) finish();
-    };
-    for (const node of event.composedPath()) node.addEventListener(event.type, check, { once: true });
+    consider(observer.takeRecords(), handled());
+    dispatching.add(event);
+    for (const node of event.composedPath()) if (node instanceof ShadowRoot) watch(node);
   };
   const phases = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].map((type) => [
     window, type, begin, true]);
@@ -91,13 +92,14 @@ const INSTALL = `(() => {
     target = at && typeof at.x === "number" ? document.elementFromPoint(at.x, at.y) : at;
     // A click on the page's background has no target: everything would be "inside" it.
     if (target === document.body || target === document.documentElement) target = null;
+    if (target) watch(target.getRootNode());
     armed = true;
   };
   const stop = () => {
     onUrl();
     armed = false;
     resolve();
-    clearTimeout(settleTask);
+    dispatching.clear();
     observer.disconnect();
     for (const [on, type, listener] of listeners) on.removeEventListener(type, listener, true);
     for (const [on, type, listener, capture] of phases) on.removeEventListener(type, listener, capture);

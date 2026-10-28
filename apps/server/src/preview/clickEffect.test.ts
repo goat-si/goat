@@ -192,3 +192,50 @@ it("does not credit a click with what timers change right after it", () =>
           effect: "suspected_noop",
         });
   }));
+
+it("does not credit timers after a click a capture listener stopped", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<p id="still" style="position:absolute;left:10px;top:10px;margin:0">static</p><div id="feed" style="position:absolute;top:100px"></div><script>
+        document.addEventListener("click", (event) => event.stopPropagation(), true);
+        setInterval(() => feed.append(document.createElement("aside")), 1);
+      </script>`,
+    );
+    for (let attempt = 0; attempt < 40; attempt++)
+      await expect(ServerBrowserPage.click(page, { x: 20, y: 18 })).resolves.toMatchObject({
+        effect: "suspected_noop",
+      });
+  }));
+
+it("keeps crediting a click whose handler dispatches another click first", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<span id="outer">open</span><b id="inner"></b><div id="overlays"></div><script>
+        outer.addEventListener("click", () => {
+          inner.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          overlays.append(document.createElement("menu"));
+        });
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#outer" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["dom"]),
+    });
+  }));
+
+it("sees a change inside an open shadow root", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<div id="host"></div><script>
+        const root = host.attachShadow({ mode: "open" });
+        root.innerHTML = "<span id=s>save</span>";
+        root.getElementById("s").addEventListener("click", (event) => { event.target.firstChild.data = "saved"; });
+      </script>`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#host >> #s" })).resolves.toMatchObject(
+      {
+        effect: "confirmed",
+        evidence: expect.arrayContaining(["dom"]),
+      },
+    );
+  }));
