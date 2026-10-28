@@ -10,6 +10,7 @@ else
     ln -sf '/opt/${sanitizedProductName}/${executable}' '/usr/bin/${executable}'
 fi
 
+# goat-rename: legacy-begin
 # GOAT: builds from before the rename relaunch /usr/bin/t3code after an in-app update, and the
 # t3code package's postrm removes that alternative, so register it again for goat-desktop.
 if type update-alternatives >/dev/null 2>&1; then
@@ -20,6 +21,7 @@ if type update-alternatives >/dev/null 2>&1; then
 else
     ln -sf '/opt/${sanitizedProductName}/${executable}' '/usr/bin/t3code'
 fi
+# goat-rename: legacy-end
 
 # Check if user namespaces are supported by the kernel and working with a quick test:
 if ! { [[ -L /proc/self/ns/user ]] && unshare --user true; }; then

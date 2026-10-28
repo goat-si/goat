@@ -9,12 +9,14 @@ else
     rm -f '/usr/bin/${executable}'
 fi
 
+# goat-rename: legacy-begin
 # GOAT: the legacy launcher added by after-install.tpl.
 if type update-alternatives >/dev/null 2>&1; then
     update-alternatives --remove 't3code' '/opt/${sanitizedProductName}/${executable}'
 else
     rm -f '/usr/bin/t3code'
 fi
+# goat-rename: legacy-end
 
 APPARMOR_PROFILE_DEST='/etc/apparmor.d/${executable}'
 
