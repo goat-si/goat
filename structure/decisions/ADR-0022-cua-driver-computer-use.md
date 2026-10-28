@@ -229,9 +229,16 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   them); it then admits only those apps' windows. Interactive threads ask the same way: without a
   grant they may list apps and windows but act on none. The proxy ties a call to an app by the
   pid it targets and learns which app a pid is from the driver's own answers, asking
-  `list_apps` when it has not seen one. Calls with no target act on the whole desktop, and
-  `run_script` and `run_steps` cannot be read ahead, so under a list they are refused
-  (`targetRefused`, detail `desktop_not_approved`) unless a grant covers the whole screen.
+  `list_apps` when it has not seen one. Calls with no target act on the whole desktop, so under
+  a list they are refused (`targetRefused`, detail `desktop_not_approved`) unless a grant covers
+  the whole screen. `run_script` and `run_steps` cannot be read ahead, so under a list they run
+  only with an `app_scope` of approved apps (cua-driver goat.6+), which the driver checks on every
+  call the batch makes, its target lookups included, refusing one outside it with nothing sent.
+  The proxy adds the approved apps to a batch that names none once the driver's tool list shows
+  it keeps `app_scope`; a driver that does not could run the scope unscoped, so there a batch
+  naming one is refused (`outside_manifest`) and one without stays refused. A background scope
+  takes neither the shared screen nor foreground approval, and a `run_steps` whose steps name only
+  its own window reserves that window alone; any other batch reserves the desktop.
 - **Controls.** Every attached driver runs under a control the server mints per thread: an
   unattended one lives on its grant, an interactive one for 60 minutes. Stop on a turn
   (`ProviderTurnControlService` interrupt and restart) and the host kill switch

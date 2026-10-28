@@ -292,12 +292,13 @@ describe("computer use skill against what agents receive today", () => {
   });
 
   it("teaches batches and scripts, with single calls where an approved-app turn refuses them", () => {
-    // ComputerUseScope refuses run_steps and run_script, sending nothing, whenever a thread's
-    // control names apps, and reservations count both as foreground use of the desktop.
+    // Under an app list the proxy admits run_steps and run_script only with an app_scope of
+    // approved apps, which it adds where the driver takes one; elsewhere it refuses both.
     for (const tool of ["run_steps", "run_script"]) expect(codeSpans).toContain(tool);
     const line = (text: string) => guidance.split("\n").find((entry) => entry.includes(text)) ?? "";
     expect(line("`run_steps` call")).toContain("`observe: {}`");
-    expect(line("approved apps gets")).toMatch(
+    expect(line("approved apps may batch")).toContain("`app_scope`");
+    expect(line("approved apps may batch")).toMatch(
       /refused, and nothing was sent\. Make the calls one at a time/,
     );
     expect(line("foreground use of the whole screen")).toContain(

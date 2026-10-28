@@ -511,3 +511,37 @@ it.effect(
       bridge.cutCellNow("r", "t", "c");
     }),
 );
+
+const app = { ...tab, id: "window", kind: "app" as const };
+const member = (callId: number, index: number, size: number, text = "a"): ScreenHostCall => ({
+  ...call(callId),
+  targetRef: app,
+  method: "type_text",
+  args: [{ text, batch: { index, size }, targetRef: app }],
+});
+
+it.effect("a batch group whose member is refused on admission sends none of the group", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    let sent = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () => Effect.sync(() => ({ category: "confirmed" as const })),
+      dispatchBatch: (calls) =>
+        Effect.sync(() => {
+          sent += calls.length;
+          return [];
+        }),
+    });
+    const limits = { ...context(), limits: screenRunLimits({ argBytes: 4 }) };
+    const replies = yield* Effect.forEach(
+      [member(1, 0, 3), member(2, 1, 3, "too long"), member(3, 2, 3)],
+      (each) => bridge.handle(each, limits),
+      { concurrency: "unbounded" },
+    );
+    expect(
+      replies.map((reply) => (reply && "error" in reply ? reply.error?.code : reply?.outcome)),
+    ).toEqual(["not_run", "text_limit", "not_run"]);
+    expect(sent).toBe(0);
+  }),
+);

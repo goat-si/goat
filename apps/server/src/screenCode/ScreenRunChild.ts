@@ -158,8 +158,13 @@ export async function runScreenChild(
         typeof batch.index === "number" &&
         batch.index > 0 &&
         group.first + batch.index === nextCallId + 1;
+      // A group starts only when all of it fits the cell's calls, so none of it waits on a call
+      // that is refused here and never reaches the host.
+      const opens = batch?.index === 0 && typeof batch.size === "number";
+      const fits = !opens || callCount + Number(batch.size) <= currentLimits.callsPerCell;
       if (
         !admitted ||
+        !fits ||
         !methods.includes(method as (typeof methods)[number]) ||
         ++callCount > currentLimits.callsPerCell ||
         (!member && pending.size >= currentLimits.pendingCalls) ||
@@ -171,11 +176,7 @@ export async function runScreenChild(
         return promise.handle;
       }
       const callId = ++nextCallId;
-      if (!member)
-        group =
-          batch?.index === 0 && typeof batch.size === "number"
-            ? { first: callId, size: batch.size }
-            : undefined;
+      if (!member) group = opens ? { first: callId, size: Number(batch?.size) } : undefined;
       const targetRef =
         typeof firstArg === "object" && firstArg !== null && "targetRef" in firstArg
           ? (firstArg.targetRef as ScreenHostCall["targetRef"])

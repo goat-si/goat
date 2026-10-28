@@ -309,7 +309,8 @@ provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) inst
 (`ComputerUseScope.ts`), and kills its driver child on Stop, the `computerUse.stopAll` kill switch,
 expiry, or a pause for a person's input until `computerUse.resume` (`ComputerUseRpcHandlers.ts`).
 Before dispatch, the proxy reserves mutations through the same server. Exact window calls exclude
-other threads from that window; opaque, unresolved and foreground calls exclude every mutation.
+other threads from that window, as does a background-scoped `run_steps` kept to its own window;
+other batches, unresolved and foreground calls exclude every mutation.
 Ownership lasts until a terminal reply or acknowledged driver cutoff. Cancellation alone cannot
 release it, and closing a driver generation fences delayed admission requests. Lost cutoff or
 release acknowledgements retain conflicts rather than risking overlapping input. This coordinator

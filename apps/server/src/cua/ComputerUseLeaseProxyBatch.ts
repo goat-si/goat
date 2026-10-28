@@ -1,13 +1,8 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The provider's JSON-RPC line keeps its opaque fields.
 /**
- * run_steps and run_script under a lease proxy. The driver (goat.6+) keeps a batch with an
- * `app_scope` to those apps' windows, refusing each call outside them with nothing sent, so the
- * proxy admits such a batch under an app list (ComputerUseScope) and gives one without a scope the
- * control's approved apps. A driver whose tool list has no `app_scope` could ignore it and run the
- * batch unscoped, so a batch that names one is refused there and one without keeps the refusal it
- * always had under a list.
- *
- * @module ComputerUseLeaseProxyBatch
+ * Under an app list the proxy gives an unscoped run_steps or run_script the control's approved
+ * apps as its `app_scope` (ComputerUseScope then admits it). A driver whose tool list lacks
+ * `app_scope` could ignore one and run the batch unscoped, so a scope never goes to it.
  */
 import * as Effect from "effect/Effect";
 
@@ -27,7 +22,7 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
     : undefined;
 
 /** Whether a tools/list result gives the tool an `app_scope` input. */
-export const acceptsAppScope = (toolList: unknown, name: string): boolean => {
+const acceptsAppScope = (toolList: unknown, name: string): boolean => {
   const listed = record(toolList)?.tools;
   if (!Array.isArray(listed)) return false;
   const tool = listed.map(record).find((entry) => entry?.name === name);

@@ -1,12 +1,7 @@
 /**
- * Desktop input a cell started without awaiting each call (the prelude's flush) reaches the bridge
- * as consecutive host calls marked `batch: {index, size}`. Each stays its own call, with its own
- * admission, receipt and reply; the group only shares the trip to the driver. The first call
- * opens the group, holds the target's gate and waits until every member has arrived and passed
- * its own checks, then dispatches the ready members in order as one batch. A later call of the
- * cell closes the group; members after a gap, a refusal or a failure do not run.
- *
- * @module ScreenBatchGroups
+ * Consecutive host calls the prelude marked `batch: {index, size}`: each keeps its own admission,
+ * receipt and reply, and only the trip to the driver is shared. The first holds the target's gate
+ * until every member passed its checks; members after a gap, refusal or failure do not run.
  */
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -15,7 +10,7 @@ import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 /** The most calls the prelude sends as one group; the driver allows 64 steps. */
-export const MAX_BATCH_CALLS = 16;
+const MAX_BATCH_CALLS = 16;
 
 type Outcome = Exit.Exit<ScreenHostDispatchResult, ScreenRunError>;
 type NotRun = (callId: number, failedCallId: number) => ScreenRunError;
@@ -29,7 +24,7 @@ interface BatchGroup {
   readonly settled: Deferred.Deferred<void>;
 }
 
-export interface BatchSlot {
+interface BatchSlot {
   readonly call: ScreenHostCall;
   readonly index: number;
   readonly group: BatchGroup;

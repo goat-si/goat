@@ -46,6 +46,8 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" }.
+// Element clicks, type and setValue on one app started together (await Promise.all([...])) reach
+// the app as one batch, in order: each still gets its own result, and the first that fails stops the rest.
 interface App extends TargetBase { menu(path: string[]): Promise<Done>; launch(): Promise<Done>;
   screenshot(): Promise<object> }`;
 

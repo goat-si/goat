@@ -249,11 +249,12 @@ export class ScreenHostBridge {
         ? { outcome: { dispatch, effect: "unknown" as const } }
         : {};
     const deny = (error: ScreenRunError) => {
-      leave();
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
       record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
       halt();
+      // After the halt, so the group's first call sees it and sends nothing of the group.
+      leave();
       return refused(call, { ...error, safety, receipts });
     };
     if (

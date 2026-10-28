@@ -1,18 +1,14 @@
 /**
- * The `app_scope` a run_steps or run_script call carries (cua-driver goat.6+). The driver checks
- * every call the batch makes against it, including the reads that find a target, and refuses one
- * outside it with nothing sent, so GOAT can admit the batch for those apps without reading it
- * ahead. A malformed scope reads as none: the driver refuses it, and GOAT judges the batch as the
- * unscoped desktop work it would otherwise be.
- *
- * @module ComputerUseBatchScope
+ * The `app_scope` of a run_steps or run_script call (cua-driver goat.6+): the driver checks every
+ * call the batch makes against it and refuses one outside it with nothing sent. A malformed scope
+ * reads as none, as the driver refuses it, so GOAT judges that batch as unscoped desktop work.
  */
 
 const BATCH_TOOLS: ReadonlySet<string> = new Set(["run_steps", "run_script"]);
 /** The driver's MAX_SCOPE_APPS (cua-driver-core batch_scope.rs). */
 export const MAX_BATCH_SCOPE_APPS = 32;
 
-export interface BatchAppScope {
+interface BatchAppScope {
   readonly apps: ReadonlyArray<string>;
   /** Background (the driver's default) posts to the scoped windows only; foreground may raise them. */
   readonly delivery: "background" | "foreground";
