@@ -225,6 +225,8 @@ export const signedComputerUseHelper = (
 export const computerUseHelperEnvironment = (helper: StagedComputerUseHelper | undefined) =>
   helper ? { [COMPUTER_USE_HELPER_ENV]: helper.bundle } : {};
 
+const MAC_AFTER_PACK = NodeURL.fileURLToPath(new URL("./mac-after-pack.ts", import.meta.url));
+
 /**
  * Keeps electron-builder's signer off the helper createBuildConfig placed in Contents/Helpers,
  * and restores it after packing (universal merges rewrite its Info.plist), so GOAT.app is sealed
@@ -237,11 +239,12 @@ export function withComputerUseHelper(
   config: Record<string, unknown>,
   helper: StagedComputerUseHelper | undefined,
 ): Record<string, unknown> {
-  if (!helper) return config;
+  // Every macOS build runs the hook: it also drops the camera request from Info.plist.
+  if (!helper) return config.mac === undefined ? config : { ...config, afterPack: MAC_AFTER_PACK };
   const mac = typeof config.mac === "object" && config.mac !== null ? config.mac : {};
   return {
     ...config,
-    afterPack: NodeURL.fileURLToPath(new URL("./restore-computer-use-helper.ts", import.meta.url)),
+    afterPack: MAC_AFTER_PACK,
     mac: {
       ...mac,
       signIgnore: [`/Contents/${COMPUTER_USE_HELPER_IN_APP.replaceAll(".", "\\.")}(/|$)`],
