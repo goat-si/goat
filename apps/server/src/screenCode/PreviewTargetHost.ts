@@ -228,7 +228,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           status: "failed",
           errorTag: error._tag,
           ...(error._tag === "PreviewAutomationControlInterruptedError"
-            ? { controlReason: error.reason, dispatched: error.dispatched }
+            ? { controlReason: error.reason }
+            : {}),
+          ...("dispatched" in error && error.dispatched !== undefined
+            ? { dispatched: error.dispatched }
             : {}),
         });
         return {

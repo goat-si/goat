@@ -87,3 +87,34 @@ it.effect("an exact bound tab never reroutes after host replacement", () =>
     }),
   ),
 );
+
+it.effect("a host's refusal before any input left reaches the agent as not dispatched", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      let answered = 0;
+      yield* Stream.runForEach(yield* broker.connect(makeHost()), (event) =>
+        event.type === "connected"
+          ? Effect.void
+          : broker.respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationSecretFillRefusedError",
+                message: "Nothing was filled.",
+                // The first refusal came before anything was typed; the second may have typed.
+                ...(answered++ === 0 ? { detail: { beforeInput: true } } : {}),
+              },
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const invoke = broker
+        .invoke<void>({ scope, operation: "status", input: {}, timeoutMs: 2_000 })
+        .pipe(Effect.flip);
+      expect(yield* invoke).toMatchObject({ dispatched: false });
+      expect(yield* invoke).not.toHaveProperty("dispatched");
+    }),
+  ),
+);

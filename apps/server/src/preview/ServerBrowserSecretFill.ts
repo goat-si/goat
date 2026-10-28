@@ -55,7 +55,13 @@ const SHOWN =
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
-const refused = (message: string) => new ServerBrowserOperationError(REFUSED, message);
+/** A refusal before anything was typed; only UNCERTAIN may have typed the value. */
+const refused = (message: string) =>
+  new ServerBrowserOperationError(
+    REFUSED,
+    message,
+    message === UNCERTAIN ? undefined : { beforeInput: true },
+  );
 const decodeInput = Schema.decodeUnknownOption(PreviewAutomationFillSecretInput);
 
 /** Playwright's protocol log would carry the CDP arguments, so any pattern that could enable it refuses. */
@@ -418,7 +424,9 @@ export const make = Effect.gen(function* () {
               .catch(() => {
                 throw refused(UNCERTAIN);
               });
+            // Only FILL's explicit early false proves the value was never set.
             if (typed.exceptionDetails || typed.result.value !== true) {
+              if (typed.exceptionDetails || typed.result.value !== false) throw refused(UNCERTAIN);
               fences.set(
                 tab.page,
                 (fences.get(tab.page) ?? []).filter((each) => each !== entry),

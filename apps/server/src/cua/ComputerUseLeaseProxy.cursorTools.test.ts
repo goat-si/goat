@@ -2,8 +2,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation/types.js";
+import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
+import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { CURSOR_OUTPUT_SCHEMA, helperCursorListing } from "./ComputerUseCursorTools.ts";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
@@ -22,6 +24,12 @@ const window = { pid: 4, window_id: 9 };
 const show = (phase: string) =>
   "draw " + JSON.stringify({ op: "show", pid: 4, windowId: 9, phase });
 const HIDE_IDLE = "draw " + JSON.stringify({ op: "hide", reason: "idle" });
+/** A PNG header (signature and IHDR) for a 200x100 screenshot. */
+const SHOT = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]),
+  Buffer.from("IHDR"),
+  Buffer.from([0, 0, 0, 200, 0, 0, 0, 100, 8, 6, 0, 0, 0]),
+]).toString("base64");
 
 describe("agent cursor tools on a helper that draws the cursor", () => {
   it.effect("answers from GOAT's cursor without reaching the driver, enabled by default", () =>
@@ -115,10 +123,22 @@ describe("agent cursor tools on a helper that draws the cursor", () => {
     "moves GOAT's cursor for a window move_cursor the overlay-less driver would refuse",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness({ overlay: true, answersCursorTools: true });
+        const h = yield* harness({ overlay: true, answersCursorTools: true, onTarget: () => true });
         yield* h.push(active());
         yield* h.applied;
-        yield* h.send(call(1, "move_cursor", { ...window, x: 40, y: 20 }));
+        yield* h.send(call(1, "get_window_state", window));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { content: [{ type: "image", mimeType: "image/png", data: SHOT }] },
+          }),
+        );
+        yield* h.nextToProvider;
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        h.log.length = 0;
+        yield* h.send(call(2, "move_cursor", { ...window, x: 40, y: 20 }));
         const answer = yield* h.nextToProvider;
         assert.deepInclude(structured(answer), {
           effect: "confirmed",
@@ -128,8 +148,68 @@ describe("agent cursor tools on a helper that draws the cursor", () => {
           window_id: 9,
         });
         assert.isUndefined((answer.result as { isError?: boolean }).isError);
-        assert.deepEqual(h.log, [show("acting"), show("resting")]);
+        assert.include(h.log.join("\n"), '"fx":0.2');
         assert.equal(yield* h.driverQueued, 0);
+        // The call is reserved like any other input on the window.
+        assert.isTrue(
+          h.reservations.some(
+            (reservation) => reservation.action === "reserve" && reservation.name === "move_cursor",
+          ),
+        );
+      }),
+  );
+
+  it.effect("a window move_cursor with no screenshot to place it on does not claim it moved", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ overlay: true, answersCursorTools: true });
+      yield* h.push(active());
+      yield* h.applied;
+      yield* h.send(call(1, "move_cursor", { ...window, x: 40, y: 20 }));
+      const answer = yield* h.nextToProvider;
+      assert.notEqual((structured(answer) as { effect?: string }).effect, "confirmed");
+      assert.isTrue((answer.result as { isError?: boolean }).isError);
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "a cursor move GOAT answers itself leaves earlier unanswered input holding its window",
+    () =>
+      Effect.gen(function* () {
+        const reservations = makeCallReservations();
+        const thread = ThreadId.make("thread:cursor");
+        const h = yield* harness({
+          answersCursorTools: true,
+          reservation: (request) =>
+            Effect.sync(() =>
+              request.action === "reserve"
+                ? reservations.reserve(thread, request)
+                : request.action === "validate"
+                  ? {
+                      status: "admitted" as const,
+                      reservationId: request.reservationId,
+                      permissions: { validUntilMillis: 1_800_000 },
+                    }
+                  : reservations.release(thread, request, false),
+            ),
+        });
+        yield* h.push(active());
+        yield* h.applied;
+        yield* h.send(call(1, "type_text", { ...window, text: "still typing" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.send(call(2, "move_cursor", { ...window, x: 40, y: 20 }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        const other = {
+          action: "reserve",
+          controlId: "control:other",
+          connectionId: "proxy:other",
+          callId: "0",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: window,
+        } as const;
+        assert.isTrue(reservations.targetBusy(ThreadId.make("thread:other"), other));
       }),
   );
 });

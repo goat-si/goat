@@ -227,6 +227,40 @@ describe("actionOutcomeSafety", () => {
     });
   });
 
+  it("fetch is a read: it never commits, and a timed-out fetch may be sent again", () => {
+    expect(classifyBrowserActionOutcome({ operation: "fetch", status: "completed" })).toMatchObject(
+      {
+        possibleCommit: false,
+        writeStatus: "not_applicable",
+      },
+    );
+    expect(
+      classifyBrowserActionOutcome({
+        operation: "fetch",
+        status: "failed",
+        errorTag: "PreviewAutomationTimeoutError",
+      }),
+    ).toMatchObject({ possibleCommit: false, retryClass: "same_key" });
+  });
+
+  it("an execution error GOAT raised before any input left sent nothing", () => {
+    expect(
+      classifyBrowserActionOutcome({
+        operation: "fillSecret",
+        status: "failed",
+        errorTag: "PreviewAutomationExecutionError",
+        dispatched: false,
+      }),
+    ).toMatchObject({ possibleCommit: false, retryClass: "fix_input" });
+    expect(
+      classifyBrowserActionOutcome({
+        operation: "fillSecret",
+        status: "failed",
+        errorTag: "PreviewAutomationExecutionError",
+      }).possibleCommit,
+    ).toBe(true);
+  });
+
   it("an admission refusal sent nothing even without gate evidence; another interruption may have", () => {
     const interrupted = (controlReason: PreviewAutomationControlReason) =>
       classifyBrowserActionOutcome({

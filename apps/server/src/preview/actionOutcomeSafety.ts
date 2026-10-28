@@ -32,6 +32,7 @@ const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set
   "status",
   "snapshot",
   "logs",
+  "fetch",
   "waitFor",
 ]);
 
@@ -122,6 +123,14 @@ export function classifyBrowserActionOutcome(
     case "PreviewAutomationClientDisconnectedError":
     case "PreviewAutomationExecutionError":
     default:
+      // The host's word that it failed before any input left: change something, then retry.
+      if (input.dispatched === false)
+        return classifyActionOutcome({
+          effect,
+          status: "refused",
+          dispatched: false,
+          refusalCategory: "fix_input",
+        });
       return classifyActionOutcome({
         effect,
         status: "indeterminate",

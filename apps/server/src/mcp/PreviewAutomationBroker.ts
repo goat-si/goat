@@ -221,6 +221,15 @@ const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
   error: NonNullable<PreviewAutomationResponse["error"]>,
 ): PreviewAutomationError => {
+  // A host that refused before any input left says so in its detail; the classifier reads it.
+  const hostDetail = error.detail;
+  const notSent =
+    typeof hostDetail === "object" &&
+    hostDetail !== null &&
+    "beforeInput" in hostDetail &&
+    hostDetail.beforeInput === true
+      ? { dispatched: false }
+      : {};
   const remoteDiagnostics = {
     remoteTag: error._tag,
     remoteMessageLength: error.message.length,
@@ -274,17 +283,15 @@ const classifyResponseError = (
       });
     }
     case "PreviewAutomationControlInterruptedError": {
-      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left;
-      // dispatched: false carries that to the classifier.
+      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left.
       const detail = error.detail;
       const object = typeof detail === "object" && detail !== null ? detail : undefined;
       const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
-      const beforeInput = object !== undefined && "beforeInput" in object && object.beforeInput;
       return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
         ...(Option.isSome(reason) ? { reason: reason.value } : {}),
-        ...(beforeInput === true ? { dispatched: false } : {}),
+        ...notSent,
       });
     }
     case "PreviewAutomationInvalidSelectorError": {
@@ -355,6 +362,7 @@ const classifyResponseError = (
       return new PreviewAutomationExecutionError({
         ...context,
         ...remoteDiagnostics,
+        ...notSent,
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
           ? { reason: error.message.slice(0, MAX_REASON_CHARS) }
           : {}),
