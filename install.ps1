@@ -2,6 +2,11 @@
 # only PowerShell 5.1+; no Node, npm, or compiler.
 #
 #   irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex
+#   & .\install.ps1 --opencodex
+#
+# Options:
+#   --opencodex            also install OpenCodex with the installed goat; joining
+#                            a Home is a separate step
 #
 # Environment:
 #   GOAT_CHANNEL           release train to follow: stable, nightly, or preview
@@ -15,6 +20,22 @@
 # The archive is unpacked into $GOAT_HOME\runtime\goat\versions\<version>, the
 # same layout `goat service install` uses, so the service reuses this download.
 $ErrorActionPreference = "Stop"
+# $args keeps the documented --opencodex spelling, which a [switch] parameter would not accept.
+$installOpenCodex = $false
+foreach ($argument in $args) {
+  switch -CaseSensitive ($argument) {
+    "--opencodex" { $installOpenCodex = $true }
+    { $_ -eq "--help" -or $_ -eq "-h" } {
+      Write-Output "Usage: & .\install.ps1 [--opencodex]"
+      Write-Output "  --opencodex  also install OpenCodex; joining a Home and Ready verification are separate steps"
+      return
+    }
+    default {
+      [Console]::Error.WriteLine("goat install: unknown option $argument (see --help)")
+      exit 1
+    }
+  }
+}
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $repo = "goat-si/goat-releases"
@@ -257,6 +278,20 @@ $launchers = Join-Path $goatHome "runtime\launchers"
 $shimPath = (Resolve-Path $shim).Path
 if (-not ((Test-Path $launchers) -and ((Get-Content $launchers) -contains $shimPath))) {
   [System.IO.File]::AppendAllText($launchers, "$shimPath`r`n", (New-Object System.Text.UTF8Encoding $false))
+}
+if ($installOpenCodex) {
+  Step "Installing OpenCodex..."
+  if ($interactive) { [Console]::Error.WriteLine() }
+  # PowerShell 5.1 can turn a native command's stderr into terminating errors under "Stop".
+  $ErrorActionPreference = "Continue"
+  & $entry opencodex install
+  $openCodexExit = $LASTEXITCODE
+  $ErrorActionPreference = "Stop"
+  if ($openCodexExit -ne 0) {
+    [Console]::Error.WriteLine("goat install: OpenCodex installation failed; GOAT is installed. Run: goat opencodex install")
+    exit 1
+  }
+  [Console]::Error.WriteLine("  OpenCodex is installed. Join this machine to your Home from Hub devices on the Home; installation alone does not make it Ready.")
 }
 if ($interactive) { [Console]::Error.Write("`r$esc[2K") }
 [Console]::Error.WriteLine("  ${green}Installed GOAT $version$reset`n")
