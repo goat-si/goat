@@ -13,7 +13,11 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
-import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE, EnvironmentId } from "@goat/contracts";
+import {
+  COMPUTER_USE_PRIMITIVE_ARGS_BYTES,
+  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  EnvironmentId,
+} from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -37,6 +41,9 @@ import {
 import { ScreenObservations, type ScreenElementDetail } from "./ScreenObservations.ts";
 
 const isJson = Schema.is(Schema.Json);
+/** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
+const withinPrimitiveCap = (args: Record<string, unknown>) =>
+  new TextEncoder().encode(JSON.stringify(args)).byteLength <= COMPUTER_USE_PRIMITIVE_ARGS_BYTES;
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -227,7 +234,8 @@ export const createDesktopTargetHost = (deps: {
     /** The input's cursor: the bound target that owns it and, for an element, its center. */
     cursor?: { readonly bound: BoundWindow; readonly point?: ComputerUseOverlayPoint | undefined },
   ) {
-    if (!isJson(args)) return yield* Effect.fail(fail("invalid_argument"));
+    if (!isJson(args) || !withinPrimitiveCap(args))
+      return yield* Effect.fail(fail("invalid_argument"));
     return yield* deps.primitiveChannel.request({
       threadId: context.invocation.thread.threadId,
       runId: context.runId,
@@ -817,7 +825,8 @@ export const createDesktopTargetHost = (deps: {
     return { bound, bundleId, steps };
   };
   // One run_steps for a group's element input, scoped to its window's app in the background;
-  // anything else, or a driver that refuses the batch before it runs, goes one call at a time.
+  // anything else, a batch past the channel's args cap, or a driver that refuses the batch
+  // before it runs, goes one call at a time.
   const dispatchBatch: DesktopTargetHost["dispatchBatch"] = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context) {
@@ -833,6 +842,7 @@ export const createDesktopTargetHost = (deps: {
       app_scope: { apps: [bundleId], delivery: "background" },
       steps,
     };
+    if (!withinPrimitiveCap(args)) return yield* inTurn;
     bound.pointsStale = true;
     const sent = yield* send(
       "run_steps",

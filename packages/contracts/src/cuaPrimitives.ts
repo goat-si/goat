@@ -20,7 +20,9 @@ const boundedJson = (maxBytes: number) =>
       (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= maxBytes,
     ),
   );
-const primitiveJson = boundedJson(64 * 1024);
+/** The byte cap on a primitive request's args; a host merging calls into one checks it first. */
+export const COMPUTER_USE_PRIMITIVE_ARGS_BYTES = 64 * 1024;
+const primitiveJson = boundedJson(COMPUTER_USE_PRIMITIVE_ARGS_BYTES);
 /**
  * A driver answer's JSON on the primitive channel. A full window read of a busy app (Finder lists
  * hundreds of elements, each with its token, frame and actions, beside the tree's markdown) passes

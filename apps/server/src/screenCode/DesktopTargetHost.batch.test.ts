@@ -1,8 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import { ComputerUsePrimitiveRequest } from "@goat/contracts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -82,6 +84,46 @@ it.live("eight unawaited element clicks on one window reach the driver as one ru
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live(
+  "element typing started together past the primitive args cap goes one call at a time",
+  () => {
+    const { host, sent } = fixture({
+      run_steps: (args: { steps: ReadonlyArray<unknown> }) =>
+        ranSteps(
+          args.steps.map(() => ({ ok: true, effect: "confirmed" })),
+          args.steps.length,
+        ),
+    });
+    // What the lease stream encodes for each call; it rejects args over the primitive cap.
+    const primitive = Schema.decodeUnknownSync(ComputerUsePrimitiveRequest);
+    return Effect.gen(function* () {
+      // Each typing is within the cell's own limit; together they are past the channel's.
+      const result = yield* runCell(
+        `${BIND} const clicks = [app.type('x'.repeat(33000), 'Apply'), app.type('y'.repeat(33000), 'Apply')]; ${SETTLED}`,
+      );
+      expect(result.value).toEqual(["confirmed", "confirmed"]);
+      expect(sent.map((entry) => entry.tool).slice(3)).toEqual(["type_text", "type_text"]);
+      for (const [callId, entry] of sent.entries())
+        expect(() =>
+          primitive({
+            state: "primitive-request",
+            requestId: "request",
+            registrationId: "registration",
+            controlId: "control",
+            connectionGeneration: "driver:1",
+            runId: "r",
+            turnId: "t",
+            callId,
+            deadlineMillis: 1000,
+            tool: entry.tool,
+            args: entry.args,
+          }),
+        ).not.toThrow();
+      yield* finish;
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
 
 it.live("a refused step stops the batch, and the cell sees which clicks ran", () => {
   const { host } = fixture({

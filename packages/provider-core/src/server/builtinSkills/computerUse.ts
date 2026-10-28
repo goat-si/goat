@@ -48,8 +48,8 @@ export const COMPUTER_USE_SKILL_BATCH = `<computer_use_batch>
 - A batch or script grants nothing a single call lacks; a refused step ends it.
 
 ## When single calls are the only way
-- A thread limited to approved apps may batch in the background: give \`run_steps\` and \`run_script\` an \`app_scope\` of \`{apps: [approved bundle ids]}\` (GOAT adds one when it can), and the driver refuses any step outside them or in the foreground. Where the driver takes no \`app_scope\`, both are refused, and nothing was sent. Make the calls one at a time, each with the \`pid\` and \`window_id\` of an approved app's window.
-- GOAT counts a batch or script without a background \`app_scope\` as foreground use of the whole screen. Full-access turns have that authority and may batch. In other turns, prefer single calls; do not ask for foreground approval just to batch.
+- A thread limited to approved apps may batch in the background with \`run_steps\`: give it an \`app_scope\` of \`{apps: [approved bundle ids]}\` (GOAT adds one when it can), and the driver refuses any step outside them or in the foreground. Where the driver takes no \`app_scope\`, it is refused, and nothing was sent. Make the calls one at a time, each with the \`pid\` and \`window_id\` of an approved app's window.
+- GOAT counts every \`run_script\`, which can launch apps, and a \`run_steps\` without a background \`app_scope\` as foreground use of the whole screen. Full-access turns have that authority and may batch. In other turns, prefer single calls; do not ask for foreground approval just to batch.
 - When \`run_script\` is not among the driver's tools, use \`run_steps\` or single calls.
 </computer_use_batch>`;
 

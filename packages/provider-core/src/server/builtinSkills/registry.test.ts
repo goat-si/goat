@@ -191,6 +191,11 @@ describe("computer use skill text", () => {
     for (const guide of [screenCodeSkillFiles()["SKILL.md"] ?? "", SCREEN_TARGET_API]) {
       expect(guide).toContain('await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))');
       expect(guide).toMatch(/for\`? loop, sends each alone/);
+      // A driver no-op does not stop the batch, so nothing after a failure may be assumed unsent.
+      expect(guide).toMatch(
+        /after a failed or unknown (step|one),\s+later steps may already have run/,
+      );
+      expect(guide).not.toContain("the first failure stops the rest");
     }
   });
 
@@ -304,11 +309,14 @@ describe("computer use skill against what agents receive today", () => {
 
   it("teaches batches and scripts, with single calls where an approved-app turn refuses them", () => {
     // Under an app list the proxy admits run_steps and run_script only with an app_scope of
-    // approved apps, which it adds where the driver takes one; elsewhere it refuses both.
+    // approved apps, which it adds where the driver takes one; elsewhere it refuses both. Only a
+    // background run_steps skips foreground approval: a script can launch a scoped app.
     for (const tool of ["run_steps", "run_script"]) expect(codeSpans).toContain(tool);
     const line = (text: string) => guidance.split("\n").find((entry) => entry.includes(text)) ?? "";
     expect(line("`run_steps` call")).toContain("`observe: {}`");
     expect(line("approved apps may batch")).toContain("`app_scope`");
+    expect(line("approved apps may batch")).not.toContain("`run_script`");
+    expect(line("foreground use of the whole screen")).toContain("every `run_script`");
     expect(line("approved apps may batch")).toMatch(
       /refused, and nothing was sent\. Make the calls one at a time/,
     );
