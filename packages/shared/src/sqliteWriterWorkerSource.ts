@@ -63,6 +63,7 @@ const initialize = () => {
       }
       return constants.SQLITE_OK;
     });
+    maintain();
     parentPort.postMessage({ type: "ready" });
   } catch (error) {
     try { if (db) db.close(); } finally { db = undefined; }
