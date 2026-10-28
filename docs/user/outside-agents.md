@@ -103,6 +103,34 @@ Codex and client token settings on this page do, is listed only those two tools:
 about 2 KB of tool definitions instead of about 210 KB. Every tool stays callable by
 name either way.
 
+## Manage queues and inactive threads
+
+Ask an agent with thread write access to resume a held queue with `queue.resume`,
+or start a selected queued user message with `queued_run.start`. The selected
+message must still be queued and the thread stopped. Both use the environment's
+normal queue, provider and usage-limit rules. These calls stay in the connected
+environment and may target another project within your approved permission mode.
+
+`thread.delete` irreversibly removes an inactive thread; there is no restore tool.
+It refuses queued or active work, background subagents, provider-native children
+and the agent's own thread. Use `thread.organize` to archive reversibly instead.
+`provider_session.detach` disconnects an explicit session belonging to another
+thread. Disconnecting can affect shared provider-session continuity. The next
+send creates or resumes a session according to the provider's support.
+
+Give each request a `clientRequestId` and retry with the identical key and
+arguments if the response is lost. Retained identical requests are deduplicated
+for at least 24 hours; omitted keys have no retry guarantee. Acceptance confirms
+command intake, not provider execution or disconnect completion. To reconcile,
+read `queue.receipt`, `queued_run.receipt`, `thread.lifecycle_receipt` or
+`provider_session.receipt` with that key, using the same thread credential or
+outside-client session and its original permissions. A missing receipt may have
+expired and never proves that the action did not execute. For example:
+
+```json
+{ "path": "thread.lifecycle_receipt", "args": { "clientRequestId": "delete-1" } }
+```
+
 ## Set up a client with the goat-mcp skill
 
 The `goat-mcp` skill is a step-by-step guide an agent can follow to connect its

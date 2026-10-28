@@ -1,3 +1,4 @@
+import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
@@ -119,6 +120,7 @@ function tool(
 const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
+  ...lifecycleToolDefinitions(tool),
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",

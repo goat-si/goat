@@ -19,6 +19,8 @@ import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
 import * as CloudAgentService from "../cloudAgents/CloudAgentService.ts";
 import { ProviderToolkit } from "./toolkits/provider/tools.ts";
 import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
+import * as ThreadLifecycleMcpService from "./ThreadLifecycleMcpService.ts";
+import { ThreadLifecycleToolkit } from "./toolkits/threadLifecycle/tools.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as ServerConfig from "../config.ts";
@@ -148,6 +150,7 @@ export const toolkits = {
   remoteReport: RemoteReportToolkit,
   ssh: SshToolkit,
   thread: ThreadToolkit,
+  threadLifecycle: ThreadLifecycleToolkit,
   worktree: WorktreeToolkit,
 };
 export const entries = Object.values(agentSurfaceRegistry);
@@ -166,6 +169,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(StorageReclaim.StorageReclaim)({}),
   Layer.mock(StorageConsent.StorageConsent)({}),
   Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
+  Layer.mock(ThreadLifecycleMcpService.ThreadLifecycleMcpService)({}),
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   // A live thread, so thread callers reach the handler instead of the inert services above.
   liveThreadsLayer,

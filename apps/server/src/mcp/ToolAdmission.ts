@@ -28,6 +28,7 @@ import { McpSchema } from "effect/ai";
 
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { type CallerLimits, loadCaller } from "./threadAccess.ts";
@@ -331,7 +332,10 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
 
 /** A call outside a keyed reservation must not inherit an enclosing call's admission. */
 const unkeyed = <A, E, R>(run: Effect.Effect<A, E, R>) =>
-  Effect.provideService(run, McpToolAccess.KeyedAdmission, { admit: () => Effect.void });
+  run.pipe(
+    Effect.provideService(McpToolAccess.KeyedAdmission, { admit: () => Effect.void }),
+    Effect.provideService(LifecycleAdmissionReceipt, { held: Effect.void }),
+  );
 
 /** The caller's grant for one call, and whether it still covers one recorded earlier. */
 const makeGrants = (
@@ -568,6 +572,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       return yield* Effect.raceFirst(
         handle(args).pipe(
           Effect.provideService(McpToolAccess.KeyedAdmission, { admit }),
+          Effect.provideService(LifecycleAdmissionReceipt, { held: Ref.get(held) }),
           Effect.provideService(McpToolAccess.CallFailureCapture, {
             record: (error) =>
               Effect.andThen(Ref.set(failure, declaredFailureLiteral(error)), forward(error)),
@@ -727,3 +732,52 @@ export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(fu
   return { bootId, grantFor, covers, keyedOutcome };
 });
 export type EvalAdmission = Effect.Success<ReturnType<typeof makeEvalAdmission>>;
+
+/** Lifecycle reconciliation reads the same principal/environment reservation, never reserving it. */
+export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
+  const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const { grantOf, stillGranted } = makeGrants(permissions, settings);
+  return Effect.fn("ToolAdmission.readReceipt")(function* (path: string, clientRequestId: string) {
+    const scope = yield* McpInvocationContext.McpInvocationContext;
+    const principal = principalOf(scope);
+    if (Option.isNone(database) || principal === undefined) return { state: "unknown" as const };
+    const [row] = yield* database.value<{
+      readonly state: "running" | "completed" | "unknown";
+      readonly boot_id: string;
+      readonly receipt_id: string;
+      readonly result_json: string | null;
+      readonly failure_json: string | null;
+      readonly grant_json: string;
+    }>`SELECT state, boot_id, receipt_id, result_json, failure_json, grant_json
+      FROM mcp_request_reservations
+      WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
+        AND path = ${path} AND client_request_id = ${clientRequestId}
+        AND (state != 'completed' OR expires_at > ${DateTime.formatIso(yield* DateTime.now)})`;
+    if (row === undefined) return { state: "missing" as const };
+    const { limits } = yield* loadCaller();
+    const { grant } = yield* grantOf(scope, {}, limits);
+    if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
+      return yield* new OrchestratorMcpFailure({
+        code: "capability_denied",
+        message: "This caller no longer holds the recorded request grant.",
+      });
+    if (row.state === "completed" && row.result_json !== null)
+      return {
+        state: "completed" as const,
+        receiptId: row.receipt_id,
+        result: yield* decodeResult(row.result_json),
+        ...(row.failure_json === null ? {} : { failure: yield* decodeLiteral(row.failure_json) }),
+      };
+    return {
+      state:
+        row.state === "running" &&
+        row.boot_id === PROCESS_BOOT_ID &&
+        !ABANDONED_RECEIPTS.has(row.receipt_id)
+          ? ("in_progress" as const)
+          : ("unknown" as const),
+      receiptId: row.receipt_id,
+    };
+  });
+});

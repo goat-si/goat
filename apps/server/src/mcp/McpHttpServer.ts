@@ -167,6 +167,9 @@ import * as RemoteReportHandlers from "./toolkits/remoteReport/handlers.ts";
 import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import * as SshHandlers from "./toolkits/ssh/handlers.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
+import * as ThreadLifecycleMcpService from "./ThreadLifecycleMcpService.ts";
+import * as ThreadLifecycleHandlers from "./toolkits/threadLifecycle/handlers.ts";
+import { ThreadLifecycleToolkit } from "./toolkits/threadLifecycle/tools.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
@@ -982,6 +985,7 @@ export const catalogRegistrations = {
   previewSnapshot: imageToolRegistration(registerPreviewSnapshot(), PreviewHandlers.layerSnapshot),
   orchestrator: toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
   thread: toolkitRegistration(ThreadToolkit, ThreadHandlers.layer),
+  threadLifecycle: toolkitRegistration(ThreadLifecycleToolkit, ThreadLifecycleHandlers.layer),
   worktree: toolkitRegistration(WorktreeToolkit, WorktreeHandlers.layer),
   previewControls: toolkitRegistration(PreviewControlsToolkit, PreviewControlsHandlers.layer),
   environment: toolkitRegistration(EnvironmentToolkit, EnvironmentHandlers.layer),
@@ -1181,6 +1185,7 @@ export const layer = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
+  catalogRegistrations.threadLifecycle.pipe(Layer.provide(ThreadLifecycleMcpService.layer)),
   layerAttachmentToolkit,
   layerChannelToolkit,
   catalogRegistrations.note,
