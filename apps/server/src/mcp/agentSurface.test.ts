@@ -408,6 +408,8 @@ const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
   "pending_request.list": { scope: "launched", hosts: ["box"] },
   "provider.host_matrix": { localOnly: false },
   "host.status": { local: null },
+  // A sampled cursor without its query is refused before access matters.
+  "surface.describe": { query: "thread" },
 };
 
 const REASONS = {
