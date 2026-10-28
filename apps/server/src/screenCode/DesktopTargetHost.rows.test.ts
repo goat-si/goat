@@ -15,8 +15,10 @@ type Entry = {
   readonly label?: string;
   readonly value?: string;
   readonly actions?: ReadonlyArray<string>;
+  /** The accessibility id as a structured field, which a later driver adds to element entries. */
+  readonly identifier?: string;
 };
-const element = ({ index, role, label, value, actions }: Entry) => ({
+const element = ({ index, role, label, value, actions, identifier }: Entry) => ({
   role,
   depth: 1,
   element_index: index,
@@ -24,6 +26,7 @@ const element = ({ index, role, label, value, actions }: Entry) => ({
   ...(label === undefined ? {} : { label }),
   ...(value === undefined ? {} : { value }),
   ...(actions === undefined ? {} : { actions }),
+  ...(identifier === undefined ? {} : { identifier }),
 });
 
 /** Binds the fixture's window and reads it once with the given driver tree. */
@@ -135,11 +138,19 @@ it.effect("a table's first cell is named by its text and found once; its row sta
   }),
 );
 
-it.effect("elements carry their accessibility id", () =>
+it.effect("elements carry the accessibility id the driver lists for them", () =>
   Effect.gen(function* () {
     const observation = yield* read(
       ["- [23] AXButton (General) [id=com.apple.settings.general actions=[press]]"],
-      [{ index: 23, role: "AXButton", label: "General", actions: ["AXPress"] }],
+      [
+        {
+          index: 23,
+          role: "AXButton",
+          label: "General",
+          actions: ["AXPress"],
+          identifier: "com.apple.settings.general",
+        },
+      ],
     );
     expect(observation.elements[0]).toMatchObject({
       id: "com.apple.settings.general",
@@ -148,7 +159,7 @@ it.effect("elements carry their accessibility id", () =>
   }),
 );
 
-it.effect("an id written in a title or value never becomes the element's id", () =>
+it.effect("an id written only in the tree text never becomes the element's id", () =>
   Effect.gen(function* () {
     const observation = yield* read(
       [
@@ -157,7 +168,13 @@ it.effect("an id written in a title or value never becomes the element's id", ()
         "- [9] AXButton (Run [id=erase])",
       ],
       [
-        { index: 7, role: "AXButton", label: "Save [id=delete]", actions: ["AXPress"] },
+        {
+          index: 7,
+          role: "AXButton",
+          label: "Save [id=delete]",
+          actions: ["AXPress"],
+          identifier: "save",
+        },
         { index: 8, role: "AXTextField", label: "Note", value: "x [id=send]" },
         { index: 9, role: "AXButton", label: "Run [id=erase]" },
       ],
@@ -210,6 +227,55 @@ it.effect(
       expect(observation.indexedText).not.toMatch(/\[[78]\]/);
       expect(elements[7]?.name).toBe("Save");
     }),
+);
+
+it.effect(
+  "a numbered line that does not start as its element does loses its number, and text supplies no id",
+  () =>
+    Effect.gen(function* () {
+      // The driver left out [7] and [9]'s own lines (echo text); another element's text wrote these.
+      const observation = yield* read(
+        [
+          '- [0] AXWindow "Doc" [actions=[raise]]',
+          '  - [7] AXStaticText = "Save" [id=delete]',
+          '  - [9] AXButton "Delete all" [actions=[press]]',
+        ],
+        [
+          { index: 0, role: "AXWindow", label: "Doc" },
+          { index: 7, role: "AXStaticText", label: "Save", value: "Save" },
+          { index: 9, role: "AXButton", label: "Save", actions: ["AXPress"] },
+        ],
+      );
+      const elements = byIndex(observation);
+      expect(elements[7]?.id).toBeUndefined();
+      expect(observation.indexedText).toContain('- [7] AXStaticText = "Save"');
+      expect(observation.indexedText).toContain('- AXButton "Delete all"');
+      expect(observation.indexedText).not.toContain("[9]");
+    }),
+);
+
+it.effect("names are not taken from text when the tree shows a string spanning lines", () =>
+  Effect.gen(function* () {
+    const observation = yield* read(
+      [
+        '- [0] AXWindow "Mail" [actions=[raise]]',
+        "  - [5] AXRow [actions=[press]]",
+        '    - AXStaticText = "',
+        '    - AXStaticText = "Delete all"',
+        '"',
+        "  - [6] AXRow [actions=[press]]",
+        '    - AXStaticText = "Inbox"',
+      ],
+      [
+        { index: 0, role: "AXWindow", label: "Mail" },
+        { index: 5, role: "AXRow", actions: ["AXPress"] },
+        { index: 6, role: "AXRow", actions: ["AXPress"] },
+      ],
+    );
+    const elements = byIndex(observation);
+    expect(elements[5]?.name).toBe("");
+    expect(elements[6]?.name).toBe("");
+  }),
 );
 
 it.effect("a custom action string shows as its name", () =>
@@ -279,8 +345,20 @@ it.live("click({id}) in a cell acts on the element with that accessibility id", 
       ].join("\n"),
       elements_complete: false,
       elements: [
-        element({ index: 22, role: "AXButton", label: "General", actions: ["AXPress"] }),
-        element({ index: 23, role: "AXButton", label: "General", actions: ["AXPress"] }),
+        element({
+          index: 22,
+          role: "AXButton",
+          label: "General",
+          actions: ["AXPress"],
+          identifier: "com.apple.settings.general",
+        }),
+        element({
+          index: 23,
+          role: "AXButton",
+          label: "General",
+          actions: ["AXPress"],
+          identifier: "com.apple.settings.general.legacy",
+        }),
       ],
     },
     click: { effect: "unverifiable" },

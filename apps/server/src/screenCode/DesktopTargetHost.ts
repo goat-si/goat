@@ -539,7 +539,7 @@ export const createDesktopTargetHost = (deps: {
         : interactive
           ? rows.filter(isInteractive)
           : rows;
-      const treeText = shownTree(markdown);
+      const treeText = shownTree(markdown, filtered ? undefined : elements);
       const shownText =
         query || interactive
           ? keepTreeLines(

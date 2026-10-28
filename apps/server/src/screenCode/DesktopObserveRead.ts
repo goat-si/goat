@@ -9,14 +9,14 @@ import type { ScreenElementDetail, ScreenObservationDraft } from "./ScreenObserv
 import {
   actionName,
   cleanActionText,
-  idsFromLines,
   labelsFromTree,
   keepTreeLines,
   namesFromTree,
   pairTreeText,
   parseTree,
   repeatedIndexes,
-  unmarkRepeated,
+  spansLines,
+  unmarkUnverified,
 } from "./DesktopTreeText.ts";
 
 export type DesktopRow = ScreenObservationDraft["elements"][number];
@@ -78,23 +78,10 @@ export const desktopRows = (
 ): DesktopRow[] => {
   const lines = parseTree(markdown);
   const repeated = repeatedIndexes(lines);
-  const [names, labels] = [namesFromTree(lines), labelsFromTree(lines)];
-  const ids = idsFromLines(
-    markdown,
-    elements.flatMap((entry) => {
-      const index = natural(entry.element_index);
-      return index === undefined
-        ? []
-        : [
-            {
-              index,
-              role: string(entry.role) ?? "",
-              ...(typeof entry.label === "string" ? { label: entry.label } : {}),
-              ...(typeof entry.value === "string" ? { value: entry.value } : {}),
-            },
-          ];
-    }),
-  );
+  // Text spanning lines can pose as tree lines, so then no name is taken from text.
+  const trusted = !spansLines(markdown, listedOf(elements));
+  const none = new Map<number, string>();
+  const [names, labels] = trusted ? [namesFromTree(lines), labelsFromTree(lines)] : [none, none];
   return elements.flatMap((entry) => {
     const token = string(entry.element_token);
     if (!token) return [];
@@ -108,7 +95,8 @@ export const desktopRows = (
           : label === entry.value && !repeated.has(index)
             ? (labels.get(index) ?? label)
             : label;
-    const id = index === undefined ? undefined : ids.get(index);
+    // Only a structured id: tree text is written unescaped and can pose as metadata.
+    const id = string(entry.identifier)?.slice(0, 400);
     return [
       {
         role: string(entry.role) ?? "unknown",
@@ -275,6 +263,27 @@ export const treeOf = (
     : typeof state.tree_markdown === "string"
       ? state.tree_markdown
       : "";
-/** The tree text as shown: repeated numbers dropped, labels paired, action names cleaned. */
-export const shownTree = (markdown: string) =>
-  cleanActionText(pairTreeText(unmarkRepeated(markdown)));
+/**
+ * The tree text as shown: numbers kept only where a line verifiably shows its element (all of a
+ * read rebuilt from the element list, when no elements are given), labels paired, actions named.
+ */
+export const shownTree = (markdown: string, elements?: ReadonlyArray<Record<string, unknown>>) =>
+  cleanActionText(
+    pairTreeText(elements ? unmarkUnverified(markdown, listedOf(elements)) : markdown),
+  );
+
+/** The listed elements' index, role, label and value, for checking tree lines against them. */
+const listedOf = (elements: ReadonlyArray<Record<string, unknown>>) =>
+  elements.flatMap((entry) => {
+    const index = natural(entry.element_index);
+    return index === undefined
+      ? []
+      : [
+          {
+            index,
+            role: string(entry.role) ?? "",
+            ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+            ...(typeof entry.value === "string" ? { value: entry.value } : {}),
+          },
+        ];
+  });

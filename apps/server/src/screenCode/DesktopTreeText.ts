@@ -85,30 +85,17 @@ export const repeatedIndexes = (lines: ReadonlyArray<TreeLine>): ReadonlySet<num
   return repeated;
 };
 
-/** The tree text with every line of a repeated index unnumbered: none of them can be trusted. */
-export const unmarkRepeated = (markdown: string): string => {
-  const repeated = repeatedIndexes(parseTree(markdown));
-  return repeated.size === 0
-    ? markdown
-    : markdown.replace(/^(\s*- )\[(\d+)\] /gm, (marker, head: string, index: string) =>
-        repeated.has(Number(index)) ? head : marker,
-      );
-};
-
+interface Listed {
+  readonly index: number;
+  readonly role: string;
+  readonly label?: string;
+  readonly value?: string;
+}
 /**
- * Ids from the tree text, which the driver writes unescaped: only from the one line for an index
- * that is exactly what the driver writes from the element's role, label and value, then its
- * metadata. Text the element list lacks (a description beside a title) gives no id.
+ * Indexes whose one line starts as the driver writes that element from its listed role, label and
+ * value. The driver writes text unescaped, so any other line for an index may be text posing as it.
  */
-export const idsFromLines = (
-  markdown: string,
-  entries: ReadonlyArray<{
-    readonly index: number;
-    readonly role: string;
-    readonly label?: string;
-    readonly value?: string;
-  }>,
-): ReadonlyMap<number, string> => {
+const verifiedIndexes = (markdown: string, entries: ReadonlyArray<Listed>): ReadonlySet<number> => {
   const byIndex = new Map<number, string[]>();
   for (const raw of markdown.split("\n")) {
     const line = raw.trimStart();
@@ -116,29 +103,53 @@ export const idsFromLines = (
     if (index !== undefined)
       byIndex.set(Number(index), [...(byIndex.get(Number(index)) ?? []), line]);
   }
-  const ids = new Map<number, string>();
+  const verified = new Set<number>();
   for (const { index, role, label, value } of entries) {
     const lines = byIndex.get(index);
     const line = lines?.length === 1 ? lines[0] : undefined;
-    if (!line || label === undefined || /[\r\n]/.test(label + (value ?? ""))) continue;
-    const shown = [
-      ` "${label}"`,
-      ...(value === undefined ? [] : [` "${label}" = "${value}"`, ` = "${value}" (${label})`]),
-      ` (${label})`,
-      ` = "${label}"`,
-      "",
-    ];
-    for (const words of shown) {
-      const head = `- [${index}] ${role}${words} [id=`;
-      if (!line.startsWith(head)) continue;
-      const id = /^[^\s\]]+/.exec(line.slice(head.length))?.[0];
-      // With no title, description or value, the driver's label is the id itself.
-      if (id !== undefined && (words !== "" || id === label)) ids.set(index, id.slice(0, 400));
-      break;
-    }
+    if (!line || /[\r\n]/.test((label ?? "") + (value ?? ""))) continue;
+    const shown =
+      label === undefined
+        ? [""]
+        : [
+            ` "${label}"`,
+            ...(value === undefined ? [] : [` = "${value}" (${label})`]),
+            ` (${label})`,
+            ` = "${label}"`,
+            ` [id=${label}`,
+          ];
+    if (
+      shown.some((words) => {
+        const head = `- [${index}] ${role}${words}`;
+        const next = line.charAt(head.length);
+        return line.startsWith(head) && (next === "" || next === " " || words.startsWith(" [id="));
+      })
+    )
+      verified.add(index);
   }
-  return ids;
+  return verified;
 };
+
+/** The tree text with the number taken off every line that does not verifiably show its element. */
+export const unmarkUnverified = (markdown: string, entries: ReadonlyArray<Listed>): string => {
+  const verified = verifiedIndexes(markdown, entries);
+  return markdown.replace(/^(\s*- )\[(\d+)\] /gm, (marker, head: string, index: string) =>
+    verified.has(Number(index)) ? marker : head,
+  );
+};
+
+/**
+ * Whether some string in the read spans lines: a listed label or value with a line break, a line
+ * that is not a tree line, or one with an unpaired quote. Text lines are then not trusted to name.
+ */
+export const spansLines = (markdown: string, entries: ReadonlyArray<Listed>): boolean =>
+  entries.some((entry) => /[\r\n]/.test((entry.label ?? "") + (entry.value ?? ""))) ||
+  markdown
+    .split("\n")
+    .some(
+      (line) =>
+        line.trim() !== "" && (!LINE.test(line) || (line.match(/"/g)?.length ?? 0) % 2 === 1),
+    );
 
 const isLabel = (line: TreeLine | undefined): line is TreeLine & { readonly words: string } =>
   line !== undefined &&

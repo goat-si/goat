@@ -11,7 +11,7 @@ const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_V
 
 const COMMON = `type Target = number | string | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name.
-// { id }: an app element's accessibility id, the same in every language.
+// { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // [x, y]: pixels of the current screenshot, for click, scroll and drag (both ends); input or a new page ends them. Numbers and refs hold until the next observe,
 // and never move to another element: after navigation or a new document they fail with nothing sent.
 type Done = { verdict: "confirmed" | "unverifiable"; result?: unknown };
