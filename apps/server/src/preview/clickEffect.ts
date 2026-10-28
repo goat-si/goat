@@ -6,7 +6,14 @@
 import { constVoid } from "effect/Function";
 import type { ElementHandle, Frame, JSHandle, Locator, Page, Request } from "playwright-core";
 
-export type ClickEvidence = "dom" | "input" | "focus" | "url" | "navigation" | "popup" | "dialog";
+export type ClickEvidence =
+  | "dom"
+  | "input"
+  | "focus"
+  | "navigation"
+  | "popup"
+  | "download"
+  | "dialog";
 
 export interface ClickEffect {
   readonly effect: "confirmed" | "suspected_noop";
@@ -83,11 +90,14 @@ const INSTALL = `(() => {
   };
   // A native disclosure or popover the click toggled, after its dispatch: the details holding the
   // target, or the popover the target controls. Toggles elsewhere are not the click's.
+  const controls = (toggled) => {
+    for (let at = target; at; at = at.parentNode || at.host)
+      if (toggled === at.popoverTargetElement || toggled === at.commandForElement) return true;
+    return false;
+  };
   const onToggle = (event) => {
     const toggled = event.composedPath()[0];
-    if (target !== null && (within(target, toggled) || toggled === target.popoverTargetElement ||
-        toggled === target.commandForElement))
-      note("dom");
+    if (target !== null && (within(target, toggled) || controls(toggled))) note("dom");
   };
   const onInput = (event) => related(event) && note("input");
   const onFocus = (event) => related(event) && note("focus");
@@ -219,6 +229,12 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
     seen.add("popup");
     wake();
   };
+  // A download leaves the page as it was, so only the browser's event shows it.
+  const onDownload = () => {
+    if (!armed) return;
+    seen.add("download");
+    wake();
+  };
   // A navigation that replaces the document cannot be read from the page while it is pending, so a
   // request for a new document in the clicked frame after arming counts. Same-document changes
   // are judged in the page, where a change other work made is not the click's.
@@ -230,6 +246,7 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
     wake();
   };
   page.on("popup", onPopup);
+  page.on("download", onDownload);
   page.on("request", onRequest);
   // A page that cannot run script, or that a dialog holds, still reports popups and dialogs.
   const installing = Promise.resolve()
@@ -239,6 +256,7 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {
     page.off("popup", onPopup);
+    page.off("download", onDownload);
     page.off("request", onRequest);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);

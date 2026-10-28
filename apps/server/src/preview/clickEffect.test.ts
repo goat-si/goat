@@ -359,3 +359,30 @@ it("confirms native disclosure and popover toggles, also with the trigger alread
       effect: "suspected_noop",
     });
   }));
+
+it("confirms a popover opened through content nested in its button, by selector and by point", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<button id="b" popovertarget="pop" style="position:absolute;left:10px;top:10px"><span id="label">Menu</span></button><div id="pop" popover>items</div>`,
+    );
+    await page.focus("#b");
+    await expect(ServerBrowserPage.click(page, { selector: "#label" })).resolves.toMatchObject({
+      effect: "confirmed",
+    });
+    const box = (await page.locator("#label").boundingBox())!;
+    await expect(
+      ServerBrowserPage.click(page, { x: box.x + 3, y: box.y + 3 }),
+    ).resolves.toMatchObject({ effect: "confirmed" });
+  }));
+
+it("confirms a click that starts a download", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<a id="d" download="report.txt" href="data:text/plain,report">report</a>`,
+    );
+    await page.focus("#d");
+    await expect(ServerBrowserPage.click(page, { selector: "#d" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["download"]),
+    });
+  }));
