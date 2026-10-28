@@ -5,6 +5,7 @@ import {
   dottedPattern,
   maskSecrets,
   maskTree,
+  protectedNumbers,
   redactValue,
   rememberSecret,
   tabCookies,
@@ -33,13 +34,23 @@ it("masks a filled echo whole when another password field's value lies inside it
   expect(maskSecrets(dotted, [])("pw MiddlePassword123")).toBe("pw ••••••••");
 });
 
-it("a number an evaluation reads from a masked field comes back masked", () => {
-  const mask = maskSecrets(dottedPattern(["123456", "010-1234-5678"]), []);
-  expect(redactValue(123456, mask)).toBe("••••••••");
-  expect(redactValue({ code: 123456, phone: 1012345678, count: 3 }, mask)).toEqual({
-    code: "••••••••",
-    phone: "••••••••",
-    count: 3,
-  });
-  expect(redactValue(7, mask)).toBe(7);
+it("a number an evaluation reads from a masked field comes back masked, however the page converted it", () => {
+  const values = ["123456", "010-1234-5678", "4111111111111111111", "0000"];
+  const mask = maskSecrets(dottedPattern(values), []);
+  const numbers = protectedNumbers(values);
+  expect(
+    redactValue(
+      // The card number as Number() rounds it, and the phone without its leading zero.
+      { code: 123456, phone: 1012345678, card: Number("4111111111111111111"), count: 3 },
+      mask,
+      numbers,
+    ),
+  ).toEqual({ code: "••••••••", phone: "••••••••", card: "••••••••", count: 3 });
+  expect(redactValue(BigInt("4111111111111111111"), mask, numbers)).toBe("••••••••");
+});
+
+it("a masked code made of zeros does not mask other zeros in page text", () => {
+  const mask = maskSecrets(dottedPattern(["0000", "010-1234-5678"]), []);
+  expect(mask("Amount: 0; rows: 0; call 1012345678")).toBe("Amount: 0; rows: 0; call 1012345678");
+  expect(mask("code 0000")).toBe("code ••••••••");
 });

@@ -96,19 +96,35 @@ const dottedSpans = (
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(text, cookies, dotted ? dottedSpans(text, dotted) : []);
 
-/** Masks every string in an evaluation result, object keys included: all of it is the page's. */
-export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
+/**
+ * The numbers a page script gets from masked fields that hold digits (a one-time code, a phone or
+ * card number): `Number()` of their digits, which drops separators and leading zeros and rounds
+ * past 2^53 exactly as the page's own conversion does.
+ */
+export const protectedNumbers = (values: ReadonlyArray<string>): ReadonlySet<number> =>
+  new Set(
+    values.flatMap((value) => {
+      const digits = value.replace(/\D/g, "");
+      return /^[\d\s+().-]+$/.test(value) && digits.length >= 4 ? [Number(digits)] : [];
+    }),
+  );
+
+/**
+ * Masks every string in an evaluation result, object keys included: all of it is the page's. A
+ * number equal to a masked field's numeric form is masked too; numbers never join the text mask.
+ */
+export const redactValue = (
+  value: unknown,
+  mask: (text: string) => string,
+  numbers: ReadonlySet<number> = new Set(),
+): unknown => {
   if (typeof value === "string") return mask(value);
-  // A number read from a masked field (a one-time code, a phone number) is that value too.
-  if (typeof value === "number" || typeof value === "bigint") {
-    const text = String(value);
-    const masked = mask(text);
-    return masked === text ? value : masked;
-  }
-  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask));
+  if ((typeof value === "number" || typeof value === "bigint") && numbers.has(Number(value)))
+    return MASKED_VALUE;
+  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, numbers));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask)]),
+    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask, numbers)]),
   );
 };
 
@@ -210,11 +226,10 @@ const DOTTED_SCRIPT = `(() => {
   return [...new Set(values.filter((value) => value.trim()))];
 })()`;
 
+/** A frame came or went while the secret readers ran; another try can get past it. */
+export const SECRETS_PAGE_CHANGED = "The page changed while reading its secrets.";
 const pageChanged = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationExecutionError",
-    "The page changed while reading its secrets.",
-  );
+  new ServerBrowserOperationError("PreviewAutomationExecutionError", SECRETS_PAGE_CHANGED);
 const VALUE_TOO_LONG = "A private field holds a value too long to mask.";
 
 /** Reuse one CDP session per out-of-process frame across snapshots. */
@@ -332,13 +347,6 @@ export const openReaders = async (page: Page, cdp: CDPSession) => {
 /** Short values need word boundaries to avoid masking unrelated text. */
 export const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
-    // A phone number or code read back as a number loses its separators and leading zeros.
-    .flatMap((value) => {
-      const digits = value.replace(/\D/g, "");
-      return /^[\d\s+().-]+$/.test(value) && digits.length >= 4
-        ? [value, digits, digits.replace(/^0+(?=\d)/, "")]
-        : [value];
-    })
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
       const quoted = playwrightQuoted(value);

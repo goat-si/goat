@@ -49,6 +49,7 @@ import {
   maskSecrets,
   maskSnapshotRecords,
   maskTree,
+  protectedNumbers,
   redactValue,
   tabCookies,
   openReaders,
@@ -1018,7 +1019,7 @@ const redactEvaluation = async (
     openReaders(page, cdp).then(({ read }) => read()),
   ]);
   const values = fields.flat().filter((each) => typeof each === "string");
-  return redactValue(value, maskSecrets(dottedPattern(values), cookies));
+  return redactValue(value, maskSecrets(dottedPattern(values), cookies), protectedNumbers(values));
 };
 
 /** Terminate expired page scripts so a hung expression cannot block the tab's control queue. */
