@@ -1,3 +1,4 @@
+import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
@@ -417,7 +418,15 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   // Every report counts: a dropped private-mode change would leave agents watching a secret.
   const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
   const cuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
-  const controlMutex = yield* Semaphore.make(1);
+  const controlWriter = yield* makeDesktopControlWriter({
+    write: (payload) => writeAllToFileDescriptor(config.desktopTelemetryControlFd ?? -1, payload),
+    overflow: () =>
+      new DesktopTelemetryControlFailed({
+        fd: config.desktopTelemetryControlFd ?? -1,
+        operation: "write",
+        cause: new Error("Desktop control admission exceeded 32 frames or 64 KiB"),
+      }),
+  });
   const cuaWatch = yield* Ref.make<CuaWatchState>({
     seq: 0,
     active: false,
@@ -462,32 +471,38 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const updateSampleHealth = (sampledAt: DateTime.Utc) =>
     recordDesktopTelemetrySampleHealth(health, healthChanges, sampledAt);
 
-  const sendControlMessage = (message: DesktopTelemetryControlMessage) =>
-    controlMutex.withPermits(1)(
-      Effect.gen(function* () {
-        const fd = config.desktopTelemetryControlFd;
-        if (fd === undefined) return;
-        const encoded = yield* encodeControlMessage(message).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DesktopTelemetryControlFailed({
-                fd,
-                operation: "encode",
-                cause,
-              }),
-          ),
-        );
-        yield* writeAllToFileDescriptor(fd, Buffer.from(`${encoded}\n`)).pipe(
-          Effect.tapError((error) =>
-            updateHealth((current) => ({
-              ...current,
-              status: "degraded",
-              lastError: Option.some(error.message),
-            })),
-          ),
-        );
-      }),
+  const sendControlMessage = Effect.fn("DesktopTelemetryReceiver.sendControlMessage")(function* (
+    message: DesktopTelemetryControlMessage,
+  ) {
+    const fd = config.desktopTelemetryControlFd;
+    if (fd === undefined) return;
+    const encoded = yield* encodeControlMessage(message).pipe(
+      Effect.mapError(
+        (cause) =>
+          new DesktopTelemetryControlFailed({
+            fd,
+            operation: "encode",
+            cause,
+          }),
+      ),
     );
+    yield* controlWriter
+      .send(
+        Buffer.from(`${encoded}\n`),
+        message.type === "setDiagnosticsDemand" || message.type === "setHostPowerIntervals"
+          ? message.type
+          : undefined,
+      )
+      .pipe(
+        Effect.tapError((error) =>
+          updateHealth((current) => ({
+            ...current,
+            status: "degraded",
+            lastError: Option.some(error.message),
+          })),
+        ),
+      );
+  });
   const setDiagnosticsDemand: DesktopTelemetryReceiver["Service"]["setDiagnosticsDemand"] = (
     enabled,
   ) =>

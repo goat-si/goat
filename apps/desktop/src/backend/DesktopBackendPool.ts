@@ -1,3 +1,4 @@
+import { makeRecoveryDialog } from "./DesktopBackendRecoveryDialog.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -159,12 +160,13 @@ export const layer = Layer.effect(
       },
     );
 
+    const onRecoveryPaused = makeRecoveryDialog(electronDialog, ElectronShell.openLogsPath);
     const primary = yield* DesktopBackendManager.makeBackendInstance({
+      onRecoveryPaused,
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Resolve lazily: startup loads persisted settings after pool initialization.
       label: configuration.resolvePrimaryLabel,
       configResolve: configuration.resolvePrimary,
-      // Absorb window errors so readiness can reset restartAttempt.
       onReady: (httpBaseUrl) =>
         desktopWindow.handleBackendReady(httpBaseUrl).pipe(
           // Only once the main window exists, so the recovery window never closes into nothing.
@@ -244,10 +246,10 @@ export const layer = Layer.effect(
             return Effect.gen(function* () {
               // Provide the child Scope last so the captured pool Scope cannot shadow it and orphan stop/restart finalizers.
               const instanceScope = yield* Scope.fork(layerScope, "sequential");
-              const instance = yield* DesktopBackendManager.makeBackendInstance(spec).pipe(
-                Scope.provide(instanceScope),
-                Effect.provide(factoryContext),
-              );
+              const instance = yield* DesktopBackendManager.makeBackendInstance({
+                ...spec,
+                onRecoveryPaused: spec.onRecoveryPaused ?? onRecoveryPaused,
+              }).pipe(Scope.provide(instanceScope), Effect.provide(factoryContext));
               const next = new Map(current);
               next.set(spec.id, {
                 _tag: "Active",

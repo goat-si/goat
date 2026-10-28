@@ -89,3 +89,8 @@ export const make = ElectronShell.of({
 });
 
 export const layer = Layer.succeed(ElectronShell, make);
+
+export const openLogsPath = Effect.fn("ElectronShell.openLogsPath")(function* (path: string) {
+  const error = yield* Effect.promise(() => Electron.shell.openPath(path));
+  if (error.length > 0) yield* Effect.logError("Could not open server logs", { path });
+});

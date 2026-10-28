@@ -764,3 +764,5 @@ no running work; the background server itself keeps running, and its earlier thr
 appear only under **Headless server**. To hide it, switch off **Headless server on this computer**
 in **Settings → Connections**. To stop it starting at all, remove this computer from the other
 GOAT's SSH hosts.
+
+If a desktop-managed server repeatedly exits, automatic recovery pauses instead of restarting indefinitely. Choose **Server recovery…** in the desktop File menu to retry, stop the server, or open its logs. The pause survives restarting the desktop app.

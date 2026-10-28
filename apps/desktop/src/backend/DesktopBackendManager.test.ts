@@ -91,13 +91,6 @@ function makeProcess(options?: {
   });
 }
 
-function responseForRequest(
-  request: HttpClientRequest.HttpClientRequest,
-  status: number,
-): HttpClientResponse.HttpClientResponse {
-  return HttpClientResponse.fromWeb(request, new Response(null, { status }));
-}
-
 function layerHttpClient(
   handler: (
     request: HttpClientRequest.HttpClientRequest,
@@ -110,7 +103,7 @@ function layerHttpClient(
 }
 
 const layerHealthyHttpClient = layerHttpClient((request) =>
-  Effect.succeed(responseForRequest(request, 200)),
+  Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
 );
 
 function decodeBootstrap(raw: string) {
@@ -118,6 +111,8 @@ function decodeBootstrap(raw: string) {
 }
 
 interface MakeInstanceInput {
+  readonly fileSystem?: Partial<FileSystem.FileSystem>;
+  readonly onRecoveryPaused?: DesktopBackendManager.BackendInstanceSpec["onRecoveryPaused"];
   readonly spawnerLayer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
@@ -155,6 +150,7 @@ function makeTestInstance(input: MakeInstanceInput) {
   const layerServices = Layer.mergeAll(
     FileSystem.layerNoop({
       exists: () => Effect.succeed(true),
+      ...input.fileSystem,
     }),
     input.spawnerLayer,
     input.httpClientLayer ?? layerHealthyHttpClient,
@@ -193,6 +189,7 @@ function makeTestInstance(input: MakeInstanceInput) {
   const instance = DesktopBackendManager.makeBackendInstance({
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
+    ...(input.onRecoveryPaused ? { onRecoveryPaused: input.onRecoveryPaused } : {}),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onStartupFailure ? { onStartupFailure: input.onStartupFailure } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
@@ -555,7 +552,7 @@ describe("DesktopBackendManager", () => {
 
         yield* Deferred.succeed(finishTeardown, undefined);
         yield* Fiber.join(stopFiber).pipe(Effect.timeout("1 second"));
-        yield* TestClock.adjust(Duration.millis(500));
+        yield* TestClock.adjust(Duration.millis(1000));
 
         assert.equal(yield* Queue.take(starts).pipe(Effect.timeout("1 second")), 2);
         const restarted = yield* instance.snapshot;
@@ -716,3 +713,170 @@ describe("DesktopBackendManager", () => {
     ),
   );
 });
+
+it.effect("WSL preflight reaches fallback without spending the exit recovery budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ready = yield* Queue.unbounded<void>();
+      const exits = yield* Queue.unbounded<Deferred.Deferred<ChildProcessSpawner.ExitCode>>();
+      let attempts = 0;
+      let fallbacks = 0;
+      let spawns = 0;
+      const instance = yield* makeTestInstance({
+        configResolve: Effect.sync(() => {
+          if (fallbacks > 0) return baseConfig;
+          attempts++;
+          return {
+            ...baseConfig,
+            preflightFailure: Option.some({
+              reason: "WSL is booting",
+              fatal: false,
+              retryLimit: 12,
+            }),
+          };
+        }),
+        onPreflightFailed: () =>
+          Effect.sync(() => {
+            fallbacks++;
+            return true;
+          }),
+        onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
+        spawnerLayer: Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              spawns++;
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Effect.addFinalizer(() =>
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)),
+              );
+              yield* Queue.offer(exits, exit);
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        ),
+      });
+      yield* instance.start;
+      for (let attempt = 1; attempt < 12; attempt++) yield* TestClock.adjust("32 seconds");
+      assert.equal(attempts, 12);
+      assert.equal(fallbacks, 1);
+      assert.equal((yield* instance.snapshot).restartAttempt, 0);
+      yield* TestClock.adjust("32 seconds");
+      for (let cycle = 0; cycle < 5; cycle++) {
+        yield* Queue.take(ready);
+        yield* Deferred.succeed(yield* Queue.take(exits), ChildProcessSpawner.ExitCode(80));
+        yield* TestClock.adjust("32 seconds");
+        assert.equal((yield* instance.snapshot).restartAttempt, cycle + 1);
+      }
+      yield* Queue.take(ready);
+      assert.equal(spawns, 6);
+      yield* instance.stop();
+    }),
+  ),
+);
+
+it.effect("a healthy backend stays ready when resetting the recovery record fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const notices = yield* Queue.unbounded<string>();
+      let shutdowns = 0;
+      let spawns = 0;
+      const instance = yield* makeTestInstance({
+        config: { ...baseConfig, recoveryStateDirectory: "/isolated/recovery" },
+        fileSystem: { makeDirectory: () => Effect.void },
+        onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        onShutdown: Effect.sync(() => {
+          shutdowns++;
+        }),
+        onRecoveryPaused: (actions) => Queue.offer(notices, actions.reason).pipe(Effect.asVoid),
+        spawnerLayer: Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              spawns++;
+              yield* Effect.addFinalizer(() =>
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)),
+              );
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        ),
+      });
+      yield* instance.start;
+      yield* Deferred.await(ready);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* Queue.take(notices), "record-unavailable");
+      const healthy = yield* instance.snapshot;
+      assert.isTrue(healthy.ready);
+      assert.isTrue(healthy.desiredRunning);
+      assert.deepEqual(healthy.activePid, Option.some(123));
+      assert.equal(healthy.recovery, "record-unavailable");
+      assert.equal(shutdowns, 0);
+      assert.isTrue(yield* instance.waitForReady(Duration.seconds(1)));
+      yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(80));
+      yield* TestClock.adjust("32 seconds");
+      assert.equal(yield* Queue.take(notices), "record-unavailable");
+      assert.equal(spawns, 1);
+      assert.equal(shutdowns, 1);
+      assert.isFalse((yield* instance.snapshot).restartScheduled);
+      assert.isFalse((yield* instance.snapshot).desiredRunning);
+    }),
+  ),
+);
+
+it.effect("six ready-then-exit80 runs pause; Retry explicitly restores the same start path", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ready = yield* Queue.unbounded<void>();
+      const exits = yield* Queue.unbounded<Deferred.Deferred<ChildProcessSpawner.ExitCode>>();
+      const paused =
+        yield* Deferred.make<
+          Parameters<NonNullable<DesktopBackendManager.BackendInstanceSpec["onRecoveryPaused"]>>[0]
+        >();
+      let spawns = 0;
+      const spawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.gen(function* () {
+            spawns++;
+            const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+            yield* Effect.addFinalizer(() =>
+              Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)),
+            );
+            yield* Queue.offer(exits, exit);
+            return makeProcess({ exitCode: Deferred.await(exit) });
+          }),
+        ),
+      );
+      const instance = yield* makeTestInstance({
+        spawnerLayer: spawner,
+        onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
+        onRecoveryPaused: (actions) => Deferred.succeed(paused, actions).pipe(Effect.asVoid),
+      });
+      yield* instance.start;
+      for (let cycle = 0; cycle < 6; cycle++) {
+        yield* Queue.take(ready);
+        yield* Deferred.succeed(yield* Queue.take(exits), ChildProcessSpawner.ExitCode(80));
+        yield* TestClock.adjust("32 seconds");
+        if (cycle < 5) assert.equal((yield* instance.snapshot).restartAttempt, cycle + 1);
+      }
+      const actions = yield* Deferred.await(paused);
+      assert.equal(actions.reason, "crash-loop");
+      assert.equal(spawns, 6);
+      assert.isFalse((yield* instance.snapshot).restartScheduled);
+      yield* actions.retry;
+      yield* Queue.take(ready);
+      assert.equal(spawns, 7);
+      assert.equal((yield* instance.snapshot).restartAttempt, 0);
+      yield* Deferred.succeed(yield* Queue.take(exits), ChildProcessSpawner.ExitCode(80));
+      yield* TestClock.adjust("32 seconds");
+      yield* Queue.take(ready);
+      assert.equal((yield* instance.snapshot).restartAttempt, 1);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal((yield* instance.snapshot).restartAttempt, 0);
+      yield* instance.stop();
+    }),
+  ),
+);

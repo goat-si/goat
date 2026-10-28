@@ -554,6 +554,12 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       bootstrapDelivery: "fd3",
       httpBaseUrl: backendExposure.httpBaseUrl,
       captureOutput: true,
+      recoveryStateDirectory: environment.path.join(
+        environment.stateDir,
+        "runtime",
+        "desktop-recovery",
+      ),
+      backendLogPath: environment.logDir,
       preflightFailure: Option.none(),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
@@ -693,6 +699,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const wslEnv = mergeWslEnv(parentEnvWithoutGoatHome.WSLENV, forwardedEnvNames);
 
   const baseConfig = {
+    recoveryStateDirectory: environment.path.join(
+      environment.stateDir,
+      "runtime",
+      "desktop-recovery",
+    ),
+    backendLogPath: environment.logDir,
     executablePath: "wsl.exe",
     entryPath:
       preflight._tag === "Ready" ? preflight.windowsEntryPath : environment.backendEntryPath,

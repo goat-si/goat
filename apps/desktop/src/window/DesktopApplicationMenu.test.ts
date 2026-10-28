@@ -1,3 +1,4 @@
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -115,6 +116,9 @@ const configureMenu = (
   }).pipe(
     Effect.provide(
       DesktopApplicationMenu.layer.pipe(
+        Layer.provideMerge(
+          Layer.mock(DesktopBackendPool.DesktopBackendPool, { list: Effect.succeed([]) }),
+        ),
         Layer.provideMerge(layerElectronMenu(applicationMenuTemplate)),
         Layer.provideMerge(layerDesktopWindow(selectedAction)),
         Layer.provideMerge(layerDesktopUpdates),
