@@ -8,6 +8,7 @@ import {
   PreviewAutomationFillSecretInput,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
+  type PreviewSignInField,
   type PreviewTabSession,
   type SecretRequestFailureReason,
   ThreadId,
@@ -65,6 +66,10 @@ const ACCOUNT_CHANGED =
   "The sign-in form no longer shows the account it showed when GOAT found the field, or not the expectedAccount, so nothing was filled and the secretRef is used up. Check which account the page is for before asking the person again.";
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
+const SHARED_FENCED =
+  "A tab that shares this tab's sign-ins holds a password GOAT filled, so goat_preview_evaluate, image snapshots and recordings here stay off until that field lets go.";
+const FILLING =
+  "GOAT is filling a password in a tab that shares this tab's sign-ins. Try again once it is done.";
 
 type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
 
@@ -152,6 +157,20 @@ const IDENTIFIER_OF = `(field) => {
   return id ? id.value.trim() : null;
 }`;
 const IDENTIFIER = `function () { return (${IDENTIFIER_OF})(this); }`;
+/** The identifier now, or nothing once the field left its document. */
+const IDENTIFIER_NOW = `function () { return this.isConnected ? (${IDENTIFIER_OF})(this) : undefined; }`;
+// Without an identifier field, page text names the account: as a whole address, and no other one.
+const NAMED_ONLY = `(wanted) => {
+  const text = document.body ? document.body.innerText.toLowerCase() : "";
+  const part = (c) => c !== undefined && /[a-z0-9._%+@-]/.test(c);
+  let whole = false;
+  for (let at = text.indexOf(wanted); at !== -1 && !whole; at = text.indexOf(wanted, at + 1)) {
+    const after = text.slice(at + wanted.length).replace(/^[.]+/, "");
+    whole = !part(text[at - 1]) && !part(after[0]);
+  }
+  const addresses = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+[.][a-z]{2,}/g) || [];
+  return whole && addresses.every((address) => address === wanted);
+}`;
 // Rechecks, in the same call that types, that the form still shows the account it showed when
 // the field was found, and the expected account when the caller named one.
 const FILL = `function (value, origin, identifier, account) {
@@ -162,8 +181,7 @@ const FILL = `function (value, origin, identifier, account) {
   if (shown !== identifier) return "account";
   // With an identifier field, only that field counts; page text names the account only without one.
   const wanted = account === null ? null : account.toLowerCase();
-  if (wanted !== null && (shown !== null ? shown.toLowerCase() !== wanted :
-    !(document.body && document.body.innerText.toLowerCase().includes(wanted))))
+  if (wanted !== null && (shown !== null ? shown.toLowerCase() !== wanted : !(${NAMED_ONLY})(wanted)))
     return "account";
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(this, value);
   this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -297,6 +315,9 @@ const originOf = (url: string) => {
 };
 
 const VALIDATION_CHARS = 200;
+
+const fieldState = (identifier: string | null): PreviewSignInField =>
+  identifier === null ? "absent" : identifier === "" ? "empty" : "filled";
 
 /** Documents that take their creator's origin rather than one from their URL. */
 const INHERITED_ORIGIN = /^(?:about:|blob:|$)/u;
@@ -448,11 +469,40 @@ export const make = Effect.gen(function* () {
   const filledContexts = new WeakSet<BrowserContext>();
   /** Every tab GOAT acted on, by its context, so a fill sees recordings in that context's tabs. */
   const contextTabs = new WeakMap<BrowserContext, Set<SecretFillTab>>();
+  /** Values filled per context: a site may hand them to any thread's tab of that profile. */
+  const contextValues = new WeakMap<BrowserContext, Set<string>>();
+  /** Fills under way per context: no recording there starts meanwhile. */
+  const filling = new WeakMap<BrowserContext, number>();
+  /** The field each tab last took a password into, and where it went. */
+  const lastFill = new WeakMap<Page, Target & { readonly destination: string }>();
   const track = (tab: SecretFillTab) => {
     const context = tab.page.context();
     const known = contextTabs.get(context) ?? new Set<SecretFillTab>();
     known.add(tab);
     contextTabs.set(context, known);
+  };
+  /** Holds the context's recordings off while a fill there runs, even before it types. */
+  const reserving = async <A>(tab: SecretFillTab, run: () => Promise<A>) => {
+    const context = tab.page.context();
+    filling.set(context, (filling.get(context) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      const left = (filling.get(context) ?? 1) - 1;
+      if (left > 0) filling.set(context, left);
+      else filling.delete(context);
+    }
+  };
+  /** A thread acting on a tab of a context a password went into masks that password too. */
+  const join = (tab: SecretFillTab, threadId: ThreadId) => {
+    track(tab);
+    const shared = contextValues.get(tab.page.context());
+    if (shared === undefined) return;
+    const values = filledValues.get(threadId) ?? new Set<string>();
+    const before = values.size;
+    for (const value of shared) values.add(value);
+    filledValues.set(threadId, values);
+    if (values.size !== before) maskers.delete(threadId);
   };
   /** A page that took a password, and the popups it or they open, keep their pixels off. */
   const markFilled = (page: Page) => {
@@ -468,24 +518,53 @@ export const make = Effect.gen(function* () {
   const noteSignIn = (page: Page, change: Partial<SignInRecord>) =>
     signIns.set(page, { ...signIns.get(page), ...change });
   /**
-   * Marks the document a request left from when it carries a password GOAT filled, whatever sent
-   * it, and when a person hands the tab back; the sign-in state reads both.
+   * Marks the document a request left from when it carries a password GOAT filled, as a form
+   * submission or a script request to the site it went into, and when a person hands the tab
+   * back; the sign-in state reads both.
    */
   const watchSignIn = (tab: SecretFillTab, threadId: ThreadId) => {
     if (watchedForSignIn.has(tab.page)) return;
     watchedForSignIn.add(tab.page);
     tab.page.on("request", (request) => {
       if (request.method() === "GET" || request.method() === "HEAD") return;
+      const field = lastFill.get(tab.page);
+      const kind = request.resourceType();
+      const script = kind === "xhr" || kind === "fetch";
+      if (field === undefined) return;
+      if (kind !== "document" && !(script && originOf(request.url()) === field.destination)) return;
       const values = filledValues.get(threadId);
       const carried =
         request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
       if (values === undefined || !carriesValue(carried, values)) return;
       const at = ++signInOrder;
-      noteSignIn(tab.page, { submitted: { documentGeneration: tab.documentGeneration ?? 0, at } });
-      void request.response().then((response) => {
+      const identifier = signIns.get(tab.page)?.identifierAtFill;
+      noteSignIn(tab.page, {
+        submitted: {
+          documentGeneration: tab.documentGeneration ?? 0,
+          at,
+          ...(identifier ? { identifier } : {}),
+        },
+      });
+      const update = (change: {
+        readonly status?: number;
+        readonly identifier?: PreviewSignInField;
+      }) => {
         const submitted = signIns.get(tab.page)?.submitted;
-        if (response && submitted?.at === at)
-          noteSignIn(tab.page, { submitted: { ...submitted, status: response.status() } });
+        if (submitted?.at === at) noteSignIn(tab.page, { submitted: { ...submitted, ...change } });
+      };
+      // The field as it was sent; once its document is gone, the fill's reading stands.
+      void field.session
+        .send("Runtime.callFunctionOn", {
+          objectId: field.objectId,
+          functionDeclaration: IDENTIFIER_NOW,
+          returnByValue: true,
+        })
+        .then((answer) => {
+          const now: unknown = answer.exceptionDetails ? undefined : answer.result.value;
+          if (now === null || typeof now === "string") update({ identifier: fieldState(now) });
+        }, constVoid);
+      void request.response().then((response) => {
+        if (response) update({ status: response.status() });
       }, constVoid);
     });
     tab.control.onHandoffChange((end) => {
@@ -543,93 +622,100 @@ export const make = Effect.gen(function* () {
     const filled = await record(tab, "fillSecret", () =>
       tab.control.secret(
         request.agentSessionId,
-        async (fence) => {
-          track(tab);
-          const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
-            (each) => each.recording !== null || each.recordingStart !== null,
-          );
-          if (recording)
-            throw refused(
-              "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
+        (fence) =>
+          reserving(tab, async () => {
+            track(tab);
+            const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
+              (each) => each.recording !== null || each.recordingStart !== null,
             );
-          const target = await locate(tab, input.selector);
-          let kept = false;
-          let used = false;
-          try {
-            const destination = await passwordOrigin(target);
-            const identifier = await identifierOf(target);
-            fence.hold();
-            fence.assertMayDispatch();
-            assertBefore(deadlineMs);
-            const consumed = await consume({
-              ref: input.secretRef,
-              threadId: request.threadId,
-              origin: destination,
-            });
-            if ("error" in consumed) throw refused(consumed.error, consumed.failure);
-            used = true;
-            const value = consumed.value;
-            const values = filledValues.get(request.threadId) ?? new Set<string>();
-            values.add(value);
-            filledValues.set(request.threadId, values);
-            maskers.delete(request.threadId);
-            rememberSecret(tab.page, value);
-            // Before typing: a lost reply may still have typed it, and its pixels stay off.
-            const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
-            origins.add(destination);
-            filledOrigins.set(request.threadId, origins);
-            const shared = contextOrigins.get(tab.page.context()) ?? new Set<string>();
-            shared.add(destination);
-            contextOrigins.set(tab.page.context(), shared);
-            markFilled(tab.page);
-            // Watching before the value goes in: its own input handler may submit at once.
-            watchSignIn(tab, request.threadId);
-            fence.assertMayDispatch();
-            assertBefore(deadlineMs);
-            // Fenced before dispatch: a lost reply may still have typed the value.
-            const entry: Fence = { ...target, value };
-            watch(target.session);
-            const outstanding = fences.get(tab.page) ?? [];
-            outstanding.push(entry);
-            fences.set(tab.page, outstanding);
-            kept = true;
-            const typed = await target.session
-              .send("Runtime.callFunctionOn", {
-                objectId: target.objectId,
-                functionDeclaration: FILL,
-                arguments: [
-                  { value },
-                  { value: destination },
-                  { value: identifier },
-                  { value: input.expectedAccount ?? null },
-                ],
-                returnByValue: true,
-              })
-              .catch(() => {
-                throw refused(UNCERTAIN);
-              });
-            // Only FILL's explicit early answers prove the value was never set.
-            if (typed.exceptionDetails || typed.result.value !== true) {
-              const early = typed.result.value === false || typed.result.value === "account";
-              if (typed.exceptionDetails || !early) throw refused(UNCERTAIN);
-              fences.set(
-                tab.page,
-                (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+            if (recording)
+              throw refused(
+                "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
               );
-              kept = false;
-              throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
+            const target = await locate(tab, input.selector);
+            let kept = false;
+            let used = false;
+            try {
+              const destination = await passwordOrigin(target);
+              const identifier = await identifierOf(target);
+              fence.hold();
+              fence.assertMayDispatch();
+              assertBefore(deadlineMs);
+              const consumed = await consume({
+                ref: input.secretRef,
+                threadId: request.threadId,
+                origin: destination,
+              });
+              if ("error" in consumed) throw refused(consumed.error, consumed.failure);
+              used = true;
+              const value = consumed.value;
+              const values = filledValues.get(request.threadId) ?? new Set<string>();
+              values.add(value);
+              filledValues.set(request.threadId, values);
+              maskers.delete(request.threadId);
+              rememberSecret(tab.page, value);
+              const known = contextValues.get(tab.page.context()) ?? new Set<string>();
+              contextValues.set(tab.page.context(), known.add(value));
+              // Before typing: a lost reply may still have typed it, and its pixels stay off.
+              const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
+              origins.add(destination);
+              filledOrigins.set(request.threadId, origins);
+              const shared = contextOrigins.get(tab.page.context()) ?? new Set<string>();
+              shared.add(destination);
+              contextOrigins.set(tab.page.context(), shared);
+              markFilled(tab.page);
+              // Watching before the value goes in: its own input handler may submit at once.
+              lastFill.set(tab.page, { ...target, destination });
+              noteSignIn(tab.page, { identifierAtFill: fieldState(identifier) });
+              watchSignIn(tab, request.threadId);
+              fence.assertMayDispatch();
+              assertBefore(deadlineMs);
+              // Fenced before dispatch: a lost reply may still have typed the value.
+              const entry: Fence = { ...target, value };
+              watch(target.session);
+              const outstanding = fences.get(tab.page) ?? [];
+              outstanding.push(entry);
+              fences.set(tab.page, outstanding);
+              kept = true;
+              const typed = await target.session
+                .send("Runtime.callFunctionOn", {
+                  objectId: target.objectId,
+                  functionDeclaration: FILL,
+                  arguments: [
+                    { value },
+                    { value: destination },
+                    { value: identifier },
+                    { value: input.expectedAccount ?? null },
+                  ],
+                  returnByValue: true,
+                })
+                .catch(() => {
+                  throw refused(UNCERTAIN);
+                });
+              // Only FILL's explicit early answers prove the value was never set.
+              if (typed.exceptionDetails || typed.result.value !== true) {
+                const early = typed.result.value === false || typed.result.value === "account";
+                if (typed.exceptionDetails || !early) throw refused(UNCERTAIN);
+                fences.set(
+                  tab.page,
+                  (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+                );
+                kept = false;
+                throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
+              }
+              return { destination, verified: input.expectedAccount !== undefined };
+            } catch (cause) {
+              if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
+                throw cause;
+              throw refused(
+                cause instanceof BrowserControlInterrupted
+                  ? `${cause.message} ${USED_UP}`
+                  : USED_UP,
+              );
+            } finally {
+              if (!kept) await release(target);
             }
-            return { destination, verified: input.expectedAccount !== undefined };
-          } catch (cause) {
-            if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
-              throw cause;
-            throw refused(
-              cause instanceof BrowserControlInterrupted ? `${cause.message} ${USED_UP}` : USED_UP,
-            );
-          } finally {
-            if (!kept) await release(target);
-          }
-        },
+          }),
         deadlineMs,
       ),
     );
@@ -641,42 +727,37 @@ export const make = Effect.gen(function* () {
     };
   };
 
+  /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
+  const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
+    if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
+    const origins = filledOrigins.get(threadId);
+    const shared = contextOrigins.get(tab.page.context());
+    const inherits = filledContexts.has(tab.page.context());
+    const shows = (url: string) =>
+      origins?.has(originOf(url)) === true ||
+      shared?.has(originOf(url)) === true ||
+      (inherits && INHERITED_ORIGIN.test(url));
+    return filledPages.has(tab.page) || tab.page.frames().some((frame) => shows(frame.url()))
+      ? VISUAL
+      : null;
+  };
+
   /**
-   * Refuses the agent's own script, pixels and recordings while a filled field holds a value, and
-   * text snapshots too once that value shows as plain text.
+   * Refuses where a recording starts, after the tab is marked as starting one: a fill checks that
+   * mark after reserving its context, so whichever comes second refuses.
    */
-  const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
-    track(tab);
-    const textSnapshot =
-      request.operation === "snapshot" &&
-      (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
-    const guarded =
-      request.operation === "evaluate" ||
-      request.operation === "recordingStart" ||
-      (request.operation === "snapshot" && !textSnapshot);
-    const visual =
-      request.operation === "recordingStart" || (request.operation === "snapshot" && !textSnapshot);
-    // Pixels of a site it filled a password on stay off after the field lets go, too.
-    const visualOff = () => {
-      if (!visual) return;
-      const origins = filledOrigins.get(request.threadId);
-      const shared = contextOrigins.get(tab.page.context());
-      const inherits = filledContexts.has(tab.page.context());
-      const shows = (url: string) =>
-        origins?.has(originOf(url)) === true ||
-        shared?.has(originOf(url)) === true ||
-        (inherits && INHERITED_ORIGIN.test(url));
-      if (filledPages.has(tab.page) || tab.page.frames().some((frame) => shows(frame.url())))
-        throw refused(VISUAL);
-    };
-    const outstanding = fences.get(tab.page);
-    if ((!guarded && !textSnapshot) || outstanding === undefined || outstanding.length === 0)
-      return visualOff();
+  const assertPixels = (tab: SecretFillTab, threadId: ThreadId) => {
+    const off = pixelsOff(tab, threadId);
+    if (off !== null) throw refused(off);
+  };
+
+  /** Checks the fields GOAT filled on a page, dropping those that let go. */
+  const fenceState = async (page: Page) => {
     let unconfirmed = false;
     let shown = false;
     let holding = false;
     const kept: Array<Fence> = [];
-    for (const entry of outstanding) {
+    for (const entry of fences.get(page) ?? []) {
       const state = closedSessions.has(entry.session)
         ? "gone"
         : await entry.session
@@ -697,11 +778,40 @@ export const make = Effect.gen(function* () {
       if (state === "shown") shown = true;
       else if (state !== "hidden") unconfirmed = true;
     }
-    fences.set(tab.page, kept);
+    fences.set(page, kept);
+    return { unconfirmed, shown, holding };
+  };
+
+  /**
+   * Refuses the agent's own script, pixels and recordings while a filled field holds a value, in
+   * this tab or one sharing its sign-ins, and text snapshots too once that value shows as plain text.
+   */
+  const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
+    join(tab, request.threadId);
+    const textSnapshot =
+      request.operation === "snapshot" &&
+      (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
+    const guarded =
+      request.operation === "evaluate" ||
+      request.operation === "recordingStart" ||
+      (request.operation === "snapshot" && !textSnapshot);
+    const visual =
+      request.operation === "recordingStart" || (request.operation === "snapshot" && !textSnapshot);
+    if (!guarded && !textSnapshot) return;
+    const own = await fenceState(tab.page);
     // A text snapshot hides password inputs itself; a value shown as plain text, or a field GOAT
     // cannot check, stops it.
-    if (textSnapshot ? !shown && !unconfirmed : !holding) return visualOff();
-    throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
+    if (textSnapshot ? own.shown || own.unconfirmed : own.holding)
+      throw refused(own.unconfirmed ? UNCONFIRMED : own.shown ? SHOWN : FENCED);
+    if (textSnapshot) return;
+    const sharing = contextTabs.get(tab.page.context()) ?? new Set<SecretFillTab>();
+    for (const other of sharing) {
+      if (other.page.isClosed()) sharing.delete(other);
+      else if (other.page !== tab.page && (await fenceState(other.page)).holding)
+        throw refused(SHARED_FENCED);
+    }
+    // Pixels of a site it filled a password on stay off after the field lets go, too.
+    if (visual) assertPixels(tab, request.threadId);
   };
 
   /** Masks the thread's filled values in everything the tab answers. */
@@ -741,5 +851,5 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return { fill, guard, mask, maskText, signInState: signInStateOf };
+  return { fill, guard, assertPixels, mask, maskText, signInState: signInStateOf };
 });

@@ -39,6 +39,7 @@ const makeTab = (
     frames: () => [page],
     mainFrame: () => page,
     context: () => context,
+    isClosed: () => false,
   } as unknown as Page;
   const send = async (method: string, params?: Record<string, unknown>) => {
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
@@ -189,6 +190,70 @@ it.live("keeps the pixels of another thread's tab of the same profile off on a f
     await expect(fill.guard(other, elsewhere)).rejects.toThrow("stay off");
   });
 });
+
+it.live(
+  "masks a password another thread filled in every answer of a tab sharing its sign-ins",
+  () => {
+    const shared = {};
+    const { tab } = makeTab({}, shared);
+    const { tab: other } = makeTab({}, shared);
+    return withFill(async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      // The site copied the password into storage the other thread's tab reads back.
+      const read = { ...request("read", {}), threadId: otherThread };
+      await fill.guard(other, read);
+      const answer = fill.mask(read)({ ok: true, result: { text: "stored " + PASSWORD } });
+      expect(JSON.stringify(answer)).not.toContain(PASSWORD);
+      expect(fill.maskText(otherThread)("stored " + PASSWORD)).not.toContain(PASSWORD);
+    });
+  },
+);
+
+it.live(
+  "refuses script in a tab while another tab sharing its sign-ins holds a filled password",
+  () => {
+    const shared = {};
+    const { tab } = makeTab({}, shared);
+    const { tab: other } = makeTab({}, shared);
+    return withFill(async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const script = { ...request("evaluate", { expression: "1" }), threadId: otherThread };
+      await expect(fill.guard(other, script)).rejects.toThrow("shares this tab's sign-ins holds");
+    });
+  },
+);
+
+it.live(
+  "refuses a recording that starts beside a fill under way, before the fill marks the site",
+  () => {
+    const shared = {};
+    const { tab } = makeTab({}, shared);
+    const { tab: recorder } = makeTab({}, shared);
+    let during = () => {};
+    return withFill(
+      async (fill) => {
+        await fill.guard(recorder, { ...request("status", {}), threadId: otherThread });
+        let starting: Promise<void> | undefined;
+        let pixels: unknown;
+        during = () => {
+          starting = fill.guard(recorder, {
+            ...request("recordingStart", {}),
+            threadId: otherThread,
+          });
+          try {
+            fill.assertPixels(recorder, otherThread);
+          } catch (cause) {
+            pixels = cause;
+          }
+        };
+        await fill.fill(tab, fillRequest, later(), record);
+        expect(String((pixels as Error | undefined)?.message)).toContain("is filling a password");
+        await expect(starting).rejects.toThrow("shares this tab's sign-ins");
+      },
+      () => during(),
+    );
+  },
+);
 
 it.live("lifts the fence of a field whose frame session closed with its document", () => {
   const { tab, closeSession } = makeTab();

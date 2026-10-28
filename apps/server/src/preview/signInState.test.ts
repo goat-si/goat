@@ -16,6 +16,7 @@ const page = (facts: Partial<SignInPage> = {}): SignInPage => ({
 const stage = (facts: Partial<SignInPage>, record: SignInRecord = {}, documentGeneration = 1) =>
   signInStage(page(facts), record, documentGeneration).stage;
 const sent: SignInRecord = { submitted: { documentGeneration: 1, at: 1 } };
+const answered: SignInRecord = { submitted: { documentGeneration: 1, at: 1, status: 200 } };
 
 describe("the sign-in stage GOAT reports", () => {
   it("never reports success for a password beside an empty identifier", () => {
@@ -56,10 +57,23 @@ describe("the sign-in stage GOAT reports", () => {
 
   it("says site_accepted for a later page without a form, and signed_in only after a person's hand back", () => {
     const later = { signIn: false, identifier: "absent", password: "absent" } as const;
-    expect(stage(later, sent, 2)).toBe("site_accepted");
-    expect(stage(later, { ...sent, handedBackAt: 0 }, 2)).toBe("site_accepted");
-    expect(stage(later, { ...sent, handedBackAt: 2 }, 2)).toBe("signed_in");
+    expect(stage(later, answered, 2)).toBe("site_accepted");
+    expect(stage(later, { ...answered, handedBackAt: 0 }, 2)).toBe("site_accepted");
+    expect(stage(later, { ...answered, handedBackAt: 2 }, 2)).toBe("signed_in");
     expect(stage(later, { handedBackAt: 2 }, 2)).toBe("unknown");
+  });
+
+  it("does not call a later page accepted while the site never answered the submission", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    expect(stage(later, sent, 2)).toBe("unknown");
+    expect(stage(later, { ...sent, handedBackAt: 2 }, 2)).toBe("unknown");
+  });
+
+  it("never reports success for a password sent beside an empty identifier, after a hand back too", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    const blank = { submitted: { ...answered.submitted!, identifier: "empty" as const } };
+    expect(stage(later, blank, 2)).toBe("partial");
+    expect(stage(later, { ...blank, handedBackAt: 2 }, 2)).toBe("partial");
   });
 
   it("puts a refused submission before a CAPTCHA the failure page shows", () => {
@@ -69,7 +83,7 @@ describe("the sign-in stage GOAT reports", () => {
 
   it("does not call a later page accepted while a frame it could not read may hold the form", () => {
     const later = { signIn: false, identifier: "absent", password: "absent" } as const;
-    expect(stage({ ...later, unreadableFrames: 1 }, sent, 2)).toBe("unknown");
+    expect(stage({ ...later, unreadableFrames: 1 }, answered, 2)).toBe("unknown");
   });
 
   it("hands CAPTCHA and one-time codes to a person and never picks between accounts", () => {
