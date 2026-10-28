@@ -570,7 +570,9 @@ it("credits a popup to the link the click followed, not to one an earlier click 
       }),
     );
     // An earlier click's window whose first response was slow appears right after this press.
-    await page.exposeFunction("earlierWindowOpens", () => page.emit("popup", page));
+    // Playwright's Page is an event emitter at runtime, though its type does not say so.
+    const events = page as unknown as { emit: (event: string, ...args: unknown[]) => boolean };
+    await page.exposeFunction("earlierWindowOpens", () => events.emit("popup", page));
     await page.goto("https://page.test/");
     await page.evaluate(
       `document.addEventListener("mouseup", () => earlierWindowOpens(), { once: true })`,
