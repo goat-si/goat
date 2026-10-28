@@ -825,6 +825,15 @@ describe("pull request reads", () => {
             .call("goat_pull_request_checks", { repository: "web", number: 9 })
             .pipe(Effect.flip),
         ).toMatchObject({ _tag: "PullRequestRepositoryAmbiguousError" });
+        expect(
+          yield* shared
+            .call("goat_pull_request_checks", {
+              host: "dev.azure.com",
+              repository: "web",
+              number: 9,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "PullRequestRepositoryAmbiguousError" });
         expect(yield* Ref.get(shared.reads)).toEqual([]);
 
         const lone = yield* makeHarness({ thread: null, projects: [azure("two", "web")] });
@@ -833,7 +842,14 @@ describe("pull request reads", () => {
           number: 9,
         });
         expect(result.url).toContain("/two/project/_git/web/");
+        const named = yield* lone.call("goat_pull_request_checks", {
+          host: "dev.azure.com",
+          repository: "web",
+          number: 9,
+        });
+        expect(named.url).toBe(result.url);
         expect((yield* Ref.get(lone.reads)).map((ref) => [ref.projectId, ref.repository])).toEqual([
+          ["project-two-web", result.repository],
           ["project-two-web", result.repository],
         ]);
       }),

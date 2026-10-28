@@ -163,6 +163,20 @@ export function listThreadPullRequests(
   };
 }
 
+/** A project's own repository as a pull request key: host with its port, the full path. */
+function repositoryKeyOf(project: OrchestrationProjectShell) {
+  return project.repositoryIdentity == null
+    ? null
+    : pullRequestSyncKey(
+        {
+          projectId: project.id,
+          repository: sourceControlDefinitions.repositorySelector(project.repositoryIdentity) ?? "",
+          number: 1,
+        },
+        project.repositoryIdentity,
+      );
+}
+
 function projectForPullRequest(
   projects: ReadonlyArray<OrchestrationProjectShell>,
   target: { readonly host: string; readonly repository: string },
@@ -174,18 +188,7 @@ function projectForPullRequest(
       { projectId: project.id, host: target.host, repository: target.repository, number: 1 },
       project.repositoryIdentity ?? undefined,
     );
-    const projectKey =
-      project.repositoryIdentity == null
-        ? null
-        : pullRequestSyncKey(
-            {
-              projectId: project.id,
-              repository:
-                sourceControlDefinitions.repositorySelector(project.repositoryIdentity) ?? "",
-              number: 1,
-            },
-            project.repositoryIdentity,
-          );
+    const projectKey = repositoryKeyOf(project);
     return (
       own !== null &&
       projectKey !== null &&
@@ -321,20 +324,12 @@ const make = Effect.gen(function* () {
     const callerProject = known.find((project) => project.id === callerThread?.projectId);
     // A pull request named by repository builds its URL through the project that holds it, which
     // need not be the caller's. Without a host, that is the one project whose remote matches.
-    const holds = (project: OrchestrationProjectShell, repository: string) => {
-      const { host } = projectHostAndProvider(project);
-      return host !== null && projectForPullRequest([project], { host, repository }, undefined);
-    };
-    // The project a target resolves through, and the repository path it names there: a matched
-    // holder's full path from its canonical host/path key, so a short Azure DevOps name builds
-    // its org/project/_git URL.
-    const throughHolder = (input: PullRequestTargetInput, holder: OrchestrationProjectShell) => {
-      const key = holder.repositoryIdentity?.canonicalKey;
-      const path = key === undefined ? "" : key.slice(key.indexOf("/") + 1);
-      return {
-        input: path === "" || !key?.includes("/") ? input : { ...input, repository: path },
-        project: holder,
-      };
+    const holds = (project: OrchestrationProjectShell, repository: string, host?: string) => {
+      const at = host ?? projectHostAndProvider(project).host;
+      return (
+        at !== null &&
+        projectForPullRequest([project], { host: at, repository }, undefined) !== undefined
+      );
     };
     const routed = Effect.fn("PullRequestsToolkit.routeTarget")(function* (
       input: PullRequestTargetInput,
@@ -342,26 +337,24 @@ const make = Effect.gen(function* () {
       if (input.url !== undefined || input.repository === undefined)
         return { input, project: callerProject };
       const { repository } = input;
-      if (input.host !== undefined)
-        return {
-          input,
-          project:
-            projectForPullRequest(known, { host: input.host, repository }, callerProject) ??
-            callerProject,
-        };
-      // Checkouts of one repository share its canonical key; two repositories that answer to the
-      // same short name are ambiguous whoever calls.
-      const holders = known.filter((project) => holds(project, repository));
-      const repositories = new Set(
-        holders.map((project) => project.repositoryIdentity?.canonicalKey ?? project.id),
+      // Checkouts of one repository share its pull request key; two repositories that answer to
+      // the same short name are ambiguous whoever calls, with or without host.
+      const holders = known.filter((project) => holds(project, repository, input.host));
+      const keys = new Map(
+        holders.flatMap((project) => {
+          const key = repositoryKeyOf(project);
+          return key === null ? [] : [[`${key.host}/${key.repository}`, key] as const];
+        }),
       );
-      if (repositories.size > 1)
-        return yield* new PullRequestRepositoryAmbiguousError({ repository });
+      if (keys.size > 1) return yield* new PullRequestRepositoryAmbiguousError({ repository });
       const [first] = holders;
-      if (first === undefined) return { input, project: callerProject };
+      const [key] = keys.values();
+      if (first === undefined || key === undefined) return { input, project: callerProject };
       const holder =
         callerProject !== undefined && holders.includes(callerProject) ? callerProject : first;
-      return throughHolder(input, holder);
+      // The holder's own host and full path, so a short Azure DevOps name builds its
+      // org/project/_git URL.
+      return { input: { ...input, host: key.host, repository: key.repository }, project: holder };
     });
     return yield* Effect.forEach(targets, (input) =>
       routed(input).pipe(
