@@ -67,10 +67,6 @@ if (
     // A thread's BROWSER; see urlOpener/UrlOpenerShim.ts.
     const { runUrlOpenerCli } = await import("./urlOpener/urlOpenerCli.ts");
     process.exitCode = await runUrlOpenerCli(process.argv.slice(3));
-  } else if (command === "__ssh-helper" || (command === "--version" && process.argv.length === 3)) {
-    // SSH probes and launches start goat for these many times per reconnect.
-    const { runSshHelperCli } = await import("./cli/sshHelperCli.ts");
-    runSshHelperCli();
   } else {
     const { agentSurfaceInvocation, nodeInputReader } =
       await import("./cli/agentSurfaceCommand.ts");
