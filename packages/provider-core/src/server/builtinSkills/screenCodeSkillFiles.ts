@@ -28,7 +28,7 @@ Use URLs supplied by the user or found on the page; do not guess URLs beyond wel
 
 For an app window, \`await app.observe()\` reads its accessibility tree and \`await app.screenshot()\` its pixels; a screenshot keeps the tree's element refs while the app keeps that tree. Every app read comes back \`mode:"full"\` (a requested diff or query too; check \`complete\` and \`truncated\`), and it retires earlier element refs, so act on the numbers of the latest read. When the desktop refuses a call, its error and receipt carry \`refused\`, \`detail\` and, when known, \`app\`; nothing was sent, and a permission refusal needs a person before you retry.
 
-Steps you have already decided in one app window (element clicks, typing, \`setValue\`) go to the app as one batch when you start them together and await once: \`await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))\`. Awaiting each one, as in a \`for\` loop, sends each alone; use that only when a step depends on the one before. Read every result: after a failed or unknown step, later steps may already have run.
+Steps you have already decided in one app window (element clicks, typing, \`setValue\`) go to the app as one batch when you start them together and await once: \`await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))\`. Awaiting each one, as in a \`for\` loop, sends each alone; use that only when a step depends on the one before. Read every result: after a failed or unknown step, later steps may already have run. An app verdict says the input went out; to check its result, \`await app.waitFor({name, value})\` once.
 
 ## Desktop beside the person
 
