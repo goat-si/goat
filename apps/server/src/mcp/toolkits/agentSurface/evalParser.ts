@@ -83,8 +83,14 @@ const tooDeep = () =>
     `The program nests deeper than ${EVAL_LIMITS.depth} levels. Bind inner results with let.`,
   );
 
-// Calling these from a program would only nest the same checks, or recurse.
-const NOT_CALLABLE: ReadonlySet<string> = new Set(["surface.call", "surface.eval"]);
+// Calling these from a program would only nest the same checks, or recurse. goat_eval is named
+// here too, so a server that has not registered it yet still refuses it as a target.
+const NOT_CALLABLE: ReadonlySet<string> = new Set([
+  "surface.call",
+  "surface.eval",
+  "goat_eval",
+  "goat_surface_eval",
+]);
 const DELIMITERS = new Set(["(", ")", "[", "]", "{", "}", '"', "'", ";", ","]);
 const NUMBER = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/;
 
@@ -371,6 +377,12 @@ export const analyzeProgram = (node: Node, bindingNames: ReadonlyArray<string>):
     }
 
     function call(target: string, args: ReadonlyArray<Node>, offset: number): Expr {
+      if (NOT_CALLABLE.has(target))
+        throw new ProgramRefusal(
+          "invalid_request",
+          "not_callable",
+          `${target} cannot run inside a program.`,
+        );
       const entry = resolveAgentSurfaceEntry(target);
       if (entry === undefined)
         throw new ProgramRefusal(
