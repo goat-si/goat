@@ -84,23 +84,30 @@ the dialog.
 
 ## Track subscription limits
 
-**Usage → Limits** pools every subscription account it can see per provider, so with several Codex
-or Claude accounts across your enabled environments and hubs you read one number per window rather than a
-list. Each window card shows how much of the pool is left and a bar with one segment per account,
-kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
-first. For an account with no weekly quota left, this is when its session becomes usable again.
-The first available window is used when no account reports a 5-hour limit. A gap means the
-account does not report that window. When the provider reports reset times, the card also says
-when the next reset lands and how much it hands back. The hatched
-part of a segment is what that reset restores. Tap a segment or account row for the account's plan,
-where it is signed in, and its reset time. On web, you can hover too. Codex and Claude accounts
-with banked reset credits show a ticket count and the **Use reset** action in the account details.
-Claude resets are not available when the server runs on macOS, where Claude keeps its login in the
-Keychain. On narrow screens, numbered rows below
-the bar show each account's quota, countdown, and credits. Tap a row to open its details.
+**Usage → Limits** shows each provider's subscription accounts and how much quota each has left.
+The line beside the provider name tells you whether you can work right now, such as "3 of 4 ready"
+or "All active accounts blocked · next frees in 1h 9m". Every number is quota left.
 
-The same account signed in on more than one environment, or reported by a hub as well, counts once.
-Filter with the environment dropdown to see what a single machine has.
+Accounts are grouped by where GOAT learned of them, so a hub's accounts and the logins on your own
+machines never mix:
+
+- **Shared pool**: accounts an OpenCodex Home pools. OpenCodex names them by plan and a short label
+  such as `p61e549`, never by email. When GOAT cannot read the pool, for example because OpenCodex is
+  too old to report it, the group says why instead of listing accounts.
+- **Direct login**: providers signed in on a GOAT environment, labeled with that environment.
+- **Proxy**: accounts a CLIProxyAPI hub reports.
+
+Each group has one row per account with its status (Ready, Blocked and when it frees, No reading,
+Paused, or Sign in again) and how much is left in each window with the time until it resets. Column
+headers show how much the whole group has left. Ready accounts with the most quota left come first,
+then blocked accounts by which frees soonest. A reading older than five minutes counts as no reading
+until Limits refreshes. Codex and Claude accounts with banked reset credits show **Use reset** in
+their row. Claude resets are not available when the server runs on macOS, where Claude keeps its
+login in the Keychain. On mobile, tap a row for the account's plan, where it is signed in, and its
+reset time.
+
+The same account signed in on more than one environment, or reported by a hub as well, appears once
+and names its other paths. Filter with the environment dropdown to see what a single machine has.
 
 When a Claude or Codex account has no overall weekly quota left, its pooled session contribution
 shows 0% left. The next refill depends on both reset times: an exhausted session must also reset,

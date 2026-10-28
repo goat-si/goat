@@ -2,27 +2,23 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId } from "@goat/contracts";
 import {
-  collectLimitAccounts,
   collectExternalUsageLinks,
-  collectLimitNotices,
-  collectLimitPools,
   cursorUsageWindowDetails,
-  displayLimitWindows,
+  formatDuration,
   formatResetsIn,
   paceRemainingPercent,
   remainingPercent,
-  type LimitAccount,
   type LimitPoolWindow,
 } from "@goat/shared/usageLimits";
 import {
-  collectOpenCodexPools,
-  openCodexPoolText,
-  sectionsWithOpenCodex,
-} from "@goat/shared/usageLimitsOpenCodex";
-import { Fragment, type ReactNode, useId, useState } from "react";
+  limitBoard,
+  type LimitBoardGroup,
+  type LimitBoardRow,
+  type LimitBoardSection,
+} from "@goat/shared/usageLimitsBoard";
+import { Fragment, type ReactNode, useState } from "react";
 import { Linking, Pressable, View } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { Defs, Path, Pattern, Rect, Svg } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -38,252 +34,215 @@ const DRIVER_LABEL: Partial<Record<string, string>> = {
   claudeAgent: "Claude",
   antigravity: "Antigravity",
 };
-const PACE_LABEL = { ahead: "Ahead of pace", on: "On pace", under: "Under pace" } as const;
 
-function accountName(account: LimitAccount) {
-  if (account.displayName) return account.displayName;
-  if (!account.email) return DRIVER_LABEL[account.driver] ?? String(account.driver);
-  const [local = "", domain = ""] = account.email.split("@");
-  return `${local[0] ?? ""}${domain[0] ?? ""}`.toUpperCase() || "Account";
+const ORIGIN_LABEL = { pool: "Shared pool", login: "Direct login", proxy: "Proxy" } as const;
+
+const STATUS = {
+  ready: { label: "Ready", className: "text-foreground" },
+  blocked: { label: "Blocked", className: "text-danger-foreground" },
+  unknown: { label: "No reading", className: "text-foreground-muted" },
+  paused: { label: "Paused", className: "text-foreground-muted" },
+  reauth: { label: "Sign in again", className: "text-warning-foreground" },
+} as const;
+
+const VERDICT_CLASS = {
+  ready: "text-foreground-muted",
+  blocked: "text-danger-foreground",
+  unknown: "text-foreground-muted",
+} as const;
+
+function rowName(row: LimitBoardRow) {
+  if (row.name) return row.name;
+  if (row.email) return "••••••@••••••";
+  return DRIVER_LABEL[row.driver] ?? String(row.driver);
 }
 
-// Same gap-and-tick as the Limits rows: two clipped copies of the segment leave a see-through gap.
-function PaceGap({
-  timeLeft,
-  children,
-}: {
-  readonly timeLeft: number | null;
-  readonly children: ReactNode;
-}) {
-  const [width, setWidth] = useState(0);
-  const tickX =
-    timeLeft === null || width < 6
-      ? null
-      : Math.min(Math.max((width * timeLeft) / 100, 3), width - 3);
-  return (
-    <View
-      pointerEvents="none"
-      className="absolute inset-0"
-      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-    >
-      {tickX === null
-        ? children
-        : (
-            [
-              [0, tickX - 3],
-              [tickX + 3, width],
-            ] as const
-          ).map(([start, end]) => (
-            <View
-              key={start}
-              className="absolute top-0 bottom-0 overflow-hidden"
-              style={{ left: start, width: end - start }}
-            >
-              <View className="absolute top-0 bottom-0" style={{ left: -start, width }}>
-                {children}
-              </View>
-            </View>
-          ))}
-      {tickX !== null ? (
-        <View
-          className="absolute top-0.5 bottom-0.5 w-0.5 rounded-full bg-foreground"
-          style={{ left: tickX - 1 }}
-        />
-      ) : null}
-    </View>
-  );
-}
-
-function AccountSegment({
-  remaining,
-  color,
-  refillPercent,
-}: {
-  readonly remaining: number;
-  readonly color: string;
-  readonly refillPercent: number;
-}) {
-  const patternId = useId().replace(/:/g, "");
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  return (
-    <View
-      pointerEvents="none"
-      className="absolute inset-0"
-      onLayout={(event) => {
-        const { width, height } = event.nativeEvent.layout;
-        setSize((previous) =>
-          previous.width === width && previous.height === height ? previous : { width, height },
-        );
-      }}
-    >
-      {size.width > 0 && size.height > 0 ? (
-        // Numeric canvas dimensions clear Android SVG geometry cached before a segment resized.
-        <Svg width={size.width} height={size.height} accessible={false}>
-          <Defs>
-            <Pattern id={patternId} width={6} height={6} patternUnits="userSpaceOnUse">
-              <Path d="M-1 1L1 -1M0 6L6 0M5 7L7 5" stroke={color} strokeWidth={1} opacity={0.22} />
-            </Pattern>
-          </Defs>
-          {refillPercent > 0 ? (
-            <Rect
-              x={`${100 - Math.min(100 - remaining, refillPercent)}%`}
-              width={`${Math.min(100 - remaining, refillPercent)}%`}
-              height="100%"
-              fill={`url(#${patternId})`}
-            />
-          ) : null}
-          <Rect width={`${remaining}%`} height="100%" fill={color} opacity={0.35} />
-        </Svg>
-      ) : null}
-    </View>
-  );
-}
-
-function PoolWindowCard({
-  pool,
+function LimitRow({
+  row,
+  group,
   color,
   now,
   environmentIds,
-  label,
-  description,
 }: {
-  readonly pool: LimitPoolWindow;
+  readonly row: LimitBoardRow;
+  readonly group: LimitBoardGroup;
   readonly color: string;
   readonly now: number;
   readonly environmentIds: readonly string[] | null;
-  readonly label?: string;
-  readonly description?: string;
 }) {
   const navigation = useNavigation();
-  const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
-  const openAccount = (account: LimitAccount) =>
-    navigation.navigate("SettingsUsageAccount", {
-      accountKey: account.key,
-      windowId: pool.id,
-      windowKind: pool.kind,
-      environmentIds,
-      now,
-    });
-  return (
-    <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
-      <View className="flex-row items-start justify-between gap-3">
-        <View className="gap-1">
-          <Text className="text-sm font-goat-medium text-foreground">{label ?? pool.label}</Text>
-          <View className="flex-row items-baseline gap-1.5">
-            <Text className="text-3xl font-goat-bold tabular-nums text-foreground">
-              {pool.remainingPercent}%
-            </Text>
-            <Text className="text-sm text-foreground-muted">left</Text>
-          </View>
+  const cells = group.windows.flatMap((window) => {
+    const member = window.columns.find((column) => column.account.key === row.account?.key);
+    return member?.window ? [{ pool: window, window: member.window }] : [];
+  });
+  const status = STATUS[row.status];
+  const details = [
+    row.plan && !row.name?.toLowerCase().includes(row.plan.toLowerCase()) ? row.plan : null,
+    row.status === "blocked"
+      ? row.releaseAt === null
+        ? "Release time unknown"
+        : `Frees in ${formatDuration(row.releaseAt - now)}`
+      : null,
+    row.note ?? null,
+    row.alsoVia.length > 0 ? `Also via ${row.alsoVia.join(", ")}` : null,
+  ].filter((detail) => detail !== null);
+  const body = (
+    <View className="gap-1.5 py-3">
+      <View className="flex-row items-center gap-2">
+        <Text numberOfLines={1} className="min-w-0 flex-1 text-sm font-goat-medium text-foreground">
+          {rowName(row)}
+        </Text>
+        <View className="rounded-md bg-subtle px-1.5 py-0.5">
+          <Text className={`text-xs font-goat-medium ${status.className}`}>{status.label}</Text>
         </View>
-        {pool.pace ? (
-          <Text className="text-xs text-foreground-tertiary">{PACE_LABEL[pool.pace]}</Text>
-        ) : null}
       </View>
-      {description ? <Text className="text-xs text-foreground-muted">{description}</Text> : null}
-      {nextRefill ? (
-        <Text className="text-xs tabular-nums text-foreground-muted">
-          ↻ +{nextRefill.restoresPercent}%{" "}
-          {formatResetsIn(nextRefill.member.window, now)
-            ?.replace("resets in ", "in ")
-            .replace("resets now", "now")}
+      {details.length > 0 ? (
+        <Text numberOfLines={2} className="text-xs text-foreground-muted">
+          {details.join(" · ")}
         </Text>
       ) : null}
-      <View className="flex-row gap-1">
-        {pool.columns.map((member, index) => {
-          if (!member.window)
-            return <View key={member.account.key} className="h-7 min-w-0 flex-1" />;
-          const { account, window } = member;
-          const timeLeft = paceRemainingPercent(window, now);
-          return (
-            <Pressable
-              key={account.key}
-              accessibilityRole="button"
-              accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left${timeLeft === null ? "" : `, ${timeLeft}% of the window left`}`}
-              accessibilityHint="Show account details"
-              onPress={() => openAccount(account)}
-              className="h-7 min-w-0 flex-1 rounded-md"
-            >
-              <PaceGap timeLeft={timeLeft}>
-                <View className="absolute inset-0 rounded-md bg-subtle" />
-                <View className="absolute inset-0 overflow-hidden rounded-md">
-                  <AccountSegment
-                    remaining={remainingPercent(window)}
-                    color={color}
-                    refillPercent={window.resetsAt ? member.refillPercent : 0}
-                  />
-                </View>
-              </PaceGap>
+      {cells.map(({ pool, window }) => {
+        const remaining = remainingPercent(window);
+        return (
+          <View key={`${pool.kind}:${pool.id}`} className="flex-row items-center gap-2">
+            <Text numberOfLines={1} className="w-20 text-xs text-foreground-muted">
+              {cursorUsageWindowDetails(pool.id)?.label ?? pool.label}
+            </Text>
+            <View className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle">
               <View
-                pointerEvents="none"
-                className="absolute inset-0 items-center justify-center overflow-hidden rounded-md"
-              >
-                <Text
-                  numberOfLines={1}
-                  className="max-w-full shrink text-xs font-goat-medium tabular-nums text-foreground"
-                >
-                  {index + 1}
-                </Text>
-              </View>
-            </Pressable>
-          );
-        })}
+                className="h-full rounded-full"
+                style={{ width: `${remaining}%`, backgroundColor: color }}
+              />
+            </View>
+            <Text className="w-16 text-right text-xs font-goat-medium tabular-nums text-foreground">
+              {remaining}% left
+            </Text>
+            <Text className="w-14 text-right text-xs tabular-nums text-foreground-muted">
+              {formatResetsIn(window, now)?.replace("resets in ", "↻ ") ?? ""}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+  const first = cells[0];
+  const account = row.account;
+  if (!account) return body;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${rowName(row)}, ${status.label}${cells.map(({ pool, window }) => `, ${pool.label} ${remainingPercent(window)}% left`).join("")}`}
+      accessibilityHint="Show account details"
+      onPress={() =>
+        navigation.navigate("SettingsUsageAccount", {
+          accountKey: account.key,
+          ...(first ? { windowId: first.pool.id, windowKind: first.pool.kind } : {}),
+          environmentIds,
+          now,
+        })
+      }
+      className="active:opacity-60"
+    >
+      {body}
+    </Pressable>
+  );
+}
+
+function LimitGroupCard({
+  group,
+  color,
+  now,
+  environmentIds,
+}: {
+  readonly group: LimitBoardGroup;
+  readonly color: string;
+  readonly now: number;
+  readonly environmentIds: readonly string[] | null;
+}) {
+  return (
+    <View className="gap-1 rounded-[24px] border-continuous bg-grouped-card px-4 pt-3 pb-1">
+      <View className="flex-row flex-wrap items-center gap-x-2 gap-y-1">
+        <View className="rounded-md bg-subtle-strong px-1.5 py-0.5">
+          <Text className="text-xs font-goat-medium text-foreground">
+            {ORIGIN_LABEL[group.kind]}
+          </Text>
+        </View>
+        <Text className="text-sm font-goat-medium text-foreground">{group.title}</Text>
       </View>
-      <View>
-        {pool.columns.map(({ account, window }, index) => {
-          if (!window) return null;
-          const credits = account.limits.resetCredits?.availableCount ?? 0;
-          const resetsIn = formatResetsIn(window, now);
-          return (
-            <Pressable
-              key={account.key}
-              accessibilityRole="button"
-              accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left${resetsIn ? `, ${resetsIn}` : ""}${credits ? `, ${credits} reset credits banked` : ""}`}
-              accessibilityHint="Show account details"
-              onPress={() => openAccount(account)}
-              className="min-h-[44px] flex-row items-center gap-2 active:opacity-60"
-            >
-              <View className="size-5 items-center justify-center overflow-hidden rounded-md bg-subtle-strong">
-                <Text className="text-xs font-goat-medium tabular-nums text-foreground">
-                  {index + 1}
-                </Text>
-              </View>
-              <Text
-                numberOfLines={1}
-                className="min-w-0 flex-1 text-sm font-goat-medium text-foreground"
-              >
-                {accountName(account)}
-              </Text>
-              <Text className="text-sm font-goat-medium tabular-nums text-foreground">
-                {remainingPercent(window)}%
-              </Text>
-              <View className="flex-row items-center gap-1">
-                {resetsIn ? (
-                  <>
-                    <SymbolView
-                      name="arrow.clockwise"
-                      size={12}
-                      tintColorClassName="accent-foreground-muted"
-                    />
-                    <Text className="text-xs tabular-nums text-foreground-muted">
-                      {resetsIn.replace("resets in ", "")}
-                    </Text>
-                  </>
-                ) : null}
-                {credits ? (
-                  <>
-                    {resetsIn ? <Text className="text-xs text-foreground-tertiary">·</Text> : null}
-                    <SymbolView name="ticket" size={13} tintColorClassName="accent-icon" />
-                    <Text className="text-xs font-goat-medium tabular-nums text-foreground">
-                      {credits}
-                    </Text>
-                  </>
-                ) : null}
-              </View>
-            </Pressable>
-          );
-        })}
+      {group.detail ? <Text className="text-xs text-foreground-muted">{group.detail}</Text> : null}
+      {group.poolReadings ? (
+        <Text className="text-xs tabular-nums text-foreground-muted">
+          OpenCodex reports {group.poolReadings}
+        </Text>
+      ) : null}
+      {group.windows.length > 0 ? (
+        <Text className="text-xs tabular-nums text-foreground-muted">
+          {group.windows
+            .map((window) => `${window.label} ${window.remainingPercent}% left`)
+            .join(" · ")}
+        </Text>
+      ) : null}
+      {group.unreadable ? (
+        <Text className="py-2 text-xs text-warning-foreground">
+          GOAT can't read this pool, so its accounts and limits are hidden. {group.unreadable}
+        </Text>
+      ) : null}
+      {group.blocks.map((block) => (
+        <Text key={block} className="text-xs font-goat-medium text-danger-foreground">
+          {block}
+        </Text>
+      ))}
+      {group.rows.map((row, index) => (
+        <View key={row.key} className={index === 0 ? undefined : "border-t border-border-subtle"}>
+          <LimitRow
+            row={row}
+            group={group}
+            color={color}
+            now={now}
+            environmentIds={environmentIds}
+          />
+        </View>
+      ))}
+      {group.rows.length === 0 && !group.unreadable ? (
+        <Text className="pb-3 text-xs text-foreground-muted">No accounts reported.</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function LimitSectionView({
+  section,
+  color,
+  now,
+  environmentIds,
+}: {
+  readonly section: LimitBoardSection;
+  readonly color: string;
+  readonly now: number;
+  readonly environmentIds: readonly string[] | null;
+}) {
+  return (
+    <View className="gap-3">
+      <View className="gap-0.5 px-1">
+        <View className="flex-row items-center gap-2">
+          <ProviderIcon provider={section.driver} size={18} />
+          <Text className="text-base font-goat-medium text-foreground">
+            {DRIVER_LABEL[section.driver] ?? section.driver}
+          </Text>
+        </View>
+        <Text className={`text-sm ${VERDICT_CLASS[section.verdict.tone]}`}>
+          {section.verdict.text}
+        </Text>
       </View>
+      {section.groups.map((group) => (
+        <LimitGroupCard
+          key={group.key}
+          group={group}
+          color={color}
+          now={now}
+          environmentIds={environmentIds}
+        />
+      ))}
     </View>
   );
 }
@@ -304,22 +263,18 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const lines = collectOpenCodexPools(selected);
-  const pools = sectionsWithOpenCodex(
-    collectLimitPools(collectLimitAccounts(selected), now),
-    lines,
-  );
-  const notices = collectLimitNotices(selected);
+  const { sections, notices } = limitBoard(selected, now);
   const externalLinks = collectExternalUsageLinks(selected);
   const colors = useProviderColors();
+  const environmentIds = selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds];
   const cursorPromptAt =
     Math.max(
-      pools.findIndex((pool) => pool.driver === "codex"),
-      pools.findIndex((pool) => pool.driver === "claudeAgent"),
+      sections.findIndex((section) => section.driver === "codex"),
+      sections.findIndex((section) => section.driver === "claudeAgent"),
     ) + 1;
   return (
     <View className="gap-6">
-      {pools.length === 0 &&
+      {sections.length === 0 &&
       notices.length === 0 &&
       failedLabels.length === 0 &&
       !cursorPrompt &&
@@ -330,58 +285,18 @@ export function UsageLimitsSection({
             : "No provider on the selected environments reports subscription limits."}
         </Text>
       ) : null}
-      {pools.map((pool, index) => {
-        const windows = displayLimitWindows(pool);
-        return (
-          <Fragment key={pool.driver}>
-            {index === cursorPromptAt ? cursorPrompt : null}
-            <View className="gap-3">
-              <View className="flex-row items-center gap-2 px-1">
-                <ProviderIcon provider={pool.driver} size={18} />
-                <Text className="text-base font-goat-medium text-foreground">
-                  {DRIVER_LABEL[pool.driver] ?? pool.driver}
-                </Text>
-              </View>
-              {lines
-                .filter((line) => line.driver === pool.driver)
-                .map((line) => {
-                  const text = openCodexPoolText(line, now);
-                  return (
-                    <View key={line.key} className="gap-0.5 px-1">
-                      <Text className="text-sm text-foreground">{text.title}</Text>
-                      {text.readings ? (
-                        <Text className="text-xs text-foreground-muted">{text.readings}</Text>
-                      ) : null}
-                      {text.blocks.map((block) => (
-                        <Text key={block} className="text-xs text-foreground-muted">
-                          {block}
-                        </Text>
-                      ))}
-                    </View>
-                  );
-                })}
-              {windows.map((window) => {
-                const details =
-                  pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
-                return (
-                  <PoolWindowCard
-                    key={`${window.kind}:${window.id}`}
-                    pool={window}
-                    color={colors[usageProviderKind(pool.driver) ?? "codex"]}
-                    now={now}
-                    environmentIds={
-                      selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]
-                    }
-                    label={details?.label}
-                    description={details?.description}
-                  />
-                );
-              })}
-            </View>
-          </Fragment>
-        );
-      })}
-      {cursorPromptAt === pools.length ? cursorPrompt : null}
+      {sections.map((section, index) => (
+        <Fragment key={section.driver}>
+          {index === cursorPromptAt ? cursorPrompt : null}
+          <LimitSectionView
+            section={section}
+            color={colors[usageProviderKind(section.driver) ?? "codex"]}
+            now={now}
+            environmentIds={environmentIds}
+          />
+        </Fragment>
+      ))}
+      {cursorPromptAt === sections.length ? cursorPrompt : null}
       {externalLinks.map((link) => (
         <View key={link.url} className="gap-3 rounded-xl border border-border-subtle p-4">
           <Text className="text-base font-goat-medium text-foreground">{link.label}</Text>
@@ -430,8 +345,8 @@ export function UsageLimitsSection({
 
 type AccountScreenProps = StaticScreenProps<{
   accountKey: string;
-  windowId: string;
-  windowKind: LimitPoolWindow["kind"];
+  windowId?: string;
+  windowKind?: LimitPoolWindow["kind"];
   environmentIds: readonly string[] | null;
   now: number;
 }>;
@@ -446,11 +361,14 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
     selectedIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedIds.has(id)));
-  const accounts = collectLimitAccounts(selected);
-  const account = accounts.find((candidate) => candidate.key === accountKey);
-  const pool = collectLimitPools(accounts, now)
-    .find((candidate) => candidate.driver === account?.driver)
-    ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
+  // The same group the Limits row came from, so its columns match what the row showed.
+  const group = limitBoard(selected, now)
+    .sections.flatMap((section) => section.groups)
+    .find((candidate) => candidate.rows.some((row) => row.account?.key === accountKey));
+  const account = group?.rows.find((row) => row.account?.key === accountKey)?.account ?? undefined;
+  const pool = group?.windows.find(
+    (candidate) => candidate.id === windowId && candidate.kind === windowKind,
+  );
   const window =
     pool?.columns.find((member) => member.account.key === accountKey)?.window ?? undefined;
   const evenPace = window ? paceRemainingPercent(window, now) : null;
@@ -463,7 +381,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
         contentContainerClassName="gap-5 p-5"
         contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
       >
-        {!account || !window ? (
+        {!account ? (
           <Text className="text-base text-foreground-muted">
             This account is no longer reporting limits on the selected environments.
           </Text>
@@ -473,7 +391,10 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
               <View className="flex-row items-center gap-2">
                 <ProviderIcon provider={account.driver} size={24} />
                 <Text className="flex-1 text-xl font-goat-bold text-foreground">
-                  {account.displayName ?? DRIVER_LABEL[account.driver] ?? account.driver}
+                  {account.poolName ??
+                    account.displayName ??
+                    DRIVER_LABEL[account.driver] ??
+                    account.driver}
                 </Text>
               </View>
               {account.email ? (
@@ -494,31 +415,33 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
-            <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
-              <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>
-              <Text className="text-3xl font-goat-bold tabular-nums text-foreground">
-                {remainingPercent(window)}% left
-              </Text>
-              {window.resetsAt ? (
-                <Text selectable className="text-sm text-foreground-muted">
-                  Resets{" "}
-                  {new Date(window.resetsAt).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
+            {window ? (
+              <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
+                <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>
+                <Text className="text-3xl font-goat-bold tabular-nums text-foreground">
+                  {remainingPercent(window)}% left
                 </Text>
-              ) : null}
-              {evenPace !== null ? (
-                <Text className="text-sm text-foreground-muted">
-                  Even pace: {evenPace}% left by now
-                </Text>
-              ) : null}
-              {reset && reset.restoresPercent > 0 ? (
-                <Text className="text-sm text-foreground-muted">
-                  Restores {reset.restoresPercent}% of the pool
-                </Text>
-              ) : null}
-            </View>
+                {window.resetsAt ? (
+                  <Text selectable className="text-sm text-foreground-muted">
+                    Resets{" "}
+                    {new Date(window.resetsAt).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </Text>
+                ) : null}
+                {evenPace !== null ? (
+                  <Text className="text-sm text-foreground-muted">
+                    Even pace: {evenPace}% left by now
+                  </Text>
+                ) : null}
+                {reset && reset.restoresPercent > 0 ? (
+                  <Text className="text-sm text-foreground-muted">
+                    Restores {reset.restoresPercent}% of the pool
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-goat-medium text-foreground">
                 {account.environments.length ? "Signed in" : "Source"}

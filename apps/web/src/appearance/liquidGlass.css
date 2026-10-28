@@ -22,6 +22,10 @@
       background-color: var(--lg-pane);
       box-shadow: var(--lg-edge);
     }
+    /* A route modal floats over the app; its tint would show the page's text through its own. */
+    [data-app-modal][data-glass-pane] {
+      background-color: var(--background);
+    }
     [data-glass-pane="terminal"] {
       background-color: var(--lg-terminal);
     }

@@ -5,7 +5,7 @@ import type {
   ServerProviderUsageWindow,
 } from "@goat/contracts";
 
-import { formatDuration, type LimitPool, type LimitPresentations } from "./usageLimits.ts";
+import { formatDuration, type LimitPresentations } from "./usageLimits.ts";
 
 /** One OpenCodex pool as Usage shows it: the pool's own readings beside the accounts it counts. */
 export interface OpenCodexPoolLine {
@@ -98,35 +98,4 @@ export function availabilityText(block: ServerProviderUsageAvailability, now: nu
         : " · resets now"
       : "")
   );
-}
-
-/** Usage sections: a driver appears when it has accounts or only an OpenCodex pool line. */
-export function sectionsWithOpenCodex(
-  pools: ReadonlyArray<LimitPool>,
-  lines: ReadonlyArray<OpenCodexPoolLine>,
-): ReadonlyArray<LimitPool> {
-  const missing = [...new Set(lines.map((line) => line.driver))].filter(
-    (driver) => !pools.some((pool) => pool.driver === driver),
-  );
-  return [...pools, ...missing.map((driver) => ({ driver, accounts: [], windows: [] }))];
-}
-
-/** The pool line's text, the same on web and mobile. */
-export function openCodexPoolText(line: OpenCodexPoolLine, now: number) {
-  const { available, total, excluded } = line.accounts;
-  return {
-    title:
-      `OpenCodex pool · ${available} of ${total} ${total === 1 ? "account" : "accounts"} available` +
-      (excluded ? ` · ${excluded} paused or signed out` : ""),
-    readings: line.windows
-      .map(
-        (window) =>
-          `${window.label} ${Math.round(window.usedPercent)}% used` +
-          (window.source === undefined ? "" : ` (${window.source})`),
-      )
-      .join(" · "),
-    blocks: line.availability
-      .filter((block) => block.exhausted)
-      .map((block) => availabilityText(block, now)),
-  };
 }
