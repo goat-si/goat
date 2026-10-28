@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - The fixture holds a real TCP port.
+import * as NodeNet from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -30,12 +32,26 @@ const intent = {
   liveActivitiesEnabled: false as const,
   managedTunnelsEnabled: true,
 };
+// On Linux any outgoing socket can take the registered callback port, so the flow must not need it free.
+const holdRegisteredCallbackPort = Effect.acquireRelease(
+  Effect.callback<NodeNet.Server>((resume) => {
+    const server = NodeNet.createServer();
+    server.once("error", () => resume(Effect.succeed(server)));
+    server.listen(34338, "127.0.0.1", () => resume(Effect.succeed(server)));
+  }),
+  (server) =>
+    Effect.callback<void>((resume) => {
+      if (server.listening) server.close(() => resume(Effect.void));
+      else resume(Effect.void);
+    }),
+);
 
 describe("CLI approval and OAuth callback join", () => {
   it.live.each(["code-first", "approval-first"] as const)(
     "does not complete from one callback alone (%s)",
     (order) =>
       Effect.gen(function* () {
+        yield* holdRegisteredCallbackPort;
         const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
         const callbackClient = yield* HttpClient.HttpClient;
         const launched = yield* Deferred.make<string>();
@@ -81,6 +97,7 @@ describe("CLI approval and OAuth callback join", () => {
         const flow = CliTokenManager.CloudCliTokenManager.pipe(
           Effect.flatMap((manager) => manager.approveLink(intent)),
           Effect.provide(flowLayer),
+          Effect.provideService(CliTokenManager.CliOAuthLoopbackPort, 0),
         );
         const fiber = yield* flow.pipe(Effect.forkChild);
         yield* Queue.offer(input, {
@@ -128,6 +145,7 @@ describe("CLI approval and OAuth callback join", () => {
 
 it.live("ordinary CLI login obtains only withdrawal identity without minting a link approval", () =>
   Effect.gen(function* () {
+    yield* holdRegisteredCallbackPort;
     const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
     const launched = yield* Deferred.make<string>();
     let stored = 0;
@@ -178,6 +196,7 @@ it.live("ordinary CLI login obtains only withdrawal identity without minting a l
     const fiber = yield* CliTokenManager.CloudCliTokenManager.pipe(
       Effect.flatMap((manager) => manager.get),
       Effect.provide(flowLayer),
+      Effect.provideService(CliTokenManager.CliOAuthLoopbackPort, 0),
       Effect.forkChild,
     );
     yield* Queue.offer(input, {

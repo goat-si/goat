@@ -29,12 +29,14 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   buildConnectAuthorizeRequestUrl,
   buildConnectClerkAuthorizeUrl,
+  connectLoopbackRedirectUri,
 } from "@goat/shared/connectAuth";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -53,6 +55,12 @@ const CLOUD_CLI_OAUTH_REFRESH_EARLY_MS = Duration.toMillis(Duration.minutes(5));
 // A stalled OAuth request holds the semaphore and blocks all credential calls.
 const OAUTH_REQUEST_TIMEOUT = Duration.seconds(10);
 const boldTerminalText = (value: string): string => `\u001b[1m${value}\u001b[22m`;
+
+/** Tests bind 0: the registered callback port is in Linux's ephemeral range, where any socket can hold it. */
+export const CliOAuthLoopbackPort = Context.Reference<number | undefined>(
+  "goat/cloud/CliOAuthLoopbackPort",
+  { defaultValue: () => undefined },
+);
 
 function formatLoopbackAuthorizationPrompt(authorizationUrl: string, linking = true): string {
   return [
@@ -522,29 +530,32 @@ export const make = Effect.gen(function* () {
             );
       }),
     );
-    yield* HttpRouter.serve(
+    const server = yield* HttpRouter.serve(
       Layer.mergeAll(layerCallbackRoute, layerApprovalRoute, layerApprovalOptions),
       {
         disableListenLog: true,
         disableLogger: true,
       },
     ).pipe(
-      Layer.provide(
+      Layer.provideMerge(
         NodeHttpServer.layer(NodeHttp.createServer, {
           host: "127.0.0.1",
-          port: metadata.loopbackPort,
+          port: (yield* CliOAuthLoopbackPort) ?? metadata.loopbackPort,
           disablePreemptiveShutdown: true,
         }),
       ),
       Layer.build,
     );
+    const { address } = Context.get(server, HttpServer.HttpServer);
+    const loopbackPort = "port" in address ? address.port : metadata.loopbackPort;
+    const redirectUri = connectLoopbackRedirectUri(loopbackPort);
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
     const authorizationUrl = intent
       ? buildConnectAuthorizeRequestUrl({
           hostedAppUrl,
           state,
           challenge,
-          loopbackPort: metadata.loopbackPort,
+          loopbackPort,
           approval: {
             intent,
             cliKeyThumbprint: key.thumbprint,
@@ -555,7 +566,7 @@ export const make = Effect.gen(function* () {
       : buildConnectClerkAuthorizeUrl({
           authorizationEndpoint: new URL("authorize", metadata.tokenEndpoint).toString(),
           clientId: metadata.clientId,
-          redirectUri: metadata.redirectUri,
+          redirectUri,
           scopes: metadata.scopes,
           state,
           challenge,
@@ -586,7 +597,7 @@ export const make = Effect.gen(function* () {
     const { token } = yield* exchangeToken(metadata, {
       grant_type: "authorization_code",
       code: authorization.code,
-      redirect_uri: metadata.redirectUri,
+      redirect_uri: redirectUri,
       client_id: metadata.clientId,
       code_verifier: verifier,
     });

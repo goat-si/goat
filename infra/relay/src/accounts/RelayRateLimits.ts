@@ -120,12 +120,19 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
                 .pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
             : bindings.hourly(key, input.operation);
       const result = yield* check.pipe(
-        Effect.catchCause(() =>
-          Effect.fail(
-            new RelayAuthorizationUnavailableError({
-              code: "authorization_unavailable",
-              traceId: "relay",
-            }),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Relay rate limit check failed", {
+            operation: input.operation,
+            cause,
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                }),
+              ),
+            ),
           ),
         ),
       );
