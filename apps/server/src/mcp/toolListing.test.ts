@@ -61,7 +61,13 @@ const names = (tools: ReadonlyArray<ListedTool>) => tools.map((tool) => tool.nam
 // These callers have no browser or computer use attached, so goat_screen_run is withheld.
 const listed = (filter: (entry: (typeof entries)[number]) => boolean) =>
   entries
-    .filter((entry) => entry.path !== "surface.screen_run" && filter(entry))
+    .filter(
+      (entry) =>
+        entry.path !== "surface.screen_run" &&
+        entry.resource !== "workspace" &&
+        entry.resource !== "terminal" &&
+        filter(entry),
+    )
     .map(listedToolName)
     .sort();
 const textOf = (result: { readonly content: ReadonlyArray<unknown> }) =>

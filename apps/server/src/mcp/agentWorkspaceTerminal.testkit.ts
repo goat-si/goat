@@ -158,7 +158,9 @@ export const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () 
   };
 });
 
-export const terminalFixture = Effect.fn("agentWorkspaceTerminal.terminalFixture")(function* () {
+export const terminalFixture = Effect.fn("agentWorkspaceTerminal.terminalFixture")(function* (
+  options: Partial<Parameters<typeof TerminalManager.makeWithOptions>[0]> = {},
+) {
   const f = yield* fixture();
   const threadId = ThreadId.make("fixture-thread");
   yield* Ref.update(f.settings, (settings) => ({
@@ -189,6 +191,7 @@ export const terminalFixture = Effect.fn("agentWorkspaceTerminal.terminalFixture
       Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
     processKillGraceMs: 1,
     subprocessPollIntervalMs: 10 * 24 * 60 * 60 * 1000,
+    ...options,
   }).pipe(
     Effect.provide(
       Layer.mergeAll(Layer.mock(ProcessRunner.ProcessRunner)({}), McpProviderSessions.layer),

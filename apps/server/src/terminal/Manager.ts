@@ -1511,11 +1511,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const evictInactiveSessionsIfNeeded = Effect.fn("terminal.evictInactiveSessionsIfNeeded")(
     function* () {
       yield* modifyManagerState((state) => {
-        const inactiveSessions = [...state.sessions.values()].filter(
-          (session) =>
-            session.status !== "running" && session.status !== "starting" && !session.agentBusy,
+        const inactive = [...state.sessions.values()].filter(
+          (session) => session.status !== "running",
         );
-        if (inactiveSessions.length <= maxRetainedInactiveSessions) {
+        const inactiveSessions = inactive.filter(
+          (session) => session.status !== "starting" && !session.agentBusy,
+        );
+        if (inactive.length <= maxRetainedInactiveSessions) {
           return [undefined, state] as const;
         }
 
@@ -1528,7 +1530,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         const sessions = new Map(state.sessions);
 
-        const toEvict = inactiveSessions.length - maxRetainedInactiveSessions;
+        const toEvict = inactive.length - maxRetainedInactiveSessions;
         for (const session of inactiveSessions.slice(0, toEvict)) {
           const key = toSessionKey(session.threadId, session.terminalId);
           resetAgentTerminal(session);
@@ -2859,44 +2861,67 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
-  const closeIdle: TerminalManager["Service"]["closeIdle"] = (input) =>
-    withThreadLock(
-      input.threadId,
-      Effect.gen(function* () {
-        const running = (yield* sessionsForThread(input.threadId)).filter(
-          (session): session is TerminalSessionState & { pid: number } =>
+  const closeIdle = Effect.fn("terminal.closeIdle")(
+    function* (input: Parameters<TerminalManager["Service"]["closeIdle"]>[0]) {
+      const candidates = yield* withThreadLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const sessions = yield* sessionsForThread(input.threadId);
+          return sessions.flatMap((session) =>
             session.status === "running" &&
+            typeof session.pid === "number" &&
             Number.isInteger(session.pid) &&
-            (input.terminalId === undefined || session.terminalId === input.terminalId),
-        );
-        if (running.length === 0) return;
-        const marks = new Map(
-          running.map((session) => [session.terminalId, terminalActivityMark(session)]),
-        );
-        // Inspect now so commands started after the last poll still protect their terminals.
-        const { inspector } = yield* acquireSubprocessInspector;
-        yield* Effect.forEach(
-          running,
-          (session) =>
-            inspector(session.pid).pipe(
-              Effect.flatMap((result) =>
-                result.hasRunningSubprocess ||
-                terminalActivityMark(session) !== marks.get(session.terminalId)
-                  ? Effect.void
-                  : closeSession(input.threadId, session.terminalId, false),
-              ),
-            ),
-          { discard: true },
-        );
-      }),
-    ).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("failed to close idle terminals", {
-          threadId: input.threadId,
-          error: error.message,
+            (input.terminalId === undefined || session.terminalId === input.terminalId)
+              ? [
+                  {
+                    session,
+                    pid: session.pid,
+                    process: session.process,
+                    mark: terminalActivityMark(session),
+                  },
+                ]
+              : [],
+          );
         }),
+      );
+      if (candidates.length === 0) return;
+      const { inspector } = yield* acquireSubprocessInspector;
+      yield* Effect.forEach(
+        candidates,
+        (candidate) =>
+          Effect.gen(function* () {
+            const result = yield* inspector(candidate.pid);
+            if (result.hasRunningSubprocess) return;
+            yield* withThreadLock(
+              input.threadId,
+              Effect.gen(function* () {
+                const live = yield* getSession(input.threadId, candidate.session.terminalId);
+                if (
+                  Option.isNone(live) ||
+                  live.value !== candidate.session ||
+                  live.value.status !== "running" ||
+                  live.value.pid !== candidate.pid ||
+                  live.value.process !== candidate.process ||
+                  terminalActivityMark(live.value) !== candidate.mark
+                )
+                  return;
+                yield* closeSession(input.threadId, candidate.session.terminalId, false);
+              }),
+            );
+          }),
+        { discard: true },
+      );
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to close idle terminals", {
+            threadId: input.threadId,
+            error: error.message,
+          }),
+        ),
       ),
-    );
+  );
 
   const agentOperations = makeAgentTerminalOperations({
     withThreadLock,

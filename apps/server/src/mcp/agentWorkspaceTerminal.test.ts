@@ -901,3 +901,84 @@ it.effect("#2059 lists workspace and terminal tools only for explicitly granted 
     Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer)),
   ),
 );
+
+it.effect("#2059 human input during idle inspection keeps the PTY alive without a lock cycle", () =>
+  Effect.gen(function* () {
+    let duringCheck: () => Effect.Effect<void> = () => Effect.void;
+    const f = yield* terminalFixture({
+      subprocessInspector: () =>
+        duringCheck().pipe(
+          Effect.as({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
+        ),
+    });
+    const opened = yield* f.manager.open({
+      threadId: f.threadId,
+      terminalId: "human",
+      cwd: f.root,
+      cols: 80,
+      rows: 24,
+    });
+    f.pty.processes[0]!.onKill = () => f.pty.processes[0]!.emitExit({ exitCode: 0, signal: null });
+    duringCheck = () =>
+      f.manager
+        .write({ threadId: f.threadId, terminalId: opened.terminalId, data: "build\r" })
+        .pipe(Effect.orDie);
+    yield* f.manager.closeIdle({ threadId: f.threadId });
+    expect(f.pty.processes[0]?.writes).toContain("build\r");
+    expect(f.pty.processes[0]?.killed).toBe(false);
+    for (const process of f.pty.processes)
+      process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("#2059 evicts an exited terminal under new-session pressure without reviving it", () =>
+  Effect.gen(function* () {
+    const f = yield* terminalFixture({ maxRetainedInactiveSessions: 1 });
+    const exited = yield* Deferred.make<void>();
+    const stop = yield* f.manager.subscribe((event) =>
+      event.type === "exited"
+        ? Deferred.succeed(exited, undefined).pipe(Effect.asVoid)
+        : Effect.void,
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(stop));
+    yield* f.manager.open({
+      threadId: f.threadId,
+      terminalId: "old",
+      cwd: f.root,
+      cols: 80,
+      rows: 24,
+    });
+    f.pty.processes[0]!.emitExit({ exitCode: 0, signal: null });
+    yield* Deferred.await(exited);
+    yield* f.manager.open({
+      threadId: "other-thread",
+      terminalId: "new",
+      cwd: f.root,
+      cols: 80,
+      rows: 24,
+    });
+    for (const process of f.pty.processes)
+      process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+    const events: string[] = [];
+    const detach = yield* f.manager.attachStream(
+      {
+        threadId: f.threadId,
+        terminalId: "old",
+        cwd: f.root,
+        cols: 80,
+        rows: 24,
+        resume: true,
+        restartIfNotRunning: true,
+      },
+      (event) =>
+        Effect.sync(() => {
+          events.push(event.type);
+        }),
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(detach));
+    expect(events).toEqual(["closed"]);
+    expect(f.pty.spawnInputs).toHaveLength(2);
+    for (const process of f.pty.processes)
+      process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
