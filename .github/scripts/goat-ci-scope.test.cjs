@@ -387,11 +387,19 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("keeps the browser, native, ssh and server work on EPYC and sends the rest to hosted runners", () => {
+  it("keeps the browser, native, ssh, relay and server work on EPYC and sends the rest to hosted runners", () => {
     const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
     assert.deepEqual(
       Object.keys(pools).filter((task) => pools[task] === "epyc"),
-      ["test", "test-ssh", "test-desktop", "test-memory-growth", "build", "test-server"],
+      [
+        "test",
+        "test-ssh",
+        "test-desktop",
+        "test-relay",
+        "test-memory-growth",
+        "build",
+        "test-server",
+      ],
     );
   });
 });
