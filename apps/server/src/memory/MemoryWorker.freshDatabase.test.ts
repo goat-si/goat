@@ -22,7 +22,7 @@ import * as Quota from "./MemoryQuotaService.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Worker from "./MemoryWorker.ts";
-import { countingTracer } from "./MemoryWorker.testkit.ts";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 
 const environmentId = M.EnvironmentId.make("fresh-database");
 const database = Layer.unwrap(

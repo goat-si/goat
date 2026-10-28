@@ -247,7 +247,8 @@ const make = Effect.gen(function* () {
   // Any lease signal since a frame's check began may have closed its gate.
   const fence = Option.isSome(leases) ? yield* leases.value.subscribe : undefined;
 
-  const gateOf = Effect.fn("DesktopFrames.gateOf")(function* (key: string) {
+  // Untraced: it runs for every lease signal and frame; DesktopFrames.reconcile is the span.
+  const gateOf = Effect.fnUntraced(function* (key: string) {
     if (Option.isNone(leases)) return closed("unsupported");
     const detection = yield* leases.value.detection;
     const entry = (yield* leases.value.sessions).find(

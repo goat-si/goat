@@ -825,6 +825,9 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.andThen(changed)),
     hold: (id, on) => Effect.sync(() => holdFor(id, on)).pipe(Effect.andThen(changed)),
     // Suspended: the controls are read each time it runs, never once when the service is built.
+    // Untraced: frame viewers and session lists read it again on every lease signal, and a moving
+    // pointer signals many times a second. DesktopFrames.reconcile and PreviewSessions.snapshot
+    // are its spans.
     sessions: Effect.suspend(() =>
       Effect.forEach([...controls.values()], (record) =>
         controlState(record.threadId, record.controlId).pipe(
@@ -840,7 +843,7 @@ const make = Effect.gen(function* () {
           }),
         ),
       ).pipe(Effect.map(stoppedCards.merge)),
-    ),
+    ).pipe(Effect.withTracerEnabled(false)),
     subscribe: PubSub.subscribe(signals),
     changed,
     onAuthorityChange: (listener) => {

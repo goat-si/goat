@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import { layerTest, makeTmpDir, git, initRepoWithCommit } from "../vcs/testing/gitFixture.ts";
 import { makePrLookupGitState } from "./prLookupGitState.ts";
 
@@ -44,4 +45,26 @@ it.effect(
       yield* sweep;
       assert.equal(rechecks, 3);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("a background lookup answered from memory records no span per remembered key", () =>
+  Effect.gen(function* () {
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
+    let reads = 0;
+    const read = Effect.sync(() => {
+      reads++;
+      return "origin";
+    });
+    const spans = new Map<string, number>();
+    // The one-minute sweep asks for the same keys while nothing in the repository changed.
+    yield* Effect.gen(function* () {
+      for (let minute = 0; minute < 4; minute++) {
+        for (const key of ["remotes", "config\u0000branch.main.remote"])
+          assert.equal(yield* state.remember("/repo", key, false, read), "origin");
+        yield* TestClock.adjust("1 minute");
+      }
+    }).pipe(Effect.withTracer(countingTracer(spans)));
+    assert.equal(reads, 2);
+    assert.equal(spans.get("GitManager.rememberPrLookupGitState") ?? 0, 0);
+  }).pipe(Effect.provide(layerTest)),
 );

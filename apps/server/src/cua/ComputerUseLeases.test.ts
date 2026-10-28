@@ -10,6 +10,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
@@ -54,6 +55,30 @@ layer("ComputerUseLeases controls", (it) => {
         reason: "stopped",
       });
     }),
+  );
+  it.effect("the session list, read again on every lease signal, records no spans of its own", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const owner = ThreadId.make("thread-session-spans");
+        yield* Effect.addFinalizer(() => leases.stop(owner));
+        const control = yield* leases.control(owner, Option.none());
+        assert.isTrue(yield* leases.setTarget(owner, control.controlId, { pid: 7, windowId: 3 }));
+        const spans = new Map<string, number>();
+        // A second of the agent's pointer moving: each report signals, and readers list again.
+        for (let tick = 0; tick < 10; tick++) {
+          yield* TestClock.adjust("100 millis");
+          const point = { fx: tick / 10, fy: 0.5 };
+          const cursor = { windowId: 3, point, phase: "acting" } as const;
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor }));
+          const listed = yield* leases.sessions.pipe(Effect.withTracer(countingTracer(spans)));
+          const entry = listed.find((item) => item.control.controlId === control.controlId);
+          assert.equal(entry?.state._tag, "active");
+        }
+        assert.deepEqual([...spans], []);
+      }),
+    ),
   );
   it.effect(
     "stamps when the agent's cursor last changed, and not on a repeat of the same cursor",
