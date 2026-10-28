@@ -104,13 +104,13 @@ describe("memory generation prompts", () => {
       };
       const fresh = (yield* buildMemorySummaryPrompt(summary)).outputSchema;
       expect(strictOutputSchemaViolations(toJsonSchemaObject(fresh))).toEqual([]);
-      expect(Schema.is(fresh)(quoted)).toBe(false);
+      expect(Schema.is(fresh)({ summary: quoted })).toBe(false);
       expect(
         Schema.is(fresh)({
-          ...quoted,
-          evidence: [{ ...quoted.evidence[0]!, origin: "thread" }],
+          summary: { ...quoted, evidence: [{ ...quoted.evidence[0]!, origin: "thread" }] },
         }),
       ).toBe(true);
+      expect(Schema.is(fresh)({ summary: null })).toBe(true);
       expect(yield* buildMemorySummaryPrompt(summary)).toMatchObject({
         prompt: expect.stringContaining("has origin thread"),
       });
@@ -122,7 +122,7 @@ describe("memory generation prompts", () => {
           evidence: [{ origin: "user", messageIds: [] }],
         },
       })).outputSchema;
-      expect(Schema.is(carried)(quoted)).toBe(true);
+      expect(Schema.is(carried)({ summary: quoted })).toBe(true);
       const resolution = (yield* buildMemoryConflictPrompt(conflict)).outputSchema;
       expect(
         Schema.is(resolution)({ ...result, judgment: "j", evidence: [quoted.evidence[0]] }),

@@ -5,7 +5,7 @@ import type * as SchemaAST from "effect/SchemaAST";
 
 import {
   validateMemoryGenerationResult,
-  GenerateMemorySummaryExecutionResult,
+  GenerateMemorySummaryOutcome,
   ResolveMemoryConflictExecutionResult,
   type ChatAttachment,
   type ModelSelection,
@@ -18,6 +18,7 @@ import { buildChannelReceptionPrompt, toChannelReceptionResult } from "./channel
 import {
   buildMemoryConflictPrompt,
   buildMemorySummaryPrompt,
+  isNoDurableMemoryText,
   memoryEvidenceSources,
   memoryResultFromModelOutput,
 } from "./memoryGenerationPrompts.ts";
@@ -59,9 +60,7 @@ const sameMemorySelection = (
   (a.options ?? []).every(
     (option, i) => option.id === b.options?.[i]?.id && option.value === b.options[i]?.value,
   );
-const decodeMemorySummaryExecution = Schema.decodeUnknownEffect(
-  GenerateMemorySummaryExecutionResult,
-);
+const decodeMemorySummaryExecution = Schema.decodeUnknownEffect(GenerateMemorySummaryOutcome);
 const decodeMemoryConflictExecution = Schema.decodeUnknownEffect(
   ResolveMemoryConflictExecutionResult,
 );
@@ -174,10 +173,14 @@ export function fromRunner(
         modelSelection: input.modelSelection,
         ...request,
       });
+      const summary = generated.result.summary;
       const result = yield* decodeMemorySummaryExecution(
         {
           ...generated,
-          result: memoryResultFromModelOutput(generated.result, memoryEvidenceSources(input)),
+          result:
+            summary === null || isNoDurableMemoryText(summary.text)
+              ? null
+              : memoryResultFromModelOutput(summary, memoryEvidenceSources(input)),
         },
         { onExcessProperty: "error" },
       ).pipe(
@@ -191,7 +194,7 @@ export function fromRunner(
         ),
       );
       if (
-        !validateMemoryGenerationResult(input, result.result) ||
+        (result.result !== null && !validateMemoryGenerationResult(input, result.result)) ||
         result.execution.providerInstanceId !== input.modelSelection.instanceId ||
         !sameMemorySelection(result.execution.requestedModelSelection, input.modelSelection)
       )

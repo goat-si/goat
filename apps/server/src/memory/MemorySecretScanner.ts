@@ -67,12 +67,15 @@ export const redactMemoryText = <T extends { readonly text: string; readonly jud
   ...(value.judgment === undefined ? {} : { judgment: redactGoatCredentials(value.judgment) }),
 });
 
-/** A summary or resolution generation whose result is passed through {@link redactMemoryText}. */
+/** A summary or resolution generation whose result, when present, is passed through {@link redactMemoryText}. */
 export const redacted = <
-  O extends { readonly result: Parameters<typeof redactMemoryText>[0] },
+  O extends { readonly result: Parameters<typeof redactMemoryText>[0] | null },
   E,
   R,
 >(
   generation: Effect.Effect<O, E, R>,
 ): Effect.Effect<O, E, R> =>
-  Effect.map(generation, (output) => ({ ...output, result: redactMemoryText(output.result) }));
+  Effect.map(generation, (output) => ({
+    ...output,
+    result: output.result === null ? null : redactMemoryText(output.result),
+  }));

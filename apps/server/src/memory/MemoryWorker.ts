@@ -681,18 +681,28 @@ const make = Effect.gen(function* () {
                     : new MemoryWorkerError({ code: safeCode(cause), cause }),
                 ),
               );
-            if (!M.validateMemoryGenerationResult(input, output.result))
-              return yield* new MemoryWorkerError({ code: "invalid_output" });
-            if (scanMemoryValue(output.result).kind !== "allowed")
-              return yield* new MemoryWorkerError({ code: "secret_detected" });
+            if (
+              output.execution.providerInstanceId !== meta.modelSelection.instanceId ||
+              encodeSelection(output.execution.requestedModelSelection) !==
+                encodeSelection(meta.modelSelection)
+            )
+              return yield* new MemoryWorkerError({ code: "identity_mismatch" });
+            // Nothing durable in this chunk: the previous summary stands and later chunks still run.
+            const result = output.result;
+            if (result !== null) {
+              if (!M.validateMemoryGenerationResult(input, result))
+                return yield* new MemoryWorkerError({ code: "invalid_output" });
+              if (scanMemoryValue(result).kind !== "allowed")
+                return yield* new MemoryWorkerError({ code: "secret_detected" });
+              lastGenerated = { input, output: { ...output, result } };
+              previousSummary = {
+                text: result.text,
+                evidence: result.evidence,
+                derivedFromMemoryRevisions: dependencies,
+              };
+            }
             if (source.watermark.throughSequence >= meta.sourceWatermark.throughSequence)
-              return { input, output };
-            lastGenerated = { input, output };
-            previousSummary = {
-              text: output.result.text,
-              evidence: output.result.evidence,
-              derivedFromMemoryRevisions: dependencies,
-            };
+              return lastGenerated;
             sourceWork = {
               ...work,
               metadata: { ...meta, fromSequence: source.watermark.throughSequence },

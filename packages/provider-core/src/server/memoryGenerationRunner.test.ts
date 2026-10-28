@@ -30,7 +30,7 @@ describe("memory generation runner", () => {
   it.effect("binds requested instance environment and effective selection before returning", () =>
     Effect.gen(function* () {
       const selected: MemorySelectedRunner = (request) =>
-        Schema.decodeUnknownEffect(request.outputSchema)(result).pipe(
+        Schema.decodeUnknownEffect(request.outputSchema)({ summary: result }).pipe(
           Effect.map((result) => ({ result, effectiveModel: "resolved-model" })),
           Effect.mapError(
             (cause) =>

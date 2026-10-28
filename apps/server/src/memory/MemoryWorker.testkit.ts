@@ -76,6 +76,8 @@ export const live = (
   local = false,
   elapsedPerCallMs = 0,
   unconfigured = false,
+  // Inputs the model answers with nothing durable.
+  empty?: (input: M.GenerateMemorySummaryInput) => boolean,
 ) =>
   Worker.layer.pipe(
     Layer.provideMerge(service),
@@ -112,24 +114,26 @@ export const live = (
                     : detail,
                 )
               : Effect.succeed({
-                  result: {
-                    text: [
-                      input.previousSummary?.text,
-                      ...input.messages.map((message) => message.messageId),
-                    ]
-                      .filter(Boolean)
-                      .join(" "),
-                    assertionKind: "inference" as const,
-                    evidence: [
-                      ...(input.previousSummary?.evidence ?? []),
-                      {
-                        origin: "thread" as const,
-                        sourceThread: input.sourceThread,
-                        watermark: input.sourceWatermark,
-                        messageIds: input.messages.map((m) => m.messageId),
+                  result: empty?.(input)
+                    ? null
+                    : {
+                        text: [
+                          input.previousSummary?.text,
+                          ...input.messages.map((message) => message.messageId),
+                        ]
+                          .filter(Boolean)
+                          .join(" "),
+                        assertionKind: "inference" as const,
+                        evidence: [
+                          ...(input.previousSummary?.evidence ?? []),
+                          {
+                            origin: "thread" as const,
+                            sourceThread: input.sourceThread,
+                            watermark: input.sourceWatermark,
+                            messageIds: input.messages.map((m) => m.messageId),
+                          },
+                        ],
                       },
-                    ],
-                  },
                   execution: {
                     requestedModelSelection: input.modelSelection,
                     effectiveModel: "fixture",

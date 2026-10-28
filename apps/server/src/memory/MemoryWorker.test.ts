@@ -1055,6 +1055,46 @@ describe("MemoryWorker", () => {
       }).pipe(Effect.provide(live(() => (++calls < 3 ? "synthetic failure" : undefined))));
     },
   );
+  it.effect("a summary with nothing durable writes no memory and settles its range", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const worker = yield* Worker.MemoryWorker;
+      const store = yield* Store.MemoryStore;
+      const sql = yield* SqlClient.SqlClient;
+      yield* worker.sweepDue();
+      assert.deepStrictEqual(
+        yield* store.list({
+          memorySpaceId: space,
+          scope: { kind: "thread", thread: { environmentId, threadId } },
+          limit: 20,
+        }),
+        [],
+      );
+      assert.deepStrictEqual(
+        (yield* sql<{
+          status: string;
+        }>`SELECT status FROM memory_outbox WHERE kind='summary'`).map((row) => row.status),
+        ["completed"],
+      );
+      assert.deepStrictEqual(yield* store.pendingReports(100), []);
+    }).pipe(Effect.provide(live(false, undefined, false, 0, false, () => true))),
+  );
+  it.effect("an empty later chunk keeps the useful chunk before it", () =>
+    Effect.gen(function* () {
+      const { target, d0 } = yield* seedDerivedSummary;
+      const after = yield* incrementalSummary(target);
+      assert.notStrictEqual(after.heads[0], d0);
+      const head = after.revisions.find((pair) => pair.revision.revisionId === after.heads[0]);
+      assert.include(head?.payload?.text, "increment-102");
+      assert.notInclude(head?.payload?.text, "increment-103");
+    }).pipe(
+      Effect.provide(
+        live(false, undefined, false, 0, false, (input) =>
+          input.messages.some((message) => message.messageId === "increment-103"),
+        ),
+      ),
+    ),
+  );
   it.effect("deleted thread cancels its jobs before generation", () =>
     Effect.gen(function* () {
       yield* seed;

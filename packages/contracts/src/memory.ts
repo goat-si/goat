@@ -2246,6 +2246,12 @@ export const GenerateMemorySummaryExecutionResult = struct({
   execution: MemoryGenerationExecution,
 });
 export type GenerateMemorySummaryExecutionResult = typeof GenerateMemorySummaryExecutionResult.Type;
+/** A provider's answer: null when the supplied messages hold nothing durable to keep. */
+export const GenerateMemorySummaryOutcome = struct({
+  result: Schema.NullOr(GenerateMemorySummaryResult),
+  execution: MemoryGenerationExecution,
+});
+export type GenerateMemorySummaryOutcome = typeof GenerateMemorySummaryOutcome.Type;
 export function validateMemoryGenerationResult(
   input: ResolveMemoryConflictInput | GenerateMemorySummaryInput,
   result: ResolveMemoryConflictResult | GenerateMemorySummaryResult,

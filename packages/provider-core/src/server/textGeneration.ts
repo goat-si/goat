@@ -2,7 +2,7 @@ import type {
   ResolveMemoryConflictInput,
   ResolveMemoryConflictExecutionResult,
   GenerateMemorySummaryInput,
-  GenerateMemorySummaryExecutionResult,
+  GenerateMemorySummaryOutcome,
   BranchNamingOptions,
   ChannelReceptionInput,
   ChannelReceptionResult,
@@ -118,7 +118,7 @@ export interface ProviderTextGeneration {
   ) => Effect.Effect<ResolveMemoryConflictExecutionResult, TextGenerationError>;
   readonly generateMemorySummary?: (
     input: GenerateMemorySummaryInput,
-  ) => Effect.Effect<GenerateMemorySummaryExecutionResult, TextGenerationError>;
+  ) => Effect.Effect<GenerateMemorySummaryOutcome, TextGenerationError>;
   /**
    * Generate a commit message from staged change context.
    */
@@ -159,5 +159,6 @@ export type {
   GenerateMemorySummaryInput,
   GenerateMemorySummaryResult,
   GenerateMemorySummaryExecutionResult,
+  GenerateMemorySummaryOutcome,
   MemoryGenerationExecution,
 } from "@goat/contracts";
