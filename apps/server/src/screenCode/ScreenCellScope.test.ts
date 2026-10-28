@@ -7,7 +7,12 @@ describe("top-level bindings a cell carries into the next cell", () => {
     [
       "destructuring and functions",
       "const a = 1; let { b, c: d, ...e } = x; var [f] = y\nfunction g() {}\nclass K {}",
-      ["a", "b", "c", "d", "e", "f", "g", "K"],
+      ["a", "b", "d", "e", "f", "g", "K"],
+    ],
+    [
+      "pattern keys and defaults are not bindings",
+      "const { [k]: m, n = other.thing, o: { p }, q: [r = s] } = x",
+      ["m", "n", "p", "r"],
     ],
     [
       "only var leaves a nested block",

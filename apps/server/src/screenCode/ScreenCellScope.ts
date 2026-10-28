@@ -76,10 +76,11 @@ function tokenize(source: string): Token[] {
       if (/[\n\r\u2028\u2029]/.test(source.slice(i, stop))) lineBreak = true;
       i = stop;
     } else if (c === "'" || c === '"') {
+      const start = i;
       i++;
       while (i < source.length && at(i) !== c && at(i) !== "\n") i += at(i) === "\\" ? 2 : 1;
       i++;
-      push("value", c);
+      push("value", source.slice(start, i));
     } else if (c === "`") {
       i++;
       templateText();
@@ -138,18 +139,18 @@ const startsStatement = (token: Token, previous: Token | undefined) =>
     previous.value === "]" ||
     previous.value === "}");
 
-/** Names a cell declares at its top level, in source order, at most {@link MAX_NAMES}. */
-export function topLevelBindings(source: string): ReadonlyArray<string> {
-  const tokens = tokenize(source);
-  const names = new Set<string>();
-  const add = (token: Token | undefined) => {
+/** Names a cell declares at its top level, each with whether its binding is constant. */
+function declaredBindings(tokens: ReadonlyArray<Token>): ReadonlyMap<string, boolean> {
+  const names = new Map<string, boolean>();
+  const add = (token: Token | undefined, constant: boolean) => {
     if (
       token?.kind === "word" &&
       NAME.test(token.value) &&
       !RESERVED.has(token.value) &&
-      !token.value.startsWith("__")
+      !token.value.startsWith("__") &&
+      names.size < MAX_NAMES
     )
-      names.add(token.value);
+      names.set(token.value, constant || names.get(token.value) === true);
   };
   // Ends an initializer: a comma or semicolon at its depth, a statement on a new line, or a close.
   const endsInitializer = (index: number, depth: number) => {
@@ -158,22 +159,57 @@ export function topLevelBindings(source: string): ReadonlyArray<string> {
     if (token.depth !== depth) return false;
     return token.value === "," || token.value === ";" || startsStatement(token, tokens[index - 1]);
   };
-  const declarators = (start: number, depth: number) => {
+  // A default inside a pattern runs to the next comma or the pattern's close.
+  const skipDefault = (start: number, openDepth: number) => {
+    let j = start;
+    for (let token = tokens[j]; token !== undefined && token.depth > openDepth; token = tokens[++j])
+      if (token.depth === openDepth + 1 && token.value === ",") break;
+    return j;
+  };
+  const target = (start: number, constant: boolean): number => {
+    const token = tokens[start];
+    if (token?.kind === "word") {
+      add(token, constant);
+      return start + 1;
+    }
+    if (token?.value === "{" || token?.value === "[") return pattern(start, constant);
+    return start + 1;
+  };
+  // Binds an object or array pattern's targets, never its keys or defaults; returns past its close.
+  const pattern = (start: number, constant: boolean): number => {
+    const open = tokens[start];
+    if (open === undefined) return start + 1;
+    let j = start + 1;
+    for (let token = tokens[j]; token !== undefined; token = tokens[j]) {
+      if (token.depth <= open.depth) return j + 1;
+      if (token.value === ",") {
+        j++;
+        continue;
+      }
+      if (token.value === "...") j = target(j + 1, constant);
+      else if (open.value === "{") {
+        if (token.value === "[") {
+          j++;
+          while (tokens[j] !== undefined && (tokens[j]?.depth ?? 0) > token.depth) j++;
+          j++;
+        } else j++;
+        if (tokens[j]?.value === ":") j = target(j + 1, constant);
+        else if (token.kind === "word") add(token, constant);
+      } else j = target(j, constant);
+      if (tokens[j]?.value === "=") j = skipDefault(j + 1, open.depth);
+    }
+    return j;
+  };
+  const declarators = (start: number, depth: number, constant: boolean) => {
     let j = start;
     for (;;) {
       const first = tokens[j];
-      if (first === undefined) return j;
-      if (first.kind === "word") {
-        add(first);
-        j++;
-      } else if (first.value === "{" || first.value === "[") {
-        j++;
-        for (let token = tokens[j]; token !== undefined && token.depth > first.depth;) {
-          if (tokens[j - 1]?.value !== ".") add(token);
-          token = tokens[++j];
-        }
-        j++;
-      } else return j;
+      if (
+        first === undefined ||
+        (first.kind !== "word" && first.value !== "{" && first.value !== "[")
+      )
+        return j;
+      j = target(j, constant);
       if (tokens[j]?.value === "=") {
         j++;
         while (!endsInitializer(j, depth)) j++;
@@ -191,24 +227,53 @@ export function topLevelBindings(source: string): ReadonlyArray<string> {
       next !== undefined && (next.kind === "word" || next.value === "{" || next.value === "[");
     const topLevel = token.depth === 0;
     if (token.value === "var" || (topLevel && (token.value === "let" || token.value === "const"))) {
-      if (declares) k = declarators(k + 1, token.depth) - 1;
+      if (declares) k = declarators(k + 1, token.depth, token.value === "const") - 1;
     } else if (topLevel && token.value === "function") {
-      add(next?.value === "*" ? tokens[k + 2] : next);
+      add(next?.value === "*" ? tokens[k + 2] : next, false);
     } else if (topLevel && token.value === "class" && next?.value !== "extends") {
-      add(next);
+      add(next, false);
     }
   }
-  return [...names];
+  return names;
+}
+
+/** Names a cell declares at its top level, in source order. */
+export function topLevelBindings(source: string): ReadonlyArray<string> {
+  return [...declaredBindings(tokenize(source)).keys()];
+}
+
+/** Whether the cell opens with a "use strict" directive, after any comments and other directives. */
+function opensStrict(tokens: ReadonlyArray<Token>): boolean {
+  for (let k = 0; k < tokens.length; k++) {
+    const token = tokens[k];
+    if (token?.kind !== "value" || !/^['"]/.test(token.value)) return false;
+    const next = tokens[k + 1];
+    const ends =
+      next === undefined ||
+      next.value === ";" ||
+      (next.lineBreakBefore &&
+        (next.kind === "word"
+          ? next.value !== "in" && next.value !== "instanceof"
+          : next.kind === "value" && next.value !== "`" && next.value !== "/"));
+    if (!ends) return false;
+    if (token.value === "'use strict'" || token.value === '"use strict"') return true;
+    if (next?.value === ";") k++;
+  }
+  return false;
 }
 
 /**
- * The cell as the async function the child evaluates. `__screenKeep` is the guest's own copier:
- * it skips names the runtime defines and swallows a read of a binding that never initialized.
+ * The cell as the async function the child evaluates. `__screenKeep` is the guest's own keeper:
+ * it publishes each top-level binding as a global accessor over the binding itself.
  */
 export function cellProgram(source: string): string {
-  const keep = topLevelBindings(source)
-    .map((name) => `__screenKeep(${JSON.stringify(name)},()=>${name});`)
+  const tokens = tokenize(source);
+  const keep = [...declaredBindings(tokens)]
+    .map(
+      ([name, constant]) =>
+        `__screenKeep(${JSON.stringify(name)},()=>${name}${constant ? "" : `,(v)=>{${name}=v;}`});`,
+    )
     .join("");
-  const strict = /^\s*(['"])use strict\1/.test(source) ? '"use strict";' : "";
+  const strict = opensStrict(tokens) ? '"use strict";' : "";
   return `(async () => {${strict}let __screenExport;try{__screenExport=()=>{${keep}};\n${source}\n}finally{__screenExport?.();}})()`;
 }

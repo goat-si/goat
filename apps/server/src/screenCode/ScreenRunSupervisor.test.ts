@@ -119,6 +119,59 @@ it.live("a later turn of the thread keeps its top-level declarations until a res
   ),
 );
 
+it.live(
+  "a later cell shares live bindings with the earlier cell's closures, runs no stray getter, and keeps strict mode as written",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const asset = yield* resolveScreenRuntimeAsset("dev");
+        const limits = screenRunLimits({ cellWallMs: 5000 });
+        const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+        yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+        const cell = (cellId: string, source: string) =>
+          supervisor
+            .runCell({ runId: "r", turnId: "t", context: context(cellId, limits) }, source, false)
+            .pipe(Effect.map((result) => result.value));
+        yield* cell("define", "let n = 0; function inc() { return ++n; } return n;");
+        expect(yield* cell("mutate", "inc(); inc(); return n;")).toBe(2);
+        expect(yield* cell("assign", "n = 10; return inc();")).toBe(11);
+        yield* cell(
+          "getter",
+          "Object.defineProperty(globalThis, 'label', { get() { globalThis.reads = (globalThis.reads ?? 0) + 1; return 1; }, configurable: true }); return 0;",
+        );
+        expect(
+          yield* cell(
+            "pattern",
+            "const { label: value } = { label: 5 }; return [value, globalThis.reads ?? 0];",
+          ),
+        ).toEqual([5, 0]);
+        expect(
+          yield* cell(
+            "strict",
+            "/* first */ 'use strict'; return (function () { return this === undefined; })();",
+          ),
+        ).toBe(true);
+        expect(yield* cell("sloppy", "'use strict' + ''; loose = 1; return loose;")).toBe(1);
+      }),
+    ),
+);
+
+it.live("a disposed supervisor boots no further spare", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+    const spawns = () =>
+      vi
+        .mocked(NodeChildProcess.spawn)
+        .mock.calls.filter((call) => call[1]?.includes("__screen-run-child")).length;
+    supervisor.dispose();
+    const before = spawns();
+    supervisor.prewarm();
+    expect(spawns()).toBe(before);
+  }),
+);
+
 it.live("a new thread's first cell takes the booted spare instead of starting a child", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -257,8 +257,23 @@ export async function runScreenChild(
       {
         const own = new Set(Object.getOwnPropertyNames(globalThis));
         own.add('__screenKeep');
+        // A kept name reads and writes the cell's own binding, so its closures and later cells
+        // share one value. The probe runs with the old global out of the way: a name that is not
+        // a binding of the cell then fails to resolve instead of reaching a global getter.
         Object.defineProperty(globalThis, '__screenKeep', {
-          value: (name, read) => { if (own.has(name)) return; try { globalThis[name] = read(); } catch {} },
+          value: (name, read, write) => {
+            if (own.has(name)) return;
+            const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+            if (previous && !previous.configurable) return;
+            if (previous) delete globalThis[name];
+            try { read(); } catch {
+              if (previous) Object.defineProperty(globalThis, name, previous);
+              return;
+            }
+            Object.defineProperty(globalThis, name, {
+              get: read, ...(write ? { set: write } : {}), configurable: true, enumerable: true,
+            });
+          },
         });
       }`;
     const evaluated = vm.evalCode(setup);

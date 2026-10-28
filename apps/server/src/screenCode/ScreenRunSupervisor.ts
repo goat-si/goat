@@ -119,6 +119,7 @@ export function createScreenRunSupervisor(deps: {
 }) {
   const sessions = new Map<string, Session>();
   let spare: Session | undefined;
+  let disposed = false;
   /** Threads whose child ended while it held their values; their next cell is told. */
   const lost = new Set<string>();
   const liveChildren = () => sessions.size + (spare === undefined ? 0 : 1);
@@ -207,7 +208,7 @@ export function createScreenRunSupervisor(deps: {
   };
   /** Boots the next thread's child ahead of its first cell, when the cap leaves room. */
   const prewarm = () => {
-    if (spare !== undefined || liveChildren() >= deps.limits.activeChildren) return;
+    if (disposed || spare !== undefined || liveChildren() >= deps.limits.activeChildren) return;
     try {
       spare = spawnSession(deps.limits.turnWasmBytes);
     } catch {
@@ -215,6 +216,7 @@ export function createScreenRunSupervisor(deps: {
     }
   };
   const sessionFor = (thread: string, turnWasmBytes: number) => {
+    if (disposed) throw failure("runtime_unavailable");
     const existing = sessions.get(thread);
     if (existing !== undefined) return existing;
     let session: Session;
@@ -495,6 +497,7 @@ export function createScreenRunSupervisor(deps: {
     prewarm,
     /** Ends every child, the spare included, when the service that owns them closes. */
     dispose: () => {
+      disposed = true;
       if (spare !== undefined) close(spare);
       for (const session of sessions.values()) close(session);
       lost.clear();
