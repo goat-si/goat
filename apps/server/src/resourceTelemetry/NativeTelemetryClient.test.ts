@@ -1,12 +1,20 @@
 import type { HostPowerSnapshot } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerConfig from "../config.ts";
+import * as NativeTelemetry from "./NativeTelemetryClient.ts";
+import * as ResourceMonitorBinary from "./ResourceMonitorBinary.ts";
 import {
   commitCollectionControlUpdate,
   synchronizeCollectionControlOnStart,
@@ -138,3 +146,61 @@ describe("commitCollectionControlUpdate", () => {
     }),
   );
 });
+
+it.effect("publishes recovery after a TERM-resistant telemetry child is retired", () =>
+  Effect.gen(function* () {
+    const firstSpawn = yield* Deferred.make<void>();
+    const killEntered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const forceMayComplete = yield* Deferred.make<void>();
+    let spawns = 0;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.gen(function* () {
+        spawns++;
+        const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const kill = (options?: { readonly forceKillAfter?: import("effect/Duration").Input }) =>
+          Effect.gen(function* () {
+            if (yield* Deferred.isDone(exit)) return;
+            yield* Deferred.succeed(killEntered, undefined);
+            if (options?.forceKillAfter === undefined) yield* Deferred.await(release);
+            else yield* Deferred.await(forceMayComplete);
+            yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+          });
+        yield* Deferred.succeed(firstSpawn, undefined);
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(4242),
+          exitCode: Deferred.await(exit),
+          isRunning: Effect.succeed(true),
+          kill,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.never,
+          stderr: Stream.empty,
+          all: Stream.never,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.never,
+        });
+      }),
+    );
+    const client = yield* NativeTelemetry.make().pipe(
+      Effect.provideService(ResourceMonitorBinary.ResourceMonitorBinary, {
+        resolve: Effect.succeed("/fixture/monitor"),
+      }),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provide(ServerConfig.layerTest("/fixture", { prefix: "wp12-test-" })),
+    );
+    try {
+      yield* Deferred.await(firstSpawn);
+      yield* TestClock.adjust("5 seconds");
+      yield* Deferred.await(killEntered);
+      yield* TestClock.adjust("2 seconds");
+      yield* Deferred.succeed(forceMayComplete, undefined);
+      yield* TestClock.adjust("0 millis");
+      expect((yield* client.health).restartCount).toBe(1);
+      expect(spawns).toBe(1);
+    } finally {
+      yield* Deferred.succeed(forceMayComplete, undefined);
+      yield* Deferred.succeed(release, undefined);
+    }
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);

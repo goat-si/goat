@@ -541,7 +541,7 @@ const make = Effect.gen(function* () {
           stdin: "ignore",
         }),
       );
-      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+      yield* Effect.addFinalizer(() => Effect.ignore(child.kill({ forceKillAfter: "1 second" })));
       let tail = "";
       const decoder = new TextDecoder();
       const keep = (chunk: Uint8Array) =>
@@ -661,7 +661,7 @@ const make = Effect.gen(function* () {
           stdin: "ignore",
         }),
       );
-      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+      yield* Effect.addFinalizer(() => Effect.ignore(child.kill({ forceKillAfter: "1 second" })));
       let seen = "";
       let relayed = false;
       const decoder = new TextDecoder();

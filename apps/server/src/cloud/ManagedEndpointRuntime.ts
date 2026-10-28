@@ -428,7 +428,7 @@ export const make = Effect.gen(function* () {
         tunnelId: connector.config.tunnelId,
         tunnelName: connector.config.tunnelName,
       });
-      yield* connector.child.kill().pipe(Effect.ignore);
+      yield* connector.child.kill({ forceKillAfter: "2 seconds" }).pipe(Effect.ignore);
     }
   });
 
