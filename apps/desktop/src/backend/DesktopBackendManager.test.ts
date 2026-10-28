@@ -755,6 +755,13 @@ it.effect("six ready-then-exit80 runs pause; Retry explicitly restores the same 
       yield* actions.retry;
       yield* Queue.take(ready);
       assert.equal(spawns, 7);
+      assert.equal((yield* instance.snapshot).restartAttempt, 0);
+      yield* Deferred.succeed(yield* Queue.take(exits), ChildProcessSpawner.ExitCode(80));
+      yield* TestClock.adjust("32 seconds");
+      yield* Queue.take(ready);
+      assert.equal((yield* instance.snapshot).restartAttempt, 1);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal((yield* instance.snapshot).restartAttempt, 0);
       yield* instance.stop();
     }),
   ),

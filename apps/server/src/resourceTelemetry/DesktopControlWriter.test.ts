@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The regression holds the native fd callback without opening a descriptor.
+import * as NodeFS from "node:fs";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -5,24 +7,45 @@ import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import { vi } from "vite-plus/test";
+import {
+  DesktopTelemetryControlFailed,
+  writeAllToFileDescriptor,
+} from "./DesktopTelemetryReceiver.ts";
 import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
+vi.mock("node:fs", { spy: true });
+
 it.effect("scope shutdown settles requests without waiting for a held native frame", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const writing = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const writes: string[] = [];
+      let complete: (() => void) | undefined;
+      const heldWrite = <T extends NodeJS.ArrayBufferView>(
+        _fd: number,
+        buffer: T,
+        _offset: number,
+        length: number,
+        _position: number | null,
+        callback: (error: NodeJS.ErrnoException | null, count: number, buffer: T) => void,
+      ) => {
+        if (complete === undefined) {
+          complete = () => callback(null, 3, buffer);
+          Deferred.doneUnsafe(writing, Effect.void);
+        } else callback(null, length, buffer);
+      };
+      using write = vi.spyOn(NodeFS, "write").mockImplementation(heldWrite as typeof NodeFS.write);
       const writer = yield* makeDesktopControlWriter({
-        write: (payload) =>
-          Effect.sync(() => writes.push(payload.toString())).pipe(
-            Effect.andThen(Deferred.succeed(writing, undefined)),
-            Effect.andThen(Deferred.await(release)),
-          ),
-        overflow: () => new Error("admission closed"),
+        write: (payload) => writeAllToFileDescriptor(5, payload),
+        overflow: () =>
+          new DesktopTelemetryControlFailed({
+            fd: 5,
+            operation: "write",
+            cause: new Error("admission closed"),
+          }),
       }).pipe(Scope.provide(scope));
       yield* Effect.addFinalizer(() =>
-        Deferred.succeed(release, undefined).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
+        Effect.sync(() => complete?.()).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
       );
       const first = yield* writer.send(Buffer.from("partial-frame\n")).pipe(Effect.forkChild);
       yield* Deferred.await(writing);
@@ -40,9 +63,10 @@ it.effect("scope shutdown settles requests without waiting for a held native fra
       assert.isTrue(
         Exit.isFailure(yield* writer.send(Buffer.from("late-frame\n")).pipe(Effect.exit)),
       );
-      yield* Deferred.succeed(release, undefined);
+      assert.equal(write.mock.calls.length, 1);
+      complete?.();
       yield* TestClock.adjust("0 millis");
-      assert.deepEqual(writes, ["partial-frame\n"]);
+      assert.equal(write.mock.calls.length, 1);
     }),
   ),
 );
