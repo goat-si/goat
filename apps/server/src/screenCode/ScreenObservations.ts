@@ -149,6 +149,10 @@ class ObservationIndex {
   invalidateTarget(targetId: string): void {
     this.byTarget.delete(targetId);
   }
+  /** Screenshot points name pixels, which any input can scroll or replace; element refs remain. */
+  invalidatePoints(targetId: string): void {
+    this.byTarget.get(targetId)?.regions.clear();
+  }
 }
 
 export class ScreenObservations {

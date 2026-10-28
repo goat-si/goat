@@ -660,6 +660,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // from a replaced document before any input. A failure or a new document retires them.
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
+      else observations.index.invalidatePoints(bound.ref.id);
       const result = yield* invoke(bound, context, operation, input, cellBudgetMs).pipe(
         Effect.tapError(() => retire),
         Effect.ensuring(

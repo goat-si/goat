@@ -126,3 +126,65 @@ it.effect("refuses a full-page image point before dispatching a viewport click",
     expect(operations).not.toContain("click");
   }),
 );
+
+it.effect("an action retires the screenshot points it may have moved, and keeps element refs", () =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Page",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        Effect.succeed(
+          (request.operation === "status"
+            ? {
+                tabId: tab.tabId,
+                url: tab.url,
+                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+              }
+            : request.operation === "snapshot"
+              ? {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: "- button Save [ref=e1]",
+                  treeComplete: true,
+                  refGeneration: "1",
+                  screenshot: {
+                    mimeType: "image/png",
+                    data: "AQID",
+                    width: 100,
+                    height: 100,
+                    region: { kind: "viewport", x: 0, y: 0, width: 100, height: 100 },
+                    scale: 1,
+                  },
+                }
+              : {}) as A,
+        ),
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    const observed = yield* host.dispatch(call("observe", 3, { screenshot: true }, ref), context);
+    const image = observed.imageMetadata!;
+    const element = (observed.value as { elements: Array<{ ref: unknown }> }).elements[0]!.ref;
+    const point = { observationId: image.observationId, regionId: image.regionId, x: 5, y: 5 };
+    yield* host.dispatch(call("scroll", 4, { deltaY: 300 }, ref), context);
+    const moved = yield* host
+      .dispatch(call("click", 5, { point }, ref), context)
+      .pipe(Effect.result);
+    expect(moved._tag === "Failure" && moved.failure.code).toBe("stale_reference");
+    const kept = yield* host.dispatch(call("click", 6, { ref: element }, ref), context);
+    expect(kept.category).toBeDefined();
+  }),
+);

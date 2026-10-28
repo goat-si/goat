@@ -722,14 +722,15 @@ export const click = async (
   await pointer(point, "click");
   const button = input.button ?? "left";
   if (locator !== null) await settled(locator, deadline);
-  const watch = await watchClick(page);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
+  // Listening first: a dialog that opens while the watch installs still ends the wait.
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
     page.once("dialog", onDialog);
   });
+  const watch = await watchClick(page);
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
@@ -751,6 +752,7 @@ export const click = async (
       .then(() => page.mouse.up({ button, clickCount: count }));
   };
   try {
+    await watch.arm(point);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
       const pressed = press(count);
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
