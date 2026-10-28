@@ -189,3 +189,37 @@ it("does not ask after Later when reduced transparency passes and a failed off r
   await act(() => fixture.push(macGlass("restart", 4)));
   await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
 });
+
+it("asks for a glass change saved before the prompt mounted", async () => {
+  using fixture = materialBridge(macGlass("off", 1), "darwin");
+  await ensureClientSettingsHydrated();
+  await persistClientSettingsPatch({ desktopSystemMaterialEnabled: true });
+  fixture.bridge.getWindowMaterialState.mockResolvedValue(macGlass("restart", 2));
+  await using screen = await render(<DesktopWindowMaterialSync />);
+  await expect.element(screen.getByRole("alertdialog")).toBeVisible();
+});
+
+it("does not ask when glass was turned back off before the turn-on finished saving", async () => {
+  using fixture = materialBridge(macGlass("off", 1), "darwin");
+  await ensureClientSettingsHydrated();
+  await using screen = await render(<DesktopWindowMaterialSync />);
+  const write = deferred<void>();
+  fixture.bridge.setClientSettings.mockReturnValueOnce(write.promise);
+  let on: Promise<void> = Promise.resolve();
+  let off: Promise<void> = Promise.resolve();
+  await act(() => {
+    on = persistClientSettingsPatch({ desktopSystemMaterialEnabled: true });
+  });
+  // Turn it off while the turn-on is already being written.
+  await vi.waitFor(() => expect(fixture.bridge.setClientSettings).toHaveBeenCalled());
+  await act(() => {
+    off = persistClientSettingsPatch({ desktopSystemMaterialEnabled: false });
+  });
+  await act(async () => {
+    write.resolve();
+    await on;
+  });
+  await act(() => fixture.push(macGlass("restart", 2)));
+  await act(() => off);
+  await expect.element(screen.getByRole("alertdialog")).not.toBeInTheDocument();
+});

@@ -1,6 +1,6 @@
 import { isSystemMaterialRequested, type DesktopWindowMaterialReason } from "@goat/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { onClientSettingsPersisted } from "../hooks/useSettings";
+import { onClientSettingsPersisted, useClientSettings } from "../hooks/useSettings";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -85,6 +85,7 @@ const wantsSystemGlass = (
 // Counts saved changes from this window that turned system glass on. Saved writes only, so a
 // failed "off" that rolls the switch back never reads as a new request.
 let glassRequests = 0;
+let handledGlassRequests = 0;
 const glassRequestListeners = new Set<() => void>();
 onClientSettingsPersisted((previous, next) => {
   if (wantsSystemGlass(previous) || !wantsSystemGlass(next)) return;
@@ -98,6 +99,11 @@ const subscribeGlassRequests = (listener: () => void) => {
   };
 };
 const getGlassRequests = () => glassRequests;
+const takeGlassRequest = () => {
+  if (handledGlassRequests === glassRequests) return false;
+  handledGlassRequests = glassRequests;
+  return true;
+};
 
 /** Asks once per saved change that turns system glass on while the window needs a restart. */
 export function WindowMaterialRestartPrompt({
@@ -106,19 +112,18 @@ export function WindowMaterialRestartPrompt({
   readonly reason: DesktopWindowMaterialReason | null;
 }) {
   const requests = useSyncExternalStore(subscribeGlassRequests, getGlassRequests);
-  const [handled, setHandled] = useState(requests);
+  // A turn-on that saved after a newer turn-off was queued no longer reflects the choice.
+  const wanted = useClientSettings(wantsSystemGlass);
   const [open, setOpen] = useState(false);
   if (open && reason !== null && reason !== "restart") setOpen(false);
-  const due = requests !== handled && reason === "restart";
+  const due = requests !== handledGlassRequests && wanted && reason === "restart";
 
   // oxlint-disable-next-line goat/react-effect-budget -- a modal must wait for a held slider's pointerup
   useEffect(() => {
     if (!due) return;
     let cancelled = false;
     const show = () => {
-      if (cancelled) return;
-      setHandled(requests);
-      setOpen(true);
+      if (!cancelled && takeGlassRequest()) setOpen(true);
     };
     if (document.querySelector("input[type='range']:active") === null) {
       queueMicrotask(show);
@@ -129,7 +134,7 @@ export function WindowMaterialRestartPrompt({
       cancelled = true;
       window.removeEventListener("pointerup", show);
     };
-  }, [due, requests]);
+  }, [due]);
 
   return <WindowMaterialRestartDialog open={open} onOpenChange={setOpen} />;
 }
