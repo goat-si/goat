@@ -173,4 +173,72 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       assert.equal(sentListApps(h.log), 1);
     }),
   );
+
+  it.effect("a held provider call goes on to the same child when the late reply lands", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      const first = yield* h.driverStarted;
+      yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+      const stuck = yield* h.nextToDriver;
+      yield* TestClock.adjust(2_000);
+      yield* h.send(call(7, "list_apps"));
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: stuck.id, result: { content: [] } }));
+      assert.equal((yield* h.nextToDriver).id, 7);
+      assert.equal(h.drivers.length, 1);
+    }),
+  );
+
+  it.effect(
+    "a late reply that lands while the replacement waits for the lock keeps the child",
+    () =>
+      Effect.gen(function* () {
+        const lockGate = yield* Deferred.make<void>();
+        const holding = yield* Deferred.make<void>();
+        let applied = 0;
+        const h = yield* harness({
+          afterApplied: () =>
+            ++applied === 2
+              ? Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(lockGate)))
+              : Effect.void,
+        });
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+        const stuck = yield* h.nextToDriver;
+        yield* h.push(active());
+        yield* Deferred.await(holding);
+        // Past the deadline and its grace: the replacement now waits for the lock.
+        yield* TestClock.adjust(3_000);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: stuck.id, result: { content: [] } }));
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        yield* Deferred.succeed(lockGate, undefined);
+        yield* h.sendPrimitive(listApps("request:next", first.connectionId, 60_000));
+        assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+        assert.equal(h.drivers.length, 1);
+      }),
+  );
+
+  it.effect("a held call is refused while the old chain's cutoff report is still stuck", () =>
+    Effect.gen(function* () {
+      const driverCutoffGate = yield* Deferred.make<void>();
+      const h = yield* harness({ driverCutoffGate });
+      yield* h.push(active());
+      const first = yield* h.driverStarted;
+      yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
+      yield* h.nextToDriver;
+      yield* TestClock.adjust(2_000);
+      yield* h.send(call(7, "list_apps"));
+      yield* TestClock.adjust(1_000);
+      assert.equal(
+        yield* h.driverCutoff.pipe(Effect.map((cut) => cut.connectionId)),
+        first.connectionId,
+      );
+      const answer = (yield* h.nextToProvider) as unknown as ToolAnswer;
+      assert.equal(answer.id, 7);
+      assert.isTrue(answer.result.isError);
+      assert.equal(sentListApps(h.log), 1);
+      yield* Deferred.succeed(driverCutoffGate, undefined);
+    }),
+  );
 });

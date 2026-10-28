@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import type { OverlayEvent } from "./ComputerUseOverlay.ts";
 
+/** How long one cursor draw may hold the cursor stream; the helper draws in milliseconds. */
+const CURSOR_DRAW_LIMIT = "1 second";
+
 /** Closes the driver chain for a target that turned private or was taken over. */
 export interface TargetClose {
   /** Synchronous, so no call reaches that chain once the hide is accepted. */
@@ -45,8 +48,10 @@ export const forwardProxyCursors = (input: {
           const reason = closingReason(update.event);
           const closes = reason !== undefined && input.overlay.accepts(update.event);
           if (closes) input.targetClose().fenceTarget(reason, update.connectionGeneration);
-          const draw = input.overlay.draw({ type: "cursor", event: update.event });
-          // A draw the helper never finishes cannot keep the closed chain watching the window.
+          // A draw the helper never finishes holds back neither this closure nor later events.
+          const draw = input.overlay
+            .draw({ type: "cursor", event: update.event })
+            .pipe(Effect.timeoutOption(CURSOR_DRAW_LIMIT), Effect.asVoid);
           return closes
             ? Effect.all(
                 [draw, input.targetClose().closeTarget(reason, update.connectionGeneration)],

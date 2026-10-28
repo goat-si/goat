@@ -29,9 +29,13 @@ const show = (sequence: number, generation = 1): AgentCursorEvent => ({
   pid: 4,
   windowId: 9,
 });
-const hide = (sequence: number, reason: ComputerUseOverlayHideReason): AgentCursorEvent => ({
+const hide = (
+  sequence: number,
+  reason: ComputerUseOverlayHideReason,
+  generation = 1,
+): AgentCursorEvent => ({
   op: "hide",
-  identity: identity(sequence),
+  identity: identity(sequence, generation),
   phase: "hidden",
   reason,
 });
@@ -200,15 +204,24 @@ describe("ComputerUseLeaseProxy and a window that turns private or is taken over
       }),
   );
 
-  it.effect("a hide whose draw never finishes still closes the old chain", () =>
-    Effect.gen(function* () {
-      const hideGate = yield* Deferred.make<void>();
-      const { h, first, cursor } = yield* cursorHarness({ hideGate });
-      yield* cursor(show(1));
-      yield* cursor(hide(2, "private"));
-      assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
-      assert.notEqual((yield* h.driverStarted).connectionId, first.connectionId);
-    }),
+  it.effect(
+    "a draw that never finishes holds back neither its closure nor a later private hide",
+    () =>
+      Effect.gen(function* () {
+        const hideGate = yield* Deferred.make<void>();
+        const { h, first, cursor, drawn } = yield* cursorHarness({ hideGate });
+        yield* cursor(show(1));
+        yield* cursor(hide(2, "private"));
+        assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+        const second = yield* h.driverStarted;
+        // The stalled draw gives up at its limit, and the stream takes the next events.
+        yield* TestClock.adjust("1 second");
+        yield* cursor(show(3, 2), second.connectionId);
+        yield* drawn(3);
+        yield* cursor(hide(4, "private", 2), second.connectionId);
+        assert.equal((yield* h.driverCutoff).connectionId, second.connectionId);
+        assert.notEqual((yield* h.driverStarted).connectionId, second.connectionId);
+      }),
   );
 
   it.effect(
