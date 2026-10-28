@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "./developmentInstructions.ts";
+import { SCREEN_CODE_SKILL_CORE } from "./builtinSkills/screenCode.ts";
 import {
   GOAT_BROWSER_TOOL_INSTRUCTIONS,
   GOAT_ORCHESTRATION_INSTRUCTIONS,
@@ -20,18 +21,22 @@ const ALWAYS_INJECTED_BUDGET_BYTES = 5_632;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
 describe("GOAT provider instructions", () => {
-  it("keeps browser routing explicit within its resident budget", () => {
-    assert.isAtMost(bytes(GOAT_BROWSER_TOOL_INSTRUCTIONS), 500);
+  it("asks for active browser use and one batched observe without growing the resident text", () => {
+    // The browser block (498 bytes) and the screen-code core (284) it shared turns with before
+    // the browser became a skill; together they may not grow.
+    assert.isAtMost(bytes(GOAT_BROWSER_TOOL_INSTRUCTIONS) + bytes(SCREEN_CODE_SKILL_CORE), 782);
     for (const text of [
       "## GOAT browser",
+      "unasked",
+      "to check UI you build",
+      "an API or CLI that can do it goes first",
       "goat_preview_read",
-      "goat_preview_snapshot",
-      "diff:true",
-      "goat_screen_run",
-      "goat_preview_open",
+      "valid until the next snapshot",
+      "one goat_screen_run cell; observe once at the end",
+      "unverifiable: observe, never resend",
+      "refused: nothing sent",
       "unclaimed",
-      "Embed a saved screenshot in your reply",
-      "passwords only through goat_preview_fill_secret",
+      "goat_preview_fill_secret",
     ])
       assert.include(GOAT_BROWSER_TOOL_INSTRUCTIONS, text);
   });

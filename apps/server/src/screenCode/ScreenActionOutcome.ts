@@ -21,6 +21,7 @@ const reads = new Set<ScreenHostCall["method"]>([
   "get_accessibility_tree",
   "verify_state",
   "screenshot",
+  "fetch_tab",
 ]);
 
 export const screenActionSafety = (

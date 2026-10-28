@@ -1,5 +1,6 @@
 // @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off - Driver replies are bounded by the primitive channel; target IDs are opaque UUIDs.
 import * as NodeCrypto from "node:crypto";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -21,7 +22,7 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { observationReplyBudget } from "./ScreenHostBridge.ts";
-import { ScreenObservations } from "./ScreenObservations.ts";
+import { ScreenObservations, type ScreenElementDetail } from "./ScreenObservations.ts";
 
 const isJson = Schema.is(Schema.Json);
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -38,6 +39,30 @@ const integer = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
+const natural = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const finite = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+/** The driver's state and geometry for one element, in the observation's own names. */
+const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
+  const frame = object(entry.frame);
+  const actions = array(entry.actions).filter(
+    (action): action is string => typeof action === "string",
+  );
+  const parent = natural(entry.parent_index);
+  return {
+    ...(actions.length > 0 ? { actions } : {}),
+    ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
+    ...(typeof entry.selected === "boolean" ? { selected: entry.selected } : {}),
+    ...(frame && finite(frame.x) && finite(frame.y) && finite(frame.w) && finite(frame.h)
+      ? { frame: { x: frame.x, y: frame.y, width: frame.w, height: frame.h } }
+      : {}),
+    ...(finite(entry.min) && finite(entry.max)
+      ? { range: { min: entry.min, max: entry.max } }
+      : {}),
+    ...(parent === undefined ? {} : { parent }),
+  };
+};
 const fail = (
   code: ScreenRunError["code"],
   nextStep = "Observe the desktop and try again.",
@@ -110,6 +135,8 @@ interface BoundWindow {
   observationId?: string;
   /** The driver snapshot behind observationId; a diff read names it as `since`. */
   snapshotId?: string;
+  /** Input went to the window after its latest screenshot, so its pixels may no longer match. */
+  pointsStale?: boolean;
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -321,11 +348,14 @@ export const createDesktopTargetHost = (deps: {
         .flatMap((entry) => {
           const token = string(entry.element_token);
           if (!token) return [];
+          const index = natural(entry.element_index);
           return [
             {
               role: string(entry.role) ?? "unknown",
               name: string(entry.label) ?? "",
               ...(typeof entry.value === "string" ? { text: entry.value } : {}),
+              ...(index === undefined ? {} : { index }),
+              ...elementDetail(entry),
               driverToken: token,
             },
           ];
@@ -444,6 +474,7 @@ export const createDesktopTargetHost = (deps: {
         pixelHeight: height,
         scale: metadata.scale,
       });
+      bound.pointsStale = false;
       const image: ScreenImage = { ...metadata, bytes: imagePart.bytes };
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
@@ -470,6 +501,75 @@ export const createDesktopTargetHost = (deps: {
       }
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
+      if (call.method === "invoke_menu") {
+        const path = array(callArgs(call.args).path);
+        if (
+          path.length === 0 ||
+          path.length > 16 ||
+          !path.every((label) => typeof label === "string" && label.trim().length > 0)
+        )
+          return yield* Effect.fail(
+            fail("invalid_argument", "Name the menu path, such as ['File', 'Open…']."),
+          );
+        bound.pointsStale = true;
+        const reply = yield* request(
+          "invoke_menu",
+          { pid: bound.pid, window_id: bound.windowId, path },
+          call,
+          context,
+          bound.connectionGeneration,
+        );
+        return driverResult("invoke_menu", reply);
+      }
+      if (call.method === "wait_for") {
+        const args = callArgs(call.args);
+        const window = args.window === "exists" || args.window === "gone" ? args.window : undefined;
+        const role = string(args.role);
+        const name = string(args.name);
+        const value = typeof args.value === "string" ? args.value : undefined;
+        if (window === undefined && role === undefined && name === undefined)
+          return yield* Effect.fail(
+            fail(
+              "invalid_argument",
+              "Wait for {role, name, value?, enabled?, selected?} or {window}.",
+            ),
+          );
+        const expectation =
+          window === undefined
+            ? {
+                element: {
+                  selector: {
+                    ...(role === undefined ? {} : { role }),
+                    ...(name === undefined ? {} : { label_contains: name }),
+                  },
+                  exists: true,
+                  ...(value === undefined ? {} : { value_equals: value }),
+                  ...(typeof args.enabled === "boolean" ? { enabled: args.enabled } : {}),
+                  ...(typeof args.selected === "boolean" ? { selected: args.selected } : {}),
+                },
+              }
+            : { window: { exists: window === "exists" } };
+        const now = yield* Clock.currentTimeMillis;
+        const requested = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
+        const reply = yield* request(
+          "verify_state",
+          {
+            pid: bound.pid,
+            window_id: bound.windowId,
+            expect: [expectation],
+            timeout_ms: Math.max(0, Math.min(requested, 10_000, call.deadlineMillis - now - 250)),
+          },
+          call,
+          context,
+          bound.connectionGeneration,
+        );
+        const status = string(object(driverValue(reply))?.status) ?? "unknown";
+        return {
+          value: { met: status === "satisfied", status },
+          category: status === "satisfied" ? "confirmed" : "unverifiable",
+          evidence: [`verify_state:${status}`],
+        };
+      }
       if (call.method === "end_foreground") {
         const current = Option.getOrUndefined(
           yield* deps.leases.currentControl(context.invocation.thread.threadId),
@@ -524,6 +624,8 @@ export const createDesktopTargetHost = (deps: {
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
       const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
       delete forwarded.elementRef;
+      // The guest names its target in the call; the driver gets the window below instead.
+      delete forwarded.targetRef;
       delete forwarded.element_token;
       delete forwarded.pid;
       delete forwarded.window_id;
@@ -539,6 +641,16 @@ export const createDesktopTargetHost = (deps: {
         forwarded.bundle_id = bound.appId;
       }
       const tool = call.method === "right_click" ? "right_click" : call.method;
+      const aimed = ["x", "y", "from_x", "from_y", "to_x", "to_y"].some((key) => key in args);
+      if (aimed && bound.pointsStale)
+        return yield* Effect.fail(
+          fail(
+            "stale_reference",
+            "Input reached this window after its latest screenshot; take a new screenshot before using points.",
+          ),
+        );
+      // Any input, even one that fails, may change what is under a pixel.
+      bound.pointsStale = true;
       const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration);
       return driverResult(tool, reply);
     },

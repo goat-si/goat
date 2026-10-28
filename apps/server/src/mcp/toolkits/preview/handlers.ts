@@ -39,6 +39,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import { browserGuideFor } from "../../../preview/BrowserGuide.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /** Whether a preview the agent
@@ -152,6 +153,25 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   };
 });
 
+const GUIDED = new Set<PreviewAutomationOperation>(["open", "navigate", "read"]);
+
+/** The browser skill's path and the page's site notes, the first time this thread meets each. */
+const browserGuide = Effect.fn("PreviewToolkit.browserGuide")(function* (
+  operation: PreviewAutomationOperation,
+  result: object,
+) {
+  if (!GUIDED.has(operation)) return {};
+  const invocation = yield* McpInvocationContext.McpInvocationContext;
+  if (invocation.thread === undefined) return {};
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const guide = browserGuideFor(
+    config._tag === "Some" ? config.value.stateDir : undefined,
+    invocation.thread.threadId,
+    "url" in result && typeof result.url === "string" ? result.url : undefined,
+  );
+  return guide === undefined ? {} : { guide };
+});
+
 const invokeTargeted = <A extends object>(
   operation: PreviewAutomationOperation,
   input: {
@@ -162,12 +182,17 @@ const invokeTargeted = <A extends object>(
 ) => {
   const { tabId, ...operationInput } = input;
   return invoke<A>(operation, operationInput, timeoutMs, tabId).pipe(
-    Effect.map(({ result, toolIcon, safety }) => ({
-      ...result,
-      ...(safety === undefined ? {} : { safety }),
-      ...(toolIcon ? { toolIcon } : {}),
-      ...previewHints(operation, result),
-    })),
+    Effect.flatMap(({ result, toolIcon, safety }) =>
+      browserGuide(operation, result).pipe(
+        Effect.map((guide) => ({
+          ...result,
+          ...(safety === undefined ? {} : { safety }),
+          ...(toolIcon ? { toolIcon } : {}),
+          ...previewHints(operation, result),
+          ...guide,
+        })),
+      ),
+    ),
   );
 };
 

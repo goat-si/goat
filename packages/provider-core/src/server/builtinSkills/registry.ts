@@ -16,6 +16,7 @@ import {
   COMPUTER_USE_SKILL_CORE,
   COMPUTER_USE_SKILL_PEOPLE,
 } from "./computerUse.ts";
+import { BROWSER_SKILL_CORE } from "./browser.ts";
 import { GOAT_DISCIPLINE_SKILL } from "./goatDiscipline.ts";
 import { SCREEN_CODE_SKILL_CORE } from "./screenCode.ts";
 
@@ -27,6 +28,7 @@ const SECTIONS: Readonly<
     const skill = [COMPUTER_USE_SKILL_CORE, COMPUTER_USE_SKILL_BATCH, COMPUTER_USE_SKILL_PEOPLE];
     return notes === undefined ? skill : [...skill, notes];
   },
+  browser: () => [BROWSER_SKILL_CORE],
   "goat-discipline": () => [GOAT_DISCIPLINE_SKILL],
   "screen-code": () => [SCREEN_CODE_SKILL_CORE],
 };
