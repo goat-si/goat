@@ -166,6 +166,7 @@ it("leaves out an identifier that is a password in a shadow root, an unknown rol
       ],
       // Short and zero-width-padded values are secrets too.
       ['<textarea style="-webkit-text-security:disc">\u200bAb</textarea>', "Ab"],
+      ['<input type="password" value="A-">', "A-"],
     ]) {
       await page.setContent(
         `${field}<button id="b">Save</button><div id="${secret}" style="position:fixed;inset:0"></div>`,

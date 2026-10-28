@@ -118,9 +118,15 @@ const describe = (element: ElementHandle) =>
       }
     }
     const kept = secrets.filter((value) => value.trim() !== "");
-    // A short value is matched as a whole part of the identifier, so "Ab" drops "#Ab" or "#x-Ab".
-    const holds = (token: string, value: string) =>
-      value.length >= 3 ? token.includes(value) : token.split(/[^A-Za-z0-9]+/).includes(value);
+    // A short value counts where no letter or digit adjoins it, so "Ab" drops "#Ab" or "#x-Ab".
+    const holds = (token: string, value: string) => {
+      if (value.length >= 3) return token.includes(value);
+      for (let at = token.indexOf(value); at !== -1; at = token.indexOf(value, at + 1)) {
+        const around = (token[at - 1] ?? "") + (token[at + value.length] ?? "");
+        if (!/[A-Za-z0-9]/.test(around)) return true;
+      }
+      return false;
+    };
     const clean = (token: string) => complete && !kept.some((value) => holds(token, value));
     return {
       tag: target.tagName.toLowerCase(),
