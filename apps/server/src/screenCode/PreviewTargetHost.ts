@@ -289,7 +289,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       if (call.method === "select_tab") {
         const tabs = yield* list(context);
-        const tabId = stringField(arg, "tabId");
+        // A tab target's identity from an earlier cell of this turn names its tab again.
+        const identity = stringField(arg, "identity");
+        const tabId =
+          stringField(arg, "tabId") ?? (identity ? targets.get(identity)?.tab.tabId : undefined);
         const url = stringField(arg, "url");
         const mentionId = stringField(arg, "mentionId");
         const hints = bindingHints.get(turnKey(context));
@@ -314,7 +317,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           return yield* Effect.fail(
             fail(
               candidates.length ? "target_ambiguous" : "target_missing",
-              "Specify one live tab ID or URL.",
+              identity && !tabId
+                ? "That tab target is not bound in this turn; use its tabId or screen.listTabs()."
+                : "Specify one live tab ID or URL.",
             ),
           );
         const candidate = candidates[0];
