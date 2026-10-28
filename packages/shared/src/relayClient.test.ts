@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "./HostProcess.ts";
@@ -146,6 +147,64 @@ const layerInstallRuntime = (platform: NodeJS.Platform) =>
   );
 
 describe("RelayClient", () => {
+  it.effect("expires tar without activation and releases the install lock for retry", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const platform = windowsHost ? "win32" : "linux";
+      const executableName = windowsHost ? "cloudflared.exe" : "cloudflared";
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-cloudflared-test-",
+      });
+      const managedPath = `${baseDir}/tools/cloudflared/${RelayClient.CLOUDFLARED_VERSION}/${platform}-x64/${executableName}`;
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      let first = true;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          if (!ChildProcess.isStandardCommand(command))
+            return yield* Effect.die(new Error("Unexpected fixture pipeline."));
+          if (command.command !== "tar")
+            return makeHandle(0, `cloudflared version ${RelayClient.CLOUDFLARED_VERSION}\n`);
+          if (!first) {
+            const destination = command.args[command.args.indexOf("-C") + 1];
+            if (destination === undefined)
+              return yield* Effect.die(new Error("Missing tar destination."));
+            yield* fileSystem.writeFileString(`${destination}/${executableName}`, "cloudflared");
+            return makeHandle();
+          }
+          first = false;
+          yield* Effect.addFinalizer(() => Deferred.succeed(stopped, undefined));
+          return ChildProcessSpawner.makeHandle({
+            ...makeHandle(),
+            exitCode: Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+            ),
+            isRunning: Effect.succeed(true),
+          });
+        }),
+      );
+      const manager = yield* RelayClient.makeCloudflaredRelayClient({
+        baseDir,
+        releaseAsset: { ...testReleaseAsset, archive: "tgz" },
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      const pending = yield* manager.install.pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("60 seconds");
+      expect(yield* Deferred.isDone(interrupted)).toBe(true);
+      const result = yield* Fiber.join(pending);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.reason).toBe("write_failed");
+      expect(yield* Deferred.isDone(stopped)).toBe(true);
+      expect(yield* fileSystem.exists(managedPath)).toBe(false);
+      expect(yield* fileSystem.exists(`${managedPath}.lock`)).toBe(false);
+      expect(yield* manager.install).toMatchObject({ status: "available", source: "managed" });
+      expect(yield* fileSystem.exists(managedPath)).toBe(true);
+      expect(yield* fileSystem.exists(`${managedPath}.lock`)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(layerInstallRuntime(windowsHost ? "win32" : "linux"))),
+  );
+
   it.effect.each([
     [
       "darwin",
