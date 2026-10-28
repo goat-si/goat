@@ -1,3 +1,4 @@
+import { idleEffectWorker, mockExecution } from "./EffectWorker.testkit.ts";
 import {
   seedCompaction,
   layerDatabase,
@@ -1884,6 +1885,8 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       };
       const executionCount = yield* Ref.make(0);
       const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+        getExecution: () => Effect.succeed(mockExecution()),
+        notifyAvailable: () => Effect.void,
         claimNext: () => Effect.succeedSome(claimedEffect),
         get: () =>
           Effect.succeedSome({
@@ -2854,16 +2857,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const recovery = yield* ProviderRuntimeRecovery.make.pipe(
         Effect.provide(ServerSettings.layerTest()),
-        Effect.provideService(
-          EffectWorker.OrchestrationEffectWorkerV2,
-          EffectWorker.OrchestrationEffectWorkerV2.of({
-            awaitWork: Effect.void,
-            runRecoveryOnce: Effect.succeed(false),
-            runOnce: Effect.succeed(false),
-            nextClaimableAt: Effect.succeedNone,
-            drain: () => Effect.succeed(0),
-          }),
-        ),
+        Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, idleEffectWorker()),
       );
       const first = yield* recovery.recover;
       assert.equal(first.terminalizedRuns, 1);
@@ -3071,16 +3065,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const recovery = yield* ProviderRuntimeRecovery.make.pipe(
         Effect.provide(ServerSettings.layerTest()),
-        Effect.provideService(
-          EffectWorker.OrchestrationEffectWorkerV2,
-          EffectWorker.OrchestrationEffectWorkerV2.of({
-            awaitWork: Effect.void,
-            runRecoveryOnce: Effect.succeed(false),
-            runOnce: Effect.succeed(false),
-            nextClaimableAt: Effect.succeedNone,
-            drain: () => Effect.succeed(0),
-          }),
-        ),
+        Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, idleEffectWorker()),
       );
       assert.include(yield* projectionStore.getRecoveryThreadIds("runtime"), childId);
       yield* recovery.recover;

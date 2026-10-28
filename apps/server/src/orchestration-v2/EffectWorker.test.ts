@@ -1,3 +1,5 @@
+import { mockExecution } from "./EffectWorker.testkit.ts";
+import { reservedCleanup, cancellationFence, heldTitleDeadline } from "./EffectWorker.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -346,6 +348,8 @@ it.effect("requeues a claim when a pre-execution worker check fails", () =>
     >([]);
     const executionCount = yield* Ref.make(0);
     const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      getExecution: () => Effect.succeed(mockExecution()),
+      notifyAvailable: () => Effect.void,
       claimNext: () => Effect.succeedSome(claimedEffect),
       get: () =>
         Effect.fail(
@@ -413,6 +417,8 @@ it.effect("arms cancellation before the durable pre-execution check", () =>
     const executionCount = yield* Ref.make(0);
     const settlementCount = yield* Ref.make(0);
     const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      getExecution: () => Effect.succeed(mockExecution()),
+      notifyAvailable: () => Effect.void,
       claimNext: () => Effect.succeedSome(claimedEffect),
       awaitCancellation: () => {
         cancellationArmed = true;
@@ -480,6 +486,8 @@ it.effect("terminalizes a process-bound claim when success settlement fails", ()
     const terminalErrors = yield* Ref.make<ReadonlyArray<string>>([]);
     const executionCount = yield* Ref.make(0);
     const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      getExecution: () => Effect.succeed(mockExecution()),
+      notifyAvailable: () => Effect.void,
       claimNext: () => Effect.succeedSome(claimedEffect),
       get: () => Effect.succeedSome(claimedEffect),
       awaitCancellation: () => Effect.never,
@@ -794,4 +802,16 @@ it.effect(
         Effect.provideService(AutomationHold.AutomationHold, hold),
       );
     }),
+);
+
+it.effect("runs independent cleanup while four general effects remain held", () => reservedCleanup);
+it.effect("keeps cancelled operations fenced until their finalizers join", () =>
+  cancellationFence(),
+);
+it.effect("retires an interrupted worker's cancellation fence after its original joins", () =>
+  cancellationFence(true),
+);
+it.effect(
+  "settles title generation at its two minute owner budget without replacing the title",
+  () => heldTitleDeadline,
 );
