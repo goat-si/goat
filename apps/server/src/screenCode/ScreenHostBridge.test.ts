@@ -307,7 +307,7 @@ it.effect("cell stop distinguishes in-flight writes from undispatched and future
 );
 
 it.effect.each(["partial", "suspected_noop", "refused"] as const)(
-  "a %s write stops its cell: a call waiting at the target and later calls each report not_run",
+  "a %s write stops its cell's later writes, and the cell can still observe what it did",
   (category) =>
     Effect.gen(function* () {
       const bridge = new ScreenHostBridge();
@@ -342,9 +342,14 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
       const second = yield* Fiber.join(queued);
       expect(first?.outcome).toBe("error");
       expect(first?.error?.safety?.possibleCommit).toBe(category === "partial");
-      // The guest caught the failure and went on; the cell still runs nothing more.
-      const third = yield* bridge.handle(
+      // The guest caught the failure and went on: it may observe, but sends no more input.
+      const observed = yield* bridge.handle(
         { ...call(3), method: "observe" },
+        context(() => Effect.void),
+      );
+      expect(observed?.error?.code).not.toBe("not_run");
+      const third = yield* bridge.handle(
+        call(4),
         context(() => Effect.void),
       );
       for (const reply of [second, third])
@@ -353,14 +358,14 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
           effectStarted: false,
           safety: { possibleCommit: false, retryClass: "new_key" },
         });
-      expect(sent).toBe(1);
+      expect(sent).toBe(2);
       const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
-      expect(journal.map((entry) => entry.receipt.evidence)).toEqual([
-        [],
-        ["not_run:after_call:1"],
-        ["not_run:after_call:1"],
+      expect(journal.map((entry) => [entry.receipt.method, entry.receipt.evidence])).toEqual([
+        [call(1).method, []],
+        [call(2).method, ["not_run:after_call:1"]],
+        ["observe", []],
+        [call(4).method, ["not_run:after_call:1"]],
       ]);
-      expect(journal.slice(1).map((entry) => entry.receipt.dispatched)).toEqual([false, false]);
     }),
 );
 

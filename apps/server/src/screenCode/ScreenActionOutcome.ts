@@ -24,6 +24,9 @@ const reads = new Set<ScreenHostCall["method"]>([
   "fetch_tab",
 ]);
 
+/** A call that only reads, which may still run after an earlier call in its cell failed. */
+export const isScreenRead = (method: ScreenHostCall["method"]) => reads.has(method);
+
 export const screenActionSafety = (
   call: Pick<ScreenHostCall, "method">,
   status: "completed" | "refused" | "partial" | "unapplied" | "indeterminate",

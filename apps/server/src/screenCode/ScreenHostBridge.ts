@@ -11,6 +11,7 @@ import {
   type ScreenImage,
   type ScreenImageMetadata,
   type ScreenSurfaceAvailability,
+  type ScreenActionOutcome,
   type ScreenEffectReceipt,
   type ScreenJournalEntry,
   type ScreenRunError,
@@ -20,7 +21,7 @@ import {
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
-import { screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
 const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
@@ -43,6 +44,7 @@ export interface ScreenHostDispatchResult {
   readonly imageMetadata?: ScreenImageMetadata;
   readonly category: ScreenEffectReceipt["category"];
   readonly evidence?: readonly string[];
+  readonly outcome?: ScreenActionOutcome;
 }
 
 export interface ScreenHostDispatcher {
@@ -239,7 +241,9 @@ export class ScreenHostBridge {
       return deny(failure("stopped", call.callId));
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
-    if (state.haltedBy !== undefined) return deny(notRun(call.callId, state.haltedBy));
+    // After a failure, reads still run so the cell can observe what the failed call did.
+    const halted = state.haltedBy !== undefined && !isScreenRead(call.method);
+    if (halted) return deny(notRun(call.callId, state.haltedBy ?? call.callId));
     if (++state.calls > context.limits.callsPerCell)
       return deny({
         ...failure("call_limit", call.callId),
@@ -314,7 +318,9 @@ export class ScreenHostBridge {
       dispatched?: boolean,
       evidence: readonly string[] = [],
       safety?: ActionOutcomeSafety,
-      refusal: Pick<ScreenRunError, "refused" | "detail" | "app" | "holderThreadId"> = {},
+      refusal: Pick<ScreenRunError, "refused" | "detail" | "app" | "holderThreadId"> & {
+        readonly outcome?: ScreenActionOutcome;
+      } = {},
     ) => {
       if (admittedIndex === undefined) return;
       const entry = state.journal[admittedIndex];
@@ -356,7 +362,7 @@ export class ScreenHostBridge {
     const dispatch = Effect.gen(function* () {
       if (state.closed || state.cutoff.signal.aborted)
         return yield* Effect.fail(failure("stopped", call.callId));
-      if (state.haltedBy !== undefined)
+      if (state.haltedBy !== undefined && !isScreenRead(call.method))
         return yield* Effect.fail(notRun(call.callId, state.haltedBy));
       if (call.targetRef?.kind === "tab") {
         if (!context.invocation.reauthorize) {
@@ -371,7 +377,7 @@ export class ScreenHostBridge {
       }
       if (state.closed || state.cutoff.signal.aborted)
         return yield* Effect.fail(failure("stopped", call.callId));
-      if (state.haltedBy !== undefined)
+      if (state.haltedBy !== undefined && !isScreenRead(call.method))
         return yield* Effect.fail(notRun(call.callId, state.haltedBy));
       if (!bridge.dispatcher) return yield* Effect.fail(failure("unavailable", call.callId));
       callDispatched = true;
@@ -560,7 +566,14 @@ export class ScreenHostBridge {
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
     const evidence = result.success.evidence ?? [];
-    settle(result.success.category, "settled", undefined, evidence, result.success.safety);
+    settle(
+      result.success.category,
+      "settled",
+      undefined,
+      evidence,
+      result.success.safety,
+      result.success.outcome ? { outcome: result.success.outcome } : {},
+    );
     if (FAILED_CATEGORIES.has(result.success.category)) halt();
     return {
       t: "reply" as const,

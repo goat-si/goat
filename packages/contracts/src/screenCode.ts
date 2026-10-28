@@ -256,6 +256,19 @@ export const ScreenObservation = Schema.Struct({
 }).check(Schema.makeFilter((value) => jsonBytes(value) <= 128 * 1024));
 export type ScreenObservation = typeof ScreenObservation.Type;
 
+const ScreenOutcomeStatus = Schema.Literals(["confirmed", "refused", "failed", "unknown"]);
+
+/**
+ * An action's result on three axes: whether the input went out, whether the page visibly changed,
+ * and whether the state the caller expected was observed. Each can be unknown on its own.
+ */
+export const ScreenActionOutcome = Schema.Struct({
+  dispatch: ScreenOutcomeStatus,
+  effect: ScreenOutcomeStatus,
+  observation: Schema.optionalKey(ScreenOutcomeStatus),
+});
+export type ScreenActionOutcome = typeof ScreenActionOutcome.Type;
+
 export const ScreenEffectReceipt = Schema.Struct({
   safety: Schema.optionalKey(ActionOutcomeSafety),
   callId: natural,
@@ -272,6 +285,7 @@ export const ScreenEffectReceipt = Schema.Struct({
   ]),
   dispatched: Schema.Boolean,
   evidence: Schema.Array(text(200)).check(Schema.isMaxLength(16)),
+  outcome: Schema.optionalKey(ScreenActionOutcome),
   ...refusalFields,
 });
 export type ScreenEffectReceipt = typeof ScreenEffectReceipt.Type;
