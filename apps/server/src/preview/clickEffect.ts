@@ -78,7 +78,7 @@ const bounded = async <A>(work: Promise<A> | undefined, ms = SETTLE_MS) => {
   try {
     return await Promise.race([
       work,
-      new Promise<undefined>((resolve) => (timer = setTimeout(resolve, ms))),
+      new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), ms))),
     ]);
   } finally {
     clearTimeout(timer);

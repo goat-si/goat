@@ -56,8 +56,9 @@ const failuresOnly = (metadata: SnapshotMetadata) => {
   const networkEntries = metadata.networkEntries.filter(networkFailure);
   const quietConsole = metadata.consoleEntries.length - consoleEntries.length;
   const quietNetwork = metadata.networkEntries.length - networkEntries.length;
+  const trimmed: SnapshotMetadata = { ...metadata, consoleEntries, networkEntries };
   return {
-    metadata: { ...metadata, consoleEntries, networkEntries },
+    metadata: trimmed,
     logNote:
       quietConsole + quietNetwork > 0
         ? `${quietConsole} console and ${quietNetwork} network entries without errors left out; goat_preview_logs reads them.`

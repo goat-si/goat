@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ScreenHostCall,
+  type ScreenObservation,
   type ScreenTargetRef,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -177,7 +178,7 @@ it.effect("an action retires the screenshot points it may have moved, and keeps 
     yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
     const observed = yield* host.dispatch(call("observe", 3, { screenshot: true }, ref), context);
     const image = observed.imageMetadata!;
-    const element = (observed.value as { elements: Array<{ ref: unknown }> }).elements[0]!.ref;
+    const element = (observed.value as ScreenObservation).elements[0]!.ref;
     const point = { observationId: image.observationId, regionId: image.regionId, x: 5, y: 5 };
     yield* host.dispatch(call("scroll", 4, { deltaY: 300 }, ref), context);
     const moved = yield* host
