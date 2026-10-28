@@ -296,3 +296,53 @@ describe("routed login when the pool is unreadable", () => {
     });
   });
 });
+
+describe("redeem target across a routed and a direct report of one login", () => {
+  it("keeps the direct instance's target when the routed report cannot redeem, in either order", () => {
+    const login = { status: "authenticated" as const, email: "main@example.com" };
+    const direct = provider({
+      instanceId: ProviderInstanceId.make("direct"),
+      auth: login,
+      usageLimits: {
+        checkedAt: "2026-09-03T11:00:00.000Z",
+        windows: [window],
+        resetCredits: { availableCount: 1 },
+      },
+    });
+    const routed = provider({
+      instanceId: ProviderInstanceId.make("goat-routed"),
+      auth: login,
+      usageLimits: {
+        checkedAt: "2026-09-03T11:59:00.000Z",
+        windows: [],
+        quotaPool: { provider: "openai", homeId: "home-a", accounts: { available: 1, total: 1 } },
+        quotaPoolRoute: { provider: "openai" },
+        localAccount: {
+          checkedAt: "2026-09-03T11:59:00.000Z",
+          windows: [window],
+          resetCredits: { availableCount: 2 },
+          redeemable: false,
+        },
+      },
+    });
+    for (const providers of [
+      [direct, routed],
+      [routed, direct],
+    ]) {
+      const accounts = collectLimitAccounts(
+        new Map([
+          [
+            EnvironmentId.make("studio"),
+            { entry: { target: { label: "Studio" } }, serverConfig: { providers } },
+          ],
+        ]),
+      );
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0]?.redeem).toEqual({
+        environmentId: "studio",
+        input: { instanceId: "direct" },
+      });
+      expect(accounts[0]?.aggregated).toBe(true);
+    }
+  });
+});

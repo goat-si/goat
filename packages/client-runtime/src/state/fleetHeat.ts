@@ -35,7 +35,12 @@ export interface FleetHeatSignals {
   readonly loadPerCore: number | null;
   readonly memoryPercent: number | null;
   /** The fullest quota window across the host's provider accounts. */
-  readonly quota: { readonly label: string; readonly usedPercent: number } | null;
+  /** usedPercent ranks the reading; a blocked pool ranks as full but has no percentage to show. */
+  readonly quota: {
+    readonly label: string;
+    readonly usedPercent: number;
+    readonly blocked?: true;
+  } | null;
 }
 
 export function fleetHeatSignals(
@@ -65,8 +70,9 @@ export function fleetHeatSignals(
       if (blocked && !isWindowExhausted(window, metrics.sampledAt)) continue;
       const usedPercent = window.usedPercent ?? 100;
       if (quota !== null && usedPercent <= quota.usedPercent) continue;
-      const label = blocked ? "all accounts blocked" : window.label.toLowerCase();
-      quota = { label: name + " " + label, usedPercent };
+      quota = blocked
+        ? { label: name + " all accounts blocked", usedPercent, blocked: true }
+        : { label: name + " " + window.label.toLowerCase(), usedPercent };
     }
   }
   return {
@@ -122,6 +128,7 @@ const formatSignal = (signals: FleetHeatSignals, key: SignalKey): string | null 
   if (key === "cpu") return "CPU " + value + "%";
   if (key === "load") return "load " + value.toFixed(1) + "/core";
   if (key === "memory") return "memory " + value + "%";
+  if (signals.quota?.blocked === true) return signals.quota.label;
   return signals.quota!.label + " " + Math.round(value) + "%";
 };
 
@@ -205,7 +212,8 @@ const signalsEqual = (left: FleetHeatSignals | null, right: FleetHeatSignals | n
     left.loadPerCore === right.loadPerCore &&
     left.memoryPercent === right.memoryPercent &&
     left.quota?.label === right.quota?.label &&
-    left.quota?.usedPercent === right.quota?.usedPercent);
+    left.quota?.usedPercent === right.quota?.usedPercent &&
+    left.quota?.blocked === right.quota?.blocked);
 
 /** Same tier, status, text, and readings, so a consumer showing any of them can keep the old value. */
 export function fleetMachineHeatEqual(left: FleetMachineHeat, right: FleetMachineHeat): boolean {

@@ -243,7 +243,11 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
       redeem:
         hubRedeems.get(key)?.redeem ??
-        (creditSource ? creditSource.redeem : (winner.redeem ?? previous.redeem ?? next.redeem)),
+        // A balance from a report that cannot redeem must not remove another report's target.
+        creditSource?.redeem ??
+        winner.redeem ??
+        previous.redeem ??
+        next.redeem,
       limits: {
         ...winner.limits,
         ...(creditSource?.limits.resetCredits

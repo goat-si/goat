@@ -440,6 +440,23 @@ describe("fleetHeatSignals quota verdicts", () => {
           { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
         ],
       }),
-    ).toEqual({ label: "Codex all accounts blocked", usedPercent: 100 });
+    ).toEqual({ label: "Codex all accounts blocked", usedPercent: 100, blocked: true });
+    const heat = fleetMachineHeat({
+      host: "studio",
+      reachability: "ok",
+      metrics: metrics({
+        sampledAt: at,
+        quotas: [
+          quota({
+            availability: [
+              { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
+            ],
+          }) as never,
+        ],
+      }),
+    } as HostStatusEntry);
+    expect(heat.tier).toBe("burning");
+    expect(heat.summary).toContain("Codex all accounts blocked");
+    expect(heat.summary).not.toContain("100%");
   });
 });
