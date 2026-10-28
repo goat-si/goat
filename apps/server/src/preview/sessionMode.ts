@@ -101,14 +101,14 @@ export class SessionProfiles {
 }
 
 /** The snapshot profile for a requested session: isolated tabs carry the ephemeral profile id. */
-export const snapshotProfileId = (session: RequestedSession) =>
+const snapshotProfileId = (session: RequestedSession) =>
   session.mode === "isolated" ? INCOGNITO_BROWSER_PROFILE_ID : session.profileId;
 
 /**
  * Whether a profile tab renders on the server. A pinned store decides; an unpinned profile goes
  * where a desktop app can render it, and is pinned there once that open succeeds.
  */
-export const profileRendersOnServer = (
+const profileRendersOnServer = (
   name: string,
   pin: PreviewSessionStore | undefined,
   desktopAvailable: boolean,
@@ -117,7 +117,7 @@ export const profileRendersOnServer = (
   return pin === "server" || (pin === undefined && !desktopAvailable);
 };
 
-export const desktopStoreUnavailable = (name: string) =>
+const desktopStoreUnavailable = (name: string) =>
   refuse(
     "PreviewAutomationProfileStoreUnavailableError",
     'Profile "' +
@@ -125,7 +125,7 @@ export const desktopStoreUnavailable = (name: string) =>
       '" keeps its sign-ins in the GOAT desktop app on this machine, and the desktop app did not open the tab. Open the desktop app here and retry, use session isolated, or choose another profile.',
   );
 
-export const storeConflict = (name: string, pinned: PreviewSessionStore) =>
+const storeConflict = (name: string, pinned: PreviewSessionStore) =>
   refuse(
     "PreviewAutomationProfileStoreUnavailableError",
     'Profile "' +

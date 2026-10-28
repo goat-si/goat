@@ -74,6 +74,21 @@ The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
 
+## Sites you are signed in to
+
+A tab an agent opens starts with no saved sign-ins, so it cannot reach your accounts unless
+you choose a profile for it. To let an agent work in a site as you, add a profile under
+**Settings → Integrations → Browser profiles**, open a tab with that profile and sign in
+there, then ask the agent to use the profile by name. GOAT never moves an agent to another
+profile on its own; when more than one profile could be meant, the agent has to ask you which.
+
+A profile keeps its sign-ins where an agent first used it: in the desktop app, or in the
+browser of the GOAT environment. Agents can use it only there, and GOAT tells the agent why when
+that place is not available.
+
+When an agent fills a password, it hears that the sign-in finished only after you hand the
+tab back. Screenshots and recordings of that site stay off for the rest of the thread.
+
 ## Approving apps
 
 Every thread in full access mode uses every app without asking, whatever

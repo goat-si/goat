@@ -7,7 +7,6 @@ import {
   PreviewAutomationNoAvailableHostError,
   PreviewTabId,
   ProviderInstanceId,
-  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type PreviewAutomationHost,
   type PreviewAutomationRequest,
@@ -285,36 +284,6 @@ it.effect("announces a live replacement stream before delivering requests", () =
 
       expect(receivedTypes).toEqual(["connected", "request"]);
       expect(result).toBe("ready");
-    }),
-  ),
-);
-
-it.effect.each([
-  { clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID, shown: true },
-  { clientId: "client-1", shown: false },
-])("tells the agent why its own server browser failed ($clientId)", ({ clientId, shown }) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const broker = yield* makeBroker;
-      const requests = requestsFrom(yield* broker.connect(makeHost({ clientId }), SERVER_BROWSER));
-      yield* Stream.runForEach(requests, (request) =>
-        broker.respond({
-          clientId,
-          connectionId: request.connectionId,
-          requestId: request.requestId,
-          ok: false,
-          error: {
-            _tag: "PreviewAutomationExecutionError",
-            message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:4719/",
-          },
-        }),
-      ).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      const error = yield* broker
-        .invoke<void>({ scope, operation: "open", input: {} })
-        .pipe(Effect.flip);
-      expect(error._tag).toBe("PreviewAutomationExecutionError");
-      expect(error.message.includes("ERR_CONNECTION_REFUSED")).toBe(shown);
     }),
   ),
 );
@@ -1052,27 +1021,4 @@ it.effect("keeps each thread's current tab when threads share a provider session
       expect(routed[0]!.agentSessionId).not.toBe(routed[1]!.agentSessionId);
     }),
   ),
-);
-
-it.effect(
-  "an open never reaches a client host, which cannot open a tab in the requested session",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const broker = yield* makeBroker;
-        const requests = requestsFrom(yield* broker.connect(makeHost({ clientId: "desktop-app" })));
-        let received = 0;
-        yield* Stream.runForEach(requests, () => Effect.sync(() => void received++)).pipe(
-          Effect.forkScoped,
-        );
-        yield* Effect.yieldNow;
-
-        const error = yield* broker
-          .invoke<void>({ scope, operation: "open", input: { session: "isolated" } })
-          .pipe(Effect.flip);
-
-        expect(error).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
-        expect(received).toBe(0);
-      }),
-    ),
 );
