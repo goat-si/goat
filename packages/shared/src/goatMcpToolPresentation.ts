@@ -2,119 +2,15 @@ import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts"
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
+import { type GoatMcpToolDefinition, tool } from "./goatMcpToolDefinition.ts";
+
+export type { GoatMcpToolDefinition, GoatMcpToolSummaryAction } from "./goatMcpToolDefinition.ts";
+
 export type GoatMcpToolLogo = "t3-code";
 
 export interface GoatMcpToolPresentation {
   readonly displayName: string;
   readonly logo: GoatMcpToolLogo;
-}
-
-export type GoatMcpToolSummaryAction =
-  | "capabilities"
-  | "delegate"
-  | "task-status"
-  | "task-cancel"
-  | "schedule-run"
-  | "schedule-create"
-  | "schedule-list"
-  | "schedule-update"
-  | "schedule-delete"
-  | "thread-create"
-  | "thread-list"
-  | "thread-read"
-  | "thread-send"
-  | "thread-wait"
-  | "thread-watch"
-  | "thread-unwatch"
-  | "thread-watch-list"
-  | "thread-interrupt"
-  | "workflow-stop"
-  | "background-wait"
-  | "thread-configuration"
-  | "thread-configure"
-  | "thread-fork"
-  | "thread-merge"
-  | "thread-search"
-  | "thread-transfers"
-  | "thread-organize"
-  | "thread-update"
-  | "queue-list"
-  | "queue-read"
-  | "queue-edit"
-  | "queue-cancel"
-  | "queue-reorder"
-  | "queue-steer"
-  | "question-list"
-  | "question-read"
-  | "question-respond"
-  | "secret-request"
-  | "worktree-handoff"
-  | "worktree-list"
-  | "worktree-status"
-  | "worktree-inventory"
-  | "worktree-remove"
-  | "worktree-cleanup"
-  | "storage-usage"
-  | "storage-clean"
-  | "project-list"
-  | "project-read"
-  | "repository-snapshot"
-  | "project-create"
-  | "project-update"
-  | "project-delete"
-  | "project-clone"
-  | "environment-read"
-  | "environment-update"
-  | "host-status"
-  | "provider-diagnose"
-  | "ssh-host-list"
-  | "ssh-browse"
-  | "ssh-thread-launch"
-  | "cloud-machine-list"
-  | "cloud-machine-change"
-  | "connection-list"
-  | "connection-add"
-  | "connection-remove"
-  | "attachment-prepare"
-  | "attachment-list"
-  | "attachment-discard"
-  | "attachment-send"
-  | "link-pr"
-  | "unlink-pr"
-  | "list-prs"
-  | "watch-pr"
-  | "unwatch-pr"
-  | "write-pr-guides"
-  | "read-pr-guide"
-  | "read-pr"
-  | "read-pr-checks"
-  | "browser"
-  | "device"
-  | "html-preview"
-  | "html-list"
-  | "html-render"
-  | "channel-message"
-  | "channel-reply"
-  | "channel-task-read"
-  | "channel-task-report"
-  | "channel-task-move"
-  | "channel-bot-home-read"
-  | "channel-bot-home-claim";
-
-export interface GoatMcpToolDefinition {
-  readonly displayName: string;
-  readonly labels: readonly [action: string, running: string, completed: string, detail: string];
-  readonly icon: "t3-code" | "browser" | "device" | "pull-request";
-  readonly summaryAction: GoatMcpToolSummaryAction;
-}
-
-function tool(
-  labels: GoatMcpToolDefinition["labels"],
-  summaryAction: GoatMcpToolSummaryAction,
-  icon: GoatMcpToolDefinition["icon"] = "t3-code",
-  displayName = `${labels[0]} ${labels[3]}`,
-): GoatMcpToolDefinition {
-  return { displayName, labels, icon, summaryAction };
 }
 
 const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
@@ -166,6 +62,38 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "read-pr-checks",
     "pull-request",
   ),
+  goat_pull_request_activity: tool(
+    ["Read", "Reading", "Read", "pull request activity"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_review_thread: tool(
+    ["Read", "Reading", "Read", "a review thread"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_file: tool(
+    ["Read", "Reading", "Read", "a pull request file"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_stats: tool(
+    ["Read", "Reading", "Read", "pull request line counts"],
+    "read-pr",
+    "pull-request",
+  ),
+  goat_pull_request_search: tool(
+    ["Search", "Searching", "Searched", "pull requests"],
+    "search-prs",
+    "pull-request",
+  ),
+  goat_pull_request_filter_options: tool(
+    ["List", "Listing", "Listed", "pull request filters"],
+    "search-prs",
+    "pull-request",
+  ),
+  goat_thread_turn_diff: tool(["Read", "Reading", "Read", "a turn's diff"], "read-diff"),
+  goat_thread_diff: tool(["Read", "Reading", "Read", "a thread's diff"], "read-diff"),
   orchestrator_capabilities: tool(
     ["Get", "Getting", "Got", "orchestration capabilities"],
     "capabilities",
@@ -477,6 +405,26 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Collect", "Collecting", "Collected", "from the scrolling preview page"],
     "browser",
     "browser",
+  ),
+  goat_environment_usage: tool(
+    ["Read", "Reading", "Read", "environment usage"],
+    "environment-usage",
+  ),
+  goat_host_process_history: tool(
+    ["Read", "Reading", "Read", "process resource history"],
+    "host-process-history",
+  ),
+  goat_host_resource_history: tool(
+    ["Read", "Reading", "Read", "host resource history"],
+    "host-resource-history",
+  ),
+  goat_worktree_diff_preview: tool(
+    ["Read", "Reading", "Read", "worktree diff preview"],
+    "worktree-diff-preview",
+  ),
+  goat_worktree_diff_file: tool(
+    ["Read", "Reading", "Read", "worktree file contents"],
+    "worktree-diff-file",
   ),
   goat_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],

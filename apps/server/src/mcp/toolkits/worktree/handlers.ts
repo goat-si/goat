@@ -1,3 +1,4 @@
+import * as ScopedReadMcp from "../../ScopedReadMcp.ts";
 import {
   OrchestratorMcpFailure,
   WorktreeMcpCleanupResult,
@@ -65,6 +66,16 @@ const decodeCleanup = Schema.decodeUnknownEffect(WorktreeMcpCleanupResult);
 const inventoryService = WorktreeInventoryService.WorktreeInventoryService;
 
 const handlers = {
+  goat_worktree_diff_preview: McpToolAccess.reads((input) =>
+    Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+      ScopedReadMcp.diffPreview(scope, input),
+    ),
+  ),
+  goat_worktree_diff_file: McpToolAccess.reads((input) =>
+    Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+      ScopedReadMcp.diffFile(scope, input),
+    ),
+  ),
   goat_worktree_inventory: McpToolAccess.readsOrReachesHost(
     (input) => input.host !== undefined,
     (input) =>

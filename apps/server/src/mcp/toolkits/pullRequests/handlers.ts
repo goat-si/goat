@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import { bytesOf, clipFields, clipText, fitItems, READ_BUDGET_BYTES } from "./readBudget.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -46,6 +47,7 @@ import {
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
   PullRequestReadFailedError,
+  PullRequestReadTooLargeError,
   PullRequestRepositoryAmbiguousError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
@@ -199,6 +201,13 @@ function projectForPullRequest(
   if (preferred !== undefined && matches(preferred)) return preferred;
   return projects.find(matches);
 }
+
+/** Default rows a search returns in total. */
+const SEARCH_LIMIT = 10;
+// Measured in place of each omitted count, so the shell never grows after the lists are fitted.
+const WIDEST_COUNT = 999_999_999;
+const TARGET_TOO_LARGE =
+  "This pull request target is too long to answer within 256 KiB. Pass a URL without its query, or repository and number.";
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -633,6 +642,149 @@ const make = Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const checks = yield* pullRequests.checks(ref).pipe(Effect.mapError(readFailure));
         return { ...identityOf(target), checks };
+      }),
+    ),
+    goat_pull_request_activity: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
+        const author =
+          activity.author === undefined || activity.author === null
+            ? {}
+            : { author: clipFields(activity.author).value };
+        const shell = {
+          ...identityOf(target),
+          activity: {
+            ...activity,
+            ...author,
+            reviewers: [],
+            comments: [],
+            reviewThreads: [],
+            commits: [],
+            reactions: [],
+          },
+          commentsOmitted: WIDEST_COUNT,
+          reviewThreadsOmitted: WIDEST_COUNT,
+          commitsOmitted: WIDEST_COUNT,
+          reviewersOmitted: WIDEST_COUNT,
+          reactionsOmitted: WIDEST_COUNT,
+        };
+        if (bytesOf(shell) > READ_BUDGET_BYTES)
+          return yield* new PullRequestReadTooLargeError({ detail: TARGET_TOO_LARGE });
+        // Every list shares what the shell leaves, in this order; each says how many it left out.
+        let left = READ_BUDGET_BYTES - bytesOf(shell);
+        const take = <A>(items: ReadonlyArray<A>) => {
+          const fit = fitItems(items, left);
+          left -= fit.used;
+          return fit;
+        };
+        const reviewers = take(activity.reviewers ?? []);
+        const comments = take(activity.comments);
+        const reviewThreads = take(activity.reviewThreads);
+        const commits = take(activity.commits);
+        const reactions = take(activity.reactions ?? []);
+        return {
+          ...identityOf(target),
+          activity: {
+            ...activity,
+            ...author,
+            ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
+            comments: comments.kept,
+            reviewThreads: reviewThreads.kept,
+            commits: commits.kept,
+            ...(activity.reactions === undefined ? {} : { reactions: reactions.kept }),
+          },
+          commentsOmitted: comments.omitted,
+          reviewThreadsOmitted: reviewThreads.omitted,
+          commitsOmitted: commits.omitted,
+          reviewersOmitted: reviewers.omitted,
+          reactionsOmitted: reactions.omitted,
+        };
+      }),
+    ),
+    goat_pull_request_review_thread: McpToolAccess.reads(({ threadId, cursor, ...input }) =>
+      Effect.gen(function* () {
+        const { target, ref } = yield* locateOne(input);
+        const page = yield* pullRequests
+          .threadComments({ ...ref, threadId, cursor })
+          .pipe(Effect.mapError(readFailure));
+        const shell = {
+          ...identityOf(target),
+          comments: [],
+          nextCursor: page.nextCursor,
+          commentsOmitted: WIDEST_COUNT,
+        };
+        if (bytesOf(shell) > READ_BUDGET_BYTES)
+          return yield* new PullRequestReadTooLargeError({ detail: TARGET_TOO_LARGE });
+        const comments = fitItems(page.comments, READ_BUDGET_BYTES - bytesOf(shell));
+        return {
+          ...identityOf(target),
+          comments: comments.kept,
+          nextCursor: page.nextCursor,
+          commentsOmitted: comments.omitted,
+        };
+      }),
+    ),
+    goat_pull_request_file: McpToolAccess.reads(
+      ({ commit, changeType, oldPath, newPath, ...input }) =>
+        Effect.gen(function* () {
+          const { target, ref } = yield* locateOne(input);
+          const file = yield* pullRequests
+            .diffFileContents({
+              ...ref,
+              ...(commit === undefined ? {} : { commit }),
+              changeType,
+              oldPath,
+              newPath,
+            })
+            .pipe(Effect.mapError(readFailure));
+          const before = clipText(file.oldContents, READ_BUDGET_BYTES);
+          const after = clipText(file.newContents, READ_BUDGET_BYTES);
+          return {
+            ...identityOf(target),
+            oldContents: before.text,
+            newContents: after.text,
+            oldTruncated: before.truncated,
+            newTruncated: after.truncated,
+          };
+        }),
+    ),
+    goat_pull_request_search: McpToolAccess.reads(({ limit = SEARCH_LIMIT, ...input }) =>
+      Effect.gen(function* () {
+        yield* McpInvocationContext.requireMcpCapability("pull-requests");
+        const result = yield* pullRequests
+          .list({ ...input, limit })
+          .pipe(Effect.mapError(readFailure));
+        // Cursors are per repository, so cutting rows here would skip them on the next page.
+        // Clipping each row's fields instead keeps one row small enough that narrowing always fits.
+        const rows = result.entries.map(clipFields);
+        const page = {
+          entries: rows.map((row) => row.value),
+          rowsClipped: rows.some((row) => row.clipped),
+          errors: result.errors,
+          truncated: result.truncated,
+          nextCursors: result.nextCursors,
+        };
+        if (fitItems([page], READ_BUDGET_BYTES).omitted > 0)
+          return yield* new PullRequestReadTooLargeError({
+            detail:
+              "These search results exceed 256 KiB. Narrow with projectId, query or filters, or lower limit.",
+          });
+        return page;
+      }),
+    ),
+    goat_pull_request_stats: McpToolAccess.reads(({ pullRequests: targets }) =>
+      Effect.gen(function* () {
+        const refs = yield* Effect.forEach(targets, (target) =>
+          locateOne(target).pipe(Effect.map((located) => located.ref)),
+        );
+        return yield* pullRequests.listStats({ refs }).pipe(Effect.mapError(readFailure));
+      }),
+    ),
+    goat_pull_request_filter_options: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        yield* McpInvocationContext.requireMcpCapability("pull-requests");
+        return yield* pullRequests.filterOptions(input).pipe(Effect.mapError(readFailure));
       }),
     ),
   } satisfies McpToolAccess.Handlers<typeof PullRequestsToolkit.tools>;
