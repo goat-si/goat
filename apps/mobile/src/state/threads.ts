@@ -1,5 +1,6 @@
 import { createDecisionInboxAtoms } from "@goat/client-runtime/state/decision-inbox";
 import { useAtomValue } from "@effect/atom-react";
+import { parseThreadKey, threadKey } from "@goat/client-runtime/state/entities";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -40,9 +41,36 @@ export const threadEnvironment = createThreadEnvironmentAtoms(
   threadFamilies.snapshotAtom,
 );
 export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
-export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
-  environmentThreads.stateAtom,
-);
+
+const EMPTY_THREAD_STATE_RESULT = AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE);
+// A thread whose creation is still queued or failed loads as not found, and that miss parks
+// its stream as deleted, so every detail read waits until creation is delivered.
+const awaitingCreationFamily = Atom.family((key: string) => {
+  const ref = parseThreadKey(key);
+  const outboxKey = scopedThreadKey(ref.environmentId, ref.threadId);
+  return Atom.make(
+    (get) =>
+      selectThreadCreationDetail({
+        threadRef: ref,
+        threadKey: outboxKey,
+        queuedMessagesByThreadKey: get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+        outcomes: get(pendingThreadCreationOutcomesAtom),
+      }).detailRef === null,
+  ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`mobile-thread-awaiting-creation:${key}`));
+});
+const createdThreadStateFamily = Atom.family((key: string) => {
+  const ref = parseThreadKey(key);
+  return Atom.make((get) =>
+    get(awaitingCreationFamily(key))
+      ? EMPTY_THREAD_STATE_RESULT
+      : get(environmentThreads.stateAtom(ref.environmentId, ref.threadId)),
+  ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`mobile-created-thread-state:${key}`));
+});
+function createdThreadStateAtom(environmentId: EnvironmentId, threadId: ThreadId) {
+  return createdThreadStateFamily(threadKey({ environmentId, threadId }));
+}
+
+export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(createdThreadStateAtom);
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
@@ -98,7 +126,7 @@ export function useEnvironmentThread(
 ): EnvironmentThreadState {
   const result = useAtomValue(
     environmentId !== null && threadId !== null
-      ? environmentThreads.stateAtom(environmentId, threadId)
+      ? createdThreadStateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
   const state = Option.getOrElse(

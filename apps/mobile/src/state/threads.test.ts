@@ -313,3 +313,34 @@ describe("startOpeningEnvironmentThread", () => {
       }),
   );
 });
+
+// The atom registry runs stream work on microtasks, so one macrotask turn settles every load.
+// oxlint-disable-next-line goat/no-real-time-wait-in-tests -- a zero-delay macrotask boundary, not a wait for time
+const settle = Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
+describe("environmentThreadDetails", () => {
+  it.effect("goes live when a creation read while still queued is delivered", () =>
+    Effect.gen(function* () {
+      const h = yield* setup();
+      h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {
+        [threadKey]: [creation],
+      });
+      const unmount = h.registry.mount(h.stateAtom);
+      yield* Effect.addFinalizer(() => Effect.sync(unmount));
+      yield* settle;
+      // The server does not have the thread yet; an early load would park it as deleted.
+      expect(h.registry.get(h.stateAtom).status).toBe("empty");
+
+      h.availableThreads.add(threadId);
+      h.registry.set(h.outbox.threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+      h.registry.set(h.pending.pendingThreadCreationOutcomesAtom, {
+        [threadKey]: { kind: "delivered", message: creation },
+      });
+      const state = yield* h.observe(
+        (value) => value.status === "live" || value.status === "deleted",
+      );
+      expect(state.status).toBe("live");
+      expect(Option.getOrThrow(state.data).thread).toEqual(v2Projection.thread);
+    }),
+  );
+});
