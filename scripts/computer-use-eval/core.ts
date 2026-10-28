@@ -549,7 +549,13 @@ const trackWindows = (
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
   calculatorMultiply: ({ task, samples }) => {
     const target = digits(task.expect["result"]);
-    const saw = samples.some((sample) => digits(sample.value["display"]) === target);
+    // After "=", Calculator shows the expression and the result in separate texts.
+    const saw = samples.some((sample) =>
+      [
+        sample.value["display"],
+        ...(Array.isArray(sample.value["texts"]) ? sample.value["texts"] : []),
+      ].some((text) => digits(text) === target),
+    );
     // Not seeing it proves nothing: a read and reset can fall between two samples.
     return {
       actual: saw ? "done" : "unverified",

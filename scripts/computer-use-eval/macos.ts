@@ -50,12 +50,17 @@ export const windowInventory = async () => {
   return (value["windows"] as ReadonlyArray<{ id: number; owner: string; title: string }>) ?? [];
 };
 
-// The display's path in Calculator's accessibility tree on macOS 26; null when it moves.
+// The display group's path in Calculator's accessibility tree on macOS 26. After "=" the
+// expression and the result sit in separate scroll areas, so every text there is read.
 const CALCULATOR =
   "const procs = se.processes.whose({ name: 'Calculator' });" +
-  "const result = { running: procs.length > 0, display: null };" +
-  "if (procs.length > 0 && procs[0].windows.length > 0) { try { result.display = procs[0].windows[0]" +
-  ".uiElements[0].uiElements[0].uiElements[1].uiElements[0].uiElements[0].uiElements[0].value(); } catch (e) { result.error = String(e); } }" +
+  "const result = { running: procs.length > 0, display: null, texts: [] };" +
+  "if (procs.length > 0 && procs[0].windows.length > 0) { try {" +
+  "const group = procs[0].windows[0].uiElements[0].uiElements[0].uiElements[1].uiElements[0];" +
+  "const texts = group.scrollAreas().flatMap((area) => area.staticTexts().map((t) => ({ value: String(t.value()), description: String(t.description()) })));" +
+  "result.texts = texts.map((t) => t.value);" +
+  "const field = texts.find((t) => t.description === 'Edit field') || texts[texts.length - 1];" +
+  "result.display = field ? field.value : null; } catch (e) { result.error = String(e); } }" +
   "return result;";
 
 // CoreGraphics gives each window a stable id and System Events its text; they meet on the title,
