@@ -9,7 +9,9 @@ import { makeCallApps } from "./ComputerUseCallApps.ts";
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const at = DateTime.makeUnsafe("2026-10-28T00:00:00.000Z");
 
-const driverCall = (toolName: string, input: unknown): OrchestrationV2TurnItem => ({
+type DynamicToolItem = Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }>;
+
+const driverCall = (toolName: string, input: unknown): DynamicToolItem => ({
   id: TurnItemId.make("tool-1"),
   type: "dynamic_tool",
   threadId: ThreadId.make("thread-1"),
