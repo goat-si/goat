@@ -203,6 +203,21 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       });
     },
     pending: (key: string) => cancels.has(key),
+    /** Asks one child for its own tool list, apart from the provider's handshake. */
+    listTools: Effect.fn("ComputerUseLeaseProxy.listDriverTools")(function* (
+      send: (line: string) => Effect.Effect<void>,
+    ) {
+      const id = options.ownId("tools");
+      const answered = yield* Deferred.make<Envelope | undefined>();
+      options.ownAnswers.set(id, answered);
+      yield* send(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: {} }));
+      const answer = yield* Effect.raceFirst(
+        Deferred.await(answered),
+        Deferred.await(options.ended).pipe(Effect.as(undefined)),
+      ).pipe(Effect.timeoutOption(ANSWER_WITHIN), Effect.map(Option.getOrUndefined));
+      options.ownAnswers.delete(id);
+      return answer?.result;
+    }),
     cancel: (key: string) => {
       const cancelled = cancels.get(key);
       if (cancelled !== undefined) Deferred.doneUnsafe(cancelled, Exit.void);

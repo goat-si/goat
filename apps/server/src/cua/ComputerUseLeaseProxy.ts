@@ -38,6 +38,7 @@ import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -65,6 +66,8 @@ import {
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   RECONNECTING,
+  REQUEST_ID_BUSY,
+  SCREEN_CALL_EXPIRED,
   SCREEN_SHARED,
   TURN_ENDED,
   WRONG_DISPLAY,
@@ -135,6 +138,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
+  const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -348,7 +352,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             );
           if (verdict === "proof") proven = current;
         } else {
-          handshakeAnswers.remember(request.method, message);
+          batches.remember(current, request.method, message);
           outstanding.delete(key);
         }
       }
@@ -454,6 +458,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
+    batches.grant(update.apps);
     shared = update.shared === true;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
@@ -649,10 +654,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     primitive?: ComputerUsePrimitiveRequest,
   ) {
     const keyCall = resolveKeyCall(incoming);
-    const line = "line" in keyCall ? keyCall.line : incoming;
+    let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
-    const message = decoded.message;
+    let message = decoded.message;
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -700,14 +705,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     const key = isRequest ? JSON.stringify(id) : "";
     if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))
-      return yield* sink.answer(
-        refusal(
-          id,
-          message.method,
-          "invalid_target",
-          "This request id still has work in progress. Use a new request id after observing its result.",
-        ),
-      );
+      return yield* sink.answer(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (finished !== undefined) {
@@ -721,9 +719,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // Before anything reaches the driver; a known pause, end or idle turn answers first.
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
-        return yield* sink.answer(
-          refusal(id, message.method, "expired", "This screen call ended before dispatch."),
-        );
+        return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
       if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
@@ -743,6 +739,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
+      const batch = yield* batches.scope(id, line, message, () => notSent(id));
+      if ("refused" in batch) return yield* sink.answer(batch.refused);
+      ({ line, message } = batch);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !DISPLAY_PROOF_FREE.has(tool));
@@ -787,7 +786,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Paused: no driver until control comes back. The handshake is still answered (#1604), in
     // the background so a cancel or Stop on the input reaches it; tool calls hear the pause.
     if (lifecycle.current === undefined) {
-      if (!isRequest) return;
+      if (!isRequest || message.method === undefined) return;
       const refuse = sink.answer(
         refusal(id, message.method, "waiting_for_human", PAUSE_MESSAGES[paused ?? "human_input"]),
       );

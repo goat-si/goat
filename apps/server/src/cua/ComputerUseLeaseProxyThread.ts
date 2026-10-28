@@ -16,7 +16,12 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type Envelope, decodeProviderIngress, parse } from "./ComputerUseLeaseProtocol.ts";
-import { type LeaseEnd, LEASE_END_MESSAGES, RECONNECTING } from "./ComputerUseLeaseMessages.ts";
+import {
+  type LeaseEnd,
+  LEASE_END_MESSAGES,
+  RECONNECTING,
+  REQUEST_ID_BUSY,
+} from "./ComputerUseLeaseMessages.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
@@ -448,14 +453,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       );
     const key = JSON.stringify(id);
     if (isRequest && (owners.has(key) || setup.pending(key)))
-      return yield* options.output(
-        refusal(
-          id,
-          message.method,
-          "invalid_target",
-          "This request id still has work in progress. Use a new request id after observing its result.",
-        ),
-      );
+      return yield* options.output(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     const context = current;

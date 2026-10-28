@@ -1,95 +1,23 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId, type ComputerUseCallReservation } from "@goat/contracts";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import type { ComputerUseCallReservation } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Statement from "effect/sql/Statement";
-import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import { runMigrations } from "../persistence/Migrations.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { ORPHAN_CALL_GRACE_MS } from "./ComputerUseCallReservations.ts";
-import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import { APP_LEASE_IDLE_MS } from "./ComputerUseAppLeases.ts";
-import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import {
+  database,
+  fixture,
+  openProxy,
+  serviceLayer,
+} from "./ComputerUseCallReservations.testkit.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { foregroundGrant, revokeForegroundGrant } from "./ComputerUseForeground.testkit.ts";
 import { grant } from "./ComputerUseLeases.projection.testkit.ts";
-
-const database = NodeSqliteClient.layer({ filename: ":memory:" });
-const serviceLayer = ComputerUseLeases.layer.pipe(
-  Layer.provide(Layer.merge(database, NodeServices.layer)),
-);
-const fixture = Effect.fn("reservations.fixture")(function* () {
-  yield* runMigrations();
-  const leases = yield* ComputerUseLeases.ComputerUseLeases;
-  const a = ThreadId.make("thread:a");
-  const b = ThreadId.make("thread:b");
-  const first = yield* leases.control(a, Option.none());
-  const second = yield* leases.control(b, Option.none());
-  let sequence = 0;
-  const reserve = (
-    owner = a,
-    args: unknown = { pid: 42, window_id: 7 },
-    name = "type_text",
-    connectionId = "driver:1",
-    interruptions = 0,
-    foregroundGrantId?: import("@goat/contracts").TurnItemId,
-  ) =>
-    leases.callReservation(owner, {
-      action: "reserve",
-      controlId: owner === a ? first.controlId : second.controlId,
-      connectionId,
-      callId: String(sequence++),
-      interruptions,
-      idleEpoch: 0,
-      name,
-      args,
-      ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
-    });
-  const release = (
-    owner: typeof a,
-    reservationId: string,
-    connectionId = "driver:1",
-    outcome: { readonly completed?: true; readonly notSent?: true } = {},
-  ) =>
-    leases.callReservation(owner, {
-      action: "release",
-      controlId: owner === a ? first.controlId : second.controlId,
-      connectionId,
-      reservationId,
-      ...outcome,
-    });
-  const close = (owner = a, connectionId = "driver:1") =>
-    leases.callReservation(owner, {
-      action: "close",
-      controlId: owner === a ? first.controlId : second.controlId,
-      connectionId,
-    });
-  return { leases, a, b, first, second, reserve, release, close };
-});
-
-const openProxy = Effect.fn("reservations.openProxy")(function* (
-  threadId: ThreadId,
-  controlId: string,
-) {
-  const reading = yield* Deferred.make<void>();
-  const exit = yield* Deferred.make<void>();
-  const proxy = yield* leaseUpdates({ threadId, controlId }).pipe(
-    Stream.take(1),
-    Stream.runForEach(() =>
-      Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(exit))),
-    ),
-    Effect.provide(ServerSettings.ServerSettingsService.layerTest({ enableCua: true })),
-    Effect.forkChild,
-  );
-  yield* Deferred.await(reading);
-  return Deferred.succeed(exit, undefined).pipe(Effect.andThen(Fiber.join(proxy)));
-});
 
 describe("server computer-use call reservations", () => {
   it.effect.each([
@@ -710,6 +638,67 @@ describe("server computer-use call reservations", () => {
         "refused",
       ]);
     }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "admits a background-scoped batch without foreground approval and holds only its window",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        assert.equal((yield* f.reserve()).status, "admitted");
+        const app_scope = { apps: ["org.example.Other"] };
+        const batch = (window: object, step: object = {}) => ({
+          ...window,
+          app_scope,
+          steps: [{ tool: "click", args: { element_token: "s:1", ...step } }],
+        });
+        // The driver keeps it to background delivery in its app, so it needs no foreground grant.
+        const own = yield* f.reserve(f.b, batch({ pid: 43, window_id: 8 }), "run_steps");
+        assert.equal(own.status, "admitted");
+        // It holds its own window, so another thread's window stays a conflict.
+        assert.deepInclude(yield* f.reserve(f.b, batch({ pid: 42, window_id: 7 }), "run_steps"), {
+          status: "refused",
+          detail: "target_busy",
+        });
+        // A step naming another window may act anywhere in the scoped apps: desktop work.
+        assert.deepInclude(
+          yield* f.reserve(f.b, batch({ pid: 44, window_id: 9 }, { pid: 45 }), "run_steps"),
+          { status: "refused", detail: "target_busy" },
+        );
+        // A check naming another window moves later steps there, so it is desktop work too.
+        for (const check of [
+          { wait_for: { pid: 42, window_id: 7, name: "OK" } },
+          { expect: [{ app: "Other", window: "Doc" }] },
+        ])
+          assert.deepInclude(
+            yield* f.reserve(
+              f.b,
+              {
+                ...batch({ pid: 44, window_id: 9 }),
+                steps: [{ tool: "click", args: {}, ...check }],
+              },
+              "run_steps",
+            ),
+            { status: "refused", detail: "target_busy" },
+          );
+        // A script can launch a scoped app, which needs foreground approval, so its scope grants none.
+        assert.deepInclude(
+          yield* f.reserve(f.b, { script: "cua.call('launch_app', {})", app_scope }, "run_script"),
+          { status: "refused", detail: "foreground_not_approved" },
+        );
+        // Without a scope, or with foreground delivery, it still needs foreground approval.
+        for (const args of [
+          { pid: 44, window_id: 9, steps: [] },
+          {
+            ...batch({ pid: 44, window_id: 9 }),
+            app_scope: { ...app_scope, delivery: "foreground" },
+          },
+        ])
+          assert.deepInclude(yield* f.reserve(f.b, args, "run_steps"), {
+            status: "refused",
+            detail: "foreground_not_approved",
+          });
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
   it.effect(

@@ -1,3 +1,5 @@
+import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
+
 /**
  * The guest-side \`screen\` API a goat_screen_run cell sees. Apps and tabs share one Target shape
  * (observe, click, type, press, scroll, setValue, drag, waitFor, verify) over the host methods;
@@ -22,7 +24,7 @@ class ScreenError extends Error {
     this.code = code;
     this.nothingSent = nothingSent;
     if (host)
-      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'receipts'])
+      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'evidence', 'receipts'])
         if (host[key] !== undefined) this[key] = host[key];
   }
 }
@@ -41,17 +43,52 @@ const __remember = (entry) => {
   __screenResults.push(entry);
   if (__screenResults.length > 64) __screenResults.shift();
 };
-const __reply = async (method, args) => {
+const __sendJson = async (method, json) => {
   let out;
-  try { out = await __host(method, JSON.stringify(args)); }
+  try { out = await __host(method, json); }
   catch (raw) { throw __error(raw); }
   return JSON.parse(out);
 };
+const __send = async (method, args) => __sendJson(method, JSON.stringify(args));
+// Element input started without awaiting each call waits until the cell's code yields, then goes
+// out as one batch group per run on a target (ScreenBatchGroups); any other call first sends what
+// waits, so the cell's calls keep their order. Each call still gets its own reply. The runtime
+// admits a group whole (__hostGroup) or refuses all of it before any goes out.
+const __batchable = new Set(['click', 'right_click', 'type_text', 'set_value']);
+let __queued = [];
+const __flush = () => {
+  const queued = __queued;
+  __queued = [];
+  for (let start = 0; start < queued.length;) {
+    let end = start + 1;
+    while (end < queued.length && end - start < ${MAX_BATCH_CALLS} && queued[end].arg.targetRef.id === queued[start].arg.targetRef.id) end++;
+    const group = queued.slice(start, end);
+    start = end;
+    let jsons;
+    try {
+      jsons = group.map((entry, index) =>
+        JSON.stringify([group.length > 1 ? { ...entry.arg, batch: { index, size: group.length } } : entry.arg]));
+    } catch (raw) { for (const entry of group) entry.reject(__error(raw)); continue; }
+    if (group.length > 1 && !__hostGroup(JSON.stringify(group.map((entry, index) => [entry.method, jsons[index]])))) {
+      for (const entry of group) entry.reject(new ScreenError('refused', 'screen call refused', true));
+      continue;
+    }
+    group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
+  }
+};
+const __reply = (method, args) => {
+  if (__queued.length > 0) __flush();
+  return __send(method, args);
+};
+const __enqueue = (method, arg) => new Promise((resolve, reject) => {
+  if (__queued.length === 0) Promise.resolve().then(() => { if (__queued.length > 0) __flush(); });
+  __queued.push({ method, arg, resolve, reject });
+});
 const __tabQuery = (query) =>
   typeof query === 'string' ? (/^[a-z][a-z0-9+.-]*:/i.test(query) ? { url: query } : { tabId: query }) : query;
 const __call = async (method, arg) => (await __reply(method, [arg])).v;
-const __checked = async (method, arg) => {
-  try { return await __reply(method, [arg]); }
+const __checked = async (method, arg, queued = false) => {
+  try { return await (queued ? __enqueue(method, arg) : __reply(method, [arg])); }
   catch (raw) {
     const error = __error(raw);
     __remember({ call: method, error: error.code, nothingSent: error.nothingSent });
@@ -90,7 +127,7 @@ const __target = (binding, note, owner) => {
   const act = async (name, method, arg) => {
     // Input can change what is under a pixel, so screenshot points end with it; refs do not.
     seen.image = undefined;
-    const reply = await __checked(method, { ...arg, targetRef: ref });
+    const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && arg.elementRef !== undefined);
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
     return reply.v === undefined ? { verdict } : { verdict, result: reply.v };

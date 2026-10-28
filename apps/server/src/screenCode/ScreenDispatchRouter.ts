@@ -41,4 +41,6 @@ export const createScreenDispatchRouter = (hosts: {
     const host = kind === "app" ? hosts.app : hosts.tab;
     return host ? host.dispatch(call, context) : Effect.fail(unavailable(kind));
   },
+  // Batch groups are desktop input only (ScreenBatchGroups).
+  ...(hosts.app?.dispatchBatch === undefined ? {} : { dispatchBatch: hosts.app.dispatchBatch }),
 });

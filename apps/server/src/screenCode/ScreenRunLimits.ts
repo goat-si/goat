@@ -2,6 +2,9 @@ import { DEFAULT_SCREEN_RUN_LIMITS, type ScreenRunLimits as Limits } from "@goat
 
 export const screenBytes = (value: string) => Buffer.byteLength(value, "utf8");
 
+/** The most calls one batch group carries (ScreenBatchGroups); the driver allows 64 steps. */
+export const MAX_BATCH_CALLS = 16;
+
 // The QuickJS module declares 16 MiB of initial WASM memory.
 const MINIMUMS: Partial<Record<keyof Limits, number>> = {
   treeBytes: 512,

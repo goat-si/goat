@@ -30,6 +30,9 @@ export const DESKTOP_CAPTURE_OFF =
 export const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
 
+export const REQUEST_ID_BUSY =
+  "This request id still has work in progress. Use a new request id after observing its result.";
+export const SCREEN_CALL_EXPIRED = "This screen call ended before dispatch.";
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 
@@ -178,5 +181,5 @@ export const scopeMessage = (
       : reason === "app_not_approved"
         ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}. It waits for the person's answer, and once approved this turn can go on.`
         : opaque
-          ? "This thread may control only its approved apps, and a script or batch cannot be checked against them, so it did not run. Make the calls one at a time, each with the pid and window_id of an approved app's window."
+          ? "This thread may control only its approved apps, and this script or batch is not kept to them by an app_scope of approved apps, so it did not run. Name only approved apps in app_scope, or make the calls one at a time, each with the pid and window_id of an approved app's window."
           : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;

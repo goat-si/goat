@@ -4,13 +4,16 @@
  * a list allows every app the driver's own manifest admits.
  *
  * A call is tied to an app by the pid it targets, either top level or in an exact window target.
- * Calls without one act on whatever the desktop shows, and scripts or batches cannot be read
- * ahead of time, so neither runs under a list. The driver's own answers say which app a pid is.
+ * Calls without one act on whatever the desktop shows, so they do not run under a list. Scripts
+ * and batches cannot be read ahead of time, so they run under a list only with an `app_scope` of
+ * approved apps, which the driver enforces on each call they make (ComputerUseBatchScope). The
+ * driver's own answers say which app a pid is.
  *
  * @module ComputerUseScope
  */
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 
+import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
@@ -87,13 +90,16 @@ export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) =
 
 /**
  * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
- * delivers input in the foreground. A script or batch cannot be read for that, so it counts. Background delivery posts to the target process without
- * either, which is what lets threads admitted to different apps act at once.
+ * delivers input in the foreground. A script or batch cannot be read for that, so it counts
+ * unless it is a run_steps whose app scope keeps it to background delivery. Background delivery posts to the target
+ * process without either, which is what lets threads admitted to different apps act at once.
  */
 export function takesScreen(name: unknown, args: unknown): boolean {
   // Window/default moves leave the real pointer alone, even with foreground delivery (#1501).
   if (name === "move_cursor") return movesPointer(args);
-  if (typeof name === "string" && (SCREEN_TOOLS.has(name) || OPAQUE_TOOLS.has(name))) return true;
+  if (typeof name === "string" && SCREEN_TOOLS.has(name)) return true;
+  if (typeof name === "string" && OPAQUE_TOOLS.has(name))
+    return !backgroundBatch(name, args) || foreground(args);
   // The same foreground test as window reservations (#1462), so both agree on what takes it.
   return foreground(args);
 }
@@ -116,11 +122,17 @@ export function scopeVerdict(input: {
   /** This host's apps have bundle ids (macOS), which is what grants name them by. */
   readonly bundleIds: boolean;
 }): ScopeVerdict {
-  if (input.apps === undefined) return { _tag: "allow" };
+  const approved = input.apps;
+  if (approved === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
   if (UNSCOPED_TOOLS.has(name)) return { _tag: "allow" };
-  if (OPAQUE_TOOLS.has(name))
-    return { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+  if (OPAQUE_TOOLS.has(name)) {
+    // The driver refuses each call the batch makes outside its scope, so approved apps suffice.
+    const scope = batchAppScope(name, input.args);
+    return scope !== undefined && scope.apps.every((app) => approves(approved, app))
+      ? { _tag: "allow" }
+      : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+  }
   const args = record(input.args);
   if (name === "launch_app") {
     // The driver picks what to open from a name, a path, an AUMID or URLs before any id a grant
@@ -132,7 +144,7 @@ export function scopeVerdict(input: {
     const named = text(args?.name) ?? text(args?.app_name);
     if (bundle === undefined || named !== undefined)
       return { _tag: "refuse", reason: "app_not_approved", launch: "bundle_id" };
-    return approves(input.apps, bundle)
+    return approves(approved, bundle)
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "app_not_approved", app: bundle };
   }
@@ -142,8 +154,8 @@ export function scopeVerdict(input: {
   if (app === undefined) return { _tag: "resolve", pid };
   // Only the id list_apps reports counts, or the exact executable it runs: a display name would
   // let two grants that name the same app differently both reach it.
-  if (approves(input.apps, app.id)) return { _tag: "allow" };
-  return app.executable !== undefined && approves(input.apps, app.executable)
+  if (approves(approved, app.id)) return { _tag: "allow" };
+  return app.executable !== undefined && approves(approved, app.executable)
     ? { _tag: "allow", byExecutable: { pid, executable: app.executable } }
     : { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
