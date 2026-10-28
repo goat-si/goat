@@ -724,17 +724,16 @@ it.effect("WSL preflight reaches fallback without spending the exit recovery bud
       let spawns = 0;
       const instance = yield* makeTestInstance({
         configResolve: Effect.sync(() => {
+          if (fallbacks > 0) return baseConfig;
           attempts++;
-          return fallbacks > 0
-            ? baseConfig
-            : {
-                ...baseConfig,
-                preflightFailure: Option.some({
-                  reason: "WSL is booting",
-                  fatal: false,
-                  retryLimit: 12,
-                }),
-              };
+          return {
+            ...baseConfig,
+            preflightFailure: Option.some({
+              reason: "WSL is booting",
+              fatal: false,
+              retryLimit: 12,
+            }),
+          };
         }),
         onPreflightFailed: () =>
           Effect.sync(() => {

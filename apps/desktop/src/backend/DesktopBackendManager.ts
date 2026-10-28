@@ -114,6 +114,7 @@ interface BackendManagerState {
   readonly config: Option.Option<DesktopBackendStartConfig>;
   readonly active: Option.Option<ActiveBackendRun>;
   readonly restartAttempt: number;
+  readonly startupRetryAttempt: number;
   readonly preflightFailureAttempt: number;
   readonly restartFiber: Option.Option<Fiber.Fiber<void, never>>;
   readonly nextRunId: number;
@@ -125,6 +126,7 @@ const initialState: BackendManagerState = {
   config: Option.none(),
   active: Option.none(),
   restartAttempt: 0,
+  startupRetryAttempt: 0,
   preflightFailureAttempt: 0,
   restartFiber: Option.none(),
   nextRunId: 1,
@@ -482,7 +484,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   yield* (spec.onDatabaseAhead?.() ?? Effect.void).pipe(Effect.ignore);
                   return;
                 }
-                yield* scheduleRestart(reason);
+                yield* scheduleRestart(reason, true);
               }
             }),
           );
@@ -542,6 +544,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 {
                   ...latest,
                   ready: true,
+                  startupRetryAttempt: 0,
                 },
               ] as const;
             });
@@ -564,7 +567,11 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                     )
                       return;
                     if (!(yield* recovery.reset)) {
-                      yield* pauseRecovery();
+                      recoveryStatus = "record-unavailable";
+                      yield* logInstanceError(
+                        "could not reset recovery state; automatic restarts disabled",
+                      );
+                      yield* Effect.forkIn(showRecovery, parentScope);
                       return;
                     }
                     yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: 0 }));
@@ -621,33 +628,37 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
   const scheduleRestart = Effect.fn("desktop.backendInstance.scheduleRestart")(function* (
     reason: string,
+    afterExit = false,
   ) {
     const current = yield* Ref.get(state);
     if (!current.desiredRunning || Option.isSome(current.restartFiber)) return;
-    const record = yield* recovery.fail(
-      yield* Clock.currentTimeMillis,
-      String(current.nextRunId - 1),
-      reason,
-    );
+    const record = yield* afterExit
+      ? recovery.fail(yield* Clock.currentTimeMillis, String(current.nextRunId - 1), reason)
+      : recovery.current;
     if (record.pause !== null) {
       recoveryStatus = record.pause;
       yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false, ready: false }));
       yield* Effect.forkIn(showRecovery, parentScope);
       return;
     }
-    const delay = Duration.millis(restartDelayMs(record.attempt - 1, yield* Random.next));
+    const attempt = afterExit ? record.attempt : current.startupRetryAttempt + 1;
+    const delay = Duration.millis(restartDelayMs(attempt - 1, yield* Random.next));
     recoveryStatus = "backoff";
     const scheduled = Option.some(delay);
-    yield* Ref.update(state, (latest) => ({ ...latest, restartAttempt: record.attempt }));
+    yield* Ref.update(state, (latest) => ({
+      ...latest,
+      restartAttempt: record.attempt,
+      startupRetryAttempt: afterExit ? latest.startupRetryAttempt : attempt,
+    }));
 
     yield* Option.match(scheduled, {
       onNone: () => Effect.void,
       onSome: Effect.fn("desktop.backendInstance.scheduleRestartFiber")(function* (delay) {
-        yield* logInstanceError("backend exited unexpectedly; restart scheduled", {
+        yield* logInstanceError("backend retry scheduled", {
           reason,
           delayMs: Duration.toMillis(delay),
         });
-        if ((yield* Ref.get(state)).restartAttempt >= STARTUP_FAILURE_RESTART_ATTEMPTS) {
+        if (attempt >= STARTUP_FAILURE_RESTART_ATTEMPTS) {
           yield* startupFailure.report(`The server could not start (${reason}).`);
         }
         const restartFiber = yield* Effect.forkIn(
