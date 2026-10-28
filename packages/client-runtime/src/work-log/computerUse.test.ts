@@ -71,12 +71,22 @@ describe("computerUseRun", () => {
       target: "Finder",
       app: { name: "Finder" },
     });
-    // A launch by bundle id reads as the app the server named on the item.
-    const launched = {
-      ...call("cua-driver.launch_app", { bundle_id: "com.apple.calculator" }),
-      toolSource: { key: "native-app:com.apple.calculator", name: "Calculator", kind: "computer" },
-    } as OrchestrationV2TurnItem;
-    expect(computerUseRun(launched)?.summary).toBe("Open Calculator");
+    // A launch by bundle id, or a call naming only a pid, reads as the app the server named.
+    const named = (toolName: string, input: unknown) =>
+      ({
+        ...call(toolName, input),
+        toolSource: {
+          key: "native-app:com.apple.calculator",
+          name: "Calculator",
+          kind: "computer",
+        },
+      }) as OrchestrationV2TurnItem;
+    expect(
+      computerUseRun(named("cua-driver.launch_app", { bundle_id: "com.apple.calculator" })),
+    ).toMatchObject({ summary: "Open Calculator", target: "Calculator" });
+    expect(
+      computerUseRun(named("cua-driver.get_window_state", { pid: 501, window_id: 7 }))?.target,
+    ).toBe("Calculator");
   });
 
   it("never repeats typed text, which can be a password", () => {

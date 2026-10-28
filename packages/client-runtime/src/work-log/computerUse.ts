@@ -211,8 +211,8 @@ function summary(tool: string, input: Record<string, unknown>, appName?: string)
   }
 }
 
-function inputTarget(input: Record<string, unknown>): string | null {
-  const app = label(input.name) ?? label(input.bundle_id);
+function inputTarget(input: Record<string, unknown>, appName: string | undefined): string | null {
+  const app = label(input.name) ?? appName ?? label(input.bundle_id);
   if (app !== undefined) return app;
   const pid = label(input.pid, 12);
   if (pid === undefined) return null;
@@ -229,17 +229,15 @@ export function computerUseRun(
   const raw = record(item.input);
   // ACP children keep the call in its {server, tool, arguments} envelope.
   const input = (raw?.server === "cua-driver" ? record(raw.arguments) : raw) ?? {};
+  // The server names a pid-only call's app on the item, as a launch by bundle id learns it too.
+  const appName =
+    item.toolSource?.kind === "computer" && item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
+      ? item.toolSource.name
+      : undefined;
   return {
     tool,
-    // The server names a call's app on the item, as a launch by bundle id learns it once it settles.
-    summary: summary(
-      tool,
-      input,
-      item.toolSource?.kind === "computer" && item.toolSource.key !== COMPUTER_USE_TOOL_SOURCE.key
-        ? item.toolSource.name
-        : undefined,
-    ),
-    target: inputTarget(input),
+    summary: summary(tool, input, appName),
+    target: inputTarget(input, appName),
     app: inputApp(input),
   };
 }
