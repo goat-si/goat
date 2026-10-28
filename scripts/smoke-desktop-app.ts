@@ -74,6 +74,13 @@ try {
   });
   step = "waiting for the first window";
   const page = await appWindow(app, 60);
+  // A fresh profile opens first-run prompts (computer use, OpenCodex, goatclaw) over the sidebar;
+  // answer each with Later so it cannot intercept the clicks below.
+  await page.addLocatorHandler(page.locator('[data-slot="dialog-viewport"]'), async (overlay) => {
+    const later = overlay.getByRole("button", { name: "Later", exact: true });
+    if ((await later.count()) > 0) await later.first().click();
+    else await page.keyboard.press("Escape");
+  });
   try {
     step = "finding the seeded thread";
     const thread = page.locator("li[data-thread-item]", { hasText: LAUNCH_THREAD_TITLE });
