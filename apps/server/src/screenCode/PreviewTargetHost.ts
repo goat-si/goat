@@ -370,6 +370,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               value: { targetRef: ref, tab },
               category: "confirmed" as const,
               evidence: ["New preview tab opened"],
+              outcome: { dispatch: "confirmed", effect: "confirmed" } as const,
             };
           }),
         );
@@ -768,6 +769,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
           : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
+        outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
       };
     },
   );

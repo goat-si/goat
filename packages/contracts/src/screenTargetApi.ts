@@ -16,7 +16,7 @@ const COMMON = `type Target = number | string | [x: number, y: number] | { role?
 type Done = { verdict: "confirmed" | "unverifiable"; result?: unknown };
 // confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
-// the cell's later calls are then refused, so observe in a new cell.
+// the cell's later input is then refused, but observe, read, status, waitFor and verify still run.
 interface Observation { text: string; observationId: string; mode: "full" | "diff"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
