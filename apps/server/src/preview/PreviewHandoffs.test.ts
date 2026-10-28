@@ -828,3 +828,94 @@ it.effect(
       }),
     ),
 );
+
+it.effect("keeps a tab Stop just before the deadline the agent's own end, through the sweep", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      // The Stop's write and its retry at the deadline both fail; the sweep runs in between.
+      const { handoffs, requests, control, failed } = yield* world(orchestrator, {
+        brokenStream: true,
+        failedWrites: 2,
+      });
+      const result = yield* requests.request({
+        threadId,
+        providerInstanceId: instanceId,
+        reason,
+        tabId: "tab-1",
+      });
+      const handoffId = TurnItemId.make(result.handoff.handoffId);
+      yield* TestClock.adjust("1799 seconds");
+      control.stopAgents();
+      yield* Deferred.await(failed);
+      yield* TestClock.adjust("2 seconds");
+      yield* handoffs.sweep;
+      yield* TestClock.adjust("15 seconds");
+      const record = yield* handoffs.read({ threadId, handoffId });
+      expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
+    }),
+  ),
+);
+
+it.effect(
+  "keeps a desktop Stop just before the deadline the agent's own end, through the sweep",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, requests, endControl, failed } = yield* world(orchestrator, {
+          brokenStream: true,
+          quietHold: true,
+          failedWrites: 2,
+        });
+        const result = yield* requests.request({
+          threadId,
+          providerInstanceId: instanceId,
+          reason,
+        });
+        const handoffId = TurnItemId.make(result.handoff.handoffId);
+        yield* TestClock.adjust("1799 seconds");
+        endControl("stopped");
+        yield* requests.reconcileDesktop;
+        yield* Deferred.await(failed);
+        yield* TestClock.adjust("2 seconds");
+        yield* handoffs.sweep;
+        yield* TestClock.adjust("15 seconds");
+        const record = yield* handoffs.read({ threadId, handoffId });
+        expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
+      }),
+    ),
+);
+
+it.effect(
+  "tells the tab's viewers when a retried hand back finds the request already expired",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, requests, control, failed, freed } = yield* world(orchestrator, {
+          brokenStream: true,
+          failedWrites: 1,
+        });
+        const result = yield* requests.request({
+          threadId,
+          providerInstanceId: instanceId,
+          reason,
+          tabId: "tab-1",
+        });
+        const told = yield* Deferred.make<void>();
+        control.onChange(() => {
+          if (control.handBackNotice === "expired") Deferred.doneUnsafe(told, Effect.void);
+        });
+        yield* TestClock.adjust("1799 seconds");
+        yield* Effect.promise(async () => {
+          await control.take("viewer");
+          await control.release("viewer");
+        });
+        yield* Deferred.await(failed);
+        // The next check writes it again after the deadline, and the record says expired.
+        yield* TestClock.adjust("1 minute");
+        yield* Deferred.await(told);
+        yield* Deferred.await(freed);
+        const handoffId = TurnItemId.make(result.handoff.handoffId);
+        expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("expired");
+      }),
+    ),
+);

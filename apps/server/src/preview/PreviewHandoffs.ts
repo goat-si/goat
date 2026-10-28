@@ -229,6 +229,11 @@ const make = Effect.gen(function* () {
     return stored;
   });
 
+  // An owed Stop is written as the agent's end even past the deadline; the sweep leaves it alone.
+  yield* handoffs.holdExpiry(
+    (handoffId) => owed.get(TurnItemId.make(handoffId))?.end === "stopped",
+  );
+
   /** Frees the screen side of a request. */
   const end = Effect.fn("PreviewHandoffs.end")(function* (key: string, entry: Pending) {
     pending.delete(key);
@@ -279,6 +284,9 @@ const make = Effect.gen(function* () {
     // Nothing is written until the asking turn is known: the hand back stays owed, the tab held.
     if (asker === "unknown") {
       owed.set(entry.handoffId, { entry, end: "handedBack" });
+      yield* Effect.logWarning("a hand back waits until its turn can be read", {
+        handoffId: entry.handoffId,
+      });
       return yield* new HandoffError({ reason: "unavailable" });
     }
     // A person stopped that turn or put its thread away: the Stop is what ends the request.
@@ -295,6 +303,29 @@ const make = Effect.gen(function* () {
           },
     );
   });
+
+  /**
+   * A hand back nobody waits on (a stream release, or its retry): a tab's viewers hear how it
+   * ended when it did not complete: not recorded yet (the next check retries), too late, or after
+   * another answer.
+   */
+  const handBackAndTell = (key: string, entry: Pending) =>
+    handBackEntry(key, entry).pipe(
+      Effect.catch((error) =>
+        entry.target.kind === "browser" && Option.isSome(browser) && browser.value.noteHandBack
+          ? browser.value.noteHandBack({
+              threadId: entry.threadId,
+              tabId: entry.target.tabId,
+              notice:
+                error.reason === "expired"
+                  ? "expired"
+                  : error.reason === "conflict"
+                    ? "answered"
+                    : "unsaved",
+            })
+          : Effect.void,
+      ),
+    );
 
   const handBack = Effect.fn("PreviewHandoffs.handBack")(function* (sessionId: string) {
     const entry = pending.get(sessionId);
@@ -358,25 +389,7 @@ const make = Effect.gen(function* () {
     // A late end of an earlier request on this tab leaves the newer one alone.
     if (entry === undefined || entry.handoffId !== ended.requestId) return;
     if (ended.change === "taken") return yield* opened(entry);
-    // Nobody waits on the stream's hand back, so its viewers hear how it ended: not recorded yet
-    // (the next check retries it), too late, or after another answer.
-    if (ended.change === "handedBack")
-      return yield* handBackEntry(key, entry).pipe(
-        Effect.catch((error) =>
-          Option.isSome(browser) && browser.value.noteHandBack
-            ? browser.value.noteHandBack({
-                threadId: entry.threadId,
-                tabId: ended.tabId,
-                notice:
-                  error.reason === "expired"
-                    ? "expired"
-                    : error.reason === "conflict"
-                      ? "answered"
-                      : "unsaved",
-              })
-            : Effect.void,
-        ),
-      );
+    if (ended.change === "handedBack") return yield* handBackAndTell(key, entry);
     if (ended.change === "stopped") return yield* stop(key, entry);
     yield* endUnasked(key, entry, SCREEN);
   }, locked);
@@ -440,7 +453,7 @@ const make = Effect.gen(function* () {
         continue;
       }
       // An owed hand back checks the asking turn itself, so a Stop found now wins over it.
-      if (owed.has(entry.handoffId)) yield* handBackEntry(key, entry).pipe(Effect.ignore);
+      if (owed.has(entry.handoffId)) yield* handBackAndTell(key, entry);
       else if ((yield* askerState(entry)) === "stopped") yield* stop(key, entry);
     }
   }).pipe(locked);
