@@ -1,0 +1,234 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Outside agents | GOAT user guides</title><meta name="description" content="Outside agents: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/outside-agents/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/outside-agents/"><meta property="og:title" content="Outside agents | GOAT user guides"><meta property="og:description" content="Outside agents: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Outside agents | GOAT user guides"><meta name="twitter:description" content="Outside agents: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="outside-agents">Outside agents</h1>
+<p>Agents that GOAT did not start can work with an environment through its MCP
+server. They can read projects and threads, start and message threads, and
+check which providers and models are available. This covers Claude Code or
+Codex in your own terminal, ChatGPT, and bots that support MCP. Each agent signs
+in once, and you choose what it may do.</p>
+<h2 id="get-the-mcp-url">Get the MCP URL</h2>
+<p>In <strong>Settings → Connections</strong>, open a saved environment’s menu and choose
+<strong>Copy MCP URL</strong>. The URL is the environment’s address followed by <code>/mcp</code>, for
+example:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="text"><code><span class="line"><span>https://&lt;environment-address&gt;/mcp</span></span></code></pre>
+<p>The copied URL uses the route this device is connected over, so an agent on the
+same device can reach it.</p>
+<ul>
+<li><strong>An agent on your own computers</strong> can use <code>localhost</code> on the host or any
+<code>https</code> address, such as
+<a href="/goat/docs/user/remote-access/#tailscale-https">Tailscale HTTPS</a>. Signing in sends the
+agent’s credentials to the environment, and agents only do that over <code>https</code>
+or to <code>localhost</code>. A plain-<code>http</code> LAN or Tailscale address, like
+<code>http://100.x.y.z:3773</code>, lets an agent find the environment but not finish
+signing in.</li>
+<li><strong>A hosted agent</strong>, such as ChatGPT or a bot running in the cloud, must reach
+the environment from the internet through an HTTPS address you manage. GOAT
+Connect is coming soon; GOAT does not currently provide a public address. A
+Tailscale address only works from your own tailnet.</li>
+</ul>
+<h2 id="approve-a-sign-in">Approve a sign-in</h2>
+<p>The first time an agent connects, it opens a sign-in page on the environment.
+The page names the agent and where its access goes:</p>
+<ul>
+<li>For an agent on your computer, approval returns to a <code>localhost</code> address on
+the computer that opened the page.</li>
+<li>For a hosted agent, approval goes to that service, such as <code>chatgpt.com</code>.
+Anyone who runs that service gets the access.</li>
+</ul>
+<p>Only approve a sign-in you just started. To approve, enter a pairing code from
+<strong>Settings → Connections</strong> or from <code>goat auth pairing create</code> on the host. A
+browser already signed in to the environment with permission to manage access
+can approve without a code.</p>
+<p>Then choose what the agent may do:</p>
+<ul>
+<li><strong>Read only</strong> is the default. The agent can read projects and threads and see
+the available providers and models. It cannot change anything.</li>
+<li><strong>Supervised</strong> through <strong>Full access</strong> also let it start, message and stop
+threads in every project. A thread it starts or steers cannot run with more
+permissions than the mode you chose.</li>
+</ul>
+<h2 id="claude-code">Claude Code</h2>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">claude</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> add</span><span style="color:#79B8FF"> --transport</span><span style="color:#9ECBFF"> http</span><span style="color:#9ECBFF"> goat</span><span style="color:#9ECBFF"> https://</span><span style="color:#F97583">&lt;</span><span style="color:#9ECBFF">environment-addres</span><span style="color:#E1E4E8">s</span><span style="color:#F97583">&gt;</span><span style="color:#9ECBFF">/mcp</span><span style="color:#79B8FF"> --header</span><span style="color:#9ECBFF"> "x-goat-tool-listing: core"</span></span>
+<span class="line"><span style="color:#B392F0">claude</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> login</span><span style="color:#9ECBFF"> goat</span></span></code></pre>
+<p><code>claude mcp login</code> opens the sign-in page in your browser. On a machine
+without a browser, add <code>--no-browser</code>, open the printed URL elsewhere, and
+paste the final URL back when asked. <code>claude mcp list</code> shows <code>goat</code> as connected
+once you approve.</p>
+<h2 id="codex">Codex</h2>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">codex</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> add</span><span style="color:#9ECBFF"> goat</span><span style="color:#79B8FF"> --url</span><span style="color:#9ECBFF"> https://</span><span style="color:#F97583">&lt;</span><span style="color:#9ECBFF">environment-addres</span><span style="color:#E1E4E8">s</span><span style="color:#F97583">&gt;</span><span style="color:#9ECBFF">/mcp</span></span>
+<span class="line"><span style="color:#B392F0">codex</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> login</span><span style="color:#9ECBFF"> goat</span></span></code></pre>
+<p>Then add <code>http_headers = { "x-goat-tool-listing" = "core" }</code> under <code>[mcp_servers.goat]</code> in
+<code>~/.codex/config.toml</code>; <code>codex mcp add</code> has no header option.</p>
+<p><code>codex mcp login --no-browser</code> prints the sign-in URL instead of opening it.
+<code>codex mcp list</code> shows <code>goat</code> with OAuth once you approve.</p>
+<h2 id="chatgpt">ChatGPT</h2>
+<p>Add the environment as a custom MCP app in ChatGPT’s apps settings:</p>
+<ol>
+<li>Create a new app or plugin with a custom MCP server.</li>
+<li>Set the server URL to <code>https://&lt;environment-address&gt;/mcp</code>, using your
+server’s publicly reachable HTTPS address.</li>
+<li>Choose <strong>OAuth</strong> for authentication. ChatGPT discovers the rest; you do not
+need a client ID or secret.</li>
+<li>Create the app, then approve the sign-in page that opens.</li>
+</ol>
+<h2 id="other-agents-and-bots">Other agents and bots</h2>
+<p>Any agent that supports remote MCP servers over HTTP with OAuth can connect. Give
+it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
+Agents without OAuth support can use a client token instead.</p>
+<p>The agent finds GOAT’s capabilities with <code>goat_describe</code> and runs any of them with
+<code>goat_call {path, args}</code>, where <code>path</code> names the capability, such as <code>thread.read</code>.
+An agent that sends the <code>x-goat-tool-listing: core</code> header, as the Claude Code,
+Codex and client token settings on this page do, is listed only those two tools:
+about 2 KB of tool definitions instead of about 210 KB. Every tool stays callable by
+name either way.</p>
+<h2 id="set-up-a-client-with-the-goat-mcp-skill">Set up a client with the goat-mcp skill</h2>
+<p>The <code>goat-mcp</code> skill is a step-by-step guide an agent can follow to connect its
+own client: finding the MCP URL, signing in or using a client token, the
+settings for Claude Code, Claude Desktop, Codex, Cursor, VS Code, OpenCode,
+Gemini CLI, ChatGPT and Grok, checking the connection, and fixing common
+errors. Clients that only start local stdio servers connect through the
+<code>mcp-remote</code> bridge it describes.</p>
+<p><code>goat mcp skill</code> prints the skill. To install it for Claude Code or Codex:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">mkdir</span><span style="color:#79B8FF"> -p</span><span style="color:#9ECBFF"> ~/.claude/skills/goat-mcp</span><span style="color:#E1E4E8"> &amp;&amp; </span><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> skill</span><span style="color:#F97583"> &gt;</span><span style="color:#9ECBFF"> ~/.claude/skills/goat-mcp/SKILL.md</span></span>
+<span class="line"><span style="color:#B392F0">mkdir</span><span style="color:#79B8FF"> -p</span><span style="color:#9ECBFF"> ~/.codex/skills/goat-mcp</span><span style="color:#E1E4E8"> &amp;&amp; </span><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> mcp</span><span style="color:#9ECBFF"> skill</span><span style="color:#F97583"> &gt;</span><span style="color:#9ECBFF"> ~/.codex/skills/goat-mcp/SKILL.md</span></span></code></pre>
+<p>On a machine without GOAT, copy
+<a href="https://github.com/goat-si/goat/blob/dev/skills/goat-mcp/SKILL.md">skills/goat-mcp/SKILL.md</a>
+from the GOAT repository into the client’s skills folder.</p>
+<h2 id="long-running-orchestrators">Long-running orchestrators</h2>
+<p>A bot or script that drives GOAT for weeks, such as an orchestrator on another
+machine, should use one client token instead of signing in for every call.
+Create it on the host:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> auth</span><span style="color:#9ECBFF"> client</span><span style="color:#9ECBFF"> create</span><span style="color:#79B8FF"> --name</span><span style="color:#9ECBFF"> "Grok Bot"</span><span style="color:#79B8FF"> --runtime-mode-ceiling</span><span style="color:#9ECBFF"> approval-required</span><span style="color:#79B8FF"> --token-only</span></span></code></pre>
+<p>Send the token as <code>Authorization: Bearer &lt;token&gt;</code> to the MCP URL. It lasts 90
+days unless you pass <code>--ttl</code>. The <code>--runtime-mode-ceiling</code> works like the access
+you choose on the sign-in page. Without it, the client gets <strong>Supervised</strong>.</p>
+<h3 id="give-a-client-its-token">Give a client its token</h3>
+<p>Keep the token in an environment variable, such as
+<code>export GOAT_MCP_TOKEN="$(goat auth client create --name "Cursor" --token-only)"</code>,
+and let the client read it when it starts, so the token stays out of its
+config file. Replace <code>&lt;url&gt;</code> with the MCP URL:</p>
+<table>
+<thead>
+<tr>
+<th>Client</th>
+<th>Setting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude Code</td>
+<td><code>claude mcp add-json --scope user goat '{"type":"http","url":"&lt;url&gt;","headers":{"x-goat-tool-listing":"core","Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'</code></td>
+</tr>
+<tr>
+<td>Codex</td>
+<td><code>codex mcp add goat --url &lt;url&gt; --bearer-token-env-var GOAT_MCP_TOKEN</code>, then the <code>http_headers</code> line above in <code>config.toml</code></td>
+</tr>
+<tr>
+<td>Cursor</td>
+<td><code>"url": "&lt;url&gt;"</code> and <code>"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }</code> in <code>mcp.json</code></td>
+</tr>
+<tr>
+<td>VS Code</td>
+<td><code>"type": "http"</code>, <code>"url": "&lt;url&gt;"</code> and the same <code>headers</code> under <code>servers</code> in <code>mcp.json</code></td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td><code>"type": "remote"</code>, <code>"oauth": false</code> and <code>"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }</code></td>
+</tr>
+<tr>
+<td>Gemini CLI</td>
+<td><code>gemini mcp add --scope user --transport http --header 'x-goat-tool-listing: core' --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat &lt;url&gt;</code></td>
+</tr>
+<tr>
+<td>Clients without HTTP</td>
+<td><code>npx -y mcp-remote &lt;url&gt; --header "x-goat-tool-listing:core" --header "Authorization:${GOAT_MCP_AUTH}"</code>, with <code>GOAT_MCP_AUTH</code> set to <code>Bearer &lt;token&gt;</code> (Node.js 20.18.1 or newer)</td>
+</tr>
+<tr>
+<td>xAI API</td>
+<td><code>"authorization": "Bearer &lt;token&gt;"</code> in an <code>mcp</code> tool; the URL must be public <code>https</code></td>
+</tr>
+</tbody>
+</table>
+<p>Restart the client after changing the variable. The
+<a href="#set-up-a-client-with-the-goat-mcp-skill">goat-mcp skill</a> has full config files
+and fixes for common errors.</p>
+<h3 id="sessions-and-revoking">Sessions and revoking</h3>
+<p>Initialize MCP once and reuse the <code>mcp-session-id</code> header from that response
+for later calls, including long <code>thread.wait</code> polls. End the session with
+an HTTP <code>DELETE</code> when the bot shuts down.</p>
+<p><code>goat auth client list</code> shows each token’s name and when it was last used.
+The same tokens appear in <strong>Settings → Connections</strong>. Revoke one there or with
+<code>goat auth client revoke &lt;session-id&gt;</code>.</p>
+<h3 id="let-an-orchestrator-answer-approvals">Let an orchestrator answer approvals</h3>
+<p>By default only you can answer a thread’s approval requests, such as running a
+command in a <strong>Supervised</strong> thread. To let a trusted orchestrator answer them
+too, add the approve scope when you create its token:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> auth</span><span style="color:#9ECBFF"> client</span><span style="color:#9ECBFF"> create</span><span style="color:#79B8FF"> --name</span><span style="color:#9ECBFF"> "Grok Bot"</span><span style="color:#79B8FF"> \</span></span>
+<span class="line"><span style="color:#79B8FF">  --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:operate</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:approve</span></span></code></pre>
+<p>Through <code>goat_call</code>, the client can then list approvals with <code>pending_request.list</code>, read them
+with <code>pending_request.read</code>, and answer with <code>pending_request.respond</code>
+and <code>decision</code> set to <code>accept</code> or <code>decline</code>. It can only answer approvals in
+threads that run within its ceiling. Each answer records the client’s name and
+reason, and the approval shows who answered it. This also works for threads on
+SSH hosts that the client reaches through this environment, once those hosts
+run a GOAT version that supports it.</p>
+<p>Agents running inside GOAT and clients that signed in through the sign-in page
+never get this permission. To make approvals human-only again, revoke the token
+and create one without <code>orchestration:approve</code>.</p>
+<h2 id="cloud-agents-from-any-machine">Cloud agents from any machine</h2>
+<p>Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
+that service. Through <code>goat_call</code>, an agent can call <code>cloud_agent.holders</code> to see which connected environments hold a
+login, and <code>cloud_agent.launch</code> to start a run there. Add <code>dryRun: true</code> to see which environment
+would run it. The environment needs a project for the repository, and the run starts from that
+project’s pushed branch. Launching needs <strong>Full access</strong>.</p>
+<p>A bot that starts cloud runs on its own can show them in GOAT with <code>goat_call {path:"cloud_agent.run_register", args}</code>, where <code>args</code> is:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "provider"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"cursorCloud"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "url"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"https://cursor.com/agents/bc-…"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "repo"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"owner/name"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "launchedBy"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"Grok Bot"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "notifyWebhook"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">true</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<p>The run appears in Fleet under its provider and in the thread list with “via Grok Bot”. When an
+environment signed in to the same account can see the run, GOAT follows it and reports when it
+ends. Otherwise it keeps only the link and says so (<code>tracking: "link-only"</code>), and never posts <code>run.completed</code> for it. Devin Cloud sessions
+started outside GOAT are always link-only. <strong>Stop</strong> on a registered run’s thread only stops
+following it: the run keeps going, and you cancel it from its page in the provider.
+<code>cloud_agent.run_forget</code> removes a registered run from GOAT; the cloud run itself keeps going.</p>
+<h2 id="scripts-on-the-host">Scripts on the host</h2>
+<p>On the machine that runs the environment, sign the terminal in once with
+<code>goat login</code>, and <code>goat thread</code> then uses the same tools:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> login</span></span>
+<span class="line"><span style="color:#E1E4E8">id</span><span style="color:#F97583">=</span><span style="color:#E1E4E8">$(</span><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> start</span><span style="color:#9ECBFF"> .</span><span style="color:#9ECBFF"> "Find why the tests are slow"</span><span style="color:#E1E4E8">)</span></span>
+<span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> send</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$id</span><span style="color:#9ECBFF">"</span><span style="color:#9ECBFF"> "Now fix it"</span><span style="color:#79B8FF"> --wait</span></span>
+<span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> show</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$id</span><span style="color:#9ECBFF">"</span></span>
+<span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> list</span></span></code></pre>
+<p><code>.</code> means the project that contains the current folder; a project id also
+works. A new thread uses the project’s default model and permission mode, and
+runs in the project folder unless you pass <code>--worktree &lt;base-branch&gt;</code>. <code>send</code>
+never interrupts: a busy thread gets the message as its next turn. Pass <code>-</code> as
+the message to read it from stdin.</p>
+<p><code>--wait</code> prints the agent’s reply. It exits 1 when the run fails or stops, and
+2 when the agent waits for an answer you give in the app. Add <code>--json</code> for a
+result that always includes the thread id.</p>
+<p>Every other capability is a command too. <code>goat describe</code> lists them, <code>goat describe thread</code>
+shows one resource, and <code>goat describe thread.read</code> prints its arguments. Run one as
+<code>goat thread read -f threadId=$id</code> or <code>goat call thread.read '{"threadId":"…"}'</code>: <code>-f key=value</code>
+passes a string and <code>-F key=value</code> passes <code>true</code>, <code>false</code>, <code>null</code>, or a whole number. <code>--json</code> prints
+a result with <code>status</code> <code>ok</code>, <code>error</code>, or <code>needs_human</code>. The exit code is 0 for ok, 1 for an
+error, 2 for a mistyped command, 3 when you need to act in the app, 4 when retrying is safe, and 5
+when a change may have happened, so check before retrying. Work that keeps running after the
+command returns prints an operation id; <code>goat operation wait &lt;id&gt;</code> follows it and exits 0 when it
+succeeded, 1 when it failed or was cancelled, 3 when it waits for you, and 6 when it is still
+running at the deadline.</p>
+<p><code>goat login</code> stores a client session for this environment that lasts 30 days. It
+appears under <strong>Settings → Connections</strong> as “goat CLI”, and threads it starts or
+changes run at most <code>approval-required</code> unless you pass <code>--access</code>. <code>goat whoami</code>
+shows which credential the terminal uses, and <code>goat logout</code> revokes it. Inside a
+GOAT thread whose agent has a GOAT credential in its environment, <code>goat</code> uses
+that thread’s own access instead, and <code>goat login</code>, <code>goat pair</code>, and the
+<code>goat auth</code> commands that create credentials refuse to run.</p>
+<h2 id="remove-an-agent">Remove an agent</h2>
+<p>Approved agents appear under <strong>Settings → Connections</strong> like other clients.
+Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
+after that the agent asks you to approve it again.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#get-the-mcp-url">Get the MCP URL</a></li><li><a href="#approve-a-sign-in">Approve a sign-in</a></li><li><a href="#claude-code">Claude Code</a></li><li><a href="#codex">Codex</a></li><li><a href="#chatgpt">ChatGPT</a></li><li><a href="#other-agents-and-bots">Other agents and bots</a></li><li><a href="#set-up-a-client-with-the-goat-mcp-skill">Set up a client with the goat-mcp skill</a></li><li><a href="#long-running-orchestrators">Long-running orchestrators</a></li><li><a href="#cloud-agents-from-any-machine">Cloud agents from any machine</a></li><li><a href="#scripts-on-the-host">Scripts on the host</a></li><li><a href="#remove-an-agent">Remove an agent</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

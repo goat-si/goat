@@ -1,0 +1,221 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Usage and limits | GOAT user guides</title><meta name="description" content="Usage and limits: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/usage/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/usage/"><meta property="og:title" content="Usage and limits | GOAT user guides"><meta property="og:description" content="Usage and limits: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Usage and limits | GOAT user guides"><meta name="twitter:description" content="Usage and limits: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="usage-and-limits">Usage and limits</h1>
+<p>Open <strong>Usage</strong> from the icon rail on the left (the sidebar on narrow windows) or the
+command palette, or press <code>mod+u</code> on web and desktop when the terminal is not focused.
+Customize <code>usage.open</code> in
+<strong>Settings → Keybindings</strong>.</p>
+<p>On mobile, choose <strong>Usage</strong> in the workspace navigation.</p>
+<h2 id="understand-your-usage">Understand your usage</h2>
+<p><strong>Usage</strong> combines Codex, Claude Code, Grok Build, OpenCode, Antigravity, Pi, Muse Code, and Cursor history
+from your connected environments. It shows token use, cache savings, model breakdowns, and estimated API-equivalent
+cost, split by token type and by speed. These estimates are not your subscription bill.
+<strong>Premium</strong> is what Fast and Ultrafast requests cost above standard rates. Cost that cannot be
+split, such as a provider-reported cost for a model without public rates, shows as <strong>Other</strong>.
+Select a model under <strong>Breakdown</strong> to see its trend, cache hit rate, and cost per million tokens.</p>
+<p>Totals depend on the history available on each server. Grok turns without a saved completed-turn
+record are missing from the totals.</p>
+<p>OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
+databases, including GOAT-managed profiles. Set <code>OPENCODE_DATA_DIR</code> or <code>ANTIGRAVITY_DATA_DIR</code> on the
+server to read a different data directory; comma-separated paths read multiple directories.</p>
+<p>Cursor reads account usage from Cursor’s dashboard API using the CLI login saved on the server.
+This includes headless GOAT sessions and desktop usage across machines; the same account counts
+once across connected environments. Without an accessible CLI login, GOAT shows a
+notice instead of incomplete local totals. GOAT does not estimate missing tokens from conversation text.
+On macOS, choose <strong>Enable Cursor usage</strong> on Usage to allow GOAT to read your existing CLI login
+from Keychain. You can turn it off in <strong>Settings → Providers → Usage providers</strong>. macOS may ask
+you to allow access on the server Mac.</p>
+<p>Usage includes each configured account’s history, including disabled accounts. Custom homes follow
+the account’s home setting or its <code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, or <code>GROK_HOME</code> environment
+variable. Pi reads <code>~/.pi/agent/sessions</code>, or the <code>sessions</code> directory under
+<code>PI_CODING_AGENT_DIR</code>. Set <code>PI_CODING_AGENT_SESSION_DIR</code> to read a different session directory.
+To include sessions saved through <code>--session-dir</code> or Pi’s <code>sessionDir</code> setting, set this environment
+variable to the same directory. Pi includes recorded tool and summary costs under <code>Tools/summaries</code>.
+Muse Code reads native session history, including child sessions, from the home reported by the
+configured Muse CLI. Its environment settings, including <code>XDG_DATA_HOME</code>, apply. Models without
+known prices still contribute tokens and appear as unpriced; set custom prices to estimate their cost.
+Use absolute paths or <code>~/</code> paths in the account’s environment settings; relative environment paths
+depend on each project’s working directory and cannot be reliably discovered by Usage. Accounts
+sharing a history directory count once.</p>
+<p>When your app and server support different providers, usage totals may cover only the providers
+your app understands. Update the app to include newly supported providers.</p>
+<p>On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
+environments are selected by default. The dropdown shows which environments are still scanning;
+results appear as each one responds, and figures still updating are dimmed. Cursor shows its last
+saved totals first, then updates them when Cursor’s API responds.</p>
+<p>If recent work is missing or a new model shows no cost, refresh to rescan session history and
+update model pricing.</p>
+<h2 id="set-custom-model-prices">Set custom model prices</h2>
+<p>On web or desktop, open the environment dropdown on <strong>Usage</strong>, then choose <strong>Model prices</strong> to add,
+edit, or reset a model’s estimated price. <strong>Apply to</strong> starts with your current Usage filter;
+choose all environments or select individual destinations. Enter the exact model ID and USD
+rates per million input and output tokens. You can enter any model ID, including models
+without public pricing. When a model on <strong>Usage</strong> has no known price, select it under
+<strong>Breakdown</strong> and choose <strong>Set price</strong> to open this table with that model added.</p>
+<p>Cache read and cache write rates are optional and use the input rate when blank. Enter <code>0</code> for
+tokens that are free. Saved prices replace automatic pricing for all of that environment’s
+history and are shared with clients connected to it. When environments have different prices,
+cells show <strong>Mixed</strong>. Edit rates directly in the table, then choose <strong>Save changes</strong> to apply all
+edited rows. Untouched cells keep each environment’s rate. Select one environment to inspect its
+prices. <strong>Reset to automatic</strong> marks a model’s override for removal when you save; you can undo
+it before saving.</p>
+<p>To count one model as another, such as a preview model under its released name, enter the target
+model ID under <strong>Map to</strong>. The mapped model no longer appears on <strong>Usage</strong>: its tokens and cost
+move to the target model and use the target’s price. Clear <strong>Map to</strong> or reset the row to show
+the model on its own again.</p>
+<p>Each destination reports whether the change saved. Offline or unavailable environments are
+marked <strong>Not saved</strong>. Reconnect them and choose <strong>Retry failed saves</strong> to finish the same change
+without writing again to environments that already saved. Changes are not queued after you close
+the dialog.</p>
+<h2 id="track-subscription-limits">Track subscription limits</h2>
+<p><strong>Usage → Limits</strong> pools every subscription account it can see per provider, so with several Codex
+or Claude accounts across your enabled environments and hubs you read one number per window rather than a
+list. Each window card shows how much of the pool is left and a bar with one segment per account,
+kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
+first. For an account with no weekly quota left, this is when its session becomes usable again.
+The first available window is used when no account reports a 5-hour limit. A gap means the
+account does not report that window. When the provider reports reset times, the card also says
+when the next reset lands and how much it hands back. The hatched
+part of a segment is what that reset restores. Tap a segment or account row for the account’s plan,
+where it is signed in, and its reset time. On web, you can hover too. Codex and Claude accounts
+with banked reset credits show a ticket count and the <strong>Use reset</strong> action in the account details.
+Claude resets are not available when the server runs on macOS, where Claude keeps its login in the
+Keychain. On narrow screens, numbered rows below
+the bar show each account’s quota, countdown, and credits. Tap a row to open its details.</p>
+<p>The same account signed in on more than one environment, or reported by a hub as well, counts once.
+Filter with the environment dropdown to see what a single machine has.</p>
+<p>When a Claude or Codex account has no overall weekly quota left, its pooled session contribution
+shows 0% left. The next refill depends on both reset times: an exhausted session must also reset,
+and a partly spent session may only regain its unused portion when the week resets. Missing or
+stale reset times have no refill estimate; refresh Limits for a new reading. Claude’s
+model-specific weekly allowances keep their reported values.</p>
+<p>Opening Limits checks the selected connected environments automatically. Each client waits at
+least five minutes between automatic checks of an environment, including after a failed check.
+If a window still looks stale, refresh Limits to re-check every provider and hub.</p>
+<p>Pick <code>/usage-limits</code> from the composer’s command menu, or send it as a message, to check the
+current model’s limits without leaving the conversation. The result opens above the composer and
+closes when you dismiss it or send your next message. It uses the same snapshot as <strong>Usage → Limits</strong>, so it does not run the agent or refresh
+anything. The command is offered only for providers that appear under <strong>Usage → Limits</strong>.</p>
+<p>OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
+the environment. GOAT cannot report limits for external OpenCode servers because their credentials
+belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
+in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
+your Go API key as <code>OPENCODE_API_KEY</code> in the OpenCode instance’s <strong>Environment variables</strong>, then
+refresh provider status. Cursor reports
+its monthly allowance, including separate Auto and API usage, using the CLI login or
+<code>CURSOR_AUTH_TOKEN</code>. On macOS, this includes the default Keychain login after you enable Cursor
+usage. Keychain login is used for limits only with Cursor’s default API endpoint. If you configure
+a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.</p>
+<p>Grok reports the remaining subscription allowance and reset time for its current billing period
+after signing in with <code>grok login</code>. Explicit <code>XAI_API_KEY</code> connections and custom authentication
+or endpoint configurations do not report subscription limits.</p>
+<p>API-key accounts may not report subscription limits. This also applies to Claude connections
+using a proxy through <code>ANTHROPIC_AUTH_TOKEN</code>.</p>
+<h2 id="fall-back-to-another-model-at-a-limit">Fall back to another model at a limit</h2>
+<p>A fallback chain moves work to the next model when a usage limit stops it, instead of waiting
+for the reset. Each move leaves a notice on the thread saying which model it left, why, and when
+that limit resets, and the thread is asked to continue where it left off. A move to another
+provider, such as Codex to Claude Code, carries the conversation over as a handoff. When no step
+is left, the thread waits for its reset as before, with <strong>Resume at reset</strong> and auto-resume if you
+turned them on.</p>
+<p>Chains are off until you create one. Ask an agent with full access to call
+<code>goat_call {path:"fallback_chain.set"}</code>, or add them under <code>fleet</code> in the environment’s <code>settings.json</code>.
+This chain tries two Claude accounts routed through Codex, then GPT, then the Claude Code CLI:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "fleet"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "fallbackChains"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">      "claude-opus"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">        "steps"</span><span style="color:#E1E4E8">: [</span></span>
+<span class="line"><span style="color:#E1E4E8">          { </span><span style="color:#79B8FF">"instanceId"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"codex"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"anthropic/claude-opus-5-5"</span><span style="color:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#E1E4E8">          { </span><span style="color:#79B8FF">"instanceId"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"codex"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"anthropic2/claude-opus-5-5"</span><span style="color:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#E1E4E8">          { </span><span style="color:#79B8FF">"instanceId"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"codex"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"gpt-6.1-sol"</span><span style="color:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#E1E4E8">          { </span><span style="color:#79B8FF">"instanceId"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"claudeAgent"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"claude-opus-5-5"</span><span style="color:#E1E4E8"> }</span></span>
+<span class="line"><span style="color:#E1E4E8">        ],</span></span>
+<span class="line"><span style="color:#79B8FF">        "on"</span><span style="color:#E1E4E8">: [</span><span style="color:#9ECBFF">"usage_limit"</span><span style="color:#E1E4E8">],</span></span>
+<span class="line"><span style="color:#79B8FF">        "cooldownMs"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">900000</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">        "scope"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"goals_and_threads"</span></span>
+<span class="line"><span style="color:#E1E4E8">      }</span></span>
+<span class="line"><span style="color:#E1E4E8">    },</span></span>
+<span class="line"><span style="color:#79B8FF">    "defaultFallbackChain"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"claude-opus"</span></span>
+<span class="line"><span style="color:#E1E4E8">  }</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<ul>
+<li><code>scope</code> decides what the chain moves. <code>"goals"</code>, the default, applies it to fleet goals only.
+<code>"goals_and_threads"</code> also moves your ordinary threads whose model is one of the steps.</li>
+<li><code>on</code> lists what triggers a move: <code>usage_limit</code> (the default), <code>provider_error</code>,
+<code>transport_error</code>, or <code>unavailable</code>. <code>unavailable</code> includes a provider refusing the model for
+your account, such as a plan that does not include it. Ordinary threads move only on usage limits.</li>
+<li>A step that just failed is skipped for <code>cooldownMs</code> (15 minutes by default), and so is a step on
+another provider whose account reports an exhausted window. <code>maxHops</code> caps how many moves one
+piece of work makes; by default it can try every step once.</li>
+<li><code>defaultFallbackChain</code> is the chain goals use when they name none.</li>
+</ul>
+<p>Each step names a provider and model already set up in this environment. GOAT never changes
+provider sign-ins or Codex configuration to move work.</p>
+<h2 id="set-fleet-limits">Set fleet limits</h2>
+<p>Limits under <code>fleet</code> cap how much goal work each machine takes. They count running and queued
+threads, your own included, but never refuse a thread you start yourself. <code>hosts</code> keys are SSH
+aliases, with <code>local</code> for this machine:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "fleet"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "maxRunningThreads"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">12</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">    "hosts"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">      "local"</span><span style="color:#E1E4E8">: { </span><span style="color:#79B8FF">"maxThreads"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">4</span><span style="color:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#79B8FF">      "lidge-ai"</span><span style="color:#E1E4E8">: { </span><span style="color:#79B8FF">"maxThreads"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">6</span><span style="color:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#79B8FF">      "mini"</span><span style="color:#E1E4E8">: { </span><span style="color:#79B8FF">"allowGoals"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">false</span><span style="color:#E1E4E8"> }</span></span>
+<span class="line"><span style="color:#E1E4E8">    }</span></span>
+<span class="line"><span style="color:#E1E4E8">  }</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<p>The <code>scheduler.status</code> path shows each machine’s threads against these limits, its quota per
+provider, why it would refuse goal work now, the models cooling down after a failure, and recent
+placement decisions.</p>
+<h2 id="machines-under-heavy-load">Machines under heavy load</h2>
+<p>Each machine watches its own load, CPU, memory, disk space, and whether GOAT itself stalls. A
+machine that stays busy for three minutes is under heavy load, and it counts as normal again only
+after five quiet minutes. A single GOAT stall while a build or test runs is recorded but changes
+nothing; three stalls of 2.5 seconds within ten minutes mean heavy load, and two of five seconds,
+or one of fifteen, mean overloaded. Fleet telemetry shows an alert for it. Agents that started work
+there see one status line per machine in their thread, updated in place as the level changes, and
+an overloaded machine wakes them so they stop adding work to it. An agent launching onto a busy
+machine is told where else to go, and goals do not place work on an overloaded one.</p>
+<p>Thresholds and behavior live under <code>fleet.pressure</code>; these are the defaults:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "fleet"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "pressure"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">      "elevatedLoadPerCore"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">1.5</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "criticalLoadPerCore"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">3</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "elevatedCpuPercent"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">90</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "criticalEventLoopDelayMs"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">5000</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "sustainMs"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">180000</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "recoverMs"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">300000</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "notifyCooldownMs"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">2700000</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "elevatedDelivery"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"notice"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "criticalDelivery"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"wake"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "admission"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"warn"</span></span>
+<span class="line"><span style="color:#E1E4E8">    }</span></span>
+<span class="line"><span style="color:#E1E4E8">  }</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<p>Memory and disk thresholds are <code>elevatedMemoryFreePercent</code> (10), <code>criticalMemoryFreePercent</code> (5),
+<code>elevatedDiskFreeGiB</code> (10), and <code>criticalDiskFreeGiB</code> (2). Set <code>admission</code> to <code>"block"</code> to refuse
+agent launches onto an overloaded machine, a delivery to <code>"off"</code> to silence that level, or
+<code>enabled</code> to <code>false</code> to turn this off.</p>
+<h2 id="connect-a-cliproxyapi-hub">Connect a CLIProxyAPI hub</h2>
+<p>To see pooled accounts, open <strong>Settings → Providers → Usage providers → Add CLIProxyAPI hub</strong>. Choose the
+environment that will connect to the hub and enter its URL and management key.</p>
+<p>The accounts appear under <strong>Usage → Limits</strong>. Codex accounts show banked reset credits; select an
+account and choose <strong>Use reset</strong> to redeem one. No hub plugin is required.</p>
+<p>This connection supplies usage information; configure
+the provider separately to send agent requests through the hub. Remove the hub from the same
+settings section when you no longer need it.</p>
+<h2 id="subscription-usage-widget">Subscription usage widget</h2>
+<p>Add <strong>Subscription usage</strong> from your iOS or Android widget gallery to see remaining Codex and
+Claude quotas. Tap it to open <strong>Usage → Limits</strong>; on Android this works while GOAT is running in
+the background, otherwise open the app from the launcher. On iOS, use <strong>Edit Widget</strong> to choose
+Session, Weekly, or both for each provider. Reopen GOAT to refresh expired readings.</p>
+<h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
+<p>On web and desktop, open Usage from the command palette. While on Usage,
+press <code>C</code>, <code>T</code>, or <code>L</code> for Cost, Tokens, or Limits while not typing in a field.
+Use <code>Ctrl+Shift+1/2/3/4</code> (<code>Cmd+Shift+1/2/3/4</code> on macOS) for the past
+24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
+Press <code>Escape</code> to return to the previous page. Customize these shortcuts in
+<strong>Settings → Keybindings</strong>.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#understand-your-usage">Understand your usage</a></li><li><a href="#set-custom-model-prices">Set custom model prices</a></li><li><a href="#track-subscription-limits">Track subscription limits</a></li><li><a href="#fall-back-to-another-model-at-a-limit">Fall back to another model at a limit</a></li><li><a href="#set-fleet-limits">Set fleet limits</a></li><li><a href="#machines-under-heavy-load">Machines under heavy load</a></li><li><a href="#connect-a-cliproxyapi-hub">Connect a CLIProxyAPI hub</a></li><li><a href="#subscription-usage-widget">Subscription usage widget</a></li><li><a href="#keyboard-shortcuts">Keyboard shortcuts</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

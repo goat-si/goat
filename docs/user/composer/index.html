@@ -1,0 +1,338 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Messages and context | GOAT user guides</title><meta name="description" content="Messages and context: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/composer/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/composer/"><meta property="og:title" content="Messages and context | GOAT user guides"><meta property="og:description" content="Messages and context: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Messages and context | GOAT user guides"><meta name="twitter:description" content="Messages and context: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="messages-and-context">Messages and context</h1>
+<p>Give the agent a task in the composer. Add files, quote a previous response, or
+include a skill when the task needs more context.</p>
+<p>Messages can contain up to 120,000 characters. Longer drafts stay in the composer
+so you can shorten them or split them into several messages.</p>
+<p>Pasting 32 KiB or more of text adds that fragment as a text-file attachment so
+the agent can inspect it without filling the model context. A smaller paste also
+becomes an attachment when inserting it would exceed the message limit. On a
+hardware keyboard, use <code>Cmd+Shift+V</code> on Apple devices or <code>Ctrl+Shift+V</code> elsewhere
+to keep a large paste editable in the composer instead.</p>
+<h2 id="formatting">Formatting</h2>
+<p>The composer writes Markdown and shows it styled as you type. Markers such as
+<code>**</code> stay in the text and show beside the styled words when your cursor is on
+them. Lines starting with <code>- </code>, <code>1. </code>, <code>- [ ] </code>, <code>&gt; </code>, <code># </code> or <code>---</code> become lists,
+task lists, quotes, headings and rules; <code>```</code> followed by Enter opens a code
+block. What you typed is what the agent receives, markers and numbering
+included, and <code>#1234</code> without a space still looks up a pull request.</p>
+<p>Enter sends. In a list or quote, <strong>Shift+Enter</strong> continues it, and Shift+Enter
+on an empty line leaves it; <strong>Tab</strong> nests a list item. In a code block, Enter
+starts a new line at the current indentation, <strong>Tab</strong> and <strong>Shift+Tab</strong> indent
+the selected lines, and a closing <code>```</code> followed by Enter, or two blank lines
+at the end, leave the block. <strong>Backspace</strong> at the start of a code block turns it
+back into plain lines. Choose the language in a code block’s corner to change
+it. Very large code blocks are shown without syntax highlighting.</p>
+<h2 id="attach-files">Attach files</h2>
+<p>Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
+80 MiB of images in one message. Other files, including videos, can be up to
+50 MiB each, subject to the environment’s upload support and limit. The agent
+receives them on the environment’s machine. Provider and model limits still
+apply, including images already in the conversation. A video attachment gives
+the agent a file path; it does not enable native video input.</p>
+<p>Uploads begin when you add an attachment. All uploads must finish before the
+message can send. Retry or remove a failed upload. On web and desktop, reloading
+before an upload finishes requires you to attach that file again.</p>
+<p>You can drag or paste images into the web or desktop composer. HEIC and HEIF
+photos are converted to JPEG there and when selected from the mobile photo
+library; photos over the image limit are also resized to fit. On mobile, you can
+also send files to GOAT through another app’s system share sheet.</p>
+<p>See <a href="#images-and-videos-in-messages">images and videos</a> for previewing and saving media.</p>
+<h2 id="send-while-the-agent-is-working">Send while the agent is working</h2>
+<p>On web and desktop, choose <strong>Settings → General → Follow-up behavior</strong> to queue
+new messages for a later turn or steer the running turn immediately. The setting
+applies to this client; already queued messages keep their place. Queued messages
+are saved on the server and can be edited, reordered, or removed above the composer.
+When Enter sends, <code>Cmd+Enter</code> on macOS or <code>Ctrl+Enter</code> on Windows and Linux uses
+the opposite action: it steers when your default is Queue and queues when your
+default is Steer.
+If your <strong>Send shortcut</strong> requires <code>Cmd+Enter</code> or <code>Ctrl+Enter</code>, that shortcut uses
+your default follow-up behavior; add <strong>Shift</strong> to use the opposite action. This
+applies only to multiline messages when you choose the multiline send option.</p>
+<p>Use <code>Cmd+Shift+Enter</code> on macOS or <code>Ctrl+Shift+Enter</code> on Windows and Linux to send
+the oldest queued message as a steer. This leaves the current draft intact and
+requires an active turn that supports steering. If that shortcut sends the opposite
+action for your draft, move focus outside the composer to steer the queued message. Change
+<code>thread.steerQueuedMessage</code> in <strong>Settings → Keybindings</strong> to use another shortcut.</p>
+<p>Press <code>Option+Up</code> on macOS or <code>Alt+Up</code> on Windows and Linux with the cursor at the
+start of the composer to edit the most recently queued message. Change
+<code>thread.editQueuedMessage</code> to use another shortcut.</p>
+<p>Mobile has the same choice under <strong>Settings → Follow-ups</strong>. While a turn is
+running the send button shows which action it will take. Long-press it to use the
+other action for a single message, or hold <code>Cmd</code> while sending from a hardware
+keyboard. The button only offers Steer when the running agent supports it.</p>
+<h2 id="cloud-tasks">Cloud tasks</h2>
+<p>Most cloud providers use the published remote branch and exclude local edits and
+unpushed commits; push first if you want those tasks to use them. Some also require
+a clean checkout of that pushed revision. Claude Cloud starts from the project
+folder and its current branch instead, and local changes may be included without
+publishing the branch. Check the provider’s source notice before sending.</p>
+<p>Open the task or its returned pull request from the conversation. Cloud changes
+stay in the remote repository, so this thread has no local checkpoint or worktree
+to diff or rewind. Project files, editor and terminal still show your local source;
+they do not show cloud changes. Your task history keeps its summary and links.</p>
+<p>Follow-ups use the same cloud conversation when supported. Otherwise the composer
+explains why another message cannot be sent. A task marked “Running in the cloud”
+with link-only tracking has been submitted; its link is the place to check progress.
+Restarting GOAT does not stop remote cloud work.</p>
+<h2 id="queue-messages-offline-on-mobile">Queue messages offline on mobile</h2>
+<p>Mobile keeps local copies of draft attachments, so you can preview them and queue
+messages while disconnected. Uploads resume when you reconnect. Drafts and queued
+messages survive app restarts. Reconnect to the environment to send queued work.</p>
+<h2 id="custom-models">Custom models</h2>
+<p>On web and desktop, use Settings → Providers → <strong>Models</strong> to add an unlisted model with a custom
+name and options. Only options supported by the provider integration affect turns. Antigravity
+uses its account catalog and does not support custom models.</p>
+<p>To rename a built-in model on every client, edit the server’s <code>settings.json</code> in its <code>userdata</code>
+directory. Add a custom model entry with the built-in model ID and a new name under that provider
+instance:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "providerInstances"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "codex"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">      "driver"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"codex"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">      "config"</span><span style="color:#E1E4E8">: { </span><span style="color:#79B8FF">"customModels"</span><span style="color:#E1E4E8">: [{ </span><span style="color:#79B8FF">"slug"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"gpt-5.5"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"name"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"Team GPT"</span><span style="color:#E1E4E8"> }] }</span></span>
+<span class="line"><span style="color:#E1E4E8">    }</span></span>
+<span class="line"><span style="color:#E1E4E8">  }</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<h2 id="model-defaults">Model defaults</h2>
+<p>GOAT remembers your provider, model, and model options for new threads. A
+project’s configured model takes precedence; resetting that project setting
+returns to the remembered selection.</p>
+<p>Leaving reasoning level or service tier unset uses the provider’s own configuration.</p>
+<h2 id="quote-an-assistant-response">Quote an assistant response</h2>
+<p>On web and desktop, select text within one assistant response and choose
+<strong>Cite in composer</strong>. You can add a comment about the quote and write instructions
+around it.</p>
+<p>Select the quote in a draft or sent message to return to its source. If the source
+is unavailable or has changed, the saved quote remains readable.</p>
+<p>The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
+button to add or change the comment. To remove the citation, place the caret beside its chip and
+delete it like other inline context. Copying, reloading, and restoring a
+<a href="#prompt-stash">stashed prompt</a> keep each comment
+with its quote, and sending tells the agent which words were quoted and which comment you wrote.
+The quoted text and comment count toward the message limit.</p>
+<p>Mobile displays saved quotes and comments, but does not create citations or
+navigate to their sources.</p>
+<h2 id="recall-a-sent-prompt">Recall a sent prompt</h2>
+<p>Press <code>ArrowUp</code> in an empty composer to bring back the last prompt you sent in this thread. Press
+<code>ArrowUp</code> again to go further back, and <code>ArrowDown</code> to come forward. Moving forward past the newest
+prompt clears the composer. Recall walks the prompts loaded in the thread. Attachments, terminal
+context, and other extras from the original message are not restored, only the text you typed. A
+composer that holds an attachment or a picked element does not count as empty.</p>
+<p>When the composer has text, the arrow keys move the caret as usual. Recall takes over only while
+the text is an unedited recalled prompt, with the caret on the first visual line for <code>ArrowUp</code> or
+the last visual line for <code>ArrowDown</code>, counting wrapped lines. Editing a recalled prompt turns it
+into a normal draft.</p>
+<h2 id="edit-an-earlier-prompt">Edit an earlier prompt</h2>
+<p>On web and desktop, choose <strong>Edit from here</strong> beneath a sent message to rewind
+the conversation to before that message. Choose <strong>Revert and keep changes</strong> to
+leave workspace files as they are, or <strong>Revert files too</strong> to put the workspace back
+to its checkpoint from before that message. That also undoes edits you made yourself.
+File restore is only offered for threads running in a worktree, and it is
+refused when another thread or agent session also uses that directory, a folder
+inside it, or a folder that contains it, since
+restoring would erase their changes. A thread that works in the project directory
+rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
+resending. Any unsent draft stays above the restored prompt.</p>
+<p>This removes the selected message and later conversation from the active thread
+and provider history. It does not undo external actions or separate provider
+memory. The action is available only when the provider supports rewind.</p>
+<h2 id="prompt-stash">Prompt stash</h2>
+<p>On web and desktop, press <code>Cmd+S</code> on macOS or <code>Ctrl+S</code> on Windows and Linux to save
+the current prompt and its attachments for later. Wait for uploads to finish first.
+With an empty composer, the same shortcut restores a single stash or opens the
+stash menu when there are several.</p>
+<p>Stashes containing uploaded files must be restored in their original environment.
+Those files are retained for 24 hours. After an upload expires, restore the prompt
+and use <strong>Attach again</strong> or remove the missing file before sending.</p>
+<h2 id="voice-input-on-iphone">Voice input on iPhone</h2>
+<p>On supported iPhones with iOS 26 or later, use the composer’s microphone to record,
+then confirm to transcribe. Text is inserted where your selection was when
+recording started, ready for you to review and edit before sending.</p>
+<p>The first use may download Apple’s speech model and needs a network connection.
+Later transcription works offline for that language. Recordings can be up to five
+minutes long. Canceling, leaving the screen, or an audio interruption discards the
+recording and preserves your existing draft. While recording, the screen stays
+awake; it can sleep normally once recording stops.</p>
+<p>Voice input records from the first connected microphone in <strong>Settings → Microphone</strong>.
+The list mixes kinds (built-in, other wired, other Bluetooth, CarPlay) with wired and
+Bluetooth devices you have dictated with, listed by name. Drag to rank them together:
+for example, put <strong>Other Bluetooth</strong> above your AirPods so a new headset is preferred
+while the AirPods microphone stays low. By default, CarPlay comes after the built-in
+microphone.</p>
+<p>Transcription runs on your iPhone when Apple’s speech model supports your
+language. Otherwise the recording is transcribed by the environment the thread
+belongs to, and the composer names it while you record. GOAT deletes the
+temporary audio after transcription or cancellation; only the message text is
+sent when you submit.</p>
+<h2 id="voice-input-on-desktop-and-web">Voice input on desktop and web</h2>
+<p>Click the composer’s microphone to record, then confirm to insert the text or send it.</p>
+<p>The desktop app transcribes on this computer, even when the thread runs on another
+machine: the recording goes to the transcription service through this computer’s
+Codex sign-in or OpenCodex, and never to the other machine. If you
+turned off <strong>Local environment</strong> in <strong>Settings › Connections</strong>, desktop voice input
+is unavailable until you turn it back on. In a browser, the environment you are
+connected to transcribes. The recorder shows which device transcribes.</p>
+<p>The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
+declined, or turned GOAT off later, the composer says so and offers <strong>Open System
+Settings</strong>: turn on GOAT in <strong>Privacy &amp; Security › Microphone</strong>. GOAT may need to
+restart to notice the change. In a browser, allow the microphone in the site’s
+settings; recording also needs HTTPS or localhost.</p>
+<p>If no sound reaches GOAT within a few seconds, recording stops and the composer
+asks you to check the selected input. Your draft stays as it was.</p>
+<p>On a Mac, the microphone access you give GOAT also covers commands run by
+terminals and coding agents in GOAT, including work started from your other
+devices; those commands can record without asking again. GOAT does not ask for
+the camera, so camera commands such as <code>imagesnap</code> cannot use it when GOAT runs
+them.</p>
+<h2 id="queued-messages">Queued messages</h2>
+<p>On web and desktop, the composer shows <strong>Interrupt</strong> while the agent is working and the draft is
+empty. Adding text or attachments replaces it with a send button that shows your
+<a href="#send-while-the-agent-is-working">Follow-up behavior</a>: a queue icon for Queue or a steer arrow for
+Steer. Click it or press your send shortcut to use that action. Hold <code>Cmd</code> on macOS or <code>Ctrl</code> on
+Windows and Linux to switch the button to the opposite action, then click, or use the opposite-action
+shortcut described above.</p>
+<p>Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
+the text. Drag a row by its handle to reorder it, use the handle’s arrow keys, promote the message
+to a steer, or remove it.</p>
+<p>If you stop the agent or the server restarts, queued messages keep their order and are held.
+Press <strong>Resume</strong> in an empty composer on web and desktop, or <strong>Resume queue</strong> on mobile, to
+continue. Sending a new message also resumes the queue, unless it steers a turn that is already
+running. You can edit, reorder, or remove held messages without starting them.</p>
+<p>The pencil on a queued row opens that message in the composer for editing. The original message
+stays in the queue until you save, and its row is highlighted while you edit. The message’s
+attachments appear above the text with a remove control, and new images can be added the usual way.
+The checkmark saves the queued message in place; <strong>Cancel</strong> on its row leaves it unchanged. Whatever
+you had typed in the composer before starting the edit is restored afterwards. If the queued
+message starts or is removed while you are editing, the edit ends: changed content moves into the
+composer when it is empty, and is discarded otherwise.</p>
+<h2 id="commands-and-skills">Commands and skills</h2>
+<p>Type <code>/</code> for commands or <code>$</code> to add a skill from the selected environment and
+provider. On mobile, both are also available before starting a thread on
+<strong>New task</strong>.</p>
+<p>The slash menu also includes skills unless you turn off <strong>Settings → General →
+Show skills in slash menu</strong>. Only skills enabled for the provider are listed.</p>
+<p>After you add or change skills, plugins, or MCP servers, use <strong>Restart agent
+session</strong> in the command palette on web and desktop. The conversation continues,
+and your next message starts the agent again with the new setup.</p>
+<p>Provider commands must start the message to run. GOAT commands such as
+<code>/model</code> and <code>/plan</code>, and skill mentions, work on any line.</p>
+<p>GOAT also ships built-in skills, marked <strong>Built in</strong> in the <code>$</code> menu. <strong>Development
+discipline</strong> (<code>$goat-discipline</code>) gives the agent GOAT’s longer guidance for code changes: how
+much process a change needs, what counts as proof, what needs your approval, and how to brief
+subagents. Every agent already gets a short version; the full guidance goes only to the turn
+whose message names the skill, on Codex, Claude, Cursor, Grok, Antigravity, ACP registry agents,
+OpenCode and Pi. It needs no agent restart. A message that starts with a provider command does not
+load it, and neither does a skill name inside an attachment. Agents can name it in briefs for the
+tasks they delegate. Turn it off for every project, or for one project, in <strong>Settings →
+Integrations → Agent tools</strong>; on mobile, under <strong>Agent behavior</strong>.</p>
+<p>Send <code>/compact</code> in an existing conversation to reduce context usage when the
+provider supports it. Web and desktop also offer compaction from the context meter.</p>
+<p>Claude instances can also compact idle threads for you. See
+<a href="/goat/docs/user/providers-claude/#compact-long-conversations">compact long conversations</a>.</p>
+<h2 id="side-chat">Side chat</h2>
+<p>On web and desktop, send <code>/side &lt;question&gt;</code> to ask about the current thread without
+adding to it. The question opens in a <strong>Side chat</strong> tab in the right panel, and its
+answers never enter the thread’s history. Send <code>/side</code> alone, use the side chat button
+in the thread header, or press <code>Mod+/</code> to open or close the tab.</p>
+<p>The side chat starts from the conversation up to the last finished turn, and every
+question you send it also carries the thread’s current state: whether it is working,
+interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
+ask what the thread is doing while the agent is still working, and the side chat header
+shows the thread’s status. It has the full composer, with the thread’s model, workspace,
+and permission mode. It is meant for questions and leaves files alone unless you ask it
+to change something. Use <strong>Start a new side chat</strong> to discard it, or <strong>Open as a full
+thread</strong> to continue it on its own.</p>
+<h2 id="goals">Goals</h2>
+<p>With Codex and Claude, send <code>/goal</code> followed by what “done” means, for example
+<code>/goal all tests in packages/api pass</code>. The agent keeps working across turns
+until it judges the goal met. The thread shows <strong>Goal</strong> while it works, and a
+row above the composer shows the goal and its progress.</p>
+<ul>
+<li><code>/goal</code> alone shows the current goal. <code>/goal clear</code> removes it.</li>
+<li>Codex also supports <code>/goal pause</code> and <code>/goal resume</code>. Stopping a Codex goal
+pauses it, and so does Codex ending its work without meeting the goal.</li>
+<li>Stopping Claude ends the current turn, but the goal stays set. Claude checks it
+again at the end of your next message.</li>
+<li>Sending a new goal, or <code>/goal resume</code>, while the agent works stops the current
+turn and starts the goal, unless you queue it. <code>/goal clear</code> and <code>/goal pause</code>
+stop the turn only when it is working on the goal. Other goal commands wait for
+the turn to end.</li>
+</ul>
+<h2 id="context-in-your-message">Context in your message</h2>
+<p>Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,
+a review comment from a diff or file, a preview annotation, or a file. You can type before and
+after a chip, move it by cutting and pasting, and delete it like a character. Hover a chip for
+its brief details. Select a terminal excerpt to open its captured output, or select a review
+comment, picked element, or preview annotation to open its full details. Chips read as “Terminal
+excerpt, Terminal 1 lines 3-4” and similar to screen readers.</p>
+<p>A pull request appears as its icon and number. Its color reflects whether it was open, draft,
+merged, or closed when it was attached. Select it to inspect the captured title and branches,
+then choose <strong>Open pull request</strong> to visit the pull request. On web and desktop, type <code>#</code> to browse the newest
+pull requests in the current project’s repository. Pull requests linked to the thread are included
+from any repository and listed first, after any exact number match. Continue typing digits to filter the recent list
+by any part of its pull request numbers. A complete number is also resolved directly, even when that
+pull request is older than the recent list. Type a single word after <code>#</code> to search pull requests in
+the repository by text. Choose a result to insert it as a chip.</p>
+<p>Another thread can be context too. Type <code>@</code> followed by part of its title to pick one from
+the same server, or on web and desktop drag a thread from the sidebar or Fleet onto the
+composer; a sidebar multi-selection drops together. The chip shows the thread’s current title and
+opens it when selected. Your prompt only carries a reference: the agent reads the thread’s
+history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
+thread does not change it, and the agent cannot send messages to it unless you ask.</p>
+<p>Dropping a thread from another environment attaches a saved transcript file. The source
+environment must be connected and up to date. The transcript includes the visible history and
+saved text context at the time of the drop; later messages and the contents of attached files
+are not copied. The agent can read the saved transcript after the source disconnects. Normal
+file attachment limits apply.</p>
+<p>In the desktop app, threads from SSH hosts can also be picked with <code>@</code> or dragged into a thread
+that runs on this computer. They attach as references with their SSH host alias; the agent reads
+them through SSH. If a host is disconnected, its chip shows “Host not connected”. You can still
+send, and the agent will try to read it.</p>
+<p>Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
+say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing
+the thumbnail asks first when the image is still mentioned in your text, then removes both. Files
+exist only as chips: deleting a file’s last chip removes the file from the message.</p>
+<p>Copy text that holds chips and paste it into another draft, in the same thread or another one,
+and the chips come along with what they point to. Images and files are fetched again from the
+environment they came from; while that happens the chip shows a dashed outline, and if it cannot
+complete GOAT tells you and leaves the chip for you to remove or replace. A chip whose
+context is no longer available shows the same dashed outline; hover it for what to do.</p>
+<p>Copying a message with the copy button, or copying text out of it, gives other apps readable
+Markdown with a link in place of each chip. Older messages that were sent before chips still
+show their context. Stashing a prompt keeps its chips and what they point to; restoring brings
+them back.</p>
+<p>On mobile, tap a chip to inspect its content. File references open the current file; attached
+files show the copy that was attached to the message.</p>
+<h2 id="attached-files">Attached files</h2>
+<p>Select a file chip in your draft or a sent message to preview it. Code and JSON use syntax
+highlighting; Markdown, HTML, CSV, and TSV offer rendered and raw views. Audio files have
+playback controls. Large text files show a limited preview; save the file to read it in full.</p>
+<p>On web and desktop, files open beside the conversation with the same controls as a workspace
+file: a header row with the view toggle, <strong>Copy contents</strong> and <strong>Save file</strong>. On mobile, documents
+open in the same file screen as workspace files; its menu holds <strong>Copy contents</strong>, <strong>Save or
+share</strong> and <strong>Open in file viewer</strong>. Pictures, videos and PDFs keep their native viewers, and
+other document formats such as Word or Pages open in the device’s own viewer when it has one.
+If nothing on the device can show a format, save or share it to open it elsewhere.</p>
+<h2 id="images-and-videos-in-messages">Images and videos in messages</h2>
+<p>Select an image or video attachment or link to preview it. Playback support depends
+on your browser or device; save an unsupported video to open it in another app.</p>
+<p>On web and desktop, right-click media to save it or copy its path or URL. On mobile,
+touch and hold an image or video thumbnail and choose <strong>Save or share</strong>. On iOS,
+return to the thumbnail to open this menu after watching a full-screen video.</p>
+<p>File links refer to the environment’s machine, including when you connect remotely.
+Previews use the original file, even outside the workspace. Moving or deleting it
+can break the preview, so save a copy if you need to keep it.</p>
+<h2 id="files-outside-the-workspace">Files outside the workspace</h2>
+<p>Follow an agent’s file link to read a report or other file outside the workspace.
+These files open read-only. An HTML file outside the workspace cannot load scripts,
+styles, or images from neighboring files.</p>
+<h2 id="html-and-pdf-files-in-the-file-viewer">HTML and PDF files in the file viewer</h2>
+<p>On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML
+file to source view to read its markup; a link to a specific line opens source
+automatically. HTML previews cannot access your GOAT session.</p>
+<p>The file viewer recognizes images, HTML, and PDF files by their filename extension,
+including filenames or folders containing <code>#</code> or <code>?</code>.</p>
+<p>On mobile, select a PDF attachment or link to open it. iOS uses the native viewer;
+Android opens a compatible installed file viewer.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#formatting">Formatting</a></li><li><a href="#attach-files">Attach files</a></li><li><a href="#send-while-the-agent-is-working">Send while the agent is working</a></li><li><a href="#cloud-tasks">Cloud tasks</a></li><li><a href="#queue-messages-offline-on-mobile">Queue messages offline on mobile</a></li><li><a href="#custom-models">Custom models</a></li><li><a href="#model-defaults">Model defaults</a></li><li><a href="#quote-an-assistant-response">Quote an assistant response</a></li><li><a href="#recall-a-sent-prompt">Recall a sent prompt</a></li><li><a href="#edit-an-earlier-prompt">Edit an earlier prompt</a></li><li><a href="#prompt-stash">Prompt stash</a></li><li><a href="#voice-input-on-iphone">Voice input on iPhone</a></li><li><a href="#voice-input-on-desktop-and-web">Voice input on desktop and web</a></li><li><a href="#queued-messages">Queued messages</a></li><li><a href="#commands-and-skills">Commands and skills</a></li><li><a href="#side-chat">Side chat</a></li><li><a href="#goals">Goals</a></li><li><a href="#context-in-your-message">Context in your message</a></li><li><a href="#attached-files">Attached files</a></li><li><a href="#images-and-videos-in-messages">Images and videos in messages</a></li><li><a href="#files-outside-the-workspace">Files outside the workspace</a></li><li><a href="#html-and-pdf-files-in-the-file-viewer">HTML and PDF files in the file viewer</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>OpenCode | GOAT user guides</title><meta name="description" content="OpenCode: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/providers-opencode/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/providers-opencode/"><meta property="og:title" content="OpenCode | GOAT user guides"><meta property="og:description" content="OpenCode: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="OpenCode | GOAT user guides"><meta name="twitter:description" content="OpenCode: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="opencode">OpenCode</h1>
+<p>Install and authenticate OpenCode on the machine running your environment, then
+enable it in <strong>Settings &gt; Providers</strong>. See <a href="/goat/docs/user/install/#providers">provider setup</a>.
+GOAT requires OpenCode 1.14.19 or newer, including when you connect an existing
+OpenCode server.</p>
+<h2 id="opencode-2">OpenCode 2</h2>
+<p>GOAT supports OpenCode 2.0.18 and newer. It detects the version on its own, so
+the same provider settings work for OpenCode 1.x and 2.x. OpenCode 1.x shows
+<strong>Limited support</strong> in its provider settings.</p>
+<p>OpenCode 2 is a separate package, <code>@opencode/cli</code>. To move from 1.x, install it
+yourself, for example <code>npm install -g @opencode/cli</code>. Then refresh provider status.
+GOAT’s update button updates whichever package you have installed. It never
+switches a 1.x install to 2.x.</p>
+<p>OpenCode 2 converts the shared OpenCode database to its own format the first time it
+runs. Don’t run OpenCode 1.x and 2.x side by side on the same machine. Threads you
+started on 1.x continue on 2.x.</p>
+<p>Plan mode uses OpenCode’s <code>plan</code> agent.</p>
+<h2 id="local-or-external-server">Local or external server</h2>
+<p>Leave <strong>Server URL</strong> empty to let GOAT start OpenCode locally. A password in
+provider settings applies to both that server and GOAT’s connection. With no
+password setting, the local server uses <code>OPENCODE_SERVER_PASSWORD</code> from its
+environment.</p>
+<p>To use an existing OpenCode server, set <strong>Server URL</strong> and its password in provider
+settings. GOAT uses only that configured password for an external server; it
+does not forward a local <code>OPENCODE_SERVER_PASSWORD</code>. If connection or version checks
+fail, check the URL, credentials, and OpenCode version, then refresh provider status.</p>
+<p>After a lost connection, send another prompt to reconnect to the same OpenCode
+session.</p>
+<h2 id="use-opencodex-home">Use OpenCodex Home</h2>
+<p>A OpenCode instance can send its model requests through your
+<a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Home</a> and use Home’s
+accounts and shared quota. In the instance’s settings in <strong>Settings →
+Providers</strong>, set <strong>Model route</strong> to <strong>OpenCodex Home</strong>. <strong>OpenCodex address</strong> is
+OpenCodex on the machine running the instance, <code>http://127.0.0.1:10100/v1</code> by
+default. An agent can also ask you to approve the change. A routed instance
+uses only the models Home offers. If Home is unavailable, requests fail; GOAT
+never switches to another account. Set <strong>Model route</strong> back to <strong>Provider
+settings</strong> to stop. Memory summaries from OpenCode are unavailable while the
+instance uses Home.</p>
+<h2 id="approvals">Approvals</h2>
+<p>OpenCode follows the shared <a href="/goat/docs/user/permission-modes/">permission modes</a>. <strong>Auto</strong> has
+the same rules as <strong>Supervised</strong> because OpenCode has no AI approval reviewer.
+Environment files such as <code>.env</code> and <code>.env.local</code> need approval in restricted
+modes even though normal file reads do not; <code>.env.example</code> is allowed.</p>
+<p><strong>Allow for workspace</strong> applies to matching requests in other OpenCode sessions
+using the same workspace. It is broader than the current thread, especially on a
+shared external server. Use <strong>Allow once</strong> for a single request. Denying an action
+does not stop the whole turn.</p>
+<h2 id="refresh-models-commands-and-skills">Refresh models, commands, and skills</h2>
+<p>After changing an OpenCode login or configuration, use <strong>Refresh provider status</strong>
+in <strong>Settings &gt; Providers</strong> for that environment. On mobile, use <strong>Refresh models</strong>
+in the thread settings. Reconnecting also refreshes the catalog; periodic provider
+health checks do not.</p>
+<p>Credential changes are read on refresh. Native OpenCode configuration can remain
+cached while the local helper is running. Let it sit for 30 seconds without model
+refreshes or text-generation work, then refresh again to reload the files. Repeated
+refreshes keep the helper alive. An external server may need its own reload or
+restart before GOAT can see configuration changes.</p>
+<p>Existing threads keep their selected model and options even when it disappears
+from the catalog. If OpenCode rejects that model, select an available one and retry.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#opencode-2">OpenCode 2</a></li><li><a href="#local-or-external-server">Local or external server</a></li><li><a href="#use-opencodex-home">Use OpenCodex Home</a></li><li><a href="#approvals">Approvals</a></li><li><a href="#refresh-models-commands-and-skills">Refresh models, commands, and skills</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

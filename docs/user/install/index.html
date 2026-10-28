@@ -1,0 +1,328 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Install GOAT | GOAT user guides</title><meta name="description" content="Install GOAT: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/install/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/install/"><meta property="og:title" content="Install GOAT | GOAT user guides"><meta property="og:description" content="Install GOAT: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Install GOAT | GOAT user guides"><meta name="twitter:description" content="Install GOAT: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="install-goat">Install GOAT</h1>
+<p>GOAT runs coding agents on your computer and lets you control them from its
+desktop, web, or mobile app. Set up the machine where the agents will work first.</p>
+<h2 id="requirements">Requirements</h2>
+<p>You need a working provider before starting a thread. You can launch GOAT and
+configure one afterwards. A machine connected to your OpenCodex Home can use
+Home’s accounts without a provider sign-in on that machine; see
+<a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Home</a>.</p>
+<h2 id="command-line">Command line</h2>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">curl</span><span style="color:#79B8FF"> -fsSL</span><span style="color:#9ECBFF"> https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh</span><span style="color:#F97583"> |</span><span style="color:#B392F0"> sh</span></span></code></pre>
+<p>On Windows, in PowerShell:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="powershell"><code><span class="line"><span style="color:#E1E4E8">irm https:</span><span style="color:#F97583">//</span><span style="color:#79B8FF">raw.githubusercontent.com</span><span style="color:#F97583">/</span><span style="color:#E1E4E8">goat</span><span style="color:#F97583">-</span><span style="color:#E1E4E8">si</span><span style="color:#F97583">/</span><span style="color:#E1E4E8">goat</span><span style="color:#F97583">-</span><span style="color:#E1E4E8">releases</span><span style="color:#F97583">/</span><span style="color:#E1E4E8">main</span><span style="color:#F97583">/</span><span style="color:#E1E4E8">install.ps1 </span><span style="color:#F97583">|</span><span style="color:#E1E4E8"> iex</span></span></code></pre>
+<p>This installs the <code>goat</code> binary to <code>~/.local/bin</code>. If your shell reports <code>command not found</code>
+afterwards, that directory is not on your <code>PATH</code> yet; the installer prints the
+line to add. Set <code>GOAT_CHANNEL=nightly</code> to install the nightly train, or
+<code>GOAT_VERSION</code> to pin an exact version.</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start the server and open the web app</td>
+<td><code>goat</code></td>
+</tr>
+<tr>
+<td>Start the server without a browser</td>
+<td><code>goat serve</code></td>
+</tr>
+<tr>
+<td>Keep it running in the background (macOS, Linux)</td>
+<td><code>goat service install</code> (<a href="/goat/docs/user/background-service/">details</a>)</td>
+</tr>
+<tr>
+<td>Move to the newest release</td>
+<td><code>goat update</code></td>
+</tr>
+<tr>
+<td>Reclaim database space</td>
+<td><code>goat doctor</code> (<a href="/goat/docs/user/background-service/#reclaim-database-space">details</a>)</td>
+</tr>
+<tr>
+<td>Remove it again</td>
+<td><code>goat uninstall</code></td>
+</tr>
+</tbody>
+</table>
+<p>Run <code>goat help</code> or <code>goat --help</code> for the full reference. To start in a new working
+directory, use an explicit path such as <code>goat ./my-project</code>. A bare directory name
+is accepted only if it already exists.</p>
+<p>If <code>goat</code> or <code>goat start</code> reports an already running server, connect to that server
+instead. Stop it before starting a replacement, or use a different <code>--base-dir</code>
+for an independent server.</p>
+<h3 id="install-with-npm">Install with npm</h3>
+<p>GOAT is distributed as an npm-installable tarball in
+<a href="https://github.com/goat-si/goat-releases/releases">GOAT Releases</a>, rather than
+through an npm registry package. The unscoped <code>goat</code> registry package is an
+unrelated blockchain toolkit; <code>t3</code> is upstream T3 Code.</p>
+<p>With Node.js 20.11 or newer and npm installed, install the latest stable release:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">npm</span><span style="color:#9ECBFF"> install</span><span style="color:#79B8FF"> --global</span><span style="color:#9ECBFF"> https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz</span></span>
+<span class="line"><span style="color:#B392F0">goat</span><span style="color:#79B8FF"> --version</span></span>
+<span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> help</span></span></code></pre>
+<p>For an exact stable or nightly version, copy its tag from GOAT Releases and use
+that release’s <code>goat-npm.tgz</code> URL. For example, in a POSIX shell:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#6A737D"># Enter the version from the release tag, without the leading v.</span></span>
+<span class="line"><span style="color:#79B8FF">read</span><span style="color:#79B8FF"> -r</span><span style="color:#9ECBFF"> GOAT_VERSION</span></span>
+<span class="line"><span style="color:#B392F0">npm</span><span style="color:#9ECBFF"> install</span><span style="color:#79B8FF"> --global</span><span style="color:#9ECBFF"> "https://github.com/goat-si/goat-releases/releases/download/v${</span><span style="color:#E1E4E8">GOAT_VERSION</span><span style="color:#9ECBFF">}/goat-npm.tgz"</span></span></code></pre>
+<p>This route becomes available with the first release containing <code>goat-npm.tgz</code>;
+older releases require the archive installer above. The tarball has the private
+identity <code>@goat-si/goat</code> and exposes <code>goat</code> plus the legacy <code>t3</code> command. This does
+not claim that npm scope is available or published. If you already have a separate
+<code>t3</code> command, use a dedicated npm prefix rather than forcing npm to overwrite it.</p>
+<p>The first invocation downloads the exact version’s CLI archive and checks its
+SHA-256 against <code>SHA256SUMS</code>. Later invocations stay pinned to that npm package’s
+version. To update, install the target release’s tarball again with the same npm
+prefix. For a custom prefix, use <code>npm --prefix &lt;prefix&gt; install --global &lt;URL&gt;</code>
+and put that prefix’s executable directory on <code>PATH</code>. Native <code>goat update</code> can
+update the server runtime but does not change an npm-owned launcher pin.</p>
+<p>For a fresh Linux or cloud machine, use the
+<a href="#a-server-only-machine">server installer</a> with <code>--opencodex</code>, then join it to
+your <a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Home</a>. Home keeps the
+provider accounts and relays requests; every Child shares Home’s quota. Add the
+environment’s <a href="/goat/docs/user/outside-agents/#get-the-mcp-url">MCP URL</a> to your agent and
+authorize it through the normal sign-in flow. Access to GOAT and provider
+sign-in are separate: OpenCodex serves the provider; GOAT serves MCP.</p>
+<h3 id="intel-macs">Intel Macs</h3>
+<p>There is no <code>goat</code> executable for Intel Macs (the desktop app is available). To
+run a server there, build it from source with Node.js 26 and <code>vp</code>
+(<a href="https://github.com/goat-si/goat#development">Install vp</a>):</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">git</span><span style="color:#9ECBFF"> clone</span><span style="color:#9ECBFF"> https://github.com/goat-si/goat</span></span>
+<span class="line"><span style="color:#79B8FF">cd</span><span style="color:#9ECBFF"> goat</span><span style="color:#E1E4E8"> &amp;&amp; </span><span style="color:#B392F0">vp</span><span style="color:#9ECBFF"> i</span><span style="color:#E1E4E8"> &amp;&amp; </span><span style="color:#B392F0">vp</span><span style="color:#9ECBFF"> run</span><span style="color:#9ECBFF"> build:desktop</span></span>
+<span class="line"><span style="color:#B392F0">node</span><span style="color:#9ECBFF"> apps/server/dist/bin.mjs</span></span></code></pre>
+<p><code>goat update</code> and the background service do not apply to a server run this way;
+update it with <code>git pull</code> and a rebuild.</p>
+<h3 id="a-server-only-machine">A server-only machine</h3>
+<p>For a machine you only reach from other devices, such as a VPS or a spare Mac,
+install just the server. It needs no desktop app, browser or Node.js:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">curl</span><span style="color:#79B8FF"> -fsSL</span><span style="color:#9ECBFF"> https://raw.githubusercontent.com/goat-si/goat-releases/main/install-goat-server.sh</span><span style="color:#F97583"> |</span><span style="color:#B392F0"> sh</span><span style="color:#79B8FF"> -s</span><span style="color:#79B8FF"> --</span><span style="color:#79B8FF"> --tailscale</span></span></code></pre>
+<p>This installs the <code>goat</code> command, keeps the server running as a
+<a href="/goat/docs/user/background-service/">background service</a>, and prints two pairing links.
+Paste the first into <strong>Settings → Connections</strong> on your other device, or scan
+its QR code, to see the machine’s threads there. Give the second to an agent in
+your main GOAT so it can
+<a href="/goat/docs/user/remote-access/#link-a-goat-server-for-agents-without-ssh">link the machine</a>
+and start, read and message threads on it. The second link only grants agent
+access. Each link works once and expires after five minutes; run <code>goat pair</code>
+on the machine for new ones.</p>
+<p><code>--tailscale</code> publishes the server on your tailnet so other devices can reach
+it. Leave it out when you reach the machine another way, such as
+<a href="/goat/docs/user/remote-access/#pair-over-a-lan-or-private-network">direct pairing over your LAN</a>. Pass <code>--no-service</code> to skip the
+background service and run <code>goat serve</code> yourself. To install a CLI archive you
+already downloaded, for example on a machine without internet access, pass
+<code>--archive goat-&lt;version&gt;-&lt;platform&gt;-&lt;arch&gt;.tar.gz</code>.</p>
+<p>Add <code>--opencodex</code> to also install OpenCodex, without Node or npm, so the
+machine can become an <a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Child</a>:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">curl</span><span style="color:#79B8FF"> -fsSL</span><span style="color:#9ECBFF"> https://raw.githubusercontent.com/goat-si/goat-releases/main/install-goat-server.sh</span><span style="color:#F97583"> |</span><span style="color:#B392F0"> sh</span><span style="color:#79B8FF"> -s</span><span style="color:#79B8FF"> --</span><span style="color:#79B8FF"> --tailscale</span><span style="color:#79B8FF"> --opencodex</span></span></code></pre>
+<p>With GOAT already installed, run <code>goat opencodex install</code> instead. A supported
+OpenCodex that is already installed is kept; otherwise GOAT installs a release
+it has tested. Home and its Children do not need the same version. Installing
+does not join Home or make the machine <strong>Ready</strong>; continue in
+<a href="/goat/docs/user/hub/#add-repair-or-remove-a-device">Hub devices</a>.</p>
+<p>If OpenCodex installation fails, GOAT stays installed and the installer stops
+with the command to retry. If <code>goat opencodex install</code> is not a known command,
+update GOAT first. <code>--archive</code> supplies only GOAT’s archive, so <code>--opencodex</code>
+still needs network access to download OpenCodex unless a supported one is
+already installed.</p>
+<h2 id="desktop-app">Desktop app</h2>
+<p>Download a release from <a href="https://github.com/goat-si/goat-releases/releases">GitHub Releases</a>.
+On Debian and Ubuntu, install the <code>.deb</code> with <code>sudo apt install ./&lt;file&gt;.deb</code>.</p>
+<p>The <code>.deb</code> updates itself like the other desktop builds. It asks for your
+password to install each update. If your desktop has no password prompt, the
+update fails. Download the new <code>.deb</code> and install it the same way.</p>
+<p>Older releases installed the app under an earlier package name. The <code>goat</code>
+package replaces it on the next update and keeps your settings, threads and
+saved logins. To go back to one of those releases, remove the current package
+first with <code>sudo apt remove goat</code>, then install the older <code>.deb</code>.</p>
+<h3 id="the-goat-command">The <code>goat</code> command</h3>
+<p>The desktop app includes the <code>goat</code> command-line tool. To run it from any
+terminal, open <strong>Settings → General → About</strong> and choose <strong>Install</strong> next to
+<strong>goat command</strong>. On macOS and Linux it adds a <code>goat</code> link to a folder on your
+<code>PATH</code>; on Windows it adds the app’s command folder to your <code>PATH</code>. Open a new
+terminal afterwards. <strong>Remove</strong> takes it off again. If you already have <code>t3</code>
+from npm, it stays as it is. With both GOAT and GOAT (Nightly) installed, <code>goat</code>
+runs the app you installed it from. If it runs the other app, choose <strong>Remove</strong> and
+then <strong>Install</strong> in the app you want.</p>
+<h3 id="goat-and-goat-nightly-side-by-side">GOAT and GOAT (Nightly) side by side</h3>
+<p>GOAT and GOAT (Nightly) keep separate data, so both can run at once without
+sharing a database, settings, or logs:</p>
+<table>
+<thead>
+<tr>
+<th>App</th>
+<th>macOS and Linux</th>
+<th>Windows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GOAT</td>
+<td><code>~/.goat/desktop</code></td>
+<td><code>%USERPROFILE%\.goat\desktop</code></td>
+</tr>
+<tr>
+<td>GOAT (Nightly)</td>
+<td><code>~/.goat/desktop-nightly</code></td>
+<td><code>%USERPROFILE%\.goat\desktop-nightly</code></td>
+</tr>
+</tbody>
+</table>
+<p>Preview builds use the nightly folder. Setting <code>GOAT_HOME</code> overrides both.</p>
+<p>The first time GOAT (Nightly) opens without its own folder, it copies GOAT’s
+threads, projects, settings, saved connections, secrets, attachments, and notes
+into it. GOAT’s folder is only read, never moved or deleted, so GOAT and any older
+nightly keep working from it. Logs and caches are not copied. Worktrees and
+project folders are not copied either: both apps keep using the same folders on
+disk. Neither app’s automatic cleanup removes a worktree the other app still
+uses, but nothing stops both apps from working in the same worktree at once, so
+continue a copied thread in one app only. A large history can make that first
+launch take a little longer. If the copy fails, for example because the disk is full, GOAT (Nightly) says why and
+quits without changing anything; it tries again the next time you open it. On
+macOS, reading saved connections may ask once for permission to use GOAT’s
+keychain item. Sign in to your GOAT account again in the nightly app.</p>
+<p>The copy starts with its automation paused, because it would otherwise act as a
+second copy of the same machine: scheduled tasks, channel bots such as Slack,
+goals and Fleet work, memory sync, and hub and remote links stay off, and agent
+work that was in progress when the copy was made does not continue. Your own
+threads and commands work as usual. A notice at the top of <strong>Settings</strong> explains
+this; choose <strong>Resume automation on this app</strong> there to turn it on. If both apps
+run with automation on, each runs it: scheduled tasks and channel replies happen
+twice.</p>
+<h3 id="windows-subsystem-for-linux">Windows Subsystem for Linux</h3>
+<p>Choose a WSL distro in <strong>Settings → Connections</strong> to run agents and projects
+there. Install the provider CLIs inside that distro. GOAT installs its own
+server runtime there automatically; the first launch after an app update can
+take longer.</p>
+<h3 id="open-a-project-from-a-terminal">Open a project from a terminal</h3>
+<p>With the desktop app already running on the same machine:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> app</span></span></code></pre>
+<p>This opens a new thread for the current directory, adding the project if needed.
+Pass a path, such as <code>goat app ../my-project</code>, to open another directory. It requires
+the desktop app, so a standalone server or an SSH session is not enough. If the
+command cannot reach the app, start or update the desktop app and try again.</p>
+<h2 id="mobile-app">Mobile app</h2>
+<p>GOAT’s mobile app for iPhone, iPad and Android is in development and is not in the
+App Store or Google Play yet. Today you can get it two ways:</p>
+<ul>
+<li><strong>iPhone and iPad:</strong> through TestFlight, which is invite-only for now.</li>
+<li><strong>iPhone, iPad or Android:</strong> build it from source and install it on your own
+device, following the <a href="https://github.com/goat-si/goat/blob/dev/apps/mobile/README.md">mobile app README</a>.</li>
+</ul>
+<p>The phone connects to a GOAT server on another machine. Follow
+<a href="/goat/docs/user/remote-access/">remote access</a> to pair it directly or over Tailscale.</p>
+<p>The “T3 Code” app in the App Store and Google Play belongs to T3 Code, the <!-- goat-rename: legacy -->
+project GOAT is forked from. It is not GOAT and cannot connect to a GOAT server,
+which runs a newer server protocol than that app.</p>
+<p>If the app crashes during launch, open Settings → Diagnostics on the next launch
+that succeeds. It lists startup crashes from the last 7 days with the error and
+component stack that store crash reports leave out. Copy the report and paste it
+into a GitHub issue. Error messages can quote values from the app, so read it over
+before sharing.</p>
+<h2 id="providers">Providers</h2>
+<p>Open <strong>Settings → Providers</strong> in the web or desktop app, select the environment,
+and enable the provider you want. Installation, login, and configuration belong
+to that environment’s machine, even when you connect from a phone or another
+computer.</p>
+<p>To add one while you work, open the composer’s model picker and select <strong>+</strong> at
+the bottom of the provider list. The window lists every provider with whether it
+is installed, then installs it when GOAT can and signs you in with the provider’s
+own flow: a browser page, a device code, an API key, or the provider’s login
+command in a terminal inside the window. When a provider can only sign in from
+its own terminal, the window shows the command to run on that machine and
+<strong>Check again</strong> confirms it. The picker adds providers to the environment the
+composer targets, including an SSH-connected machine. The <strong>+</strong> is disabled when
+your device cannot manage that environment’s providers.</p>
+<p>An agent can ask you to add or sign in to a provider. Its request appears as a
+card in the thread; <strong>Review request</strong> opens the same window, and the agent never
+sees what you enter.</p>
+<p>An agent in a full-access thread can also change provider settings itself:
+turn providers on or off, add one (including ACP Registry agents such as Devin),
+choose which local provider Cursor Cloud, Claude Cloud, or Devin Cloud signs in
+with, or remove one. With <a href="/goat/docs/user/hub/#permission-profiles">permission profiles</a> on,
+its profile must allow managing providers; <strong>Owner</strong> does. Any other agent asks
+first, and approving its card makes the change. Signing in to a provider’s
+account always stays with you.</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Install and authenticate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Codex</td>
+<td><a href="/goat/docs/user/providers-codex/#connect-with-chatgpt">Connect with ChatGPT</a>, or install <a href="https://developers.openai.com/codex/cli">Codex CLI</a> and run <code>codex login</code>.</td>
+</tr>
+<tr>
+<td>Claude</td>
+<td>Install <a href="https://claude.com/product/claude-code">Claude Code</a>, then sign in from GOAT, which runs <code>claude auth login</code> in the app.</td>
+</tr>
+<tr>
+<td>Cursor</td>
+<td>Install <a href="https://cursor.com/cli">Cursor CLI</a>, then run <code>agent login</code>.</td>
+</tr>
+<tr>
+<td>Grok Build</td>
+<td>Install <a href="https://x.ai/cli">Grok Build CLI</a>, then sign in from GOAT with an xAI API key, or run <code>grok login</code>.</td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td>Install <a href="https://opencode.ai">OpenCode</a>, then run <code>opencode auth login</code>.</td>
+</tr>
+<tr>
+<td>Antigravity</td>
+<td>Install and sign in with Google from GOAT’s provider settings.</td>
+</tr>
+<tr>
+<td>Pi</td>
+<td>Install <a href="/goat/docs/user/providers-pi/#set-up-pi">Pi</a> with Node.js 22.19 or newer, then run <code>pi</code> and <code>/login</code>.</td>
+</tr>
+<tr>
+<td>Muse Code</td>
+<td>Install <a href="https://dev.meta.ai/docs/muse-code">Muse Code</a> on the server, run <code>muse login</code>, then enable it in Settings → Providers.</td>
+</tr>
+<tr>
+<td>fx</td>
+<td>Install <a href="https://fx.sh">fx</a> with <code>curl -fsSL https://fx.sh/setup.sh | bash</code>, then run <code>fx login</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Provider CLIs must be on the server’s <code>PATH</code>. If GOAT cannot find one, set its
+<strong>Binary path</strong> in provider settings, especially when using a version manager.
+Cursor’s executable is <code>cursor-agent</code>, although its login command is
+<code>agent login</code>. Codex connected through ChatGPT and Antigravity can use their
+managed runtimes without a <code>PATH</code> entry.</p>
+<p>GOAT warns when a provider version has known compatibility problems with your
+release. Check <strong>Settings → Providers</strong> on that environment for the recommended
+version or range. When its package manager supports installing a specific version,
+you can install the recommendation there. Otherwise use the provider’s installer
+on the environment’s machine. An unlisted version is unverified.</p>
+<p>When a provider CLI is behind its latest release, its provider card shows the
+available version. <strong>Update now</strong> runs the installer that owns the CLI
+(Homebrew, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install), or the
+CLI’s own update command when GOAT cannot tell. Update a CLI installed with
+mise through mise. Cursor and Antigravity update with GOAT. Homebrew installs
+compare against the version Homebrew offers, which can trail the npm release by
+a few hours.</p>
+<p>Add another provider instance for a separate account or configuration. Each
+instance can have its own environment variables, such as API keys or a custom
+base URL. Mark secret values as sensitive; after saving, GOAT does not display
+their original values.</p>
+<p>For provider-specific setup and accounts, see <a href="/goat/docs/user/providers-codex/">Codex</a>,
+<a href="/goat/docs/user/providers-claude/">Claude</a>, <a href="/goat/docs/user/providers-opencode/">OpenCode</a>,
+<a href="/goat/docs/user/providers-antigravity/">Antigravity</a>, <a href="/goat/docs/user/providers-pi/">Pi</a>,
+<a href="/goat/docs/user/providers-muse/">Muse Code</a>, and <a href="/goat/docs/user/providers-fx/">fx</a>.</p>
+<h2 id="next-steps">Next steps</h2>
+<ul>
+<li><a href="/goat/docs/user/thread-sidebar/">Working with threads</a>: start tasks and organize parallel work.</li>
+<li><a href="/goat/docs/user/permission-modes/">Permission modes</a>: choose when agents ask before acting.</li>
+<li><a href="/goat/docs/user/remote-access/">Remote access</a>: connect from another device.</li>
+<li><a href="/goat/docs/user/background-service/">Running in the background</a>: keep a Linux or macOS host available.</li>
+<li><a href="/goat/docs/user/updating/">Updating GOAT</a>: update the app and connected servers.</li>
+</ul>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#requirements">Requirements</a></li><li><a href="#command-line">Command line</a></li><li><a href="#desktop-app">Desktop app</a></li><li><a href="#mobile-app">Mobile app</a></li><li><a href="#providers">Providers</a></li><li><a href="#next-steps">Next steps</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

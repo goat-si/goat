@@ -1,0 +1,140 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Hub | GOAT user guides</title><meta name="description" content="Hub: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/hub/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/hub/"><meta property="og:title" content="Hub | GOAT user guides"><meta property="og:description" content="Hub: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Hub | GOAT user guides"><meta name="twitter:description" content="Hub: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="hub">Hub</h1>
+<p>A hub is one GOAT environment that runs your fleet. It is the GOAT server your
+phone <a href="/goat/docs/user/remote-access/#connect-your-phone-to-a-hub">pairs with</a>, and its
+machine is also the <a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Home</a>
+that holds every provider sign-in, so your other machines reach their models
+through it. GOAT shows whether each linked device really uses the hub, and holds
+cloud runs there.</p>
+<p>The hub is off until you turn it on. Make only one environment the hub.</p>
+<p>Hub settings live in three places. <strong>Settings → Hub</strong> turns the hub on and lists
+<strong>Hub devices</strong>: the machines the hub reaches for phones and agents, each with
+whether it is linked to the hub’s OpenCodex. It shows the environment you select
+at the top of Settings. <strong>Settings → Connections</strong> pairs your phone.
+<strong>Settings → Providers → Codex</strong> chooses whether Codex uses OpenCodex Home.</p>
+<p>When the desktop app first finds OpenCodex on its machine, it asks once whether
+Codex there should use your OpenCodex Home or keep its own sign-in, and, on a
+Home or a machine not yet linked to one, whether to turn on the hub and
+permission profiles. It asks one question per launch, and closing a question
+leaves everything as it was. Change these answers later in <strong>Settings →
+Providers → Codex</strong> and <strong>Settings → Hub</strong>.</p>
+<h2 id="turn-it-on">Turn it on</h2>
+<p>Open <strong>Settings → Hub</strong> on the machine whose OpenCodex is the Home, and turn on
+<strong>This machine is the hub</strong>. GOAT then checks every linked device every 30
+minutes. Checking only reads: it never changes a device or its OpenCodex
+settings. <strong>Cloud runs</strong> chooses whether Claude Cloud, Cursor Cloud and Devin
+Cloud runs start on the hub or wherever a sign-in exists.</p>
+<p>Accounts and keys stay in OpenCodex; open its dashboard from <strong>Accounts and keys</strong>.</p>
+<h2 id="add-repair-or-remove-a-device">Add, repair, or remove a device</h2>
+<p>In <strong>Settings → Hub → Hub devices</strong>, <strong>Add device to hub</strong> joins a machine to the
+hub’s OpenCodex by its SSH alias; a standalone device in
+the list has <strong>Join</strong> too. The device needs OpenCodex and a direct SSH alias on
+the hub. On a fresh Linux or macOS machine, the
+<a href="/goat/docs/user/install/#a-server-only-machine">server installer’s <code>--opencodex</code> option</a>
+installs both; installing does not join the hub. GOAT compares the host key
+OpenCodex is offered with the key GOAT pinned for that alias, links the device,
+and checks its parity.</p>
+<p>A Windows device joins as a Hub client until your GOAT includes an OpenCodex
+release with Windows Remote Link support. A Hub client needs this hub’s
+OpenCodex in Hub mode with addresses the device can reach, such as behind
+Tailscale Serve. GOAT creates a single-use invite on the hub and GOAT on the
+device redeems it; you never see or copy the code. Agents can request the same
+for a device GOAT reaches only by password. With Windows Remote Link support,
+Windows x64 machines join as Remote Link Children over OpenSSH and Windows
+PowerShell, without Git Bash. PowerShell there must run in Full Language mode;
+setup stops and says so otherwise.</p>
+<p>A cloud machine this hub creates joins by itself while <strong>Join new cloud
+machines</strong> in <strong>Settings → Hub</strong> is on, as it is unless you turn it off. GOAT
+installs an OpenCodex release it has tested there, without Node or npm, or keeps
+a supported one that is already installed. It starts OpenCodex, links it as a
+Remote Link Child using the host key it pinned when it created the machine,
+installs Codex, and adds a Codex instance that uses the hub’s accounts without a
+sign-in on that machine. Use <strong>Repair</strong> if the link breaks later. Turning the
+switch off stops new joins, even one already being set up; machines that are
+linked stay linked.</p>
+<p>An SSH host you added joins only when you turn on <strong>Join as OpenCodex Child
+after each SSH setup</strong> on its row in <strong>Hub devices</strong>, on desktop, web or the
+mobile app. GOAT then sets it up right away and again after each successful
+SSH setup of that host, and links it only with the host key GOAT pinned when
+you added it. The switch is your standing permission, so only a session that
+can change settings turns it on; agents cannot. It turns itself off when you
+forget or add the host again, and when the session that turned it on signs
+out, expires, or loses settings permission; the row then says so. Turning it
+off never removes the host from the hub: use <strong>Leave</strong> for that.</p>
+<p>The hub and a Child can run different OpenCodex versions; a Child needs 2.66.0
+or later. Provider accounts stay on the hub, and every Child shares its quota.
+Fleet shows a Child’s quota under the hub’s pool. A host that does not report
+which of its instances use the pool, such as one on an older GOAT, is matched
+by provider and marked <strong>inferred</strong>; update GOAT there to see its actual routing.</p>
+<p>A linked Child is <strong>Ready</strong> only after one small model request from its Codex
+instance succeeds through the hub, and that request counts against the hub’s
+quota. Until then, its row in <strong>Hub devices</strong>, in the mobile app, and in Fleet
+shows the step setup reached or why it stopped, with what to do next. For
+example, a Child whose OpenCodex release cannot prove it holds no sign-ins of
+its own asks you to update OpenCodex there. Agents read the same from its
+<code>goat_host_status</code> entry. Checking status never sends a model request.
+Changing the Child’s Codex instance, its settings, or its link to the hub
+clears <strong>Ready</strong> until setup verifies it again. GOAT retries setup after each
+successful SSH setup of the host. <strong>Continue setup</strong> on the device’s row, or an
+agent with <code>goat_hub_device_setup</code>, retries or finishes it, including on a
+Child linked before setup existed.
+Claude Code, OpenCode, and Pi use the hub only when you route them there; see
+<a href="/goat/docs/user/providers-codex/#use-opencodex-home">OpenCodex Home</a>.</p>
+<p><strong>Repair</strong> walks the fixes for failing checks in order: sync the device’s
+settings, restart its OpenCodex once nothing runs there, and reconnect the link.
+<strong>Leave</strong> disconnects the device and returns it to its own sign-ins, then revokes
+its link or Hub key on the hub; GOAT asks before it does that.</p>
+<h2 id="sync-opencodex-models">Sync OpenCodex models</h2>
+<p><strong>Sync OpenCodex</strong> loads OpenCodex’s current models into Codex, on the hub first
+and then on each linked Child. Find it in <strong>Settings → Hub → OpenCodex models</strong>,
+next to <strong>Hub</strong> on the Fleet page, and under <strong>Update → Runtimes</strong>. The dialog
+shows what each machine will do, then its progress and result.</p>
+<p>A Child always takes the hub’s models and settings, never its own providers, so
+GOAT syncs it only while it is linked to this hub; a Child that is not linked is
+skipped with a pointer to <strong>Repair</strong>. Codex restarts to pick up the models only
+on a machine with nothing running. On a busy hub the models are written, but
+Codex keeps its old list until it restarts or you sync again once the work
+finishes; a busy Child is skipped until you sync again. GOAT also syncs each
+machine right after a managed OpenCodex update moves it.</p>
+<p>Each action lists its steps and their results. Some changes wait for a person: a
+host key GOAT has not pinned or that changed, re-linking a device, or removing
+one that could not be cleaned up. They appear in <strong>Settings → Decision Inbox</strong>;
+answer there, then select <strong>Continue</strong> on the device. Approving needs permission
+to change this hub’s settings.</p>
+<h2 id="permission-profiles">Permission profiles</h2>
+<p><strong>Permission profiles</strong> is off by default, and when you turn it on an agent
+without its own profile gets the widest built-in profile, <strong>owner</strong>, until you
+pick a narrower <strong>Default profile</strong>. With it on, GOAT refuses an agent’s
+request to launch or steer threads, work on other machines, manage the fleet or
+change settings when its profile does not allow it. Agents allowed to create
+worktrees, such as those under <strong>worker</strong> and <strong>manager</strong>, can also add and clone
+projects; changing or deleting a project still needs permission to change settings.
+Pull requests are opened and merged from the agent’s own terminal, which profiles
+do not control; GOAT only refuses to start a merge manager for an agent whose
+profile cannot merge. A supervisor whose own profile allows merging can still
+start one for a thread that cannot merge, unless the limits that thread was started
+with, such as ones forwarded from another machine, leave merging out. Turn it on in
+<strong>Settings → Hub</strong>.</p>
+<p>The switch covers your whole fleet. Turning it on or off on one machine does the
+same on every host connected to it, and the most recent change wins wherever you
+made it. The row lists each host as <strong>applied</strong>, <strong>waiting</strong> (not reached yet) or
+<strong>needs a GOAT update</strong>; a host on an older GOAT cannot take the setting, and
+agents cannot launch new threads on it while profiles are on. Follow-up messages
+to threads already running there are still delivered, as they are to a host that
+is still <strong>waiting</strong>, so your agents can keep steering their work. The agent is told
+each time its limits may not apply on that host yet.</p>
+<h2 id="read-a-device">Read a device</h2>
+<p>Each device shows how it joined (Remote Link Child, Hub client, or standalone),
+its parity, its OpenCodex version, and the Home’s tunnel to it. Parity is <strong>ok</strong>
+when the hub serves the device’s requests and its settings match, <strong>degraded</strong>
+when traffic works but something on the device still describes the device,
+<strong>broken</strong> when requests do not reach the hub, and <strong>unproven</strong> when the device
+cannot say which Home served it. <strong>Verify</strong> checks one device now.</p>
+<p><strong>Use this device’s own sign-in when the hub is down</strong> is off by default. With it
+off, goal work on that device pauses while it cannot reach the hub. The setting is
+stored on the device, so it works while the hub is down; to change it, GOAT needs
+a connection to that device. OpenCodex must allow it too: the row says whether it
+does, or <strong>unknown</strong> when your OpenCodex does not report it yet.</p>
+<p>Fleet shows the same devices in its <strong>Hub</strong> entry. Select its count to see each
+one.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#turn-it-on">Turn it on</a></li><li><a href="#add-repair-or-remove-a-device">Add, repair, or remove a device</a></li><li><a href="#sync-opencodex-models">Sync OpenCodex models</a></li><li><a href="#permission-profiles">Permission profiles</a></li><li><a href="#read-a-device">Read a device</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

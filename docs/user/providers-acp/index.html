@@ -1,0 +1,133 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>ACP providers | GOAT user guides</title><meta name="description" content="ACP providers: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/providers-acp/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/providers-acp/"><meta property="og:title" content="ACP providers | GOAT user guides"><meta property="og:description" content="ACP providers: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="ACP providers | GOAT user guides"><meta name="twitter:description" content="ACP providers: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="acp-providers">ACP providers</h1>
+<p>GOAT can run installed ACP commands or coding agents from the official
+<a href="https://agentclientprotocol.com/get-started/registry">ACP Registry</a>. Registry agents bring their
+own models, tools, and sign-in, while GOAT provides projects, threads, checkpoints, and task
+delegation.</p>
+<p>Google Antigravity is available through its official <code>antigravity-acp</code> Registry entry. Add it like
+any other Registry agent; it does not need an Antigravity-specific GOAT provider.</p>
+<p>GOAT prefers the current ACP v2 preview protocol and uses its richer messages, usage, plans,
+configuration, compaction, and agent-terminal updates when the agent supports them. It also
+negotiates ACP v1 for Registry agents that have not migrated yet, so agents such as Pi continue to
+work through the same generic integration.</p>
+<p>Claude Agent uses the ACP v2 preview by default for Registry and local <code>claude-agent-acp</code>
+commands. If you encounter preview issues, set <code>CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=0</code> in the
+provider instance’s environment overrides to use ACP v1.</p>
+<h2 id="add-an-agent">Add an agent</h2>
+<ol>
+<li>Open <strong>Settings → Providers</strong>.</li>
+<li>Select <strong>Add provider</strong> and search the ACP Registry.</li>
+<li>Search for the agent and select <strong>Add</strong> on its result.</li>
+<li>Confirm the name and instance ID, then complete the agent’s sign-in step.</li>
+</ol>
+<p>Search only shows agents that can run on the connected server. Registry agents are third-party
+code; review an agent’s source and license before adding it.</p>
+<h2 id="add-a-local-command">Add a local command</h2>
+<p>In <strong>Settings → Providers → Add provider</strong>, select <strong>Local ACP command</strong>. Enter the executable
+name or path on the selected environment, add one literal argument per row, and choose a display
+name. For DeepSeek Harness, use <code>dsh</code> with arguments <code>--profile</code> and <code>acp</code>.</p>
+<p>Local commands require no registry entry or download. Environment overrides apply to the command;
+credentials and skills remain managed by the installed agent or its wrapper. Models and reasoning
+options come from ACP, including model IDs that contain JSON. GOAT launches the executable directly
+without expanding shell expressions.</p>
+<h2 id="where-agents-run">Where agents run</h2>
+<p>Registry agents always run on the machine that hosts your GOAT server. That stays true when you
+connect from another device through direct pairing, Tailscale, or SSH.</p>
+<p>Agents install under <code>tools/&lt;agent-id&gt;/&lt;version&gt;/</code> inside GOAT home. GOAT verifies SHA-256 when the Registry entry
+provides one; entries without a checksum retain the Registry’s HTTPS distribution guarantee.
+Registry <code>npx</code> and <code>uvx</code> packages use GOAT-owned npm prefixes and Python tool directories at the exact
+version published by the Registry. Their commands are available in a new server terminal for
+sign-in and direct use. Removing an agent’s last provider instance removes GOAT-managed binary files
+but keeps package installs. To use an existing local binary, set <strong>Executable override</strong> explicitly.</p>
+<h2 id="signing-in">Signing in</h2>
+<p>Open the agent’s account section in <strong>Settings → Providers</strong> on web or desktop. Choose
+<strong>Sign in</strong> and, if the agent offers several methods, select one. For an installed, configured
+provider, mobile also offers <strong>Settings → Provider accounts</strong>.</p>
+<p>Browser sign-in shows the agent’s URL and waits for you to open or copy it before telling the
+agent to proceed. The page opens on your device, while the agent runs on the environment.
+Terminal methods run in an in-app terminal on that environment. On mobile, send responses
+through the terminal response field. GOAT reconnects after terminal login and waits for the
+agent to confirm sign-in before reporting success. You can cancel or retry an expired attempt.</p>
+<p>Browser and terminal sign-in leave credentials in the agent’s own store. Agents that use API keys
+through environment variables still take those keys in the instance’s environment settings.
+A configured environment or agent home applies to both sign-in and chat.</p>
+<p>If the agent advertises logout, choose <strong>Sign out</strong>. Changing a shared agent login stops running
+threads for instances of that same agent on the environment. Thread history and workspace files
+are kept. ACP does not describe account isolation, so adding another instance does not guarantee
+a separate account; use the agent’s own configuration to isolate accounts when supported.</p>
+<p>If an agent cannot complete its advertised flow remotely, its CLI remains available on the
+server. For example, Codex supports <code>codex login --device-auth</code>, and Grok Build supports
+<code>grok login --device-auth</code>.</p>
+<h2 id="models-and-options">Models and options</h2>
+<p>The model picker lists the models the agent reports. If the agent reports none, or hides some, add
+your own model IDs under <strong>Custom models</strong> in the instance settings.</p>
+<p>Other settings the agent offers, such as reasoning effort or approval mode, appear in the
+composer’s model options menu like they do for built-in providers. Agents with their own plan and
+build modes follow GOAT’s Plan and Build toggle. Models and options that change while an agent
+is running update the picker without waiting for another provider probe.</p>
+<h2 id="commands-and-skills">Commands and skills</h2>
+<p>Slash commands the agent provides appear under <strong>Provider</strong> in the <code>/</code> menu while a session is
+running. Commands the agent names with a <code>$</code> prefix appear in GOAT’s <code>$</code> skill menu instead.</p>
+<h2 id="native-sessions">Native sessions</h2>
+<p>When an agent advertises ACP session listing and import support, expand its provider card,
+choose a project, and select <strong>List sessions</strong>. Importing one creates a deterministic GOAT thread
+backed by that native session. Importing the same agent session again returns the existing thread,
+including when another client performs the import.</p>
+<p>The thread keeps the native session’s title and last-update value as provider metadata without
+overwriting a title you set in GOAT. Agents that report ACP context usage drive the composer’s
+context meter and cumulative cost metadata. Text resources and links render as assistant output;
+binary resources, images, and audio that GOAT cannot render yet appear as explicit placeholders
+instead of disappearing.</p>
+<h2 id="permissions-and-terminals">Permissions and terminals</h2>
+<p>Registry agents read files, edit, and run commands themselves, under their own sandbox and
+approval rules. They start in their own default mode, and their mode picker in the model options
+menu switches it. How far an agent is confined depends on that mode and the agent’s own settings,
+so use its sandbox and permission controls when that matters.</p>
+<p>When a registry agent asks for approval, GOAT answers by the thread’s
+<a href="/goat/docs/user/permission-modes/">permission mode</a>: <strong>Supervised</strong> shows the request in the conversation,
+<strong>Auto-accept edits</strong> approves edits and shows the rest, and <strong>Auto</strong> and <strong>Full access</strong> approve
+automatically. File reads and searches never wait for approval.</p>
+<p>The local Devin ACP provider runs its commands through GOAT’s terminals, and those commands follow the thread’s
+permission mode. For other agents, GOAT shows the command, output, and exit status the agent
+reports but does not run or stop their terminals.</p>
+<p>Registry agents can schedule work and use GOAT’s MCP tools. Child-task presentation depends on what
+the agent exposes: ACP has no portable native subagent-lineage contract, so richer delegation views
+remain agent-specific.</p>
+<h2 id="checkpoints">Checkpoints</h2>
+<p>Checkpoint rollback restores your files as usual. ACP agents cannot rewind their own conversation,
+so the next turn after a rollback starts a fresh agent session that no longer remembers the
+conversation from before the checkpoint.</p>
+<p>Registry instances are not used for GOAT’s app-owned text generation, such as thread titles, commit
+messages, branch names, or pull request descriptions. Configure a text-generation-capable provider
+for those actions.</p>
+<h2 id="devin-cloud">Devin Cloud</h2>
+<p>When the Devin CLI is installed, GOAT sets up Devin Cloud by itself: it adds a Devin provider
+that runs your <code>devin</code>, links it, and turns Devin Cloud on. This happens when GOAT starts and
+when providers refresh, on every connected machine that runs this version. Devin Cloud uses your
+Devin sign-in; if you are signed out, sign in from the Devin Cloud card. Devin 3000.11.1 or newer
+is required. To use a different Devin provider, open <strong>Advanced</strong> on the Devin Cloud card. Turn
+Devin Cloud off with its toggle; GOAT does not turn it back on. Reset the cloud card to have GOAT
+set it up again.
+The project folder must already be trusted by Devin, and your Devin organization must have access
+to the repository.</p>
+<p>Push the branch you want Devin to start from, then select Devin Cloud for a new thread. Choose a
+Devin version in the model picker, and choose Ubuntu, macOS, or Windows in model options. macOS
+and Windows availability depends on your Devin plan. Local changes are not included. Work runs
+in Devin’s cloud environment and creates no local checkpoints.
+The thread shows progress, the final response, and a matching PR link when Devin returns one.
+A completed response may still need more input or report a repository-access block.</p>
+<p>Follow-up messages continue the same cloud session. Stop waits for Devin to confirm cancellation.
+If GOAT loses tracking, the thread keeps its session link and blocks further messages while the
+prompt outcome is unknown. Reconnecting does not resend the original message.
+If Devin asks you to sign in again during a session, run <code>devin auth login</code>, then send the
+message again. GOAT does not resend it for you, and the thread stays usable.</p>
+<p>If Devin Cloud is not ready, run <code>goat provider diagnose --driver devinCloud</code> on the environment’s
+machine. It lists what blocks it and the next step for each.</p>
+<h2 id="advanced-configuration">Advanced configuration</h2>
+<ul>
+<li><strong>Executable override</strong> runs an existing local executable instead of the managed distribution,
+keeping the registry-declared arguments and environment.</li>
+<li><strong>Authentication method</strong> picks a specific method when the agent advertises more than one.</li>
+<li><strong>Custom models</strong> adds model IDs the agent does not report.</li>
+</ul>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#add-an-agent">Add an agent</a></li><li><a href="#add-a-local-command">Add a local command</a></li><li><a href="#where-agents-run">Where agents run</a></li><li><a href="#signing-in">Signing in</a></li><li><a href="#models-and-options">Models and options</a></li><li><a href="#commands-and-skills">Commands and skills</a></li><li><a href="#native-sessions">Native sessions</a></li><li><a href="#permissions-and-terminals">Permissions and terminals</a></li><li><a href="#checkpoints">Checkpoints</a></li><li><a href="#devin-cloud">Devin Cloud</a></li><li><a href="#advanced-configuration">Advanced configuration</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Cursor | GOAT user guides</title><meta name="description" content="Cursor: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/cursor/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/cursor/"><meta property="og:title" content="Cursor | GOAT user guides"><meta property="og:description" content="Cursor: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Cursor | GOAT user guides"><meta name="twitter:description" content="Cursor: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="cursor">Cursor</h1>
+<p>Cursor V2 runs through the official <a href="https://cursor.com/docs/api/sdk/typescript"><code>@cursor/sdk</code></a>
+TypeScript package. It does not use Cursor’s ACP transport for V2 execution.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li>Node.js 22.13 or newer. The repository’s supported Node version satisfies this requirement.</li>
+<li>Sign in with Cursor in <strong>Settings &gt; Providers &gt; Cursor</strong>, or provide a Cursor API key in
+<code>CURSOR_API_KEY</code>.</li>
+<li>A paid Cursor plan on the account used for browser sign-in or <code>CURSOR_API_KEY</code>.</li>
+<li>A model accepted by the Cursor SDK. <code>auto</code> is sent to the SDK as its <code>default</code> model selection.</li>
+</ul>
+<p>The Cursor provider runs in the selected GOAT workspace. Cursor Cloud is a separate provider
+that runs against the published repository in Cursor’s cloud.</p>
+<h2 id="sign-in">Sign in</h2>
+<p>Choose <strong>Sign in</strong>, then open the sign-in page and complete it in your browser. GOAT
+updates automatically when sign-in finishes. This works when connected to a remote environment too.
+On mobile, use <strong>Settings &gt; Provider accounts</strong> for an already configured Cursor instance.</p>
+<p>Each provider instance keeps its own login on the environment that runs it. Your Cursor editor and
+CLI login are separate. A configured <code>CURSOR_API_KEY</code> overrides browser sign-in; remove that override
+to use the browser flow.</p>
+<p>Use <strong>Change account</strong> or <strong>Sign out</strong> in the same settings section. Both stop that
+instance’s running threads and keep their history. Sign-out forgets the saved credential; to revoke
+the generated key before it expires, remove it from your Cursor dashboard’s API keys.</p>
+<h2 id="cursor-cloud">Cursor Cloud</h2>
+<p>When the Cursor CLI (<code>cursor-agent</code>) is installed, GOAT turns on the Cursor provider and Cursor
+Cloud by itself. Cursor Cloud becomes available when you sign in to Cursor from the Cursor Cloud
+card; it uses the Cursor account.
+Turn Cursor Cloud off with its toggle. To follow Cursor’s enabled state again, reset the cloud
+card. For another account, add a custom Cursor Cloud instance and choose its Cursor source.
+On mobile, manage the account under <strong>Settings &gt; Provider accounts</strong>. Cursor Cloud uses only
+the selected Cursor provider’s sign-in or its <code>CURSOR_API_KEY</code>; when that provider is signed
+out, Cursor Cloud is unavailable until you sign in again.</p>
+<p>Select Cursor Cloud for a repository with a pushed branch. The first message starts
+from the published revision; local edits and unpushed commits are not included.
+Cloud messages accept text only and require full access. GOAT’s sandbox and approval
+overrides do not apply to Cursor’s cloud. Progress, summary, and returned PR or branch
+links remain visible when connecting to the environment remotely. Cursor may create
+a draft PR; opening it does not mean its checks passed.</p>
+<p>If Cursor stops a run with an unexpected error before it opens a branch or PR, GOAT asks the
+same agent to continue once, and the thread shows the result of that retry. Errors you need to
+fix, such as sign-in, access, or usage limits, are not retried.</p>
+<p>Messages sent while a task is active wait for completion. Later messages continue
+in the same cloud agent using its original repository revision, without including
+subsequent local edits. <strong>Stop</strong> requests remote cancellation; GOAT marks cancellation
+only after Cursor confirms it. Closing GOAT or changing the account detaches
+observation; cloud work may continue. An unknown submission or tracking outcome
+blocks further messages until reconciled; open the saved agent link to inspect it.</p>
+<p>Manage sign-in from the Cursor Cloud card or the selected Cursor provider’s settings on the
+environment running the task. Cursor Cloud uses that provider’s account.</p>
+<h2 id="v2-capability-mapping">V2 Capability Mapping</h2>
+<p>The adapter supports:</p>
+<ul>
+<li>creating and resuming local Cursor agent threads;</li>
+<li>changing the model and model parameters between turns;</li>
+<li>assistant text, reasoning, tool activity, plans, and todo streaming;</li>
+<li>thread-scoped GOAT MCP tools;</li>
+<li>image attachments;</li>
+<li>interruption, queued app messages, and orchestrator-owned interrupt/restart steering;</li>
+<li>provider conversation snapshots through <code>Agent.messages.list()</code>;</li>
+<li>Cursor <code>task</code> subagents, projected as read-only child app threads with their tool activity and
+final result.</li>
+</ul>
+<p>The public SDK does not currently expose native agent fork, conversation rollback, active steering,
+or interactive approval callbacks. Direct active steering is advertised as unsupported, while V2
+steering uses the orchestrator’s interrupt-and-restart path and preserves the app run identity across
+provider turns. Same-provider Cursor forks use the orchestrator’s portable full-thread context
+handoff into a fresh Cursor agent. The SDK has in-process custom callback tools, but the V2 adapter
+intentionally uses the authenticated, thread-scoped MCP server instead.</p>
+<p>Portable handoffs summarize eligible timeline items and can omit the end of long messages. Read
+<a href="/goat/docs/user/portable-handoffs/">Context in portable handoffs</a> before using a fork for work whose exact
+instructions must carry forward.</p>
+<p>Cursor task events include an <code>agentId</code>, but the local SDK does not register that identifier as a
+resumable agent: <code>Agent.resume()</code> returns <code>AgentNotFoundError</code>. The adapter therefore does not attach
+a provider thread to native task projections or advertise subagent thread IDs. A projected child is
+read-only: send messages from the parent thread.</p>
+<p>Runtime modes map to the controls the local SDK exposes: full access disables its sandbox, while
+restricted modes normally enable it. On Windows, Auto and Supervised run without filesystem
+isolation when Cursor Auto-review is enabled, because the SDK does not support a filesystem sandbox
+there. Restricted modes without Auto-review, including the default Auto-accept edits mode, still
+request the sandbox and cannot start on Windows. Explicit sandbox policies remain authoritative,
+including restrictive policies that the Windows SDK rejects. Explicit approval policy overrides
+control Auto-review, which is not represented as an interactive GOAT approval flow.</p>
+<p>The existing Cursor binary path and API endpoint settings belong to the CLI/ACP integration. Cursor
+V2 execution does not launch that binary, and the SDK does not expose an API endpoint override.</p>
+<h2 id="replay-and-live-testing">Replay And Live Testing</h2>
+<p>Cursor replay fixtures preserve the SDK boundary: agent open/resume, sends, ordered <code>onDelta</code>
+updates, terminal results, cancellation, message snapshots, and close. The real V2 adapter,
+orchestrator, event store, projections, and checkpoint logic still run in tests.</p>
+<p>Record a fixture against the real SDK with:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">pnpm</span><span style="color:#79B8FF"> --filter</span><span style="color:#9ECBFF"> goat</span><span style="color:#9ECBFF"> record:cursor-replay</span><span style="color:#79B8FF"> --scenario</span><span style="color:#9ECBFF"> simple</span></span></code></pre>
+<p>Use <code>--out &lt;path&gt;</code> to record a temporary probe without replacing a checked-in fixture. Supported
+scenarios are listed by the recorder when an invalid scenario is supplied.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#prerequisites">Prerequisites</a></li><li><a href="#sign-in">Sign in</a></li><li><a href="#cursor-cloud">Cursor Cloud</a></li><li><a href="#v2-capability-mapping">V2 Capability Mapping</a></li><li><a href="#replay-and-live-testing">Replay And Live Testing</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

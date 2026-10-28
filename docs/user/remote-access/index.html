@@ -1,0 +1,611 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fcfcfc" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)"><title>Remote access | GOAT user guides</title><meta name="description" content="Remote access: a GOAT user guide."><meta name="robots" content="noindex"><link rel="canonical" href="https://goat-si.github.io/goat/docs/user/remote-access/"><meta property="og:type" content="website"><meta property="og:site_name" content="GOAT"><meta property="og:locale" content="en_US"><meta property="og:url" content="https://goat-si.github.io/goat/docs/user/remote-access/"><meta property="og:title" content="Remote access | GOAT user guides"><meta property="og:description" content="Remote access: a GOAT user guide."><meta property="og:image" content="https://goat-si.github.io/goat/og/en.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="GOAT: your coding agents, on every machine you own."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Remote access | GOAT user guides"><meta name="twitter:description" content="Remote access: a GOAT user guide."><meta name="twitter:image" content="https://goat-si.github.io/goat/og/en.png"><meta name="twitter:image:alt" content="GOAT: your coding agents, on every machine you own."><link rel="preload" href="/goat/_astro/dm-sans-latin.Bf69Tn_J.woff2" as="font" type="font/woff2" crossorigin="anonymous"><link rel="icon" href="/goat/favicon.ico" sizes="32x32"><link rel="icon" href="/goat/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/goat/apple-touch-icon.png"><link rel="manifest" href="/goat/site.webmanifest"><style>.docs-index,.docs-page{padding-bottom:clamp(64px,9vw,120px)}.docs-index .lede{max-width:60ch}.guide-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 40px;margin-top:40px;padding:0;list-style:none;display:grid}.guide-list a{border-top:1px solid var(--hairline);padding:14px 0;display:block}.docs-breadcrumb{margin-bottom:32px}.docs-layout{grid-template-columns:minmax(0,76ch) minmax(180px,1fr);align-items:start;gap:clamp(32px,5vw,80px);display:grid}.guide-content{overflow-wrap:anywhere;min-width:0}.guide-content h1{max-width:24ch;margin-bottom:24px;font-size:clamp(2rem,1.5rem + 2vw,3rem)}.guide-content :is(h2,h3,h4){max-width:none;margin:40px 0 16px}.guide-content h2{font-size:1.5rem}.guide-content :is(p,ul,ol,pre,table,blockquote){margin:16px 0}.guide-content :is(ul,ol){padding-left:24px}.guide-content li+li{margin-top:8px}.guide-content a,.docs-breadcrumb a{color:var(--accent-text);text-underline-offset:3px;text-decoration:underline}.guide-content pre{border:1px solid var(--hairline);border-radius:6px;padding:20px;overflow-x:auto}.guide-content code{font-family:var(--font-mono);font-size:.875em}.guide-content :not(pre)>code{background:var(--tint);border-radius:3px;padding:2px 4px}.guide-content table{border-collapse:collapse;max-width:100%;font-size:.9375rem;display:block;overflow-x:auto}.guide-content :is(th,td){border:1px solid var(--hairline);text-align:left;vertical-align:top;min-width:140px;padding:12px}.guide-content blockquote{border-left:2px solid var(--hairline);color:var(--muted);padding-left:20px}.guide-toc{top:calc(var(--header) + 24px);max-height:calc(100dvh - var(--header) - 48px);font-size:.875rem;position:sticky;overflow-y:auto}.guide-toc p{margin:0 0 12px;font-weight:600}.guide-toc ul{margin:0;padding:0;list-style:none}.guide-toc a{color:var(--muted);padding:8px 0;display:block}@media (width<=767px){.docs-layout,.guide-list{grid-template-columns:minmax(0,1fr)}.guide-toc{border-top:1px solid var(--hairline);max-height:none;padding-top:24px;position:static}}
+</style><link rel="stylesheet" href="/goat/_astro/Base.DdBThLX5.css"></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="container header-inner"><a class="brand" href="/goat/" aria-label="GOAT home"><svg width="28" height="28" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span class="brand-name">GOAT</span></a><nav aria-label="Main"><ul class="nav-list"><li><a class="nav-link" href="/goat/download/">Download</a></li><li class="nav-optional"><a class="nav-link" href="/goat/docs/user/">Guides</a></li><li class="nav-optional"><a class="nav-link" href="https://github.com/goat-si/goat">GitHub</a></li></ul></nav></div></header><main id="main" tabindex="-1"><div class="container page-head docs-page"><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="/goat/docs/user/">← All user guides</a></nav><div class="docs-layout"><article class="guide-content"><h1 id="remote-access">Remote access</h1>
+<p>Connect a phone, browser, or another desktop app to GOAT running on a different
+machine. That machine must stay running and reachable while you work.</p>
+<h2 id="goat-connect-coming-soon">GOAT Connect (coming soon)</h2>
+<p>GOAT Connect is coming soon. Upstream’s Connect sign-in and managed tunnels are
+unavailable. Connect your devices with direct pairing, <a href="#tailscale-https">Tailscale HTTPS</a>,
+or <a href="#desktop-managed-ssh">SSH</a>.</p>
+<p><code>goat connect</code> and its subcommands print
+“GOAT Connect is coming soon. Use <code>goat pair --tailscale</code> to connect a device over Tailscale.”
+and exit successfully without changing your connection settings.</p>
+<p>Previously linked servers start normally and keep their stored link dormant.
+Saved environments with only a GOAT Connect route show as unavailable; add a
+direct or Tailscale route, or forget the environment in connection settings.</p>
+<h2 id="connect-your-phone-to-a-hub">Connect your phone to a hub</h2>
+<p>A hub is the one GOAT server your phone pairs with, ideally a machine that stays
+on. The phone and the hub must be on the same tailnet, so install Tailscale on
+both and sign in to the same account.</p>
+<p>On the hub’s desktop app, open <strong>Settings → Connections</strong>. The <strong>Connect your
+phone</strong> card at the top has the <strong>Tailscale HTTPS</strong> switch and <strong>Show phone
+QR</strong>. Turn on Tailscale HTTPS first: without it, the QR dialog explains how to
+turn it on, and only offers a tailnet or local network address after you choose
+one. On a hub without the desktop app, run <code>goat serve --tailscale-serve</code>, then
+<code>goat pair --tailscale</code> to print a QR code.</p>
+<p>On the phone, open GOAT and tap <strong>Scan QR code</strong>, allow camera access the first
+time, and point the camera at the hub’s QR code. The app connects as soon as it
+reads the code and opens the hub’s sessions. To type an address and pairing code
+instead, open <strong>Advanced → Enter address manually</strong>.</p>
+<p>These QR codes are GOAT app links. Scan them from inside GOAT; scanning one with
+the phone’s camera app opens GOAT’s scanner, and you scan once more there. QR
+codes printed by older T3 Code versions still scan. Browsers use the
+<code>Pairing URL</code> printed next to the QR code.</p>
+<p>If pairing fails, the app shows three checks and stops at the first one that
+failed:</p>
+<ol>
+<li><strong>Tailscale</strong> (or <strong>Network</strong> for a non-tailnet address): the phone could not
+reach the hub. Turn on Tailscale on the phone and sign in to the hub’s
+tailnet, or check that the hub is awake.</li>
+<li><strong>Hub responds</strong>: something answered, but not as a GOAT hub this app can use.
+Check the address and update GOAT on the hub.</li>
+<li><strong>Pairing code</strong>: the hub rejected the code. Codes work once and expire; show
+a new QR code on the hub.</li>
+</ol>
+<p>To switch to another hub, open <strong>Settings → Environments → Change hub</strong> on the
+phone and scan the new hub’s QR code. The old hub is removed from the phone
+after the new one connects. To keep several servers on the phone, use
+<strong>Settings → Environments → Advanced → Add another server</strong>.</p>
+<h2 id="pair-over-a-lan-or-private-network">Pair over a LAN or private network</h2>
+<p>Use direct pairing when the other device can reach the host’s network address.</p>
+<p>On a desktop host, open <strong>Settings → Connections</strong>, enable <strong>Network access</strong>,
+then create a pairing link using an address the other device can reach. Changing
+network access restarts the desktop app. You can turn it off in the same place.</p>
+<p>For a command-line host, replace <code>&lt;private-ip&gt;</code> with the host’s LAN or tailnet
+address:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --host</span><span style="color:#F97583"> &lt;</span><span style="color:#9ECBFF">private-i</span><span style="color:#E1E4E8">p</span><span style="color:#F97583">&gt;</span></span></code></pre>
+<p>If a server is already running, generate a fresh link without restarting it:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span></span></code></pre>
+<p>Scan the QR code from the GOAT app on your phone, or paste the pairing URL into
+<strong>Add device → Tailscale (GOAT server)</strong> on web and desktop. Connection settings are under <strong>Settings → Connections</strong>
+on web and desktop and <strong>Settings → Environments</strong> on mobile. A loopback address
+such as <code>127.0.0.1</code> reaches only the device opening the link.</p>
+<p>Pairing authorizes that device for future connections. Use a fresh one-time link
+for each new device; you do not need the original token to reconnect. Links
+created in Settings can only be copied from the client that created them while
+its Connections page stays open. If you leave or reload that page, create
+another link to share.</p>
+<h3 id="reach-one-machine-several-ways">Reach one machine several ways</h3>
+<p>A machine can have more than one route: LAN, Tailscale, another VPN, a public
+URL, or SSH. Tailscale shares its <code>100.64.0.0/10</code> address range with
+other VPNs such as Cloudflare WARP, so an address in that range shows as VPN
+unless the machine confirms it is on Tailscale. To add a route, choose <strong>Add
+route</strong> in the machine’s route list.
+Pairing the same machine again over another address also adds a route instead
+of a second machine. A new route is placed by speed, in that order, and you can
+reorder routes at any time.</p>
+<p>While connected through a paired address, GOAT also learns the
+machine’s current LAN and Tailscale addresses and adds them as routes. When the
+machine’s LAN address changes, for example after it joins another Wi-Fi network,
+the learned route follows it. The machine must allow network access for its LAN
+address to be learned. The <a href="/goat/docs/user/background-service/#local-network-access">background service</a>
+allows it on private networks by default. You can reorder a learned route, but not remove it; it
+goes away with the route it was learned through, or when the machine stops
+reporting that address.</p>
+<p>GOAT connects over the first route that answers. Away from home, a LAN
+address that does not answer is checked briefly and skipped. It is only tried
+again, after the other routes, if none of them connect. While connected over a
+later route, GOAT checks the earlier ones when your network changes, when you
+return to the app, and every minute, and moves back as soon as one works.</p>
+<p>On web and desktop, select the route count under the machine’s name in
+<strong>Settings → Connections</strong> to see its routes. Drag a route to change the order,
+or remove it. On mobile, open the machine under <strong>Settings → Environments</strong> and
+choose <strong>Edit</strong>.</p>
+<p>Open <strong>Permissions</strong> next to <strong>Routes</strong> in web or desktop, or <strong>Your permissions</strong>
+in the mobile route details, to see what your current connection can do on that
+environment. For a remote environment, this is in its route details. Permissions
+shown there apply only to the route marked <strong>In use</strong>; other routes are not
+checked.</p>
+<h3 id="balance-new-threads-across-machines">Balance new threads across machines</h3>
+<p>Auto balance is off by default. On web and desktop, enable it in
+<strong>Settings → Connections → Load balancing</strong> to automatically choose a machine for
+new threads in projects grouped across connected environments. The section
+appears once two or more machines are switched on.
+Each machine starts at <strong>Normal</strong>. Choose <strong>Prefer</strong> to favor it when it has CPU and
+memory available, <strong>Less often</strong> to reduce its share, or <strong>Manual only</strong> to exclude
+it from automatic selection. These are preferences, not fixed traffic percentages.
+Preferences are saved separately in each client.</p>
+<p>The composer checks eligible machines when choosing a draft’s environment, then keeps
+that choice stable. Choose <strong>Auto balance</strong> again to check current resources, or choose
+a specific machine to override it. Choosing a branch or worktree also keeps the draft
+on that machine. Existing threads stay where they started. If resource checks are
+unavailable or all eligible machines are full, choose a machine manually to continue.
+Mobile keeps its manual environment selection.</p>
+<p>Agents spread their own work too. When more than one machine is connected, an
+agent checks each machine’s load, providers, and sign-ins before starting
+parallel or heavy work, starts each piece on a machine with room for it, and
+keeps work that needs your browser or local files on the machine you are using.
+It skips machines that are unreachable, cordoned, or need an update, and never
+starts a Boat cloud machine unless you ask. Its final report says which machine
+ran what.</p>
+<h3 id="tailscale-https">Tailscale HTTPS</h3>
+<p>Join both devices to the same tailnet. In the desktop app, enable <strong>Tailscale
+HTTPS</strong> in <strong>Settings → Connections</strong>. Turn it off there to remove that route.</p>
+<p>To start a command-line server with Tailscale HTTPS:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --tailscale-serve</span></span></code></pre>
+<p>For an already-running server:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --tailscale</span></span></code></pre>
+<p>The pairing link uses an address such as <code>https://machine.tailnet.ts.net/</code>.
+The mapping created by <code>pair --tailscale</code> persists across restarts. Remove its
+default-port mapping with:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">tailscale</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --https=443</span><span style="color:#9ECBFF"> off</span></span></code></pre>
+<p>If that port is already in use, choose another with
+<code>--tailscale-serve-port</code>. See <code>goat pair --help</code> for other pairing options.</p>
+<h3 id="connect-a-browser">Connect a browser</h3>
+<p>Open the direct pairing URL in a browser that can reach the server. For a
+secure address on your tailnet, use <a href="#tailscale-https">Tailscale HTTPS</a>.
+On mobile, an IP address entered without a scheme uses HTTP, so include
+<code>https://</code> when your server uses HTTPS.</p>
+<h2 id="desktop-managed-ssh">Desktop-managed SSH</h2>
+<p>In the desktop app, open <strong>Settings → Connections → Add device</strong>, choose
+<strong>SSH</strong>, and pick a host from your SSH config or type an address such as
+<code>user@example.com</code>. GOAT starts or reuses a server there and opens the port
+forward for you. Projects, provider credentials, and agent work stay on the
+remote machine.</p>
+<p>Before it installs anything, GOAT checks the host and shows one line per check:
+whether it answers (including Tailscale), its host key, sign-in with your SSH key,
+the operating system, free disk space, and whether a GOAT runtime is available for
+that platform. On a host that has never run GOAT, the runtime check also considers
+the newest compatible published release, using the same rule as installation.
+A check that fails says what to change, often with a command to copy, and
+<strong>Check again</strong> runs them again. <strong>Connect</strong> turns on once nothing is left to fix. A host GOAT has not seen before shows its fingerprint for you to
+approve first. If you approved a host but its checks still fail, <strong>Forget host</strong> in the
+same dialog removes the SSH entry and pinned key GOAT added. Agents run the same
+checks and get the same results.</p>
+<p>GOAT signs in only with SSH keys or your ssh-agent. If a host turns your key down
+and would ask for a password, the sign-in check says so and offers an
+<code>ssh-copy-id</code> command: run it once in a terminal on this computer, enter the
+password there, then choose <strong>Check again</strong>. For a host from your SSH config, the
+user, port and key come from that file; change them there.</p>
+<p>The remote host must be Linux, an Apple Silicon Mac, or a Windows machine set up
+as described below, with <code>tar</code>, <code>sha256sum</code> or <code>shasum</code>, and
+<code>git</code> for project work. Set up provider CLIs and sign-in with
+<a href="#providers-on-your-machines">provider sync</a> or follow <a href="/goat/docs/user/install/#providers">provider setup</a>
+on that host. GOAT keeps its server, launch state,
+and data under <code>~/.goat</code>, apart from any T3 Code install in <code>~/.t3</code>. A fresh host
+does not need the desktop app or Node.</p>
+<p>A Windows host works when its OpenSSH server uses Git Bash as the default shell
+(the OpenSSH <code>DefaultShell</code> setting pointing at Git for Windows’ <code>bash.exe</code>).
+GOAT starts its server outside your SSH session so it keeps running after you
+disconnect, which means the server gets your Windows user environment rather
+than the SSH session’s: provider CLIs must be on your Windows <code>PATH</code>. After an
+app update, a Windows host moves to the new version only from a GOAT release;
+a server started from a source checkout must be stopped before reconnecting.</p>
+<p>The first launch can take longer while GOAT installs its runtime. It uses a
+bundled or cached archive when available. Otherwise it uses your configured
+release mirror, or downloads the matching published GOAT release and checks its
+checksums. If a public download fails, GOAT can try the GitHub CLI when signed in
+(<code>gh auth login</code>). It refuses a checksum mismatch and names the expected release
+when it cannot obtain an archive. Connections shows the current setup step. The first
+installation can take a few minutes; reconnecting while it runs joins that setup.</p>
+<p>When the host is asleep or off the network, its connection shows <strong>Unreachable</strong>
+and GOAT keeps retrying, sooner when this computer wakes or joins a network.
+Agent work on the host keeps running while you are away. A rejected SSH key, a
+changed host key, or a runtime that refuses this app stops retrying until you
+choose <strong>Reconnect</strong>; the connection’s status says what to fix.</p>
+<h3 id="recovering-a-watched-thread-while-its-host-is-offline">Recovering a watched thread while its host is offline</h3>
+<p>Ask the launching agent to enable checkpoint copies for a remote watch with
+<code>goat_call {path:"thread.watch", args:{host, threadId, checkpointReplication: "on"}}</code>. To set
+the policy for an entire host, use
+<code>goat_call {path:"thread.replication_set", args:{host, checkpointReplication: "on"}}</code>.
+Turning the host setting <code>"off"</code> stops new copies for both channel tasks and ordinary
+watches. Existing channel tasks keep their previous default when the setting is omitted;
+ordinary watches require opt-in. Recovery is owned by the launching GOAT thread;
+launcherless webhook watches keep their existing reporting behavior. These operations
+require full access, and changing the
+host policy also requires permission to write settings. Checkpoint replication and recovery are unavailable while goatclaw permission profiles are enabled; profile ceilings and lane accounting are not yet supported by these operations. Remote capture and recovery use only
+an existing authorized connection; reconnect explicitly if its session is missing or expired.</p>
+<p>Copies are taken after completed checkpoints, not continuously. The <code>thread.watch_list</code> and
+<code>thread.status</code> paths show the latest copy and any skipped capture. To recover, ask the
+launching agent to call <code>goat_call {path:"thread.handoff_host"}</code> with <code>fromReplicatedCheckpoint: true</code>, the
+source <code>host</code> and <code>threadId</code>, the copy’s run as <code>expectedRunId</code>, and a registered
+<code>destinationProjectId</code>. Add <code>destinationHost</code> for another machine; omit it to recover here.
+The destination must already be ready, identify the same repository, and use an enabled
+provider that runs in its local worktree; cloud providers are not recovery destinations. The destination must also have the shared base commits; if they are missing, fetch them
+there and request recovery again. Recovery does not fetch from or contact the source.
+Automatic moves remain off.</p>
+<p>Recovery starts a new thread in an isolated worktree with the copied unpushed commits and
+uncommitted file contents. Staging selections are not preserved. It carries bounded
+conversation context, not the provider’s full session or attachments. Copies are limited to
+8 MiB; snapshots containing excluded or oversized new files are skipped. Turning copying off
+discards in-flight copies and keeps the last admitted copy. Recovery refuses copies older than
+seven days. Older checkpoints without completeness evidence, nested repositories and submodules
+are not eligible; complete another supported checkpoint before relying on recovery.</p>
+<p>A refused destination can be corrected and requested again. A known successful recovery is
+returned on retry even if that destination is now offline. Checkpoint contents expire
+independently of the small recovery records, so an existing launch can still be reconciled.</p>
+<p>The disconnected source may still perform external actions. GOAT fences its reports and
+tries to interrupt only its recorded old run after reconnecting; this does not guarantee
+that external side effects happened only once. Interruption waits while the launcher is in
+plan mode or its authorized connection is unavailable. If recovery reports <code>launch_unknown</code>, retry
+the same recovery to reconcile it rather than starting a separate launch. An empty destination
+thread is not proof that its recovery run started.</p>
+<p>On Linux and macOS hosts, provider CLIs must be on the <code>PATH</code> of a
+non-interactive login shell there; check with:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">ssh</span><span style="color:#9ECBFF"> user@example.com</span><span style="color:#9ECBFF"> 'sh -lc "command -v claude codex"'</span></span></code></pre>
+<p>The machine that owns your SSH connection keeps the host’s GOAT runtime at its
+own version. The host does not need the desktop app. In <strong>Settings → Connections</strong>,
+check the SSH connection’s runtime status and choose <strong>Update runtime</strong> to retry an
+update. A busy compatible runtime stays available while the update waits.</p>
+<p>Choose <strong>Update now</strong> and confirm to update immediately. Running agent work gets up
+to a minute to finish, then continues on the new version. <strong>Cancel</strong> leaves the
+runtime running as before. Agents can request an update that runs when the
+runtime is idle. If the new version fails to start, GOAT restores the previous one.</p>
+<p>Runtime archives come from published GOAT releases or a configured release mirror.
+If this app’s own version has no archive (a development build, for example) and
+the host has never run GOAT, GOAT installs the newest published runtime that works
+with this app instead. The connection then shows <strong>Running <version> · Upgrade to
+<version> deferred</strong> and GOAT retries the upgrade every 10 minutes. A host that
+already has GOAT data never gets a different version this way. When nothing
+usable exists, the status says so and names the one thing to do. GOAT does not
+replace a newer runtime; update the machine that owns the SSH connection instead.</p>
+<p>A server that GOAT cannot confirm it launched, or that cannot restart itself,
+is left running. GOAT keeps using it if it is compatible; otherwise, stop it on
+the host and reconnect. When two computers update the same host at once, the
+second retries after the first finishes. If an interrupted update left the host
+locked, the error names the file to remove after you check that no other GOAT
+app is updating it. Removing the connection leaves GOAT’s server running on the
+host. Ask an agent to forget the host and stop its runtime when idle, or use
+<strong>Forget host</strong>. GOAT stops only an idle server it owns; remote projects and files stay.</p>
+<p>Each desktop app keeps one session on the host for its SSH connection and reuses
+it when it reconnects. Revoke sessions you no longer use in <strong>Settings →
+Connections</strong> on the host, or on a headless host with <code>goat auth session list</code> and
+<code>goat auth session revoke &lt;id&gt;</code>. A desktop that can still sign in over SSH pairs
+again on its next connect.</p>
+<p>For Antigravity’s Google callback on a remote host, see
+<a href="/goat/docs/user/providers-antigravity/#sign-in-from-a-remote-device">remote sign-in</a>.</p>
+<h3 id="providers-on-your-machines">Providers on your machines</h3>
+<p>Open <strong>Settings → Connections → Providers on your machines</strong> to compare installed
+provider versions and sign-in status on this machine and connected SSH hosts.
+Choose <strong>Sync to other hosts…</strong> for a provider and select your destination
+machines. GOAT uses the vendor’s official npm package or installer for each
+operating system, matching this machine’s version by default, or installing the
+latest if it is absent here. Cursor’s installer always installs the latest.
+Choose <strong>Update runtime</strong> for a host whose GOAT is too old, or <strong>Prepare host</strong>
+if its runtime is stopped, then retry.</p>
+<p>Each host installs and starts its own sign-in. Complete the offered device code
+or vendor sign-in page, or finish in GOAT on that host. If a terminal step is
+needed, run it on the destination: <code>claude auth login</code>, <code>agent login</code> (Cursor),
+<code>grok login</code>, <code>opencode auth login</code>, or <code>pi</code> followed by <code>/login</code>. Codex uses
+<code>codex login --device-auth</code>. An agent can request a sync; approve the request in
+its thread before installation starts. Cancelling stops unfinished work; a
+completed installation stays installed.</p>
+<p>GOAT never copies credentials between machines. For headless Codex login,
+<a href="https://developers.openai.com/codex/auth">OpenAI documents copying <code>~/.codex/auth.json</code> as a fallback</a>.
+A person may do this between their own machines, treating the file like a
+password; GOAT does not automate it.</p>
+<p>Sync only to your own machines and sign in with your own account on each.
+Never sign in to someone else’s account or share yours.
+<a href="https://www.anthropic.com/legal/consumer-terms">Claude’s consumer terms</a> forbid
+sharing login credentials or letting others use your account; see also the
+<a href="https://support.anthropic.com/en/articles/8325606-what-is-the-pro-plan">Pro plan guidance</a>.
+<a href="https://help.openai.com/en/articles/10471989">OpenAI accounts are for the individual</a>,
+and <a href="https://help.openai.com/en/articles/8980438">use across your own devices is supported</a>.
+Cursor and xAI subscription policies: <strong>needs confirmation</strong>; no source has been
+verified yet.</p>
+<h3 id="a-fresh-vps">A fresh VPS</h3>
+<p>Open <strong>Settings → Connections → Add device → SSH</strong>, or tell an agent to
+“connect a new SSH host” and give it the address and SSH user. Check the displayed
+host-key fingerprint against your server provider’s record before approving.
+The first approval also lets GOAT add its Include line to your SSH config. Approving
+only pins the key; the checks run again before GOAT installs anything.</p>
+<p>GOAT uses SSH keys or your ssh-agent. If it creates a key, register the displayed
+public key with your server provider or add it to the host. If the host only
+accepts a password, run the offered <code>ssh-copy-id</code> command in a terminal on the
+machine that owns this GOAT environment, then retry. Your password stays in that
+terminal; GOAT does not collect it or run <code>sudo</code> for you.</p>
+<p>GOAT prepares the runtime before checking providers. Provider diagnosis needs a
+ready runtime; if preparation is still running or failed, check the host’s status
+and finish or retry setup first. After agent setup, GOAT checks provider CLIs and
+sign-in on the remote host. Use <a href="#providers-on-your-machines">provider sync</a> or
+run the offered installation and sign-in commands there; signing in on your own
+computer does not sign in the VPS. The desktop
+connection row reports runtime setup.</p>
+<p>Save the prepared host in the desktop app to see its environment in the sidebar.
+With web or mobile alone, approve setup in the requesting thread. The host is then
+available to that environment’s SSH tools; adding it does not create a separate
+sidebar environment on those clients.</p>
+<p>If the host key changes, GOAT stops connecting. Check why it changed before
+trusting it again. If you rebuilt the server, forget the host and add it again.
+Forgetting removes GOAT’s managed SSH entry and pinned key. It keeps your shared
+SSH keys and the host’s projects and files, and stops a runtime only when GOAT owns
+it and no work is running.</p>
+<h3 id="start-a-worktree-on-a-saved-ssh-host">Start a worktree on a saved SSH host</h3>
+<p>Before asking an agent to start work on another machine, it can check registered
+checkouts with <code>goat_call {path:"host.status", args:{host, repositories:true}}</code>. The inventory includes
+local Git state; ahead/behind does not fetch from the remote, and unknown dependency
+freshness does not mean dependencies are installed. An agent can pass the inventory’s
+origin key as <code>repository: {key, candidateHosts}</code> to <code>ssh.thread_launch</code> to
+refuse an unverified checkout and report matching candidates. This check does not
+copy uncommitted work or prepare stopped hosts. Use the canonical checkout path from
+the inventory; diagnosis does not browse aliases or wake candidate hosts.</p>
+<p>To give a worker sibling source code without mounting the sibling checkout, add
+<code>references: [{mode:"snapshot", repositoryKey:"example.com/team/sibling", files:["src/api.ts"]}]</code>
+to <code>thread.launch</code> or <code>ssh.thread_launch</code>. The worker receives the requested
+committed text, including local unpushed commits; dirty files are excluded. Use <code>checkout</code>
+from the inventory when more than one checkout matches, and <code>revision</code> to pin a local
+commit. For an SSH launch, an omitted source <code>host</code> means the selected host; <code>host:null</code>
+means the caller’s machine. The source must already be ready and support snapshots.</p>
+<p><code>repository.snapshot</code> previews the same read. Capturing source requires an existing
+file-read grant or full-access caller authority, checked again before returning content.
+Snapshots support up to eight files, 16 KiB per file, 32 KiB per repository and 64 KiB per
+brief. Secret paths and credential-like assignments (including prefixed keys such as
+<code>DB_PASSWORD</code> and <code>AWS_SECRET_ACCESS_KEY</code>, with quoted or unquoted values after <code>:</code> or <code>=</code>), symlinks, submodules, binary content
+and partial clones are refused. This copies data only: it grants no source filesystem or
+host credential, and does not restrict permissions a worker already had.</p>
+<p>In the desktop app, save the host in <strong>Settings → Connections</strong>, then open a new
+thread in a project on this device. In the workspace menu, choose <strong>Worktree on SSH</strong>
+and the saved host. Send your message to start the thread there.</p>
+<p>GOAT copies the project’s commits and current tracked and untracked changes into
+<code>~/.goat/repos</code> on that host, then creates a new worktree. Untracked files that Git
+ignores (such as <code>.env</code>) stay behind; files already committed travel with the history.
+Provider credentials stay on their machines, and the thread belongs to the
+remote environment. Use SSH keys or an ssh-agent; password prompts are unsupported.
+The new worktree’s setup script follows that host’s own project script settings; if the
+host has no setup script configured, install dependencies there yourself.</p>
+<p>The secret-file check is an early warning for common newly added credential filenames.
+It does not scan tracked files or commit history. Keep secrets out of the project
+before copying it. If a launch response is lost, the thread may already have started;
+check that host’s threads before sending again.</p>
+<p>To bring committed work home, open the remote thread and choose <strong>Fetch branch to
+this device</strong> in <strong>Git actions</strong>, or search for it in the command palette. The result
+shows a local ref you can inspect in the original repository. See
+<a href="/goat/docs/user/source-control/#fetch-a-branch-from-an-ssh-worktree">Fetch a branch from an SSH worktree</a>.</p>
+<p>To move a thread you already started, choose <strong>Continue on SSH host…</strong> in the thread’s
+menu or the command palette, pick the saved host, and optionally say what to do next.
+GOAT copies the thread’s worktree the same way, including uncommitted changes, starts a
+new thread on that host with a summary of the conversation, and leaves a note in the
+original thread pointing to it. Wait for the current turn to finish first; a running
+thread cannot be moved. Your local worktree is left as it was, so you can keep working
+here or fetch the remote branch back later.</p>
+<p>SSH worktree creation and fetch-back are available in the desktop app. The remote
+thread can also be followed through an existing web or mobile connection.</p>
+<h3 id="let-an-agent-start-work-on-another-machine">Let an agent start work on another machine</h3>
+<p>An agent can also start a thread on another computer over SSH. Ask it, for
+example, to “run this in ~/work/api on mini”. It lists the hosts in this
+machine’s <code>~/.ssh/config</code> and <code>known_hosts</code>, browses folders and Git worktrees on
+the one you name, and starts a thread there in that folder or in a new worktree.
+The folder becomes a project on that machine, and the thread runs in that
+machine’s own GOAT, which is started the same way as above if needed.
+An agent can also move a thread there, uncommitted changes included, when you ask
+it to “continue this on mini”; it does so as the last step of its turn.</p>
+<p>Only SSH keys or a running ssh-agent are used; a host that asks for a password
+is refused. Starting a thread needs a full-access thread or a full-access
+outside agent. To watch the new thread, add the same host under
+<strong>Settings → Connections</strong>, or ask the agent to add it for you. On that machine
+itself, a thread started while the GOAT app is open runs in the app’s own server
+and appears in the app like any other thread. Without the app, GOAT starts a
+background server there, and the app lists its threads under <strong>Headless server</strong>
+while that server is running. Each start
+issues a 12-hour sign-in on that machine, listed with its other clients. A
+machine running an older GOAT
+only accepts approval-required threads in folders that are already projects
+there.</p>
+<p>An agent can also list, add, and remove the devices on this hub (see
+<a href="#hub-devices">Hub devices</a>), including on a headless
+<code>goat serve</code> with no desktop app. Adding uses only SSH keys or ssh-agent, never a
+password, and needs a host where GOAT has run before; prepare a new host first.
+Adding a device that is already listed returns it. Adding and removing need a
+full-access thread or a full-access outside agent. While the desktop app runs on
+the same machine, the agent’s change is also saved in its
+<strong>Settings → Connections</strong>, so the device’s threads show up in the sidebar.</p>
+<p>Adding a host and saving its connection are one step for an agent: it runs the
+same checks as <strong>Add device → SSH</strong>, asks you to approve a new fingerprint, and
+saves the connection once the checks pass. A new fingerprint needs approval in a
+GOAT thread; an outside agent can save an already-trusted host. Without a desktop
+app on that machine, or from an agent without full access, it prepares the host
+and tells you the connection was not saved.</p>
+<p>The agent that started the thread can follow it from here: it waits for the
+thread to finish, reads its messages and the result its agent recorded (outcome,
+pull requests, tests, and commits), sends it follow-ups, or stops it, and it
+can list threads across this machine and the ones it is connected to. The
+remote thread cannot report back on its own, so ask the starting agent to wait
+on it. Sending to or stopping a thread on another machine needs an agent in the
+default interaction mode, and that machine still refuses threads that run with
+broader permissions than the agent has.</p>
+<p><strong>Settings → Connections → Remote launches</strong> lists the threads each connected
+environment started or watches on other machines, grouped by SSH host, even
+when this app runs on a different computer from the one that started them. A
+thread opens from there once this app is also connected to its machine. In the
+desktop app, <strong>Connect</strong> adds the host over SSH using the same host name. A
+thread started from another machine shows <strong>Launched by</strong> with that machine’s
+name in its header, also when the launching thread is not open here. A message
+an agent sends to a thread on another machine shows <strong>Sent by</strong> with the sending
+thread’s name; it opens that thread while this app is connected to its machine.
+The name is how the sending machine described itself, so treat it as a label,
+not as proof of who sent it.</p>
+<h3 id="link-a-goat-server-for-agents-without-ssh">Link a GOAT server for agents without SSH</h3>
+<p>When the other machine already runs GOAT on its own, such as a headless server
+kept up with <code>goat service install</code>, and this machine reaches it over
+Tailscale or your LAN, agents can use it without SSH. On that
+machine, create a pairing link that can only grant agent access:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --tailscale</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:operate</span></span></code></pre>
+<p>Leave out <code>--tailscale</code> when the server already listens on an address this
+machine reaches. Give an agent here the printed pairing URL, for example “link
+<a href="https://mini.tailnet.ts.net/pair#token=%E2%80%A6">https://mini.tailnet.ts.net/pair#token=…</a> as mini”. The code works once and
+expires after five minutes. From then on agents use <code>mini</code> as the host for
+projects, threads, worktrees and host status, start threads there, and include
+it when they list threads across machines.</p>
+<p>A link can do at most what you allow when linking. It is Supervised by default;
+read-only links cannot start or change threads. Agents start threads only in
+folders that are already projects on that machine, so add the project there
+first, for example from the GOAT app connected to it. An agent whose own permission
+mode is lower than the link’s cannot change anything through it. A link cannot
+answer approval requests, and folder browsing and runtime updates still need SSH.</p>
+<p>A link lasts 30 days; link again with a new code to renew it. Removing a link
+forgets it here. To end it on the other machine at once, revoke <strong>GOAT on …</strong> in
+that machine’s <strong>Settings → Connections</strong>. To watch its threads yourself, add
+the machine under <strong>Settings → Connections</strong> with a pairing URL from <code>goat pair</code>.</p>
+<p><a id="devices-on-this-hub"></a></p>
+<h3 id="hub-devices">Hub devices</h3>
+<p>The GOAT server your phone or browser pairs with keeps one list of the machines it
+reaches: SSH hosts you add, GOAT servers you link, and its cloud machines. Every
+client paired with that server sees the same list, and a device added on the
+desktop appears on the phone right away. It works the same on a headless
+<code>goat serve</code>.</p>
+<p>Find it under <strong>Settings → Hub → Hub devices</strong> on desktop and web, for the
+environment selected at the top of Settings, and under <strong>Settings → Hub devices</strong>
+in the mobile app. Each device also shows whether it is linked to the hub’s
+<a href="/goat/docs/user/hub/#add-repair-or-remove-a-device">OpenCodex</a>. Add an SSH
+host by its alias from this machine’s <code>~/.ssh/config</code>, or add another GOAT server
+with a pairing URL from <code>goat pair</code>. A machine reached two ways, for example
+over SSH and as a linked server, is one device with two routes.</p>
+<p><strong>Check</strong> asks each route whether it answers. It never starts or extends a cloud
+machine: a stopped one shows as offline. Cloud machines are removed from
+<strong>Settings → Connections → <a href="#cloud-machines">Cloud machines</a></strong>, not from this list. Removing a saved connection in the
+desktop sidebar does not remove the device from the hub.</p>
+<p>The first time the desktop app runs as a hub, it copies the SSH connections saved
+in its <strong>Settings → Connections</strong> into this list. If those saved connections
+can’t be unlocked, nothing is copied and the list asks you to add your devices
+again; <strong>Saved on this desktop</strong> offers the desktop’s SSH connections that are
+not on the hub yet.</p>
+<h3 id="reach-every-machine-through-one-hub">Reach every machine through one hub</h3>
+<p>Pair your phone, or any other client, with one GOAT server you keep running, such as a Mac
+mini or a small VPS. That server is the hub. Every machine the hub lists as a node then shows
+up on the phone with its own threads, and the phone reaches it through the hub. The phone never
+needs SSH, Tailscale access to the node, or a pairing of its own with that machine.</p>
+<ol>
+<li>On the hub, pair the phone with hub access: <code>goat pair --tailscale --hub-proxy</code>. A pairing
+made without <code>--hub-proxy</code> reaches only the hub itself; pair again to add it.</li>
+<li>Add the machines to the hub’s <a href="#hub-devices">device list</a>. An SSH host needs nothing
+more. If GOAT never ran on it, choose <strong>Set up</strong> once, so the hub installs GOAT there and
+learns which machine it is.</li>
+<li>For a machine linked over HTTPS, choose <strong>Allow phone access</strong> and paste a pairing link
+created on that machine with <code>goat pair</code>. Links made for agents cannot open your threads.</li>
+</ol>
+<p>Through the hub you can open a node’s threads, watch them live, send follow-ups with images or
+files, stop a running turn, answer approval requests, and start a new thread on any node in a
+folder you pick there. Archiving, deleting and other changes to a thread, editing project
+scripts, and creating a folder that does not exist yet stay with the machine’s own GOAT. A
+thread started in a new worktree runs that machine’s own setup script. A machine that is off or
+asleep stays in the list as <strong>Unreachable</strong>, with its threads as last seen and how old that copy
+is, for example “last state 5 min ago”. It reconnects on its own when the machine comes back.
+Stopped cloud machines are never started by opening them.</p>
+<p>The hub holds the keys and sessions for every node, so keep its disk encrypted and its screen
+locked.</p>
+<h3 id="cloud-machines">Cloud machines</h3>
+<p>GOAT can create <a href="https://boat.dev">Boat</a> cloud machines and use them like any other
+SSH host. In <strong>Settings → Connections → Cloud machines</strong>, paste a Boat API key and agree
+to one <code>Include ~/.ssh/goat-cloud/*.conf</code> line at the top of this computer’s
+<code>~/.ssh/config</code>. Create the key with Boat’s <code>ci</code> preset (<code>boat api-key create goat --preset ci</code>), which can create, resume and delete the machines it made and connect
+over SSH. A <code>full-sandbox</code> key cannot create or resume machines. The key stays on the
+GOAT server that owns the machines.</p>
+<p>Create a machine with a name, a size and an auto-stop time. It appears as
+<code>boat-&lt;id&gt;</code>, which you can open from <strong>Connect</strong>, pick as an SSH host for a thread, or
+give an agent. Boat bills the machine while it runs:</p>
+<ul>
+<li><strong>Stop</strong> saves its disk as a snapshot that Boat keeps for about 14 days.</li>
+<li><strong>Resume</strong> starts it again, and billing with it. Browsing, launching a thread or
+continuing a thread on a stopped machine also resumes it. Listing hosts, checking host
+status and following a running thread never do.</li>
+<li><strong>Delete</strong> removes the machine and its data from Boat permanently.</li>
+</ul>
+<p>Each use you start pushes the auto-stop time out again, but work that keeps running on
+its own does not, so choose an auto-stop time that covers it. Boat gives a resumed
+machine a new address and host key; GOAT refreshes and pins both before it connects.
+Removing the key keeps the machines listed, so you can still find ones that may be
+billing. Machines belong to the GOAT server that created them; open them from that
+server.</p>
+<h2 id="browser-on-a-remote-environment">Browser on a remote environment</h2>
+<p>Browser tabs belong to the environment, so you and your agents see the same
+tabs from any device. The desktop app shows its own environment’s tabs
+directly. Every other device, and the desktop app for other environments,
+streams them from the host. Agents keep using them while no device is
+connected, and <code>localhost</code> addresses reach servers on the host.</p>
+<p>The first tab downloads a headless Chrome, about 120 MB, into the GOAT home. It
+is the same browser <a href="/goat/docs/user/html-renders/">HTML renders</a> use, so a host downloads it
+only once. Some Linux hosts need <a href="#browser-host-setup">setup</a> before it can
+start.</p>
+<p>Agent tabs have separate storage and share a Chromium process. Take control before
+typing into an agent’s tab, then release control when you want the agent to
+continue. Read-only connections can watch without changing the page.</p>
+<p>While you have control, the tab works with your device: text the page copies or
+cuts goes to your clipboard, a file picker on the page opens your device’s
+picker, and a finished download is offered for you to save. Popups such as
+sign-in windows open as their own tabs. Downloads stay on the host until the
+tab closes. Audio does not play on your device.</p>
+<p>On a phone, tap the floating preview’s corner dot to show its controls, then
+<strong>Pop into separate window</strong> to keep watching in picture-in-picture over other
+apps.</p>
+<h3 id="browser-host-setup">Browser host setup</h3>
+<p>macOS, Windows, and Linux desktops run the browser as is. Some Linux hosts need
+one-time setup: Ubuntu 23.10 and later block the sandbox the browser runs in,
+and minimal images and containers lack libraries it loads. When that happens,
+the server says so at startup, and browser tabs and HTML previews show the
+command to run on the host:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">sudo</span><span style="color:#9ECBFF"> goat</span><span style="color:#9ECBFF"> browser</span><span style="color:#9ECBFF"> setup</span></span></code></pre>
+<p>The server shows the exact line for how you started it, such as
+<code>sudo goat browser setup</code>, and keeps your <code>PATH</code> when Node is installed only
+for your user. Where <code>goat</code> is not on your <code>PATH</code>, such as with only the
+desktop app installed, it names the full path of the app’s own <code>goat</code> instead. It allows Chrome’s sandbox with an AppArmor profile and installs
+any missing libraries and system fonts with apt; pages that load without text
+can mean the host has no fonts. It is safe to run again. Without <code>sudo</code>, it only
+reports what it would change.</p>
+<p>The browser always runs in Chrome’s sandbox. Where you cannot change the host,
+set <code>GOAT_SERVER_BROWSER_SANDBOX=0</code> for the environment to run without it.</p>
+<h2 id="connect-an-outside-agent">Connect an outside agent</h2>
+<p>Claude Code, Codex, ChatGPT and other agents GOAT did not start can drive
+threads on an environment through its MCP server. See
+<a href="/goat/docs/user/outside-agents/">outside agents</a> for setup.</p>
+<h2 id="manage-or-revoke-access">Manage or revoke access</h2>
+<p>On the host, <strong>Settings → Connections</strong> lets authorized administrators create
+pairing links and revoke client sessions. Revoking an unused link prevents new
+pairings; revoke a device’s session to remove its existing access. Command-line
+management is available through <code>goat auth --help</code>.</p>
+<p>A session with an open connection stays listed after its access credential
+expires.</p>
+<p>To choose a token’s permissions, pass <code>--scope</code> once for each scope you want:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> relay:read</span></span></code></pre>
+<p>The selected scopes replace the default permissions. The same option works with
+<code>goat auth pairing create</code> and <code>goat auth session issue</code>; each command’s
+<code>--help</code> lists the available scopes. Without <code>--scope</code>, pairing tokens and issued
+bearer sessions get every permission, including managing access.
+A terminal or a full-access agent on the host can reach those as well, so a
+client that should not manage access also needs to go without <code>terminal:operate</code>
+and <code>orchestration:operate</code>.</p>
+<p>To change an existing client’s permissions, create a fresh pairing link with the
+scopes it needs. In a browser opened directly on the environment, open that link
+to replace the browser’s current grant. For mobile or a saved remote environment
+in web or desktop, use <strong>Add Environment</strong> with the fresh link or code; pairing
+the same environment replaces its saved grant. Reconnecting alone does not change
+permissions.</p>
+<p>Grouping checkouts does not combine their permissions. Shared project settings
+require <code>orchestration:operate</code> on every member environment; actions on one
+checkout use that checkout’s permissions.</p>
+<p><code>source-control:write</code> covers direct Git and pull request changes made from the
+client: pushing, switching or creating branches, cloning, and removing
+worktrees. It does not restrict what a task does. Starting a task in a new
+worktree still creates that branch and worktree with <code>orchestration:operate</code>,
+and the agent it runs can use Git however the environment allows.</p>
+<p>Settings changes, provider management, environment maintenance, and access
+management can each be granted separately. New pairings without <code>--scope</code> include all of them. Existing clients keep the
+permissions they paired with and can stay connected after an update, but newly
+separated features may require pairing again with the permissions they need.
+Older clients may show controls that the server denies. Create a fresh pairing
+link to change a client’s permissions.</p>
+<p><code>filesystem:read</code> allows browsing host files, opening workspace files, and viewing
+local changes. Add <code>filesystem:write</code> to allow editing files or saving plans to
+the workspace. These scopes control direct file access from the client.</p>
+<p>Removing an environment from a device’s connection settings only forgets it on
+that device. It does not stop the server or delete its stored link.
+Background-service <a href="/goat/docs/user/background-service/#manage-the-service">removal</a> is separate.</p>
+<p>Treat pairing URLs and authorization codes as passwords. Do not include them in
+screenshots, logs, or bug reports.</p>
+<h2 id="using-the-desktop-app-as-a-remote-only">Using the Desktop App as a Remote Only</h2>
+<p>If a computer should only drive work running elsewhere, turn off its local environment. In the
+desktop app, open <strong>Settings → Connections</strong> and switch off <strong>Local
+environment</strong>. GOAT restarts without a local server: no local agents or terminals run, WSL
+backends stay off, and other devices can no longer connect to this computer. Your projects,
+history, and saved connections are kept, and you keep working through direct pairing, Tailscale, or SSH.</p>
+<p>Switch <strong>Local environment</strong> back on in the same place to restart with your previous local
+settings.</p>
+<p>When another GOAT reaches this computer over SSH while the app is open, it uses the app’s own server, so
+its threads and yours are in one place. When the app is closed, it starts a background server here
+(<code>goat serve</code> on your <code>~/.goat</code> data), and the desktop app lists it as <strong>Headless server</strong>. Once
+you open the app again, other GOATs move to the app’s server as soon as the background server has
+no running work; the background server itself keeps running, and its earlier threads stay under
+<strong>Headless server</strong>. On Windows, other GOATs always use the background server, so their threads
+appear only under <strong>Headless server</strong>. To hide it, switch off <strong>Headless server on this computer</strong>
+in <strong>Settings → Connections</strong>. To stop it starting at all, remove this computer from the other
+GOAT’s SSH hosts.</p>
+<p>If a desktop-managed server repeatedly exits, automatic recovery pauses instead of restarting indefinitely. Choose <strong>Server recovery…</strong> in the desktop File menu to retry, stop the server, or open its logs. The pause survives restarting the desktop app.</p>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#goat-connect-coming-soon">GOAT Connect (coming soon)</a></li><li><a href="#connect-your-phone-to-a-hub">Connect your phone to a hub</a></li><li><a href="#pair-over-a-lan-or-private-network">Pair over a LAN or private network</a></li><li><a href="#desktop-managed-ssh">Desktop-managed SSH</a></li><li><a href="#browser-on-a-remote-environment">Browser on a remote environment</a></li><li><a href="#connect-an-outside-agent">Connect an outside agent</a></li><li><a href="#manage-or-revoke-access">Manage or revoke access</a></li><li><a href="#using-the-desktop-app-as-a-remote-only">Using the Desktop App as a Remote Only</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
