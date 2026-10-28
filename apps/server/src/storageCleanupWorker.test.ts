@@ -88,6 +88,50 @@ it.effect("interrupts active, queued, and late manual callers when its scope clo
   }),
 );
 
+it.effect("rejects manual callers while shutdown waits for an active sweep's finalizer", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const started = yield* Deferred.make<void>();
+    const finalizing = yield* Deferred.make<void>();
+    const releaseFinalizer = yield* Deferred.make<void>();
+    const worker = yield* makeStorageCleanupWorker(() =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(
+          Deferred.succeed(finalizing, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFinalizer)),
+          ),
+        ),
+      ),
+    ).pipe(Scope.provide(scope));
+    const active = yield* worker.runNow.pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(started);
+    const queued = yield* Effect.forEach([1, 2, 3], () =>
+      worker.runNow.pipe(Effect.forkChild({ startImmediately: true })),
+    );
+    const closing = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.await(finalizing);
+    const duringClose = yield* Effect.forEach([1, 2, 3], () =>
+      worker.runNow.pipe(Effect.forkChild({ startImmediately: true })),
+    );
+    const duringCloseExits = duringClose.map((caller) => caller.pollUnsafe());
+    yield* Deferred.succeed(releaseFinalizer, undefined);
+    yield* Fiber.join(closing);
+    yield* worker.drain;
+    expect(Exit.hasInterrupts(yield* Fiber.await(active))).toBe(true);
+    for (const caller of queued) {
+      expect(Exit.hasInterrupts(yield* Fiber.await(caller))).toBe(true);
+    }
+    for (const exit of duringCloseExits) {
+      expect(exit?._tag).toBe("Failure");
+      expect(exit && Exit.hasInterrupts(exit)).toBe(true);
+    }
+    expect(Exit.hasInterrupts(yield* Effect.exit(worker.runNow))).toBe(true);
+  }),
+);
+
 it.effect("keeps a shared queued sweep when one waiter cancels and automatic wakes overflow", () =>
   Effect.scoped(
     Effect.gen(function* () {
