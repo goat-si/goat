@@ -1,3 +1,4 @@
+import { pullRequestToolDefinitions } from "./goatMcpPullRequestToolPresentation.ts";
 import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
@@ -17,81 +18,7 @@ const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ...lifecycleToolDefinitions(tool),
-  link_pull_request: tool(
-    ["Link", "Linking", "Linked", "a pull request"],
-    "link-pr",
-    "pull-request",
-  ),
-  unlink_pull_request: tool(
-    ["Unlink", "Unlinking", "Unlinked", "a pull request"],
-    "unlink-pr",
-    "pull-request",
-  ),
-  list_thread_pull_requests: tool(
-    ["Check", "Checking", "Checked", "linked pull requests"],
-    "list-prs",
-    "pull-request",
-  ),
-  watch_pull_request: tool(
-    ["Watch", "Watching", "Watching", "a pull request"],
-    "watch-pr",
-    "pull-request",
-  ),
-  unwatch_pull_request: tool(
-    ["Stop watching", "Unwatching", "Stopped watching", "a pull request"],
-    "unwatch-pr",
-    "pull-request",
-  ),
-  write_pull_request_guides: tool(
-    ["Write", "Writing", "Started writing", "review guides"],
-    "write-pr-guides",
-    "pull-request",
-  ),
-  read_pull_request_guide: tool(
-    ["Read", "Reading", "Read", "a review guide"],
-    "read-pr-guide",
-    "pull-request",
-  ),
-  goat_pull_request_read: tool(
-    ["Read", "Reading", "Read", "a pull request"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_checks: tool(
-    ["Check", "Checking", "Checked", "pull request checks"],
-    "read-pr-checks",
-    "pull-request",
-  ),
-  goat_pull_request_activity: tool(
-    ["Read", "Reading", "Read", "pull request activity"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_review_thread: tool(
-    ["Read", "Reading", "Read", "a review thread"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_file: tool(
-    ["Read", "Reading", "Read", "a pull request file"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_stats: tool(
-    ["Read", "Reading", "Read", "pull request line counts"],
-    "read-pr",
-    "pull-request",
-  ),
-  goat_pull_request_search: tool(
-    ["Search", "Searching", "Searched", "pull requests"],
-    "search-prs",
-    "pull-request",
-  ),
-  goat_pull_request_filter_options: tool(
-    ["List", "Listing", "Listed", "pull request filters"],
-    "search-prs",
-    "pull-request",
-  ),
+  ...pullRequestToolDefinitions,
   goat_thread_turn_diff: tool(["Read", "Reading", "Read", "a turn's diff"], "read-diff"),
   goat_thread_diff: tool(["Read", "Reading", "Read", "a thread's diff"], "read-diff"),
   orchestrator_capabilities: tool(

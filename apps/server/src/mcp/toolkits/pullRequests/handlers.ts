@@ -16,6 +16,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import { bytesOf, clipFields, clipText, fitItems, READ_BUDGET_BYTES } from "./readBudget.ts";
+import { makeWriteHandlers } from "./writeHandlers.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -455,6 +456,7 @@ const make = Effect.gen(function* () {
   });
 
   return {
+    ...(yield* makeWriteHandlers(locateOne)),
     link_pull_request: writesThread((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread(PullRequestLinkFailedError, input.threadId);

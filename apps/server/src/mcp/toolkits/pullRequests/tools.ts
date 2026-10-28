@@ -1,4 +1,5 @@
 import { withClientRequestId } from "../keyedParameters.ts";
+import { makeWriteTools, PullRequestWriteFailedError } from "./writeTools.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -246,6 +247,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestGuideFailedError,
   PullRequestReadFailedError,
   PullRequestReadTooLargeError,
+  PullRequestWriteFailedError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 
@@ -541,6 +543,7 @@ const PullRequestFilterOptionsTool = Tool.make(
 ).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.filter_options"]));
 
 export const PullRequestsToolkit = Toolkit.make(
+  ...makeWriteTools(GuideTarget.fields, PullRequestToolError),
   LinkPullRequestTool,
   UnlinkPullRequestTool,
   ListThreadPullRequestsTool,

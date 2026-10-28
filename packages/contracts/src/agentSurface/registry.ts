@@ -26,6 +26,7 @@ import { previewEntries } from "./entries/preview.ts";
 import { projectEntries } from "./entries/project.ts";
 import { providerEntries } from "./entries/provider.ts";
 import { pullRequestEntries } from "./entries/pull_request.ts";
+import { pullRequestWriteEntries } from "./entries/pull_request_writes.ts";
 import { pullRequestGuideEntries } from "./entries/pull_request_guide.ts";
 import { queueEntries } from "./entries/queue.ts";
 import { repositoryEntries } from "./entries/repository.ts";
@@ -78,6 +79,7 @@ export const agentSurfaceRegistry = {
   ...previewEntries,
   ...projectEntries,
   ...pullRequestEntries,
+  ...pullRequestWriteEntries,
   ...pullRequestGuideEntries,
   ...originEntries,
   ...sshEntries,

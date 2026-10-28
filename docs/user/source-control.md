@@ -184,6 +184,16 @@ Open **Pull requests** to review changes and comments, request reviewers, check 
 or merge. You can edit review titles and descriptions and your own comments where the host allows it.
 GitLab calls these merge requests.
 
+Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
+manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The
+repository must be a project in the connected environment. Outside MCP clients need the
+`source-control:write` grant; read-only and reduced operate access cannot write. Plan-mode
+threads cannot write, and goatclaw profiles need `pr.open`, with `pr.merge` for merge and close.
+Comments, reviews and replies require a retry key. If a write's outcome is uncertain, the agent
+checks activity and tells you when it cannot confirm the result; a partial GitLab review or
+unconfirmed approval does not count as complete. Merge requests act on the host's current head
+and may be queued; use branch protection when a merge must require a particular head.
+
 On mobile, **Pull requests** lists reviews across your connected environments. Open a review
 to read its description, activity, commits, and changed files. Line comments stay as drafts
 until you submit the review. **Work on PR** opens a chat with the review attached; sending
