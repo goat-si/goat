@@ -208,7 +208,7 @@ it.effect(
           timeoutMs: 15_000,
         },
       ]);
-      // It may look for a desktop dev app server left on the legacy home, never an upstream ~/.t3 home.
+      // It looks only at the packaged app's homes, never an upstream ~/.t3 home.
       expect(scripts[0]!.script.replaceAll(desktopAppServerStateDirWords, "")).not.toContain(".t3");
     }),
 );

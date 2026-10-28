@@ -30,7 +30,7 @@ describe("resolveDesktopBaseDir", () => {
     assert.equal(devBaseDir(["/home/user/.t3/dev", "/home/user/.goat/dev"]), "/home/user/.goat"); // goat-rename: legacy
   });
 
-  it("every default desktop state directory is one the app-server probe searches", () => {
+  it("packaged builds keep state where the app-server probe searches, and dev builds never do", () => {
     const home = "/home/user";
     const base = (
       appVersion: string,
@@ -45,18 +45,21 @@ describe("resolveDesktopBaseDir", () => {
         appVersion,
         pathExists: (path) => existing.includes(path),
       });
-    const dirs = [
+    const searched = (dir: string) =>
+      desktopAppServerStateDirs.some((relative) => dir === `${home}/${relative}`);
+    const packaged = [
       stateDir(base("1.2.3-nightly.20261027.1", false), false),
       stateDir(base("1.2.3-preview.20261027.1", false), false),
+      stateDir(base("1.2.3-pr.1834.2", false), false),
       stateDir(base("1.2.3", false), false),
-      stateDir(base("1.2.3", true), true),
-      stateDir(base("1.2.3", true, ["/home/user/.t3/dev"]), true),
     ];
-    for (const dir of dirs) {
-      assert.ok(
-        desktopAppServerStateDirs.some((relative) => dir === `${home}/${relative}`),
-        dir,
-      );
-    }
+    for (const dir of packaged) assert.ok(searched(dir), dir);
+    // A PR preview runs beside stable, so its migrations never touch stable's database.
+    assert.equal(packaged[2], `${home}/.goat/desktop-nightly/userdata`);
+    const development = [
+      stateDir(base("1.2.3", true), true),
+      stateDir(base("1.2.3", true, ["/home/user/.t3/dev"]), true), // goat-rename: legacy
+    ];
+    for (const dir of development) assert.ok(!searched(dir), dir);
   });
 });

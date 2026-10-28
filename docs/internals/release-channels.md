@@ -46,13 +46,18 @@ To stop stable releases, label an issue `release-blocker` (and close it to resum
 
 ## Side-by-side desktop state
 
-A packaged nightly or preview build keeps its state in `~/.goat/desktop-nightly` and stable keeps
+A packaged nightly or preview build (dated or PR) keeps its state in `~/.goat/desktop-nightly` and stable keeps
 `~/.goat/desktop` (`resolveDesktopBaseDir` in `apps/desktop/src/app/DesktopStatePaths.ts`). The
 bundled server derives everything from that base directory, so the split covers its database and
 secrets too. On a nightly's first launch `apps/desktop/src/app/DesktopChannelStateMigration.ts`
 copies stable's state before any layer exists: anything that touches the state directory earlier
 would create the destination and stop the copy, because a destination that exists is never
 overwritten.
+
+A PR build keeps stable's app id and Computer Use helper (`usesNightlyDesktopState` in
+`apps/desktop/src/updates/updateChannels.ts`), so only its state moves: it shares the nightly home
+with an installed Nightly, and the server owner lock lets one of them run at a time. When the
+nightly home already exists, state an earlier PR build left in `~/.goat/desktop` is not copied.
 
 The copy keeps stable's environment id and secrets, since the database holds data encrypted with
 them, so two servers answer as one machine. It therefore starts with an automation hold

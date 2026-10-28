@@ -103,8 +103,17 @@ fi
 const serverPreamble = (kind: "app" | "managed") =>
   kind === "app" ? appServerSelect : managedPreamble;
 
-const appServerProbeScript =
-  () => String.raw`${appServerSelect}printf 'GOAT_APP_SERVER=live %s %s\n%s\n' "$app_pid" "$app_port" "$app_descriptor"
+// Also names the chosen directory and any other app server whose record names a live PID, so a
+// second channel's app (stable beside nightly) is reported instead of passed over silently.
+const appServerProbeScript = () => String.raw`${appServerSelect}app_chosen="$app_userdata"
+app_others=""
+for app_dir in ${desktopAppServerStateDirWords}; do
+  if [ "$app_dir" = "$app_chosen" ]; then continue; fi
+  other_line="$(tr '\n' ' ' 2>/dev/null <"$app_dir/server-runtime.json" || true)"
+  other_pid="$(printf '%s\n' "$other_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  if [ -n "$other_pid" ] && kill -0 "$other_pid" 2>/dev/null; then app_others="$app_others ${"$"}{app_dir#"$HOME/"}"; fi
+done
+printf 'GOAT_APP_SERVER=live %s %s %s\n%s\nGOAT_APP_SERVER_OTHERS=%s\n' "$app_pid" "$app_port" "${"$"}{app_chosen#"$HOME/"}" "$app_descriptor" "${"$"}{app_others# }"
 `;
 
 const managedExistingServerProbeScript = String.raw`set -eu
@@ -215,7 +224,15 @@ const isRuntimeMode = Schema.is(RuntimeMode);
  * serves this client. `none`: no app server runs here.
  */
 export type AppServerProbe =
-  | { readonly kind: "attach"; readonly port: number; readonly version: string }
+  | {
+      readonly kind: "attach";
+      readonly port: number;
+      readonly version: string;
+      /** Home-relative state directory of the attached server. */
+      readonly stateDir: string;
+      /** Other app-server state directories whose record names a live process. */
+      readonly otherLive: ReadonlyArray<string>;
+    }
   | { readonly kind: "declined"; readonly reason: string }
   | { readonly kind: "none" };
 
@@ -284,7 +301,7 @@ export const parseAppServerProbe = (stdout: string): AppServerProbe => {
   const index = lines.findIndex((line) => line.startsWith("GOAT_APP_SERVER="));
   const marker = lines[index];
   if (marker === undefined) return { kind: "none" };
-  const [status, , port] = marker.slice("GOAT_APP_SERVER=".length).split(" ");
+  const [status, , port, stateDir = ""] = marker.slice("GOAT_APP_SERVER=".length).split(" ");
   if (status === "none") return { kind: "none" };
   if (status !== "live") return { kind: "declined", reason: status ?? "unknown" };
   const remotePort = Number(port);
@@ -300,7 +317,16 @@ export const parseAppServerProbe = (stdout: string): AppServerProbe => {
     return { kind: "declined", reason: "no-runtime-sessions" };
   const verdict = compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, descriptor.value);
   if (verdict !== "compatible") return { kind: "declined", reason: verdict };
-  return { kind: "attach", port: remotePort, version: descriptor.value.serverVersion };
+  const others = lines
+    .find((line) => line.startsWith("GOAT_APP_SERVER_OTHERS="))
+    ?.slice("GOAT_APP_SERVER_OTHERS=".length);
+  return {
+    kind: "attach",
+    port: remotePort,
+    version: descriptor.value.serverVersion,
+    stateDir,
+    otherLive: others?.split(" ").filter((dir) => dir.length > 0) ?? [],
+  };
 };
 
 type AppServerContext = ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path;
@@ -337,6 +363,13 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
     yield* Effect.logInfo("ssh.appServer.probed", {
       ...sshTargetLogFields(target),
       ...probe,
+    });
+  // Only the first live app server is attached; threads in another channel's app stay out of view.
+  if (probe.kind === "attach" && probe.otherLive.length > 0)
+    yield* Effect.logWarning("ssh.appServer.otherLive", {
+      ...sshTargetLogFields(target),
+      stateDir: probe.stateDir,
+      otherLive: probe.otherLive,
     });
   return probe;
 });
