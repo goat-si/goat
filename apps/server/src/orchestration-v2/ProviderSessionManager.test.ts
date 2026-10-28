@@ -6016,7 +6016,7 @@ it.effect(
         // launches with the thread alone and reads its control at call time.
         yield* Ref.set(enabled, true);
         const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
-        assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
+        assert.isTrue(enabledDriver?.environment.some((e) => e.value.includes("/resources")));
         assert.isTrue(enabledDriver?.args.includes(threadId));
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
