@@ -61,8 +61,8 @@ const INSTALL = `(() => {
   const types = new Set(["pointerdown", "mousedown", "pointerup", "mouseup", "click",
     "contextmenu", "dblclick"]);
   const dispatching = new Set();
-  // The press moves focus as its default action, so a blur, change or focus the browser dispatches
-  // once it began (validation on leaving a field) is the click's as well.
+  // The press moves focus as its mousedown's default action, so a blur, change or focus the browser
+  // dispatches between its pointerdown and pointerup (validation on leaving a field) is the click's.
   const focusTypes = new Set(["blur", "focusout", "change", "focus", "focusin"]);
   let pressed = false;
   const handled = () => {
@@ -136,7 +136,10 @@ const INSTALL = `(() => {
       pressed = true;
       dismissible = new Set(document.querySelectorAll(":popover-open"));
     }
-    if (event.type === "pointerup") dismissible = new Set();
+    if (event.type === "pointerup") {
+      pressed = false;
+      dismissible = new Set();
+    }
     // Changes pending from before this event are ambient.
     observer.takeRecords();
     dispatching.add(event);
@@ -189,7 +192,7 @@ const INSTALL = `(() => {
     channel.port1.onmessage = () => {
       channel.port1.close();
       if (event.defaultPrevented) return;
-      note("navigation");
+      note(event.downloadRequest == null ? "navigation" : "download");
       navigatedNow(true);
     };
     channel.port2.postMessage(null);
@@ -326,14 +329,7 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
     seen.add("popup");
     wake();
   };
-  // A download leaves the page as it was, so only the browser's event shows it.
-  const onDownload = () => {
-    if (!armed) return;
-    seen.add("download");
-    wake();
-  };
   page.on("popup", onPopup);
-  page.on("download", onDownload);
   // A page that cannot run script, or that a dialog holds, still reports popups and dialogs.
   const installing = Promise.resolve()
     .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
@@ -342,7 +338,6 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {
     page.off("popup", onPopup);
-    page.off("download", onDownload);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);
   };
@@ -361,8 +356,8 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
       ?.evaluate((state) => state.changed.then(() => [...state.seen]))
       .then(record, constVoid);
     navigated = watch
-      ?.evaluate((state) => state.navigated)
-      .then((yes) => void (yes && seen.add("navigation")), constVoid);
+      ?.evaluate((state) => state.navigated.then(() => [...state.seen]))
+      .then(record, constVoid);
   };
   const settle = async (dialog = false): Promise<ClickEffect> => {
     try {

@@ -377,9 +377,14 @@ it("confirms a popover opened through content nested in its button, by selector 
 
 it("confirms a click that starts a download", () =>
   fixture(async (page) => {
-    await page.setContent(
-      `<a id="d" download="report.txt" href="data:text/plain,report">report</a>`,
+    // A served page: an initial about:blank document fires no navigate events.
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<a id="d" download="report.txt" href="data:text/plain,report">report</a>`,
+      }),
     );
+    await page.goto("https://page.test/");
     await page.focus("#d");
     await expect(ServerBrowserPage.click(page, { selector: "#d" })).resolves.toMatchObject({
       effect: "confirmed",
@@ -534,4 +539,24 @@ it("confirms a click outside a field whose blur validation it triggered", () =>
       evidence: expect.arrayContaining(["dom"]),
     });
     expect(await page.textContent("#saveState")).toBe("Saved");
+  }));
+
+it("does not credit a click with a focus or a download other work caused", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<p id="still">static</p><input id="search"><a id="export" download="report.txt" href="data:text/plain,report">export</a><script>
+          // Earlier work finishes right after this press: it saves an export and focuses search.
+          document.addEventListener("mouseup", () => setTimeout(() => {
+            document.getElementById("export").click();
+            document.getElementById("search").focus();
+          }, 5), { once: true });
+        </script>`,
+      }),
+    );
+    await page.goto("https://page.test/");
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
   }));
