@@ -138,3 +138,43 @@ it("maps into a bordered, padded frame and leaves out an identifier that is a co
     await browser.close();
   }
 });
+
+it("leaves out an identifier that is a password in a shadow root, an unknown role, and a rotated frame", async () => {
+  expect(chromiumInstalled).toBe(true);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.setContent(
+      '<div id="host"></div><button id="b">Save</button><div id="QuietPass1" role="quietsecret" style="position:fixed;inset:0"></div>',
+    );
+    await page.evaluate(
+      "document.getElementById('host').attachShadow({ mode: 'open' }).innerHTML = '<input type=password value=QuietPass1>'",
+    );
+    const masked = await ServerBrowserPage.click(page, { locator: "#b", timeoutMs: 5_000 }).then(
+      () => undefined,
+      (error: unknown) =>
+        (error as { readonly detail?: { readonly interceptedBy?: string } }).detail,
+    );
+    expect(masked?.interceptedBy).toContain("Now at the target: <div>.");
+    expect(JSON.stringify(masked)).not.toMatch(/QuietPass1|quietsecret/);
+    // A rotated wrapper makes the frame's mapping unknown, so only the tag and role are reported.
+    const child =
+      '<button>Inner</button><div style="position:fixed;inset:0" id="inner-cover"></div>';
+    await page.setContent(
+      `<div style="transform:rotate(180deg)"><iframe srcdoc='${child}'></iframe></div>`,
+    );
+    await page.frameLocator("iframe").getByRole("button").waitFor();
+    const rotated = await ServerBrowserPage.click(page, {
+      locator: "iframe >> internal:control=enter-frame >> button",
+      timeoutMs: 5_000,
+    }).then(
+      () => undefined,
+      (error: unknown) =>
+        (error as { readonly detail?: { readonly interceptedBy?: string } }).detail,
+    );
+    expect(rotated?.interceptedBy).toBeDefined();
+    expect(rotated?.interceptedBy).not.toContain("Now at the target");
+  } finally {
+    await browser.close();
+  }
+});

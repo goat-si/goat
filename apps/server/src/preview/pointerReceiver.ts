@@ -11,7 +11,17 @@ const MAX_FRAME_DEPTH = 5;
 /** Identifiers only; long runs of letters and digits look like tokens and are left out. */
 const IDENTIFIER = /^[A-Za-z][\w-]{0,39}$/;
 const TOKEN_LIKE = /[A-Za-z0-9_-]{24,}|\d{6,}/;
-const ROLE = /^[a-z]{1,20}$/;
+/** Only well-known tags and roles are named; anything else a page set is left out. */
+const TAGS = new Set(
+  "a article aside button canvas details dialog div figure footer form header iframe img input label li main nav ol p section span summary svg table td th tr ul video".split(
+    " ",
+  ),
+);
+const ROLES = new Set(
+  "alert alertdialog article banner button complementary contentinfo dialog form grid group heading img link listbox main menu menubar menuitem navigation option presentation region search status tab tabpanel toolbar tooltip".split(
+    " ",
+  ),
+);
 
 /** The topmost element at a point, inside open shadow roots too. */
 const HIT_AT = `([x, y]) => {
@@ -41,20 +51,51 @@ const within = async <A>(work: Promise<A>, deadline: number): Promise<A | undefi
   }
 };
 
-/** Tag, role and identifiers; one that holds a password field's value in its document is dropped. */
+type PageNode = {
+  readonly tagName?: string;
+  readonly type?: string;
+  readonly value?: unknown;
+  readonly children?: ArrayLike<PageNode>;
+  readonly shadowRoot?: PageNode | null;
+  readonly parentElement?: PageNode | null;
+  getRootNode?(): { readonly host?: PageNode };
+};
+/**
+ * Tag, role and identifiers. Identifiers holding a value of any password or visually masked
+ * field in the document, open shadow roots included, are dropped; all are dropped when that
+ * walk does not finish within its node budget.
+ */
 const describe = (element: ElementHandle) =>
   element.evaluate((node) => {
     const target = node as unknown as {
       readonly tagName: string;
       readonly id: string;
       readonly classList: Iterable<string>;
-      readonly ownerDocument: { querySelectorAll(selector: string): Iterable<{ value: string }> };
+      readonly ownerDocument: { readonly documentElement: PageNode };
       getAttribute(name: string): string | null;
     };
-    const hidden = Array.from(target.ownerDocument.querySelectorAll("input[type=password]"))
-      .map((input) => input.value)
-      .filter((value) => value.length >= 3);
-    const clean = (token: string) => !hidden.some((value) => token.includes(value));
+    const view = globalThis as unknown as {
+      getComputedStyle(element: unknown): { getPropertyValue(name: string): string };
+    };
+    const secrets: Array<string> = [];
+    const stack: Array<PageNode> = [target.ownerDocument.documentElement];
+    for (let budget = 20_000; stack.length > 0 && budget > 0; budget--) {
+      const current = stack.pop();
+      if (current === undefined) break;
+      if (
+        current.tagName === "INPUT" &&
+        typeof current.value === "string" &&
+        current.value.length >= 3
+      ) {
+        const security = view.getComputedStyle(current).getPropertyValue("-webkit-text-security");
+        if (current.type === "password" || (security !== "" && security !== "none"))
+          secrets.push(current.value);
+      }
+      if (current.shadowRoot) stack.push(current.shadowRoot);
+      for (const child of Array.from(current.children ?? [])) stack.push(child);
+    }
+    const complete = stack.length === 0;
+    const clean = (token: string) => complete && !secrets.some((value) => token.includes(value));
     return {
       tag: target.tagName.toLowerCase(),
       role: (target.getAttribute("role") ?? "").toLowerCase(),
@@ -69,38 +110,49 @@ const describe = (element: ElementHandle) =>
   });
 
 /**
- * A point in a frame's own viewport: inside its border and padding. Returns undefined for a
- * transformed or scaled frame, whose mapping this does not attempt.
+ * A point in a frame's own viewport: inside its border and padding. Returns null when the frame
+ * or any ancestor is transformed, rotated, translated or scaled; that mapping is not attempted.
  */
 const intoFrame = (frameElement: ElementHandle, x: number, y: number) =>
   frameElement.evaluate(
     (node, [px, py]) => {
-      const frame = node as unknown as {
+      const frame = node as unknown as PageNode & {
         getBoundingClientRect(): { left: number; top: number; width: number; height: number };
         readonly offsetWidth: number;
         readonly offsetHeight: number;
         readonly clientLeft: number;
         readonly clientTop: number;
       };
-      const style = (
-        globalThis as unknown as {
-          getComputedStyle(element: unknown): {
-            transform: string;
-            paddingLeft: string;
-            paddingTop: string;
-          };
+      const view = globalThis as unknown as {
+        getComputedStyle(element: unknown): { getPropertyValue(name: string): string };
+      };
+      for (let current: PageNode | null | undefined = frame; current;) {
+        const style = view.getComputedStyle(current);
+        for (const property of ["transform", "rotate", "scale", "translate", "zoom"]) {
+          const value = style.getPropertyValue(property);
+          if (value !== "" && value !== "none" && !(property === "zoom" && value === "1"))
+            return null;
         }
-      ).getComputedStyle(node);
+        current = current.parentElement ?? current.getRootNode?.().host;
+      }
       const rect = frame.getBoundingClientRect();
       if (
-        style.transform !== "none" ||
         Math.abs(rect.width - frame.offsetWidth) > 0.5 ||
         Math.abs(rect.height - frame.offsetHeight) > 0.5
       )
         return null;
+      const style = view.getComputedStyle(frame);
       return {
-        x: px - rect.left - frame.clientLeft - Number.parseFloat(style.paddingLeft),
-        y: py - rect.top - frame.clientTop - Number.parseFloat(style.paddingTop),
+        x:
+          px -
+          rect.left -
+          frame.clientLeft -
+          Number.parseFloat(style.getPropertyValue("padding-left")),
+        y:
+          py -
+          rect.top -
+          frame.clientTop -
+          Number.parseFloat(style.getPropertyValue("padding-top")),
       };
     },
     [x, y] as const,
@@ -150,8 +202,8 @@ export const describeReceiver = async (page: Page, target: Locator, deadline: nu
       id !== undefined && usable(id)
         ? ` #${id}`
         : found.identifiers.filter((token) => token.startsWith(".") && usable(token)).join("");
-    const role = ROLE.test(found.role) ? ` (${found.role})` : "";
-    const tag = /^[a-z][a-z0-9-]{0,30}$/.test(found.tag) ? found.tag : "element";
+    const role = ROLES.has(found.role) ? ` (${found.role})` : "";
+    const tag = TAGS.has(found.tag) ? found.tag : "element";
     return `<${tag}>${role}${hint ? ` ${hint.trim()}` : ""}`;
   } catch {
     return undefined;

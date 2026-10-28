@@ -149,22 +149,41 @@ describe("inPageFetch privacy", () => {
     ).rejects.toMatchObject({ reason: "privateMode" });
   });
 
-  it("gives up on a page that never answers, releases its handle and frees the tab", async () => {
-    const control = new SessionControl("agent");
-    const disposed = Promise.withResolvers<void>();
-    const page = {
-      url: () => "https://app.example/",
-      evaluateHandle: async () => ({
-        evaluate: () => new Promise<never>(() => undefined),
-        dispose: async () => disposed.resolve(),
-      }),
-      context: () => ({ cookies: async () => [] }),
-    };
-    await expect(
-      inPageFetch(page as unknown as Page, control, { url: "/me", timeoutMs: 1 }),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
-    await disposed.promise;
-    expect(await control.observe(async () => "next")).toBe("next");
+  it("gives up on a page that never answers at its deadline, releases its handle and lets the next queued action run", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const control = new SessionControl("agent");
+      const disposed = Promise.withResolvers<void>();
+      const asked = Promise.withResolvers<void>();
+      const page = {
+        url: () => "https://app.example/",
+        evaluateHandle: async () => ({
+          evaluate: () => {
+            asked.resolve();
+            return new Promise<never>(() => undefined);
+          },
+          dispose: async () => disposed.resolve(),
+        }),
+        context: () => ({ cookies: async () => [] }),
+      };
+      // Queued as the server queues tab work: the next action waits for the fetch to settle.
+      const fetching = control
+        .agent("agent", () =>
+          inPageFetch(page as unknown as Page, control, { url: "/me", timeoutMs: 1_000 }),
+        )
+        .then(
+          () => "answered",
+          (error: unknown) => error,
+        );
+      const next = control.agent("agent", async () => "next");
+      await asked.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await fetching).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+      await disposed.promise;
+      expect(await next).toBe("next");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
