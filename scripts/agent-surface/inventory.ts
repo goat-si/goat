@@ -459,7 +459,9 @@ export async function collectTools(): Promise<{
   const resolve = (await importFile(
     NodePath.join(repoRoot, "packages/contracts/src/agentSurface/resolve.ts"),
   )) as {
-    resolveAgentSurfaceEntry: (name: string) => unknown;
+    resolveAgentSurfaceEntry: (
+      name: string,
+    ) => { readonly examples?: ReadonlyArray<unknown> } | undefined;
     deduplicatesClientRequestId: (entry: unknown) => boolean;
     listedToolName: (entry: unknown) => string;
   };
