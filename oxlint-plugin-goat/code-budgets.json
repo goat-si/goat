@@ -871,7 +871,6 @@
   "packages/ssh/src/tunnel.core.test.ts": { "lines": 3012 },
   "packages/ssh/src/tunnel.fixture.ts": { "nonNull": 1 },
   "packages/ssh/src/tunnel.pending-manager.test.ts": { "lines": 1947 },
-  "packages/ssh/src/tunnel.reconnect-probe.test.ts": { "lines": 1206 },
   "packages/ssh/src/tunnel.runtime-status.test.ts": { "lines": 1084 },
   "packages/ssh/src/tunnel.ts": { "lines": 4977, "nonNull": 4 },
   "scripts/agent-surface/audit.ts": { "lines": 1077 },
