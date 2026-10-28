@@ -193,7 +193,8 @@ const supportsOperation = (
   operation: PreviewAutomationOperation,
 ): boolean =>
   connection.supportedOperations.has(operation) &&
-  (operation !== "fillSecret" || connection.inProcess);
+  // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
+  ((operation !== "fillSecret" && operation !== "open") || connection.inProcess);
 
 const supportsRequest = (
   connection: ClientConnection,

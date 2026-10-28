@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
 import * as HostProcess from "@goat/shared/HostProcess";
-import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
+import { INCOGNITO_BROWSER_PROFILE_ID, type PreviewSessionStore } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
@@ -14,6 +14,9 @@ import { sandboxDisabled } from "./PreviewBrowserHost.ts";
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
 const loadPlaywright = () =>
   requirePlaywright("playwright-core") as typeof import("playwright-core");
+
+/** Records which sign-in store agent tabs use for a profile; Chromium ignores unknown files. */
+const STORE_PIN_FILE = "goat-agent-store";
 
 interface Options {
   readonly profilesDir: string;
@@ -222,6 +225,33 @@ export class ServerBrowserContexts {
       this.options.profilesDir,
       profileId === "." || profileId === ".." ? encoded.replaceAll(".", "%2E") : encoded,
     );
+  }
+
+  private storePinPath(profileId: string) {
+    return NodePath.join(this.profileDirectory(profileId), STORE_PIN_FILE);
+  }
+
+  /** The sign-in store an agent first opened this profile in; clearing the profile removes it. */
+  async storePin(profileId: string): Promise<PreviewSessionStore | undefined> {
+    try {
+      const value = (await NodeFSP.readFile(this.storePinPath(profileId), "utf8")).trim();
+      return value === "server" || value === "desktop" ? value : undefined;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw cause;
+    }
+  }
+
+  /** Pins the first store only; returns the pinned one, which differs when another open won. */
+  async pinStore(profileId: string, store: PreviewSessionStore): Promise<PreviewSessionStore> {
+    await NodeFSP.mkdir(this.profileDirectory(profileId), { recursive: true });
+    try {
+      await NodeFSP.writeFile(this.storePinPath(profileId), store, { flag: "wx" });
+      return store;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
+      return (await this.storePin(profileId)) ?? store;
+    }
   }
 
   async scratchPage() {

@@ -23,6 +23,11 @@ import {
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import {
+  PREVIEW_SESSION_GUIDANCE,
+  PreviewSessionMode,
+  PreviewTabSession,
+} from "./previewAutomationSession.ts";
 import * as Screen from "./previewAutomationScreen.ts";
 import {
   PreviewAutomationFeature,
@@ -39,7 +44,7 @@ const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isMaxLength(2048));
 const URL_GUIDANCE = "Absolute http(s) URL, or a bare host (https; http for loopback).";
 const PROFILE_GUIDANCE =
-  "Profile id or name from goat_preview_status, for a new tab. Default: the user's. A tab keeps its profile.";
+  "Profile id or name from goat_preview_status, for a new tab; implies session profile. A tab keeps its profile.";
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(60_000)),
 ).annotate({ description: "Default 15000." });
@@ -81,6 +86,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "scrollCollect",
   "fillSecret",
   "read",
+  "signInState",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
@@ -170,11 +176,14 @@ export const PreviewAutomationStatus = Schema.Struct({
         ownedByCaller: Schema.optional(Schema.Boolean),
         visible: Schema.optional(Schema.Boolean),
         profileId: Schema.optional(BrowserProfileId),
+        session: Schema.optional(PreviewTabSession),
       }),
     ),
   ),
   profiles: Schema.optional(Schema.Array(PreviewAutomationProfile)),
   defaultProfileId: Schema.optional(BrowserProfileId),
+  /** The selected tab's sign-in mode and store; older servers omit it. */
+  session: Schema.optional(PreviewTabSession),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 
@@ -208,11 +217,17 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   profileId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))).annotate({
     description: PROFILE_GUIDANCE,
   }),
+  session: Schema.optional(PreviewSessionMode).annotate({ description: PREVIEW_SESSION_GUIDANCE }),
 }).check(
   Schema.makeFilter(
     (input) =>
       !(input.tabId !== undefined && input.reuseExistingTab === false) ||
       "tabId cannot be combined with reuseExistingTab=false.",
+  ),
+  Schema.makeFilter(
+    (input) =>
+      !(input.session === "isolated" && input.profileId !== undefined) ||
+      "profileId selects a saved profile; omit it for session isolated.",
   ),
 );
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
@@ -1074,3 +1089,4 @@ export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
 
 export * from "./previewAutomationInputHold.ts";
 export * from "./previewAutomationPrimitives.ts";
+export * from "./previewAutomationSession.ts";

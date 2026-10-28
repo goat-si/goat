@@ -2,21 +2,17 @@
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
-  BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   FILL_PREVIEW_VIEWPORT,
-  findBrowserProfile,
   INCOGNITO_BROWSER_PROFILE_ID,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewAutomationLogsInput,
   PreviewClearProfileError,
   PreviewViewportSetting as PreviewViewportSettingSchema,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-  resolveBrowserProfiles,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
-  type BrowserProfile,
   type AgentCursorSnapshot,
   type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
@@ -47,6 +43,7 @@ import {
   type PreviewNavStatus,
   type PreviewReportProfilesInput,
   type PreviewSessionSnapshot,
+  type PreviewTabSession,
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -112,6 +109,14 @@ import { inPageFetch } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import {
+  assertReusable,
+  desktopStoreUnavailable,
+  openInSession,
+  SessionProfiles,
+  tabSession,
+  type RequestedSession,
+} from "./sessionMode.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -328,6 +333,8 @@ interface ServerTab {
   readonly onFileChooser: (chooser: FileChooser) => void;
 
   readonly isolatedContext: boolean;
+  /** The sign-in mode and store the tab was opened with; it never changes. */
+  readonly session: PreviewTabSession;
 
   readonly desktop: { readonly close: () => Promise<void> } | null;
   readonly profileId: string | undefined;
@@ -413,6 +420,7 @@ const make = Effect.gen(function* () {
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
+  const profiles = new SessionProfiles();
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
@@ -651,9 +659,15 @@ const make = Effect.gen(function* () {
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
     const desktop =
-      adopted === undefined && (await desktopRenders(snapshot))
+      adopted === undefined && snapshot.serverRendered !== true && (await desktopRenders(snapshot))
         ? await connectDesktop(snapshot)
         : null;
+    // An agent profile tab whose sign-ins live in the desktop app never falls back to the server.
+    const owned = snapshot.automationOwner !== undefined && snapshot.serverRendered !== true;
+    if (adopted === undefined && desktop === null && owned)
+      throw desktopStoreUnavailable(
+        profiles.name(snapshot.profileId ?? DEFAULT_BROWSER_PROFILE_ID),
+      );
     const isolatedContext =
       adopted === undefined &&
       desktop === null &&
@@ -702,6 +716,9 @@ const make = Effect.gen(function* () {
       fileChooserIntercepted: false,
       onFileChooser: (chooser) => void offerFileChooser(tab, chooser),
       isolatedContext,
+      session:
+        (adopted && tabs.get(tabKey(snapshot.threadId, adopted.openerTabId))?.session) ??
+        tabSession({ isolatedContext, profileId: snapshot.profileId, desktop }),
       desktop: desktop === null ? null : { close: desktop.close },
       profileId: snapshot.profileId,
       openerTabId: adopted?.openerTabId,
@@ -1127,6 +1144,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
+        ...(opener.session.store === "server" ? { serverRendered: true as const } : {}),
         ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
@@ -1232,10 +1250,6 @@ const make = Effect.gen(function* () {
         ? ("agent" as const)
         : ("unclaimed" as const);
 
-  let reportedProfiles: {
-    readonly profiles: ReadonlyArray<BrowserProfile>;
-    readonly defaultProfileId: string;
-  } | null = null;
   // Agent recordings encode here, so they need the client's Browser recording frame rate. The
   // last report outlives the client, which lets agents record while no client is connected.
   let recordingFrameRate = DEFAULT_BROWSER_RECORDING_FRAME_RATE;
@@ -1243,39 +1257,42 @@ const make = Effect.gen(function* () {
   const reportProfiles: ServerBrowser["Service"]["reportProfiles"] = (input) =>
     Effect.sync(() => {
       if (input.recordingFrameRate !== undefined) recordingFrameRate = input.recordingFrameRate;
-      const profiles = resolveBrowserProfiles(input.profiles);
-      reportedProfiles = {
-        profiles,
-        defaultProfileId:
-          findBrowserProfile(profiles, input.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
-      };
+      profiles.report(input);
     });
 
-  const profileStatus = () => {
-    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
-    return {
-      profiles: profiles.map((profile) => ({
-        id: profile.id,
-        name: profile.name,
-        ...(profile.kind === "incognito" ? { incognito: true } : {}),
-      })),
-      ...(reportedProfiles ? { defaultProfileId: reportedProfiles.defaultProfileId } : {}),
-    };
-  };
-
-  const resolveOpenProfile = (requested: string | undefined): string | undefined => {
-    if (requested === undefined) return reportedProfiles?.defaultProfileId;
-    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
-    const wanted = requested.toLowerCase();
-    const match =
-      findBrowserProfile(profiles, requested) ??
-      profiles.find((profile) => profile.name.toLowerCase() === wanted);
-    if (match) return match.id;
-    throw new ServerBrowserPage.ServerBrowserOperationError(
-      "PreviewAutomationUnknownProfileError",
-      `No browser profile is named "${requested}". Use one of: ${profiles
-        .map((profile) => `${profile.name} (id ${profile.id})`)
-        .join(", ")}.`,
+  /** A new agent tab in exactly the requested session, closing idle tabs first. */
+  const openSessionTab = (
+    request: { readonly threadId: string; readonly agentSessionId: string },
+    url: string | undefined,
+    session: RequestedSession,
+  ) => {
+    closeIdleAgentTabs();
+    assertTabCapacity(request.agentSessionId);
+    return openInSession(
+      {
+        profiles,
+        contexts,
+        desktopAvailable: desktopChannel.available,
+        open: (fields) =>
+          runPromise(
+            manager.open({
+              threadId: ThreadId.make(request.threadId),
+              ...(url ? { url } : {}),
+              runtime: "server",
+              reveal: false,
+              automationOwner: request.agentSessionId,
+              ...fields,
+            }),
+          ),
+        ensureTab,
+        discard: async (snapshot, tab) => {
+          if (tab) void tab.control.close().catch(constVoid);
+          const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
+          await runPromise(manager.close(key)).catch(constVoid);
+          if (tab) dropTab(tab, false);
+        },
+      },
+      session,
     );
   };
 
@@ -1292,7 +1309,7 @@ const make = Effect.gen(function* () {
         url: null,
         title: null,
         loading: false,
-        ...profileStatus(),
+        ...profiles.status(),
       };
     }
     const url = tab.page.url();
@@ -1327,8 +1344,10 @@ const make = Effect.gen(function* () {
           ownedByCaller: candidate.control.agentId === agentSessionId,
           visible: candidate.viewers.size > 0,
           ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
+          session: candidate.session,
         })),
-      ...profileStatus(),
+      ...profiles.status(),
+      session: tab.session,
       downloads: tab.downloads.map(({ fileName, path, sizeBytes, url, completedAt }) => ({
         fileName,
         path,
@@ -1712,25 +1731,8 @@ const make = Effect.gen(function* () {
             ? found
             : undefined;
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
-        const profileId = existing ? undefined : resolveOpenProfile(open.profileId);
-        if (!existing) {
-          closeIdleAgentTabs();
-          assertTabCapacity(request.agentSessionId);
-        }
-        const tab =
-          existing ??
-          (await ensureTab(
-            await runPromise(
-              manager.open({
-                threadId: request.threadId,
-                ...(url ? { url } : {}),
-                ...(profileId === undefined ? {} : { profileId }),
-                runtime: "server",
-                reveal: false,
-                automationOwner: request.agentSessionId,
-              }),
-            ),
-          ));
+        if (existing) assertReusable(existing.session, open, profiles);
+        const tab = existing ?? (await openSessionTab(request, url, profiles.resolve(open)));
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',

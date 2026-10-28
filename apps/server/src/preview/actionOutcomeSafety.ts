@@ -35,6 +35,7 @@ const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set
   "logs",
   "fetch",
   "waitFor",
+  "signInState",
 ]);
 
 export function classifyBrowserControlReason(

@@ -37,6 +37,8 @@ export class PreviewManager extends Context.Service<
     readonly open: (
       input: PreviewOpenInput & {
         readonly automationOwner?: string;
+        /** Set for agent tabs whose sign-in store is the server's, so clients never render them natively. */
+        readonly serverRendered?: true;
         /** Runs before the `opened` event publishes, so subscribers find state keyed by the tab. */
         readonly beforePublish?: (snapshot: PreviewSessionSnapshot) => void;
       },
@@ -194,6 +196,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         ...(runtime === "server" && input.automationOwner !== undefined
           ? { automationOwner: input.automationOwner }
           : {}),
+        ...(runtime === "server" && input.serverRendered ? { serverRendered: true as const } : {}),
         ...(input.reveal === undefined ? {} : { reveal: input.reveal }),
         updatedAt,
       };
