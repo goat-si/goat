@@ -1,9 +1,14 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import {
+  goatBotActivity,
+  type GoatBotActivity,
+  type GoatBotRow,
+} from "@goat/client-runtime/goatBot";
 import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
+const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -59,7 +64,11 @@ vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
-vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
+vi.mock("@legendapp/list/react-native", () => ({
+  LegendList: ({ ListFooterComponent }: { ListFooterComponent?: ReactNode }) => (
+    <>{ListFooterComponent}</>
+  ),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useKeyboardState: () => false,
@@ -75,7 +84,6 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
 }));
-vi.mock("./useReplying", () => ({ useReplying: () => false }));
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
@@ -87,6 +95,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     onSend: () => true,
     onRetryInput: () => {},
     replyingSince: null,
+    activity: screenSession.activity,
   }),
 }));
 
@@ -191,4 +200,22 @@ it("scales timeline message text when the base font size changes", async () => {
   });
   await view.unmount();
   appearance.baseFontSize = 16;
+});
+
+it("shows the shared reader's reading and working text below the conversation", async () => {
+  screenSession.activity = goatBotActivity({ reading: true, task: null, worker: null });
+  const reading = await render(<GoatBotScreen visible />);
+  expect(reading.container.textContent).toContain("Reading your message");
+  await reading.unmount();
+
+  screenSession.activity = { state: "working", text: "Run df -h" };
+  const working = await render(<GoatBotScreen visible />);
+  expect(working.container.textContent).toContain("Run df -h");
+  expect(working.container.textContent).not.toContain("Reading your message");
+  await working.unmount();
+
+  screenSession.activity = null;
+  const idle = await render(<GoatBotScreen visible />);
+  expect(idle.container.textContent).not.toContain("Run df -h");
+  await idle.unmount();
 });
