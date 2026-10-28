@@ -36,6 +36,7 @@ import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
+import { runSnapshot } from "./snapshotRetry.ts";
 import {
   narrowTree,
   resetSnapshotDiff,
@@ -688,37 +689,14 @@ const capture = async (
   );
 };
 
-/** Snapshots begun per page; observers' snapshots aren't queued, so two can overlap. */
-const snapshotTurns = new WeakMap<Page, number>();
-
-export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
-  const deadline = Date.now() + input.timeoutMs;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), input.timeoutMs);
+export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapshot> =>
+  runSnapshot({
+    page: input.page,
+    timeoutMs: input.timeoutMs,
+    capture: (deadline) => capture(input, deadline),
+    retryable: (cause) => !(cause instanceof Error && NOT_RETRIED.has(cause.message)),
+    tooBusy,
   });
-  const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
-  snapshotTurns.set(input.page, turn);
-  // Retry only before the deadline and the next snapshot, whose refs a later retry would revoke.
-  const captured = capture(input, deadline).catch((cause: unknown) =>
-    Date.now() < deadline &&
-    snapshotTurns.get(input.page) === turn &&
-    !(cause instanceof Error && NOT_RETRIED.has(cause.message))
-      ? capture(input, deadline)
-      : Promise.reject(cause),
-  );
-  try {
-    return await Promise.race([captured, expired]);
-  } catch (cause) {
-    throw cause instanceof Error && cause.name === "TimeoutError" ? tooBusy() : cause;
-  } finally {
-    clearTimeout(timer);
-    // CDP cannot cancel a capture: the caller's capture lock and paused screencasts wait for the
-    // one Chromium still owes, so no second capture runs beside it. The caller's own deadline
-    // answers it meanwhile (CaptureLock).
-    await captured.then(constVoid, constVoid);
-  }
-};
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
 export const click = async (
