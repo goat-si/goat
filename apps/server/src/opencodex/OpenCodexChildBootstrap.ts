@@ -1,12 +1,24 @@
 import {
+  type ChildReadyFailure,
+  type ChildReadyResult,
+  type ChildReadyStep,
+  type ChildSetupBinding,
   CloudMachineError,
   EnvironmentId,
   hasCloudMachineAliasPrefix,
+  type HubDeviceSetupInput,
   OpenCodexChildBootstrapStatus,
   type EnvironmentAuthorizationError,
   type HubDeviceMcpResult,
-  type OrchestratorMcpFailure,
+  type OpenCodexChildSetup,
+  OrchestratorMcpFailure,
 } from "@goat/contracts";
+import {
+  windowsRemoteLinkRelease,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
+import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,6 +31,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
@@ -32,39 +45,32 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
+import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as ReadyDispatch from "./ChildReadyDispatch.ts";
+import {
+  decodeStoredRecords,
+  presentSetupAction,
+  setupResult,
+  withCurrentProof,
+  withSetupFailure,
+} from "./childBootstrapStatus.ts";
+import { makeReadyVerifier } from "./childReadyVerification.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
-import { CHILD_MINIMUM_VERSION, PREPARE_EXIT } from "./childPrepare.ts";
+import { ReleaseCatalog } from "./OpenCodexInstallation.ts";
+import { CHILD_MINIMUM_VERSION } from "./childPrepare.ts";
 import { makeSshChildConsent } from "./sshChildConsent.ts";
 
 const STATE_FILE = "opencodex-child-bootstrap.json";
 const CONSENT_FILE = "opencodex-child-ssh-consent.json";
-// npm downloads OpenCodex and its bundled Bun runtime, then the service gets 40 seconds to answer.
-const PREPARE_TIMEOUT_MS = 15 * 60_000;
 /** A blocked machine is tried again on a later readying, but not on every one. */
 const RETRY_AFTER_MS = 10 * 60_000;
 
 type Status = OpenCodexChildBootstrapStatus;
 type Reason = NonNullable<Status["reason"]>;
 const Records = Schema.Record(Schema.String, OpenCodexChildBootstrapStatus);
-const decodeRecords = Schema.decodeUnknownOption(Schema.fromJsonString(Records));
-const encodeRecords = Schema.encodeSync(Schema.fromJsonString(Records));
+const encodeRecords = Schema.encodeEffect(Schema.fromJsonString(Records));
 
-const PREPARE_REASONS: Readonly<Record<number, readonly [Reason, string]>> = {
-  [PREPARE_EXIT.npmMissing]: [
-    "npm_missing",
-    "npm is not installed there. OpenCodex installs with npm (Node 18 or later).",
-  ],
-  [PREPARE_EXIT.installFailed]: ["install_failed", "npm could not install OpenCodex there."],
-  [PREPARE_EXIT.ocxUnusable]: [
-    "ocx_unusable",
-    `After installing, the first ocx there still is not OpenCodex ${CHILD_MINIMUM_VERSION} or later.`,
-  ],
-  [PREPARE_EXIT.runtimeUnhealthy]: [
-    "runtime_unhealthy",
-    "OpenCodex is installed there but did not start; see ~/.opencodex/goat-start.log on it.",
-  ],
-};
-
+const RUNTIME_MISSING = "GOAT's runtime is not available there. Finish SSH setup and retry.";
 /** Whether a join may still happen: the hub's cloud switch, or an SSH host's standing consent. */
 type Admission =
   | { readonly state: "allowed" }
@@ -77,6 +83,12 @@ interface Gate {
   readonly join: (
     scope: McpInvocationScope,
   ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
+  /** The consent's identity now, read fresh: a setup purpose is issued only while it holds. */
+  readonly grant: Effect.Effect<{
+    readonly enabled: boolean;
+    readonly grantId: string;
+    readonly grantRevision: number;
+  }>;
 }
 
 export class OpenCodexChildBootstrap extends Context.Service<
@@ -102,6 +114,11 @@ export class OpenCodexChildBootstrap extends Context.Service<
     ) => Effect.Effect<void, OrchestratorMcpFailure | EnvironmentAuthorizationError>;
     /** Whether an SSH host is opted in; undefined while not a hub and for hosts that cannot be. */
     readonly sshOptIn: (alias: string) => Effect.Effect<boolean | undefined>;
+    /**
+     * Retries or finishes one machine's setup under its standing consent; a Child linked before
+     * setup existed finishes without linking again. Never gives consent.
+     */
+    readonly setupDevice: (input: HubDeviceSetupInput) => Effect.Effect<ChildReadyResult>;
   }
 >()("goat/opencodex/OpenCodexChildBootstrap") {}
 
@@ -112,6 +129,10 @@ const make = Effect.gen(function* () {
   const ocx = yield* HubOcx;
   const membership = yield* HubMembership.HubMembership;
   const inventory = yield* Inventory.OpenCodexInventory;
+  const childReady = yield* ReadyDispatch.ChildReadyDispatch;
+  // Read once here: a setup job's fiber does not carry this layer's context.
+  const catalog = yield* ReleaseCatalog;
+  const sshDispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const settings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const config = yield* ServerConfig.ServerConfig;
@@ -129,9 +150,15 @@ const make = Effect.gen(function* () {
   const jobs = new Map<string, Fiber.Fiber<Status | undefined>>();
   const releases = new Map<string, Fiber.Fiber<void>>();
 
+  const bootedAt = yield* Clock.currentTimeMillis;
   const stored = yield* fs.readFileString(stateFile).pipe(
-    Effect.map((text) => Option.getOrElse(decodeRecords(text), () => ({}))),
-    Effect.orElseSucceed((): Readonly<Record<string, Status>> => ({})),
+    Effect.map((text) => decodeStoredRecords(text, bootedAt)),
+    Effect.catch((error) =>
+      (error.reason._tag === "NotFound"
+        ? Effect.void
+        : Effect.logWarning("Child setup records could not be read.")
+      ).pipe(Effect.as<Readonly<Record<string, Status>>>({})),
+    ),
   );
   // A job does not outlive the server, so a "running" record from before a restart is stale.
   const initial = Object.fromEntries(
@@ -148,30 +175,44 @@ const make = Effect.gen(function* () {
     ]),
   );
   const records = yield* Ref.make<Readonly<Record<string, Status>>>(initial);
-  /** One atomic write per change, so a restart sees each outcome whole or not at all. */
+  /**
+   * One atomic write per change, published only after the rename, so a restart sees each outcome
+   * whole or not at all and a failed write never reads as done.
+   */
   const save = (change: (current: Readonly<Record<string, Status>>) => Record<string, Status>) =>
     writing.withPermits(1)(
       Effect.gen(function* () {
         const next = change(yield* Ref.get(records));
-        yield* Ref.set(records, next);
         yield* fs.makeDirectory(config.stateDir, { recursive: true });
-        yield* fs.writeFileString(`${stateFile}.tmp`, encodeRecords(next));
+        yield* fs.writeFileString(`${stateFile}.tmp`, yield* encodeRecords(next));
         yield* fs.rename(`${stateFile}.tmp`, stateFile);
-      }).pipe(Effect.ignore({ log: true })),
+        yield* Ref.set(records, next);
+      }),
     );
+  /** A record that could not be saved is answered as a storage failure, never as Ready. */
   const record = Effect.fn("OpenCodexChildBootstrap.record")(function* (
     alias: string,
     status: Omit<Status, "checkedAt">,
   ) {
     const next: Status = { ...status, checkedAt: yield* Clock.currentTimeMillis };
-    yield* save((current) => ({ ...current, [alias]: next }));
-    return next;
+    const saved = yield* save((current) => ({ ...current, [alias]: next })).pipe(Effect.result);
+    if (saved._tag === "Success") return next;
+    yield* Effect.logWarning("Child setup record could not be saved.");
+    return {
+      ...withSetupFailure(next, {
+        code: "storage_failed",
+        step: next.step ?? "goat_available",
+        message: "This Home could not save the setup record. Retry setup.",
+        retryable: true,
+      }),
+      checkedAt: next.checkedAt,
+    } satisfies Status;
   });
   const discard = (alias: string) =>
     save((current) => {
       const { [alias]: _gone, ...rest } = current;
       return rest;
-    });
+    }).pipe(Effect.ignore({ log: true }));
 
   // As last committed: a full read can wait on secrets and answer from before a change.
   const hubSettings = (
@@ -202,10 +243,146 @@ const make = Effect.gen(function* () {
           message: admission.message,
         });
 
+  // Each active setup operation's binding, so a consent change can revoke its Child sessions.
+  const setupBindings = new Map<
+    string,
+    { readonly alias: string; readonly binding: ChildSetupBinding; activeStep: ChildReadyStep }
+  >();
+  const recordSetupFailure = Effect.fn("OpenCodexChildBootstrap.recordSetupFailure")(function* (
+    alias: string,
+    failure: ChildReadyFailure,
+  ) {
+    return yield* record(alias, withSetupFailure((yield* Ref.get(records))[alias], failure));
+  });
+  /** Revokes every Child setup session still out for this machine; consent is already off. */
+  const revokeSetupForAlias = Effect.fn("OpenCodexChildBootstrap.revokeSetupForAlias")(function* (
+    alias: string,
+  ) {
+    for (const [operationId, held] of setupBindings) {
+      if (held.alias !== alias) continue;
+      const result = yield* sshDispatch.revokeChildSetupSessions(held.binding).pipe(Effect.result);
+      yield* recordSetupFailure(alias, {
+        code: "setup_approval_revoked",
+        step: held.activeStep,
+        retryable: false,
+        message: "Child setup approval was revoked.",
+      });
+      if (result._tag === "Success") setupBindings.delete(operationId);
+      else
+        yield* Effect.logWarning(
+          "Child setup session cleanup failed; its Home admission remains revoked.",
+        );
+    }
+  });
+  /** The Home's consent bound into a fresh purpose per phase, re-read around every call. */
+  const dispatchAdmission = Effect.fn("OpenCodexChildBootstrap.dispatchAdmission")(function* (
+    alias: string,
+    gate: Gate,
+    destinationEnvironmentId: EnvironmentId,
+  ) {
+    const grant = yield* gate.grant;
+    const binding: ChildSetupBinding = {
+      purpose: "opencodex-child-setup",
+      homeEnvironmentId: yield* environment.getEnvironmentId,
+      destinationEnvironmentId,
+      operationId: NodeCrypto.randomUUID(),
+      grantId: grant.grantId,
+      grantRevision: grant.grantRevision,
+    };
+    const held = { alias, binding, activeStep: "goat_available" as ChildReadyStep };
+    setupBindings.set(binding.operationId, held);
+    const cleanup = sshDispatch.revokeChildSetupSessions(binding).pipe(
+      Effect.mapError(
+        () =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            reason: "unreachable",
+            message: "The Child could not acknowledge setup session cleanup.",
+          }),
+      ),
+    );
+    return ReadyDispatch.makeAdmission(
+      binding,
+      "approval-required",
+      gate.grant,
+      cleanup,
+      (step) => {
+        held.activeStep = step;
+      },
+    );
+  });
+  /** Ends an operation's leftover phase sessions once it finished; failures keep it tracked. */
+  const releaseAdmission = (admission: ReadyDispatch.ChildSetupAdmission) =>
+    sshDispatch.revokeChildSetupSessions(admission.binding).pipe(
+      Effect.tap(() => Effect.sync(() => setupBindings.delete(admission.binding.operationId))),
+      Effect.ignore({ log: true }),
+    );
+  /**
+   * The destination's own environment id, read over the pinned SSH channel like revocation:
+   * no MCP session is minted for it, so setup never holds an ordinary operate credential.
+   */
+  const identify = Effect.fn("OpenCodexChildBootstrap.identify")(function* (
+    alias: string,
+    gate: Gate,
+  ) {
+    if ((yield* gate.admission).state !== "allowed")
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "setup_approval_revoked",
+        message: "Child setup approval was revoked.",
+      });
+    const identity = yield* sshDispatch.identifyTarget({
+      alias,
+      hostname: alias,
+      username: null,
+      port: null,
+    });
+    if (identity === null)
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "unreachable",
+        message: "GOAT there did not identify its environment.",
+      });
+    return identity;
+  });
+  /** Finishes the Child's own setup over the Home link it was joined with. */
+  const complete = Effect.fn("OpenCodexChildBootstrap.complete")(function* (
+    alias: string,
+    admission: ReadyDispatch.ChildSetupAdmission,
+    expectedLinkId: string,
+  ) {
+    const completed = yield* childReady
+      .complete(alias, admission.binding.homeEnvironmentId, admission, expectedLinkId)
+      .pipe(Effect.result);
+    yield* releaseAdmission(admission);
+    if (completed._tag === "Failure")
+      return yield* recordSetupFailure(
+        alias,
+        ReadyDispatch.toChildReadyFailure(completed.failure, "link_established"),
+      );
+    const {
+      failure: _failure,
+      nextAction: _nextAction,
+      actionable: _actionable,
+      reason: _reason,
+      ...membership
+    } = (yield* Ref.get(records))[alias] ?? { state: "child" as const, checkedAt: 0 };
+    return yield* record(
+      alias,
+      presentSetupAction({
+        ...membership,
+        state: membership.state === "degraded" ? "degraded" : "child",
+        step: "inference_verified",
+        setup: completed.success,
+        checkedAt: 0,
+      }),
+    );
+  });
+
   const run = Effect.fn("OpenCodexChildBootstrap.run")(function* (alias: string, gate: Gate) {
     const blocked = (reason: Reason, message: string, version?: string) =>
       record(alias, { state: "blocked", reason, message, ...(version ? { version } : {}) });
-    yield* record(alias, { state: "running" });
+    yield* record(alias, { state: "running", step: "goat_available" });
     const home = (yield* inventory.read).binaries[0]?.version;
     if (
       !isStableOpenCodexVersion(home) ||
@@ -213,25 +390,74 @@ const make = Effect.gen(function* () {
     )
       return yield* blocked(
         "home_unavailable",
-        `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to install the same release there.`,
+        `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to prepare a Child.`,
       );
-    if ((yield* ocx.devicePlatform(alias)) === "windows")
-      return yield* blocked("platform_unsupported", "Remote Link refuses Windows Children.");
-    const prepared = yield* ocx.prepareDevice(alias, home, PREPARE_TIMEOUT_MS).pipe(
-      Effect.map((output) => ({ ok: true as const, output })),
+    // Windows Children turn on only with a pinned release whose Remote Link accepts them.
+    const windowsRefused = windowsRemoteLinkRelease(catalog) === undefined;
+    if (windowsRefused && (yield* ocx.devicePlatform(alias)) === "windows")
+      return yield* blocked("platform_unsupported", WINDOWS_REMOTE_LINK_UNPINNED);
+    // GOAT's own runtime installs OpenCodex there, so it is ensured first; that can wait on
+    // provisioning, and the switch or the consent may change meanwhile.
+    const admitted = yield* gate.admission;
+    if (admitted.state !== "allowed") return yield* stopped(alias, admitted);
+    const runtime = yield* ocx.ensureDeviceRuntime(alias).pipe(
+      Effect.map((ready) => ({ ok: true as const, ready })),
       Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
     );
-    if (!prepared.ok) return yield* blocked("unreachable", prepared.error.message);
-    const known = PREPARE_REASONS[prepared.output.code];
-    if (prepared.output.code !== 0)
-      return yield* blocked(
-        known?.[0] ?? "install_failed",
-        known?.[1] ?? `Preparing OpenCodex there exited ${prepared.output.code}.`,
+    if (!runtime.ok) return yield* blocked("unreachable", runtime.error.message);
+    if (!runtime.ready) return yield* blocked("goat_runtime_missing", RUNTIME_MISSING);
+    const provisioned = yield* gate.admission;
+    if (provisioned.state !== "allowed") return yield* stopped(alias, provisioned);
+    const destination = yield* identify(alias, gate).pipe(Effect.result);
+    if (destination._tag === "Failure")
+      return yield* blocked("unreachable", "GOAT there did not identify its environment.");
+    const setupAdmission = yield* dispatchAdmission(alias, gate, destination.success);
+    yield* record(alias, { state: "running", step: "opencodex_running" });
+    const prepared = yield* childReady
+      .prepare(alias, setupAdmission.binding.homeEnvironmentId, setupAdmission)
+      .pipe(Effect.result);
+    if (prepared._tag === "Failure") {
+      yield* releaseAdmission(setupAdmission);
+      const failure = ReadyDispatch.toChildReadyFailure(prepared.failure, "opencodex_running");
+      const timedOut = failure.code === "purpose_expired" || failure.code === "phase_timeout";
+      return yield* record(
+        alias,
+        presentSetupAction({
+          ...withSetupFailure(undefined, failure),
+          reason:
+            failure.code === "remote_outdated" || failure.code === "ocx_unusable"
+              ? "ocx_unusable"
+              : timedOut
+                ? "setup_step_timeout"
+                : failure.code === "installation_failed"
+                  ? "install_failed"
+                  : failure.code === "platform_unsupported"
+                    ? "platform_unsupported"
+                    : failure.code === "setup_approval_revoked"
+                      ? "consent_revoked"
+                      : "runtime_unhealthy",
+          message: failure.message,
+          checkedAt: 0,
+        }),
       );
-    const version = prepared.output.stdout.trim() || undefined;
+    }
+    const version = prepared.success.device.ocx.version ?? undefined;
+    // A native Windows host answers no shell, so its platform is known only from typed status.
+    if (windowsRefused && prepared.success.device.platform === "win32") {
+      yield* releaseAdmission(setupAdmission);
+      return yield* blocked("platform_unsupported", WINDOWS_REMOTE_LINK_UNPINNED);
+    }
     // Preparing takes minutes; the switch or the consent may have changed meanwhile.
     const ready = yield* gate.admission;
-    if (ready.state !== "allowed") return yield* stopped(alias, ready);
+    if (ready.state !== "allowed") {
+      yield* releaseAdmission(setupAdmission);
+      return yield* stopped(alias, ready);
+    }
+    yield* record(alias, {
+      state: "running",
+      step: "link_established",
+      ...(version ? { version } : {}),
+    });
     const scope: McpInvocationScope = {
       environmentId: yield* environment.getEnvironmentId.pipe(
         Effect.orElseSucceed(() => EnvironmentId.make("local")),
@@ -248,23 +474,81 @@ const make = Effect.gen(function* () {
     };
     return yield* gate.join(scope).pipe(
       Effect.flatMap((result) =>
-        result.state === "child" || result.state === "degraded"
-          ? joined(alias, version, result)
-          : // A join the hub called off reads as withdrawn here too.
-            Effect.flatMap(gate.admission, (after) =>
-              after.state === "allowed" ? joined(alias, version, result) : stopped(alias, after),
-            ),
+        Effect.gen(function* () {
+          if (result.state !== "child" && result.state !== "degraded") {
+            yield* releaseAdmission(setupAdmission);
+            const after = yield* gate.admission;
+            // A join the hub called off reads as withdrawn here too.
+            return yield* after.state === "allowed"
+              ? joined(alias, version, result)
+              : stopped(alias, after);
+          }
+          yield* joined(alias, version, result);
+          const after = yield* gate.admission;
+          if (after.state !== "allowed") {
+            yield* releaseAdmission(setupAdmission);
+            return yield* stopped(alias, after);
+          }
+          const expectedLinkId = result.steps.find(
+            (step) => step.step === "link_add" && step.outcome === "ok",
+          )?.detail;
+          if (expectedLinkId === undefined || expectedLinkId.length === 0) {
+            yield* releaseAdmission(setupAdmission);
+            return yield* recordSetupFailure(alias, {
+              code: "link_changed",
+              step: "link_established",
+              message: "The Home did not return its added link ID.",
+              retryable: false,
+            });
+          }
+          return yield* complete(alias, setupAdmission, expectedLinkId);
+        }),
       ),
-      Effect.catch((error) => blocked("link_failed", error.message, version)),
+      Effect.catch((error) =>
+        releaseAdmission(setupAdmission).pipe(
+          Effect.andThen(blocked("link_failed", error.message, version)),
+        ),
+      ),
     );
   });
 
+  /**
+   * A Child linked before setup existed, or one whose setup stopped after linking: its Home
+   * link record names the link, and only the Child's own steps run. No relink.
+   */
+  const finish = Effect.fn("OpenCodexChildBootstrap.finish")(function* (alias: string, gate: Gate) {
+    const admitted = yield* gate.admission;
+    if (admitted.state !== "allowed") return yield* stopped(alias, admitted);
+    const linkId = (yield* inventory.read).link.links.find((link) => link.alias === alias)?.id;
+    if (linkId === undefined)
+      return yield* recordSetupFailure(alias, {
+        code: "link_changed",
+        step: "link_established",
+        message: "This Home has no link for the machine. Reconnect it, then retry.",
+        retryable: false,
+      });
+    const destination = yield* identify(alias, gate).pipe(Effect.result);
+    if (destination._tag === "Failure")
+      return yield* recordSetupFailure(alias, {
+        code: "unreachable",
+        step: "link_established",
+        message: "GOAT there did not identify its environment.",
+        retryable: true,
+      });
+    const admission = yield* dispatchAdmission(alias, gate, destination.success);
+    return yield* complete(alias, admission, linkId);
+  });
+
   /** One job per machine: a second caller joins the job already running for it. */
-  const start = Effect.fn("OpenCodexChildBootstrap.start")(function* (alias: string, gate: Gate) {
+  const start = Effect.fn("OpenCodexChildBootstrap.start")(function* (
+    alias: string,
+    gate: Gate,
+    work: typeof run = run,
+  ) {
     const existing = jobs.get(alias);
     if (existing !== undefined) return existing;
     const fiber = yield* hold.awaitRelease.pipe(
-      Effect.andThen(run(alias, gate)),
+      Effect.andThen(work(alias, gate)),
       Effect.catchCause(() =>
         record(alias, { state: "blocked", reason: "link_failed", message: "Setup stopped." }),
       ),
@@ -276,7 +560,10 @@ const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     yield* Ref.update(records, (current) => ({
       ...current,
-      [alias]: { state: "running" as const, checkedAt: now },
+      [alias]:
+        work === run
+          ? { state: "running" as const, step: "goat_available" as const, checkedAt: now }
+          : { ...current[alias], state: current[alias]?.state ?? "child", checkedAt: now },
     }));
     return fiber;
   });
@@ -289,11 +576,49 @@ const make = Effect.gen(function* () {
     return !(previous?.state === "blocked" && now - previous.checkedAt < RETRY_AFTER_MS);
   });
 
+  // Setup binds the consent generations the settings commit itself advances, so an off-then-on
+  // during a request fails its post-reply check before this subscriber runs; the subscriber only
+  // revokes sessions already delegated. The epoch keeps cloud grant ids unique per process.
+  const cloudEpoch = NodeCrypto.randomUUID();
+  const consentGenerations =
+    settings.hubConsentGenerations ?? Effect.die("Settings publish no consent generations.");
+  const changes = yield* settings.subscribeChanges.pipe(Scope.provide(serviceScope));
+  let cloudOn = yield* cloudAllowed;
+  let hubOn = yield* hubEnabled;
+  yield* changes.pipe(
+    Stream.runForEach((next) =>
+      Effect.gen(function* () {
+        const hub = next.hub.enabled;
+        const cloudNow = hub && next.hub.autoJoinCloudMachines;
+        const withdrawnHub = hubOn && !hub;
+        const withdrawnCloud = cloudOn && !cloudNow;
+        hubOn = hub;
+        cloudOn = cloudNow;
+        if (!withdrawnHub && !withdrawnCloud) return;
+        const aliases = new Set(
+          [...setupBindings.values()]
+            .filter((held) => withdrawnHub || hasCloudMachineAliasPrefix(held.alias))
+            .map((held) => held.alias),
+        );
+        for (const alias of aliases) yield* revokeSetupForAlias(alias);
+      }),
+    ),
+    Effect.ignore({ log: true }),
+    Effect.forkIn(serviceScope),
+  );
   const cloudGate = (alias: string): Gate => ({
     admission: cloudAllowed.pipe(
       Effect.map((allowed): Admission => ({ state: allowed ? "allowed" : "withdrawn" })),
     ),
     join: (scope) => membership.joinProvisioned(scope, alias, cloudAllowed),
+    // Cloud setup needs the switch on and this Home still owning the machine, read each time.
+    grant: Effect.all([cloudAllowed, cloud.owns(alias), consentGenerations]).pipe(
+      Effect.map(([allowed, owned, generations]) => ({
+        enabled: allowed && owned,
+        grantId: `cloud:${alias}:${cloudEpoch}`,
+        grantRevision: generations.cloud,
+      })),
+    ),
   });
 
   /** `retry`: a readying respects the retry wait; a direct request does not. */
@@ -347,6 +672,15 @@ const make = Effect.gen(function* () {
             Effect.map((read) => (read.state === "allowed" ? read.person : undefined)),
           ),
         ),
+      // The purpose binds this grant, the alias generation and the hub switch's generation; a
+      // new grant, a Forget or the hub turned off and on again ends it.
+      grant: Effect.all([admission, consentGenerations]).pipe(
+        Effect.map(([read, generations]) => ({
+          enabled: read.state === "allowed",
+          grantId: `${grantId}:hub${generations.hub}`,
+          grantRevision: generation,
+        })),
+      ),
     };
   };
   const startSsh = Effect.fn("OpenCodexChildBootstrap.startSsh")(function* (
@@ -366,7 +700,9 @@ const make = Effect.gen(function* () {
     event === "ready"
       ? startSsh(alias, true).pipe(Effect.asVoid)
       : // Durable before Forget goes on, so a restart never brings the consent back.
-        consents.forget(alias).pipe(Effect.andThen(discard(alias))),
+        consents
+          .forget(alias)
+          .pipe(Effect.andThen(revokeSetupForAlias(alias)), Effect.andThen(discard(alias))),
   );
 
   const ensure: OpenCodexChildBootstrap["Service"]["ensure"] = Effect.fn(
@@ -399,7 +735,8 @@ const make = Effect.gen(function* () {
         );
       return;
     }
-    // A running job sees the withdrawal itself; an old failure no longer applies.
+    // Sessions already delegated to the Child end now; a running job sees the withdrawal itself.
+    yield* revokeSetupForAlias(alias);
     if (!jobs.has(alias) && (yield* Ref.get(records))[alias]?.state === "blocked")
       yield* discard(alias);
   });
@@ -415,6 +752,7 @@ const make = Effect.gen(function* () {
     // Reconciled on every read, so a signed-out or expired session turns the switch off and the
     // host says why, without waiting for its next setup. A Child stays one.
     const consent = yield* consents.check(alias);
+    if (consent.state === "revoked" && consent.dropped) yield* revokeSetupForAlias(alias);
     if (consent.state === "revoked" && consent.dropped && !jobs.has(alias)) {
       const previous = (yield* Ref.get(records))[alias]?.state;
       if (previous !== "child" && previous !== "degraded") yield* stopped(alias, consent);
@@ -448,7 +786,13 @@ const make = Effect.gen(function* () {
   );
   // A removed machine is gone for good; a stopped one keeps its record and link for its next start.
   yield* cloud.onAliasInvalidated((alias, cause) =>
-    cause !== "removed" ? Effect.void : discard(alias).pipe(Effect.andThen(startRelease(alias))),
+    revokeSetupForAlias(alias).pipe(
+      Effect.andThen(
+        cause !== "removed"
+          ? Effect.void
+          : discard(alias).pipe(Effect.andThen(startRelease(alias))),
+      ),
+    ),
   );
   // Releases that failed, or never ran, before this start.
   yield* membership.pendingReleases.pipe(
@@ -456,11 +800,83 @@ const make = Effect.gen(function* () {
     Effect.ignore({ log: true }),
   );
 
+  /** The machine's standing consent, read without starting or stopping anything. */
+  const standingGate = Effect.fn("OpenCodexChildBootstrap.standingGate")(function* (alias: string) {
+    if (hasCloudMachineAliasPrefix(alias))
+      return (yield* cloudAllowed) && (yield* cloud.owns(alias)) ? cloudGate(alias) : undefined;
+    if (!(yield* hubEnabled)) return undefined;
+    const generation = yield* ssh.aliasGeneration(alias);
+    const consent = yield* consents.check(alias);
+    return consent.state === "granted"
+      ? sshGate(alias, generation, consent.grant.grantId)
+      : undefined;
+  });
+  /** One status-phase read of the Child under that consent; its session is revoked after. */
+  const readChild = Effect.fn("OpenCodexChildBootstrap.readChild")(function* (
+    alias: string,
+    setup: OpenCodexChildSetup,
+  ) {
+    const gate = yield* standingGate(alias);
+    if (gate === undefined)
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "setup_approval_revoked",
+        message: "This machine has no standing Child setup permission.",
+      });
+    const admission = yield* dispatchAdmission(alias, gate, setup.destinationEnvironmentId);
+    return yield* childReady
+      .status(alias, admission)
+      .pipe(
+        Effect.ensuring(
+          releaseAdmission(admission).pipe(Effect.forkIn(serviceScope), Effect.asVoid),
+        ),
+      );
+  });
+  const confirmReady = makeReadyVerifier(readChild, serviceScope);
+
+  /**
+   * The last outcome, with its next action. An expired proof reads invalid with no request; a
+   * recorded Ready stands only while a fresh, non-billed Child status read confirms it.
+   */
+  const status: OpenCodexChildBootstrap["Service"]["status"] = Effect.fn(
+    "OpenCodexChildBootstrap.status",
+  )(function* (alias) {
+    const current = (yield* Ref.get(records))[alias];
+    if (current === undefined) return undefined;
+    const recorded = withCurrentProof(current, yield* Clock.currentTimeMillis);
+    return presentSetupAction(yield* confirmReady(alias, recorded));
+  });
+
+  const setupDevice: OpenCodexChildBootstrap["Service"]["setupDevice"] = Effect.fn(
+    "OpenCodexChildBootstrap.setupDevice",
+  )(function* (input) {
+    const alias = input.deviceAlias;
+    if (!SAFE_ALIAS.test(alias)) return setupResult(undefined);
+    const running = jobs.get(alias);
+    if (running !== undefined) return setupResult(yield* Fiber.join(running));
+    const cloudAlias = hasCloudMachineAliasPrefix(alias);
+    let gate: Gate | undefined;
+    if (cloudAlias) {
+      if ((yield* cloudAllowed) && (yield* cloud.owns(alias))) gate = cloudGate(alias);
+    } else if (yield* hubEnabled) {
+      const generation = yield* ssh.aliasGeneration(alias);
+      const consent = yield* consents.check(alias);
+      if (consent.state === "revoked") return setupResult(yield* stopped(alias, consent));
+      if (consent.state === "granted") gate = sshGate(alias, generation, consent.grant.grantId);
+    }
+    // Retry never gives consent: without it nothing runs.
+    if (gate === undefined) return setupResult(undefined);
+    const previous = (yield* Ref.get(records))[alias];
+    const linked = previous?.state === "child" || previous?.state === "degraded";
+    return setupResult(yield* Fiber.join(yield* start(alias, gate, linked ? finish : run)));
+  });
+
   return OpenCodexChildBootstrap.of({
     ensure,
-    status: (alias) => Ref.get(records).pipe(Effect.map((current) => current[alias])),
+    status,
     setSshOptIn,
     sshOptIn,
+    setupDevice,
   });
 });
 

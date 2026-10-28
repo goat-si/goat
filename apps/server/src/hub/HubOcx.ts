@@ -1,5 +1,15 @@
-import { GoatHostStatusResult, hasCloudMachineAliasPrefix } from "@goat/contracts";
+import {
+  ChildReadyConnectionResult,
+  type ChildReadyConnectionInput,
+  type EnvironmentId,
+  GoatHostStatusResult,
+  hasCloudMachineAliasPrefix,
+  OrchestratorMcpFailure,
+  type RuntimeMode,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -15,7 +25,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { type OcxLayout, prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
+import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
 
 const MAX_BYTES = 256 * 1024;
@@ -25,9 +35,10 @@ const SAFE_ARG = /^[A-Za-z0-9_.:=/+-]+$/u;
 export const SAFE_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 /** OpenCodex mints `ocx_pair_` plus base64url; anything else never reaches a device script. */
 const PAIRING_CODE = /^ocx_pair_[A-Za-z0-9_-]{16,128}$/u;
-/** Git Bash (MINGW), MSYS and Cygwin all run on Windows, which Remote Link refuses. */
+/** Git Bash, MSYS and Cygwin kernel names identify a Windows device. */
 const WINDOWS_UNAME = /^(?:MINGW|MSYS|CYGWIN|Windows_NT)/iu;
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
+const decodeConnection = Schema.decodeUnknownEffect(ChildReadyConnectionResult);
 const Invite = Schema.Struct({
   code: Schema.String,
   expiresAt: Schema.String,
@@ -44,6 +55,8 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** The role the device's own GOAT read after a connection change it ran. */
+  readonly deviceRole?: "standalone" | "hub" | "client" | "unknown";
 }
 
 export class HubOcxError extends Data.TaggedError("HubOcxError")<{
@@ -52,6 +65,37 @@ export class HubOcxError extends Data.TaggedError("HubOcxError")<{
 }> {}
 
 export type DevicePlatform = "windows" | "posix";
+
+/**
+ * One membership operation's authority for the Child's goat_hub_child_connection. It lives only
+ * on this Home; the Child sees an ordinary hub.manage session and never a setup purpose.
+ */
+export interface HubChildConnectionAdmission {
+  readonly homeEnvironmentId: EnvironmentId;
+  /** The Child lets this operation restart right after its own disconnect, and nothing else. */
+  readonly operationId: string;
+  /** Rechecks the caller before the session is chosen and again right before each request. */
+  readonly authorize: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
+}
+
+/** `allowed` is the caller's live permission, read again for every Child connection call. */
+export const childConnectionAdmission = (
+  homeEnvironmentId: EnvironmentId,
+  allowed: Effect.Effect<boolean, OrchestratorMcpFailure>,
+): HubChildConnectionAdmission => ({
+  homeEnvironmentId,
+  operationId: NodeCrypto.randomUUID(),
+  authorize: Effect.flatMap(allowed, (ok) =>
+    ok
+      ? Effect.succeed("approval-required" as const)
+      : Effect.fail(
+          new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Permission for this membership change was withdrawn.",
+          }),
+        ),
+  ),
+});
 
 /**
  * The pairing code exists only inside this result's producer; callers see whether one was
@@ -91,25 +135,32 @@ export class HubOcx extends Context.Service<
     /** `uname -s` on the device; undefined when it does not answer. */
     readonly devicePlatform: (alias: string) => Effect.Effect<DevicePlatform | undefined>;
     /**
-     * `ocx hub invite --json` here, then `ocx connect <dataUrl> --pairing-code-stdin` on the
-     * device over GOAT SSH. The one-use code travels only on stdin and is never returned.
+     * `ocx hub invite --json` here, then goat_hub_child_connection on the device, whose GOAT
+     * feeds the code to `ocx connect --pairing-code-stdin`. The one-use code never comes back.
      */
     readonly connectHubClient: (
       alias: string,
       timeoutMs: number,
+      admission: HubChildConnectionAdmission,
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
+    /**
+     * Connects, disconnects or restarts the device's OpenCodex through its own GOAT's
+     * goat_hub_child_connection, which selects the executable there. A POSIX device whose GOAT
+     * does not serve that tool disconnects and restarts through the ocx script instead.
+     */
+    readonly connection: (
+      alias: string,
+      operation: ChildReadyConnectionInput["opencodexConnection"],
+      timeoutMs: number,
+      admission: HubChildConnectionAdmission,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
     /**
-     * Makes the device ready to be a Child: installs `version` for this user when OpenCodex is
-     * missing or older than Remote Link supports, then starts it unless it already answers.
-     * Stdout carries the version that answers; the code is one of `PREPARE_EXIT`.
+     * Attaches to, or provisions, GOAT's runtime on the device the way SSH setup does, never
+     * replacing a running one. False while it is pending or has no usable executable.
      */
-    readonly prepareDevice: (
-      alias: string,
-      version: string,
-      timeoutMs: number,
-    ) => Effect.Effect<OcxOutput, HubOcxError>;
+    readonly ensureDeviceRuntime: (alias: string) => Effect.Effect<boolean, HubOcxError>;
     /**
      * `ocx sync` on a Remote Link Child, only while it is connected over `linkId`. Stdout is
      * what ocx printed; the code is ocx's own or one of `SYNC_EXIT`.
@@ -332,27 +383,128 @@ const make = Effect.gen(function* () {
     return output;
   });
 
+  const devicePlatform = Effect.fn("HubOcx.devicePlatform")(
+    function* (alias: string) {
+      const result = yield* dispatch.runHostScript({
+        host: alias,
+        script: platformScript,
+        timeoutMs: 30_000,
+      });
+      const output = parseDeviceOutput(result.stdout);
+      return output?.code === 0 ? platformOf(output.stdout) : undefined;
+    },
+    Effect.orElseSucceed(() => undefined),
+  );
+
+  const refused = (message: string) => new HubOcxError({ reason: "unreachable", message });
+  const authorized = (admission: HubChildConnectionAdmission) =>
+    admission.authorize.pipe(
+      Effect.mapError(() => refused("Approval for this membership change is no longer active.")),
+    );
+  /** The device's own GOAT runs the change; `unserved` when no GOAT there has the tool. */
+  const childConnection = Effect.fn("HubOcx.childConnection")(function* (
+    alias: string,
+    operation: ChildReadyConnectionInput["opencodexConnection"],
+    timeoutMs: number,
+    admission: HubChildConnectionAdmission,
+  ) {
+    const identify = dispatch
+      .identifyTarget({ alias, hostname: alias, username: null, port: null })
+      .pipe(Effect.orElseSucceed(() => null));
+    // A device without a GOAT runtime attached yet gets one, as setup does, then names itself.
+    const destination =
+      (yield* identify) ??
+      ((yield* dispatch.ensureRuntime(alias).pipe(Effect.orElseSucceed(() => false)))
+        ? yield* identify
+        : null);
+    if (destination === null) return { unserved: `GOAT on ${alias} did not identify itself.` };
+    const input: ChildReadyConnectionInput = {
+      destinationEnvironmentId: destination,
+      homeEnvironmentId: admission.homeEnvironmentId,
+      operationId: admission.operationId,
+      opencodexConnection: operation,
+    };
+    const answer = yield* dispatch
+      .callHostTool(
+        {
+          host: alias,
+          environmentId: destination,
+          tool: "goat_hub_child_connection",
+          arguments: { ...input },
+          writes: true,
+          timeoutMs,
+        },
+        admission.authorize,
+      )
+      .pipe(Effect.result);
+    if (answer._tag === "Failure")
+      return answer.failure._tag === "SshRemoteDispatchError" &&
+        answer.failure.reason === "remote_outdated"
+        ? { unserved: `Update GOAT on ${alias}; it cannot change its OpenCodex connection yet.` }
+        : yield* refused(
+            `${alias} refused the connection change; check its membership before retrying.`,
+          );
+    const result = yield* decodeConnection(answer.success).pipe(
+      Effect.mapError(() => refused(`Update GOAT on ${alias}; its answer was not understood.`)),
+    );
+    if (
+      result.destinationEnvironmentId !== destination ||
+      result.homeEnvironmentId !== input.homeEnvironmentId ||
+      result.operationId !== input.operationId ||
+      result.kind !== operation.kind
+    )
+      return yield* refused(`${alias} answered for another connection change.`);
+    return {
+      code: result.code,
+      stdout: "",
+      ...(result.role === undefined ? {} : { deviceRole: result.role }),
+    } satisfies OcxOutput;
+  });
+
+  const connection = Effect.fn("HubOcx.connection")(function* (
+    alias: string,
+    operation: ChildReadyConnectionInput["opencodexConnection"],
+    timeoutMs: number,
+    admission: HubChildConnectionAdmission,
+  ) {
+    // Uncertain outcomes need membership reconciliation, never a retried invite or a script.
+    yield* authorized(admission);
+    const served = yield* childConnection(alias, operation, timeoutMs, admission);
+    if (!("unserved" in served)) return served;
+    // Nothing ran there. OpenCodex alone or an older GOAT on a POSIX device still disconnects
+    // and restarts through the ocx script that preceded the tool; Windows needs the tool.
+    if (operation.kind === "connectHubClient" || (yield* devicePlatform(alias)) !== "posix")
+      return yield* refused(served.unserved);
+    yield* authorized(admission);
+    return yield* runDevice(
+      alias,
+      deviceScript(operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"]),
+      timeoutMs,
+    );
+  });
+
   return HubOcx.of({
+    connection,
     home,
     homeAdmitted,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
-    prepareDevice: (alias, version, timeoutMs) =>
-      runDevice(alias, prepareScript(version), timeoutMs),
+    ensureDeviceRuntime: Effect.fn("HubOcx.ensureDeviceRuntime")(function* (alias) {
+      return yield* dispatch.ensureRuntime(alias).pipe(
+        Effect.mapError(
+          (error) =>
+            new HubOcxError({
+              reason: "unreachable",
+              message: `${alias} could not be reached over SSH (${error.reason}).`,
+            }),
+        ),
+      );
+    }),
     syncDevice: (alias, options, timeoutMs) =>
       runDevice(alias, guardedSyncScript(options.linkId, options.restartCodex), timeoutMs),
-    devicePlatform: Effect.fn("HubOcx.devicePlatform")(
-      function* (alias) {
-        const result = yield* dispatch.runHostScript({
-          host: alias,
-          script: platformScript,
-          timeoutMs: 30_000,
-        });
-        const output = parseDeviceOutput(result.stdout);
-        return output?.code === 0 ? platformOf(output.stdout) : undefined;
-      },
-      Effect.orElseSucceed(() => undefined),
-    ),
-    connectHubClient: Effect.fn("HubOcx.connectHubClient")(function* (alias, timeoutMs) {
+    devicePlatform,
+    connectHubClient: Effect.fn("HubOcx.connectHubClient")(function* (alias, timeoutMs, admission) {
+      // Nothing is minted for a caller whose approval already ended.
+      yield* authorized(admission);
       const minted = yield* home(["hub", "invite", "--json"], 60_000);
       const invite =
         minted.code === 0 ? Option.getOrUndefined(decodeInvite(minted.stdout.trim())) : undefined;
@@ -368,19 +520,16 @@ const make = Effect.gen(function* () {
           exit: minted.code === 0 ? 1 : minted.code,
           ...(minted.phase === undefined ? {} : { phase: minted.phase }),
         };
-      const connect = yield* runDevice(
+      const connect = yield* connection(
         alias,
-        deviceScript(
-          [
-            "connect",
-            invite.dataUrl,
-            "--management-url",
-            invite.managementUrl,
-            "--pairing-code-stdin",
-          ],
-          invite.code,
-        ),
+        {
+          kind: "connectHubClient",
+          dataUrl: invite.dataUrl,
+          managementUrl: invite.managementUrl,
+          pairingCode: invite.code,
+        },
         timeoutMs,
+        admission,
       );
       return {
         minted: true as const,

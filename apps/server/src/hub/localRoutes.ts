@@ -1,5 +1,6 @@
 import {
   providerInstanceConfigEnabledFlag,
+  ProviderHomeRouteConfig,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
@@ -19,6 +20,8 @@ const OpenCodeConfig = Schema.Struct({
   ),
 });
 const decodeOpenCode = Schema.decodeUnknownOption(Schema.fromJsonString(OpenCodeConfig));
+const decodeHomeRoute = Schema.decodeUnknownOption(ProviderHomeRouteConfig);
+const HOME_ROUTED_DRIVERS: ReadonlyArray<string> = ["claudeAgent", "opencode", "pi"];
 
 const usesLocalPort = (value: string | undefined, port: number, pathname: "" | "/v1") => {
   if (value === undefined) return false;
@@ -69,6 +72,28 @@ export function localOpenCodexRoutes(input: {
       continue;
     const add = (status: LocalOpenCodexRoute["status"], reason: string) =>
       routes.push({ instanceId, driver: entry.driver, status, reason });
+    if (HOME_ROUTED_DRIVERS.includes(entry.driver)) {
+      const configured = decodeHomeRoute(entry.config ?? {});
+      if (configured._tag === "None") {
+        add("unproven", "The provider's Home route configuration could not be decoded.");
+        continue;
+      }
+      if (configured.value.modelRoute === "opencodex") {
+        // Only the runtime GOAT prepared proves the endpoint; configuration alone does not.
+        const effective =
+          provider?.driver === entry.driver && provider.status === "ready"
+            ? provider.homeRoute?.effectiveBaseUrl
+            : undefined;
+        add(
+          usesLocalPort(effective, input.port, "/v1") &&
+            usesLocalPort(configured.value.opencodexBaseUrl, input.port, "/v1")
+            ? "ok"
+            : "unproven",
+          "The selected runtime must apply this device's Home endpoint.",
+        );
+        continue;
+      }
+    }
     if (entry.driver === "codex") {
       // This URL comes from Codex's config/read, after verifyEffectiveCodexRoute for a
       // managed Home route. An inspect-only "connected" label is insufficient evidence.
@@ -108,6 +133,8 @@ export function localOpenCodexRoutes(input: {
             : "failed",
         "OpenCode's selected provider in the inline runtime config must use local OpenCodex.",
       );
+    } else if (entry.driver === "pi") {
+      add("unproven", "Pi needs an observed GOAT Home runtime; a configuration path alone is not.");
     }
   }
   return routes;

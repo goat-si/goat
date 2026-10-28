@@ -185,7 +185,7 @@ const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   worker: 95,
   manager: 109,
   "merge-manager": 109,
-  owner: 140,
+  owner: 143,
 };
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
@@ -309,6 +309,7 @@ it.effect("applies the host allowlist to every argument a write declares names a
       "hub.device_join",
       "hub.device_leave",
       "hub.device_repair",
+      "hub.device_setup",
       "ssh.host_forget",
       "ssh.host_prepare",
       "ssh.runtime_update",

@@ -15,6 +15,7 @@ import {
   type HubParityCheckId,
   type HubParityResult,
 } from "@goat/contracts";
+import type { OpenCodexReleaseCatalog } from "@goat/shared/opencodexRelease";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,6 +31,7 @@ import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.test
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
@@ -84,12 +86,18 @@ export interface Fixture {
   readonly health?: { readonly service: string; readonly role?: string };
   readonly strayTunnel?: boolean;
   readonly platform?: DevicePlatform;
+  /** A native Windows device answers no shell, so its platform reads as unknown. */
+  readonly nativeWindows?: boolean;
+  /** The role the device's GOAT reports after a connection change; absent as an older GOAT. */
+  readonly reportedRole?: "standalone" | "hub" | "client" | "unknown";
   /** `ocx connect status --json` on the device. */
   readonly connection?: Readonly<Record<string, unknown>>;
   /** Home `ocx hub invite` exit; 0 mints a code. */
   readonly inviteExit?: number;
   readonly connectExit?: number;
   readonly addExit?: { readonly code: number; readonly phase: string };
+  /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
+  readonly releases?: OpenCodexReleaseCatalog;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -228,10 +236,26 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                 admitted ? home(args) : Effect.succeed(undefined),
               ),
             device,
+            // The double answers as the device's GOAT would, logged like the script it replaced.
+            connection: (alias, operation) =>
+              Effect.gen(function* () {
+                if (operation.kind === "connectHubClient")
+                  return yield* Effect.die("connectHubClient is the only way to redeem an invite");
+                const kind =
+                  operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"];
+                const { code } = yield* device(alias, kind);
+                return {
+                  code,
+                  stdout: "",
+                  ...(fixture.reportedRole === undefined
+                    ? {}
+                    : { deviceRole: fixture.reportedRole }),
+                };
+              }),
             devicePlatform: (alias) =>
               Effect.sync(() => {
                 calls.push(`platform ${alias}`);
-                return fixture.platform ?? "posix";
+                return fixture.nativeWindows === true ? undefined : (fixture.platform ?? "posix");
               }),
             connectHubClient: (alias) =>
               Effect.sync(() => {
@@ -246,7 +270,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                     };
               }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
-            prepareDevice: () => Effect.die("unused"),
+            ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
@@ -282,6 +306,11 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       Layer.provideMerge(Settings.layerTest({ goatclaw })),
       Layer.provideMerge(Sqlite.layerMemory),
       Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        fixture.releases === undefined
+          ? Layer.empty
+          : Layer.succeed(ReleaseCatalog, fixture.releases),
+      ),
     ),
   );
   const membership = Context.get(context, HubMembership.HubMembership);

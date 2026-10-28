@@ -80,6 +80,10 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
             calls.push("codex-start");
             return { ...state, driver: ProviderDriverKind.make("codex") };
           }),
+          startManagedOnly: Effect.sync(() => {
+            calls.push("codex-start-managed-only");
+            return { ...state, driver: ProviderDriverKind.make("codex") };
+          }),
           cancel: () =>
             Effect.sync(() => {
               calls.push("codex-cancel");
@@ -169,5 +173,30 @@ describe("provider installation routing", () => {
       assert.include(harness.protectedPaths(), executable);
       assert.deepEqual(harness.calls, ["remove", "refresh"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    { route: "default", opencodexAuth: "openai", expected: "codex-start" },
+    { route: "opencodex", opencodexAuth: "none", expected: "codex-start-managed-only" },
+  ] as const)(
+    "installs managed Codex for a managed $route instance without reusing PATH only for Home None",
+    ({ route, opencodexAuth, expected }) =>
+      Effect.gen(function* () {
+        const codex = ProviderDriverKind.make("codex");
+        const id = ProviderInstanceId.make("codex-child");
+        const harness = yield* makeHarness({
+          instance: instance(codex, id),
+          settings: {
+            providerInstances: {
+              [id]: {
+                driver: codex,
+                config: { setupMode: "managed", modelRoute: route, opencodexAuth },
+              },
+            },
+          },
+        });
+        yield* harness.router.start({ instanceId: id });
+        assert.deepEqual(harness.calls, [expected]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

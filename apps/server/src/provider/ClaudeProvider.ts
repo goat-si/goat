@@ -40,6 +40,7 @@ import { hasClaudeManagedMcpConfig, makeClaudeEnvironment } from "./Drivers/Clau
 import { discoverClaudeSkills } from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@goat/provider-core/server/driver";
 import { makeUnavailableUsageLimits } from "@goat/provider-core/server/usageLimits";
+import { claudeHomeFlagSettings } from "./ClaudeHomeSettings.ts";
 import {
   type ClaudeScopedLimitNames,
   claudeUsageResponseToLimits,
@@ -210,7 +211,7 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
     abortController: input.abortController,
     settingSources: [...CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES],
     // Keep settings for slash-command discovery, but disable hooks so health checks do not run SessionStart repeatedly.
-    settings: { disableAllHooks: true },
+    settings: { disableAllHooks: true, ...claudeHomeFlagSettings(input.environment) },
     allowedTools: [],
     // Exclude filesystem MCP servers; omit strict mode when managed-mcp.json already excludes them and forbids the flag.
     mcpServers: {},

@@ -37,22 +37,31 @@ Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys
 In **Settings → Hub → Hub devices**, **Add device to hub** joins a machine to the
 hub's OpenCodex by its SSH alias; a standalone device in
 the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
-the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
-for that alias, links the device, and checks its parity.
+the hub. On a fresh Linux or macOS machine, the
+[server installer's `--opencodex` option](./install.md#a-server-only-machine)
+installs both; installing does not join the hub. GOAT compares the host key
+OpenCodex is offered with the key GOAT pinned for that alias, links the device,
+and checks its parity.
 
-A Windows device cannot be a Remote Link Child, so **Join** connects it as a Hub
-client instead. That needs this hub's OpenCodex in Hub mode with addresses the
-device can reach, such as behind Tailscale Serve. GOAT creates a single-use
-invite on the hub and redeems it on the device; you never see or copy the code.
-Agents can request the same for a device GOAT reaches only by password.
+A Windows device joins as a Hub client until your GOAT includes an OpenCodex
+release with Windows Remote Link support. A Hub client needs this hub's
+OpenCodex in Hub mode with addresses the device can reach, such as behind
+Tailscale Serve. GOAT creates a single-use invite on the hub and GOAT on the
+device redeems it; you never see or copy the code. Agents can request the same
+for a device GOAT reaches only by password. With Windows Remote Link support,
+Windows x64 machines join as Remote Link Children over OpenSSH and Windows
+PowerShell, without Git Bash. PowerShell there must run in Full Language mode;
+setup stops and says so otherwise.
 
 A cloud machine this hub creates joins by itself while **Join new cloud
-machines** in **Settings → Hub** is on, as it is unless you turn it off. The
-first time it is used, GOAT installs this hub's OpenCodex release there with
-npm, starts it, and links it as a Remote Link Child, using the host key it
-pinned when it created the machine. It does this once per machine; use
-**Repair** if the link breaks later. Turning the switch off stops new joins,
-even one already being set up; machines that are linked stay linked.
+machines** in **Settings → Hub** is on, as it is unless you turn it off. GOAT
+installs an OpenCodex release it has tested there, without Node or npm, or keeps
+a supported one that is already installed. It starts OpenCodex, links it as a
+Remote Link Child using the host key it pinned when it created the machine,
+installs Codex, and adds a Codex instance that uses the hub's accounts without a
+sign-in on that machine. Use **Repair** if the link breaks later. Turning the
+switch off stops new joins, even one already being set up; machines that are
+linked stay linked.
 
 An SSH host you added joins only when you turn on **Join as OpenCodex Child
 after each SSH setup** on its row in **Hub devices**, on desktop, web or the
@@ -64,9 +73,23 @@ forget or add the host again, and when the session that turned it on signs
 out, expires, or loses settings permission; the row then says so. Turning it
 off never removes the host from the hub: use **Leave** for that.
 
-Until the machine is a Child, its row in **Hub devices**, in the mobile app, and
-in Fleet shows the progress or why it stopped, for example when the machine has
-no npm. Agents read the same from its `goat_host_status` entry.
+The hub and a Child can run different OpenCodex versions; a Child needs 2.66.0
+or later. Provider accounts stay on the hub, and every Child shares its quota.
+
+A linked Child is **Ready** only after one small model request from its Codex
+instance succeeds through the hub, and that request counts against the hub's
+quota. Until then, its row in **Hub devices**, in the mobile app, and in Fleet
+shows the step setup reached or why it stopped, with what to do next. For
+example, a Child whose OpenCodex release cannot prove it holds no sign-ins of
+its own asks you to update OpenCodex there. Agents read the same from its
+`goat_host_status` entry. Checking status never sends a model request.
+Changing the Child's Codex instance, its settings, or its link to the hub
+clears **Ready** until setup verifies it again. GOAT retries setup after each
+successful SSH setup of the host. **Continue setup** on the device's row, or an
+agent with `goat_hub_device_setup`, retries or finishes it, including on a
+Child linked before setup existed.
+Claude Code, OpenCode, and Pi use the hub only when you route them there; see
+[OpenCodex Home](./providers-codex.md#use-opencodex-home).
 
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.

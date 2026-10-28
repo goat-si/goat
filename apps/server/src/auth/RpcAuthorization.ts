@@ -156,6 +156,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.hubDeviceJoin]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceLeave]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceRepair]: AuthOrchestrationOperateScope,
+  // The service also needs the machine's standing Child consent; operate alone runs nothing.
+  [WS_METHODS.hubDeviceSetup]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetProcessResourceHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetResourceTelemetryHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverRetryResourceTelemetry]: AuthDiagnosticsReadScope,

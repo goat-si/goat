@@ -17,6 +17,7 @@ import { act, render, stubGlobal } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   providers: null as unknown as Atom.Writable<ReadonlyArray<ServerProvider>>,
+  config: null as unknown as Atom.Writable<unknown>,
   settings: null as unknown as UnifiedSettings,
   canManageProviders: true,
   canWriteSettings: true,
@@ -41,7 +42,8 @@ vi.mock(import("../../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const providers = Atom.make<ReadonlyArray<ServerProvider>>([]).pipe(Atom.keepAlive);
   state.providers = providers;
-  const config = Atom.make(null);
+  const config = Atom.make<unknown>(null).pipe(Atom.keepAlive);
+  state.config = config;
   const commandLabels = {
     refreshProviders: "refresh",
     updateProvider: "update",
@@ -207,6 +209,9 @@ function provider(): ServerProvider {
 
 const setProviders = (providers: ReadonlyArray<ServerProvider>) =>
   act(async () => appAtomRegistry.set(state.providers, providers));
+/** The connected server's advertised capabilities; only this panel's capability reads use it. */
+const setCapabilities = (capabilities: Record<string, boolean>) =>
+  act(async () => appAtomRegistry.set(state.config, { environment: { capabilities } }));
 
 function panel(options?: {
   readonly readOnly?: boolean;
@@ -251,6 +256,7 @@ async function setup() {
   state.localDesktop = false;
   state.openExternal.mockReset().mockResolvedValue(undefined);
   await setProviders([]);
+  await setCapabilities({ providerInstancePreconditions: true });
 }
 
 describe("EnvironmentProviderSettings routing", () => {
@@ -474,9 +480,11 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
             homePath: "/home/person/.codex",
             customOption: 42,
             modelRoute: "opencodex",
+            opencodexAuth: "openai",
             opencodexBaseUrl: "http://127.0.0.1:10100/v1",
           },
         }),
+        expectedInstance: state.settings.providerInstances[customId],
       },
       expect.anything(),
     );
@@ -494,4 +502,88 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
       .toBeVisible();
     expect(state.mutateProviderInstance).toHaveBeenCalledTimes(1);
   });
+
+  it("confirms a first Home write against the implicit default instance", async () => {
+    await setup();
+    await using _screen = await render(panel());
+    await userEvent.click(button("Use OpenCodex Home"));
+    await userEvent.click(
+      page.getByRole("alertdialog").getByRole("button", { name: "Use OpenCodex Home" }),
+    );
+    await vi.waitFor(() =>
+      expect(state.mutateProviderInstance).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          operation: "upsert",
+          instanceId: codexId,
+          // No stored entry: the server refuses the write if another device stored one first.
+          expectedInstance: null,
+        }),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("asks to update GOAT before changing Home on a server without write preconditions", async () => {
+    await setup();
+    await setCapabilities({});
+    await using _screen = await render(panel());
+    const auth = page.getByRole("group", { name: "Home authentication" });
+    await expect.element(auth.getByRole("button", { name: "None" })).toBeDisabled();
+    await expect.element(button("Use OpenCodex Home")).toBeDisabled();
+    await expect
+      .element(page.getByText(/Update GOAT on this machine to change Home authentication/))
+      .toBeVisible();
+    expect(state.mutateProviderInstance).not.toHaveBeenCalled();
+  });
+
+  it.each(["existing", "managed"] as const)(
+    "saves Home with None authentication for a %s instance in the selected environment",
+    async (setupMode) => {
+      await setup();
+      state.settings = {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerInstances: {
+          [customId]: {
+            driver: ProviderDriverKind.make("codex"),
+            displayName: "Child",
+            config: { setupMode, customOption: 42 },
+          },
+        },
+      };
+      await using _screen = await render(panel({ targetInstanceId: customId }));
+      const auth = page.getByRole("group", { name: "Home authentication" });
+      // Managed Codex has no OpenAI credential to send through Home.
+      if (setupMode === "managed")
+        await expect.element(auth.getByRole("button", { name: "OpenAI" })).toBeDisabled();
+      else await userEvent.click(auth.getByRole("button", { name: "None" }));
+      await expect
+        .element(auth.getByRole("button", { name: "None" }))
+        .toHaveAttribute("aria-pressed", "true");
+      await userEvent.click(button("Use OpenCodex Home"));
+      await userEvent.click(
+        page.getByRole("alertdialog").getByRole("button", { name: "Use OpenCodex Home" }),
+      );
+      await vi.waitFor(() =>
+        expect(state.mutateProviderInstance).toHaveBeenCalledExactlyOnceWith(
+          {
+            operation: "upsert",
+            instanceId: customId,
+            instance: expect.objectContaining({
+              config: {
+                setupMode,
+                customOption: 42,
+                modelRoute: "opencodex",
+                opencodexAuth: "none",
+                opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+              },
+            }),
+            // The server refuses the write if another device changed the instance since.
+            expectedInstance: state.settings.providerInstances[customId],
+          },
+          expect.anything(),
+        ),
+      );
+      expect(state.mutationEnvironmentIds).toContain(environmentId);
+    },
+  );
 });

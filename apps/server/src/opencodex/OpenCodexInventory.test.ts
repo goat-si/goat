@@ -19,6 +19,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
+import * as Installation from "./OpenCodexInstallation.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
 import parityFixture from "../hub/fixtures/parity.json" with { type: "json" };
 import fleet from "./fixtures/fleet.json" with { type: "json" };
@@ -49,6 +50,8 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     connect?: unknown;
     link?: unknown;
     service?: unknown;
+    /** The one path the installer's marker vouches for; `managed` means the first candidate. */
+    managedPath?: string;
     managed?: boolean;
     hostname?: string;
     crypto?: Crypto.Crypto;
@@ -162,7 +165,14 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
           ...(options.home ? { OPENCODEX_HOME: options.home } : {}),
         }),
       ),
-      Layer.provide(Layer.succeed(Inventory.ManagedInstall, options.managed ?? false)),
+      Layer.provide(
+        Layer.mock(Installation.OpenCodexInstallation)({
+          inspect: (binary) =>
+            Effect.succeed(
+              binary === (options.managedPath ?? (options.managed ? candidates[0]?.path : "")),
+            ),
+        }),
+      ),
     ),
   );
   return {
@@ -263,6 +273,9 @@ it.effect("Windows unsupported link status preserves a running Hub client", () =
     const { inventory } = yield* setup({
       fixture: fleet["mac-studio"],
       platform: "win32",
+      binaries: [
+        { path: "/fixture/.opencodex-desktop/bin/ocx.exe", output: fleet["mac-studio"].version },
+      ],
       config: { port: 10100, runtimeRole: "client", client: { transport: "https" } },
       connect: {
         state: "connected",
@@ -296,14 +309,17 @@ it.effect("Windows unsupported link status preserves a running Hub client", () =
   }),
 );
 
-it.effect("Windows discovers an ocx command shim in the fallback binary directories", () =>
+it.effect("Windows discovers only ocx.exe, where OpenCodex's Remote Link looks for it", () =>
   Effect.gen(function* () {
     const { inventory, commands } = yield* setup({
       platform: "win32",
-      binaries: [{ path: "/fixture/.bun/bin/ocx.cmd", output: "2.89.0" }],
+      binaries: [
+        { path: "/fixture/.bun/bin/ocx.cmd", output: "2.88.0" },
+        { path: "/fixture/.local/bin/ocx.exe", output: "2.89.0" },
+      ],
     });
     expect((yield* inventory.read).binaries).toEqual([
-      { path: "/fixture/.bun/bin/ocx.cmd", version: "2.89.0" },
+      { path: "/fixture/.local/bin/ocx.exe", version: "2.89.0" },
     ]);
     expect(commands[0]?.args).toEqual(["--version"]);
   }),
@@ -394,6 +410,29 @@ it.effect(
       yield* TestClock.adjust("31 seconds");
       yield* inventory.read;
       expect(commands).toHaveLength(10);
+    }),
+);
+
+it.effect(
+  "managed ownership follows the selected executable when another installation shadows it",
+  () =>
+    Effect.gen(function* () {
+      const managedPath = "/fixture/.local/bin/ocx";
+      const managed = { path: managedPath, output: "opencodex 2.92.0" };
+      const alone = yield* setup({ fixture: fleet.home, binaries: [managed], managedPath });
+      expect((yield* alone.inventory.read).ownership).toBe("managed");
+      // A Desktop install wins the selection, so the install GOAT made is not the one in use.
+      const shadowed = yield* setup({
+        fixture: fleet.home,
+        binaries: [{ path: "/fixture/.opencodex-desktop/bin/ocx", output: "2.91.0" }, managed],
+        managedPath,
+      });
+      const snapshot = yield* shadowed.inventory.read;
+      expect(snapshot.binaries.map((binary) => binary.path)).toEqual([
+        "/fixture/.opencodex-desktop/bin/ocx",
+        managedPath,
+      ]);
+      expect(snapshot.ownership).toBe("adopted");
     }),
 );
 

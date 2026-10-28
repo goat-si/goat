@@ -1,4 +1,8 @@
 import { expect, it } from "@effect/vitest";
+import {
+  OPEN_CODEX_PINNED_VERSION,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
 import * as Effect from "effect/Effect";
 
 import * as HubMembership from "./HubMembership.ts";
@@ -329,34 +333,114 @@ it.effect("a Windows device joins as a Hub client: invite here, connect there, t
   }),
 );
 
-it.effect("transport remote-link on Windows is refused before a probe or link add", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ platform: "windows", pin: PINNED });
-    const result = yield* hub.membership.join(scope, {
-      deviceAlias: "mini",
-      transport: "remote-link",
-    });
-    expect(result).toMatchObject({ state: "failed", transport: "remote-link" });
-    expect(result.message).toContain("remote_platform_unsupported");
-    expect(result.steps).toEqual([
-      { step: "preflight", outcome: "failed", detail: result.message },
-    ]);
-    expect(hub.calls).toEqual(["home link status --json", "platform mini"]);
-    expect(yield* hub.audit).toEqual([]);
-  }),
+it.effect(
+  "without a pinned Windows Remote Link release, remote-link on Windows is refused first",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ platform: "windows", pin: PINNED });
+      const result = yield* hub.membership.join(scope, {
+        deviceAlias: "mini",
+        transport: "remote-link",
+      });
+      expect(result).toMatchObject({ state: "failed", transport: "remote-link" });
+      expect(result.message).toContain(WINDOWS_REMOTE_LINK_UNPINNED);
+      expect(result.steps).toEqual([
+        { step: "preflight", outcome: "failed", detail: result.message },
+      ]);
+      expect(
+        hub.calls.filter(
+          (call) => call.startsWith("home link ") && call !== "home link status --json",
+        ),
+      ).toEqual([]);
+      expect(hub.calls).not.toContain("handoff mini");
+      expect(yield* hub.audit).toEqual([]);
+    }),
 );
 
-it.effect("an unreadable platform still meets OpenCodex's own refusal (exit 125)", () =>
+/** A test-only pin with Windows Remote Link support; no real GOAT pin has one yet. */
+const windowsPins = {
+  [OPEN_CODEX_PINNED_VERSION]: {
+    "win32-x64": {
+      version: OPEN_CODEX_PINNED_VERSION,
+      target: "bun-windows-x64",
+      url: "https://fixture.invalid/ocx-windows.zip",
+      sha256: "0".repeat(64),
+      archiveBytes: 1,
+      publishedAt: "2026-10-28T00:00:00Z",
+      layout: { executable: "ocx.exe", gui: "gui/dist/index.html", keyring: "keyring" },
+      remoteLinkWindows: true,
+    },
+  },
+};
+
+it.effect.each([undefined, "remote-link"] as const)(
+  "a pinned Windows Remote Link release joins Windows with transport %s through Remote Link",
+  (transport) =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ platform: "windows", pin: PINNED, releases: windowsPins });
+      const result = yield* hub.membership.join(scope, {
+        deviceAlias: "mini",
+        ...(transport === undefined ? {} : { transport }),
+      });
+      expect(result).toMatchObject({ state: "child", transport: "remote-link" });
+      expect(hub.calls).toContain(`home link add mini --expect-fingerprint ${PINNED} --json`);
+      expect(hub.calls).not.toContain("handoff mini");
+    }),
+);
+
+it.effect("OpenCodex's own platform refusal asks for an update without changing transport", () =>
   Effect.gen(function* () {
     const hub = yield* setup({
       pin: PINNED,
       addExit: { code: 125, phase: "remote_platform_unsupported" },
     });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
-    expect(result.state).toBe("failed");
+    expect(result).toMatchObject({ state: "failed", transport: "remote-link" });
     expect(result.message).toBe(
-      "Remote Link refuses this platform; it joins as a Hub-mode client instead.",
+      "OpenCodex could not execute Remote Link on this device. Update OpenCodex on Home and check PowerShell on a Windows Child, then retry.",
     );
+    expect(hub.calls).not.toContain("handoff mini");
+  }),
+);
+
+it.effect("a device that answers no shell joins through Home's own probe and link", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ nativeWindows: true, pin: PINNED, releases: windowsPins });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result).toMatchObject({ state: "child", transport: "remote-link" });
+    expect(hub.calls).not.toContain("device mini --version");
+    expect(hub.calls).toContain(`home link add mini --expect-fingerprint ${PINNED} --json`);
+  }),
+);
+
+it.effect.each([undefined, "hub-client"] as const)(
+  "a device that answers no shell is refused before any probe with transport %s while Windows is unpinned",
+  (transport) =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ nativeWindows: true, pin: PINNED });
+      const result = yield* hub.membership.join(scope, {
+        deviceAlias: "mini",
+        ...(transport === undefined ? {} : { transport }),
+      });
+      expect(result.state).toBe("failed");
+      expect(result.steps).toEqual([
+        expect.objectContaining({ step: "preflight", outcome: "failed" }),
+      ]);
+      expect(hub.calls).toEqual(["home link status --json", "platform mini"]);
+    }),
+);
+
+it.effect("a native Windows Child leaves on the role its own GOAT reports, without /healthz", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["lidge-ts"],
+      nativeWindows: true,
+      reportedRole: "standalone",
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
+    expect(result.state).toBe("ready");
+    expect(hub.calls).not.toContain("health lidge-ts");
+    expect(result.steps).toContainEqual(expect.objectContaining({ step: "health", outcome: "ok" }));
   }),
 );
 

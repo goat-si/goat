@@ -1,6 +1,79 @@
 import { entry } from "../entry.ts";
 
 export const hubEntries = {
+  "hub.child_prepare": entry({
+    resource: "hub",
+    verb: "child_prepare",
+    name: "goat_hub_child_prepare",
+    toolkit: "hostStatus",
+    summary: "Prepare this Child before linking or finish its bootstrap Codex setup.",
+    description:
+      "Run one Child setup action for its Home: installOpenCodex, startOpenCodex, opencodexHealth, installCodex, syncCatalog, configure or probe. Accepts only a Home-issued opencodex-child-setup session; probe makes one real model request.",
+    guide:
+      "The Home calls this tool over its pinned SSH channel with a read-scoped session that carries a signed setup purpose for one phase. The purpose names the Home, this Child, the operation and the consent generation, and expires five minutes after its phase deadline. Ordinary sessions are refused even with full access. Pre-link actions need no membership. Post-link actions need the Home's link and the revision returned by the previous action. The Child derives every path, model and instance itself; the Home supplies none.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The Child journal binds operationId, destination, Home, revision and stage; a repeat of a finished stage reuses its result, and a completed proof is reused only while its binding holds.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.child_connection": entry({
+    resource: "hub",
+    verb: "child_connection",
+    name: "goat_hub_child_connection",
+    toolkit: "hostStatus",
+    summary: "Connect, disconnect or restart this Child's OpenCodex connection.",
+    description:
+      "Connect this machine's OpenCodex to a Hub, disconnect it, or restart it. Needs an ordinary live hub.manage session and refuses every opencodex-child-setup session. A pairing code reaches OpenCodex only on stdin.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "A pairing code is single-use; after an uncertain answer, read the Child's status and reconcile membership instead of repeating connect.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.child_status": entry({
+    resource: "hub",
+    verb: "child_status",
+    name: "goat_hub_child_status",
+    toolkit: "hostStatus",
+    summary: "Read this Child's device state and last verified Codex setup.",
+    description:
+      "Read this Child's OpenCodex device state and its last verified Codex setup for a Home. Never installs, changes provider routing, links a Home or starts a model request.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
+  "hub.device_setup": entry({
+    resource: "hub",
+    verb: "device_setup",
+    name: "goat_hub_device_setup",
+    toolkit: "hostStatus",
+    summary: "Retry or finish a Child's OpenCodex and Codex setup from this Home.",
+    description:
+      "Retry setup for an opted-in SSH host or a cloud machine this Home created, or finish a Child linked before setup existed. Ready needs a real model request. Read goat_host_status to see progress.",
+    guide:
+      "Needs the standing Child consent already given for the host (SSH opt-in or cloud auto-join); this call never gives consent. A linked Child is finished without linking it again. Setup installs and starts OpenCodex, links the machine, installs Codex there, routes one managed Codex instance through its local OpenCodex with no provider sign-in, and proves it with one model request whose answer must come through this Home. Concurrent calls join the running setup.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "One setup runs per machine and a concurrent call joins it; a valid proof is reused, and each new attempt starts from the Child's recorded progress.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
   "hub.device_verify": entry({
     resource: "hub",
     verb: "device_verify",
@@ -25,9 +98,9 @@ export const hubEntries = {
     toolkit: "hostStatus",
     summary: "Join a device to this OpenCodex Home as a Remote Link Child or Hub client.",
     description:
-      "Join a device to this environment's Home. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
+      "Join a device to this environment's Home. Membership alone is not Ready; goat_host_status reports Child setup. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_verify to check membership.",
     guide:
-      "OpenCodex must already be installed on the device. Windows under Git Bash, MSYS or Cygwin defaults to a Hub client; an explicit remote-link request on Windows is refused before linking. Select hub-client for a device GOAT can reach only by password. Remote Link requires a direct SSH alias without ProxyJump or ProxyCommand. GOAT probes the offered fingerprint; an owner-profile caller skips approval only if it matches GOAT's pin. A missing or different pin needs a person's approval bound to the offered fingerprint, which is passed to ocx link add as --expect-fingerprint. An approved fingerprint can differ from the existing GOAT pin. A Hub client requires OpenCodex Hub mode here with public data and management origins. GOAT runs ocx hub invite locally, reads its single-use code transiently, and feeds it to ocx connect --pairing-code-stdin on the device through the SSH script. Link and data keys remain managed by OpenCodex; this service does not persist the pairing code. Needs hub.manage. For a new membership, a non-owner profile needs human approval; disabled goatclaw does not count as owner. In a thread, state needs_human also carries kind needs_human and a handoff whose ID is decisionId; outside a thread it creates a decision-inbox item. A person approves in a GOAT app. After a new join, the repair ladder runs only for failed checks, not merely unproven evidence, and can stop with unproven parity. Its restart guard omits subagent turns, as described by goat_hub_device_repair.",
+      "OpenCodex must already be installed on the device. On a fresh Linux or macOS machine, install-goat-server.sh --opencodex runs goat opencodex install after GOAT is installed; an installed GOAT runs goat opencodex install directly. Installation alone neither links Home nor makes the device Ready. Home and Child OpenCodex versions may differ; a Child needs 2.66.0 or later. A linked Child is Ready only after its setup proves one model request through Home: goat_host_status reports opencodexChild.setup with its step, failure and next action, and goat_hub_device_setup retries or finishes setup for a consented SSH host or cloud machine. Until this GOAT build pins an OpenCodex release with Windows Remote Link support, Windows defaults to a Hub client and an explicit remote-link request on Windows is refused before linking; with one, Windows x64 defaults to Remote Link. Select hub-client for a device GOAT can reach only by password. Remote Link requires a direct SSH alias without ProxyJump or ProxyCommand. GOAT probes the offered fingerprint; an owner-profile caller skips approval only if it matches GOAT's pin. A missing or different pin needs a person's approval bound to the offered fingerprint, which is passed to ocx link add as --expect-fingerprint. An approved fingerprint can differ from the existing GOAT pin. A Hub client requires OpenCodex Hub mode here with public data and management origins. GOAT runs ocx hub invite locally, reads its single-use code transiently, and hands it to goat_hub_child_connection on the device under an ordinary hub.manage session, whose GOAT feeds it to ocx connect --pairing-code-stdin. Link and data keys remain managed by OpenCodex; this service does not persist the pairing code. Needs hub.manage. For a new membership, a non-owner profile needs human approval; disabled goatclaw does not count as owner. In a thread, state needs_human also carries kind needs_human and a handoff whose ID is decisionId; outside a thread it creates a decision-inbox item. A person approves in a GOAT app. After a new join, the repair ladder runs only for failed checks, not merely unproven evidence, and can stop with unproven parity. Its restart guard omits subagent turns, as described by goat_hub_device_repair.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,

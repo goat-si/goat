@@ -159,14 +159,21 @@ Leave and re-link clean up the device before the Home (disconnect, restart, stan
 `/healthz`), then force-revoke: the Home's own revoke runs a remote disconnect whose failure
 restarts the tunnel. A device that cannot be cleaned up keeps its link until a person decides.
 
-`apps/server/src/opencodex/OpenCodexChildBootstrap.ts` makes a cloud machine this hub created into
-its Child at provision time. `CloudMachineService.onReady` fires after each real readying (the
-Boat SSH entry is written), and the bootstrap forks one job per alias: install this Home's
-OpenCodex release with a user-prefix npm install, start it (`ocx service`, else `ocx start`),
-then `HubMembership.joinProvisioned`, which links only when OpenCodex offers GOAT's own pin. It
-runs only while `hub.enabled`, skips a recorded Child, waits 10 minutes before retrying a
-blocked machine, and never touches SSH hosts a person added. Outcomes persist per alias in the
-state directory and reach `goat_host_status` as the host entry's `opencodexChild`.
+`apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
+hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
+machine; the Child's own GOAT (`OpenCodexChildReady.ts`, behind `goat_hub_child_prepare`) installs
+Codex, syncs the Home catalog and routes one bootstrap instance with no provider sign-in.
+`ChildReadyDispatch.ts` drives those steps over the pinned SSH channel with a fresh signed
+`opencodex-child-setup` purpose per phase; only the Home checks consent, before issuing and after
+every reply, and revokes delegated Child sessions when consent ends. Membership is not Ready:
+Ready needs one real model request through that Child's local OpenCodex and Home, with zero local
+credentials before and after and no link reconnect during it (OpenCodex's link connection
+generation), and expires after 24 hours or on any link, reconnect, listener, settings, catalog,
+instance, executable or credential change. Hub and cloud consent generations advance inside the
+settings commit, so setup bound to them stops even before the consent subscriber runs. Status
+reads never infer: the Home shows a recorded Ready only while a short status-phase read of the
+Child confirms that proof, and shows the machine linked and unverified otherwise. Outcomes persist per alias and reach
+`goat_host_status` as the host entry's `opencodexChild`.
 
 `apps/server/src/hub/OpenCodexManagedUpdate.ts` moves GOAT-managed OpenCodex installs to the newest
 release on OpenCodex's `latest` channel under ADR-0019's rules: staged bucket, idle (subagents
@@ -231,10 +238,15 @@ attaches through `resumeTurn` and never submits. See `docs/internals/cloud-crede
 `docs/internals/providers.md` and `docs/internals/adding-a-provider.md` are the contributor
 procedures. This page is the inventory.
 
-Codex Home routing belongs to `apps/server/src/provider/OpenCodexRoute.ts`.
-It observes OpenCodex on the Codex execution host. OpenCodex owns link keys
-and tunnel lifecycle; GOAT's route selection stays on the Codex instance.
-The shared status contract is `packages/contracts/src/codexRoute.ts`.
+Provider Home approval belongs to `apps/server/src/provider/ProviderHomeRequests.ts`. Codex launch
+verification stays in `OpenCodexRoute.ts`; Claude Code, OpenCode and Pi are routed only when their
+instance selects Home, through the process-only overlay `ProviderHomeDriver.ts` applies at driver
+registration. OpenCodex owns link keys and tunnel lifecycle, and the route selection stays on the
+instance. A configured or observed route is not the Child's inference proof. Shared route and
+settings contracts live in `packages/contracts/src/codexRoute.ts`.
+Claude Code reads settings-file `env` over its process environment, so a routed Claude launch pins
+the Home endpoint in Claude's flag settings (`ClaudeHomeSettings.ts`), and managed settings that
+outrank that tier refuse the route.
 
 Proposed (not implemented): a hub environment that is the OpenCodex Home for the fleet. Devices
 join through OpenCodex Remote Link or Hub mode, driven over GOAT's SSH sessions, and GOAT checks

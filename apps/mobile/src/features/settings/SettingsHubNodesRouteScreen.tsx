@@ -1,9 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  cloudAutoJoinSaveError,
-  hubDeviceList,
-  type ChildSetup,
-} from "@goat/client-runtime/hub-devices";
+import { cloudAutoJoinSaveError, hubDeviceList } from "@goat/client-runtime/hub-devices";
 import {
   canRemoveHubNode,
   HUB_NODE_IMPORT_NOTICE,
@@ -35,6 +31,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { HubChildSetup } from "./HubChildSetup";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsHubNodesRouteScreen() {
@@ -121,12 +118,6 @@ function HubNodesSelection({
   );
 }
 
-const CHILD_SETUP_TEXT: Record<ChildSetup["tone"], string> = {
-  progress: "text-sm text-foreground-muted",
-  warning: "text-sm text-warning-foreground",
-  destructive: "text-sm text-danger-foreground",
-};
-
 /** Web's host-status period: each read samples CPU and asks every SSH host. */
 const SETUP_REFRESH_MS = 15_000;
 
@@ -152,9 +143,10 @@ function HubDevicesList({
       hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
     ),
     hosts,
+    statusCurrent: status.isSuccess,
   });
-  // Host status is a one-shot read; reread it only while a setup is still moving.
-  const settingUp = rows.some((row) => row.childSetup?.state === "running");
+  // Host status is a one-shot read; reread it only while a setup, or its verification, is moving.
+  const settingUp = rows.some((row) => row.childSetup?.tone === "progress");
   const refreshStatus = status.refresh;
   useEffect(() => {
     if (!settingUp) return;
@@ -220,8 +212,9 @@ function HubDevicesList({
           <View className="flex-1 gap-1">
             <Text className="text-foreground">Join new cloud machines</Text>
             <Text className="text-sm text-foreground-muted">
-              A cloud machine this hub creates gets its OpenCodex and joins as a Child the first
-              time it is used. Off: new machines stay standalone, and linked ones stay linked.
+              A cloud machine this hub creates joins as a Child the first time it is used: GOAT
+              installs OpenCodex and Codex, links it, and verifies one request through Home. Off:
+              new machines stay standalone, and linked ones stay linked.
             </Text>
           </View>
           <ThemedSwitch
@@ -282,9 +275,11 @@ function HubDevicesList({
         const link =
           device !== null
             ? HUB_TRANSPORT_LABEL[device.transport]
-            : linkKnown
-              ? "Not linked to OpenCodex"
-              : null;
+            : childSetup?.state === "child"
+              ? "Linked to OpenCodex"
+              : linkKnown
+                ? "Not linked to OpenCodex"
+                : null;
         return (
           <View key={key} className="gap-2 rounded-xl bg-grouped-card p-4">
             <Text className="font-goat-medium text-foreground">{rowLabel}</Text>
@@ -318,12 +313,11 @@ function HubDevicesList({
               </Text>
             )}
             {childSetup === null ? null : (
-              <View className="gap-1">
-                <Text className={CHILD_SETUP_TEXT[childSetup.tone]}>{childSetup.label}</Text>
-                {childSetup.detail === null ? null : (
-                  <Text className="text-sm text-foreground-muted">{childSetup.detail}</Text>
-                )}
-              </View>
+              <HubChildSetup
+                environmentId={environmentId}
+                setup={childSetup}
+                onRefresh={status.refresh}
+              />
             )}
             {childOptIn === null ? null : (
               <View className="flex-row items-center gap-3">
@@ -332,6 +326,7 @@ function HubDevicesList({
                     Join as OpenCodex Child after each SSH setup
                   </Text>
                   <Text className="text-sm text-foreground-muted">
+                    GOAT installs OpenCodex and Codex there and verifies one request through Home.
                     Turning this off keeps an existing link.
                   </Text>
                 </View>

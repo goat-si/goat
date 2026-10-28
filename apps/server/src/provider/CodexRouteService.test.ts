@@ -6,7 +6,14 @@ import * as Sessions from "../auth/SessionStore.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import { session } from "./CodexRouteService.testkit.ts";
 import { assert, it } from "@effect/vitest";
-import { CodexSettings, ProviderDriverKind, ProviderInstanceId, TurnItemId } from "@goat/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderInstanceMutation,
+  TurnItemId,
+  type ProviderInstanceConfig,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -45,54 +52,145 @@ const seed = Effect.gen(function* () {
   );
   return routes;
 });
-it.effect("rejects route changes with provider_instance_busy while a Codex session is active", () =>
-  Effect.gen(function* () {
-    const routes = yield* seed;
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* Config.ServerConfig;
-    const before = yield* fs.readFileString(config.settingsPath);
-    const scope = yield* Scope.make();
-    yield* routes.reserveUse(instanceId).pipe(Effect.provideService(Scope.Scope, scope));
-    const result = yield* routes
-      .mutateProviderInstance(
-        {
-          mutation: {
-            operation: "upsert",
-            instanceId,
-            instance: { ...base, config: { ...base.config, modelRoute: "opencodex" } },
-          },
-        },
-        caller,
-      )
-      .pipe(Effect.result);
-    assert.equal(result._tag, "Failure");
-    if (result._tag === "Failure") {
-      assert.equal(result.failure.code, "provider_instance_busy");
-      assert.equal(
-        result.failure.message,
-        "Wait for this instance's active turns to finish before changing its model route.",
-      );
-    }
-    assert.equal(yield* fs.readFileString(config.settingsPath), before);
-    yield* Scope.close(scope, Exit.void);
-    const saved = yield* commitAndApply(
-      routes.mutateProviderInstance(
-        {
-          mutation: {
-            operation: "upsert",
-            instanceId,
-            instance: {
-              ...base,
-              displayName: "Home with the same home",
-              config: { ...base.config, modelRoute: "opencodex" },
+it.effect.each([
+  { change: "model route", from: {}, to: { modelRoute: "opencodex" as const } },
+  {
+    change: "Home authentication",
+    from: { modelRoute: "opencodex" as const, opencodexAuth: "openai" as const },
+    to: { modelRoute: "opencodex" as const, opencodexAuth: "none" as const },
+  },
+])(
+  "rejects $change changes with provider_instance_busy while a Codex session is active",
+  ({ from, to }) =>
+    Effect.gen(function* () {
+      const routes = yield* seed;
+      const current = { ...base, config: { ...base.config, ...from } };
+      if (Object.keys(from).length > 0)
+        yield* commitAndApply(
+          routes.mutateProviderInstance(
+            { mutation: { operation: "upsert", instanceId, instance: current } },
+            caller,
+          ),
+        );
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* Config.ServerConfig;
+      const before = yield* fs.readFileString(config.settingsPath);
+      const scope = yield* Scope.make();
+      yield* routes.reserveUse(instanceId).pipe(Effect.provideService(Scope.Scope, scope));
+      const result = yield* routes
+        .mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: { ...current, config: { ...current.config, ...to } },
             },
           },
-        },
-        caller,
-      ),
-    );
-    assert.equal(saved.providerInstances[instanceId]?.displayName, "Home with the same home");
-  }).pipe(Effect.provide(layer)),
+          caller,
+        )
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "provider_instance_busy");
+        assert.equal(
+          result.failure.message,
+          "Wait for this instance's active turns to finish before changing its model route.",
+        );
+      }
+      assert.equal(yield* fs.readFileString(config.settingsPath), before);
+      yield* Scope.close(scope, Exit.void);
+      const saved = yield* commitAndApply(
+        routes.mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: {
+                ...current,
+                displayName: "Home with the same home",
+                config: { ...current.config, ...to },
+              },
+            },
+          },
+          caller,
+        ),
+      );
+      assert.equal(saved.providerInstances[instanceId]?.displayName, "Home with the same home");
+      assert.deepInclude(decode(saved.providerInstances[instanceId]?.config ?? {}), to);
+    }).pipe(Effect.provide(layer)),
+);
+type LeasedInstance = ProviderInstanceConfig;
+it.effect.each([
+  {
+    change: "Claude Code model route",
+    driver: "claudeAgent",
+    next: (instance: LeasedInstance) => ({ ...instance, config: { modelRoute: "opencodex" } }),
+  },
+  {
+    change: "OpenCode Home address",
+    driver: "opencode",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      config: { modelRoute: "default", opencodexBaseUrl: "http://127.0.0.1:10101/v1" },
+    }),
+  },
+  {
+    change: "Claude Code endpoint variable",
+    driver: "claudeAgent",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      environment: [
+        { name: "ANTHROPIC_BASE_URL", value: "http://127.0.0.1:10100", sensitive: false },
+      ],
+    }),
+  },
+  {
+    change: "Pi driver replacement",
+    driver: "pi",
+    next: (instance: LeasedInstance) => ({
+      ...instance,
+      driver: ProviderDriverKind.make("cursor"),
+    }),
+  },
+])(
+  "refuses a $change while the instance is in use and still accepts a label edit",
+  ({ driver, next }) =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.start;
+      const routes = yield* Routes.CodexRouteService;
+      const instance: LeasedInstance = {
+        driver: ProviderDriverKind.make(driver),
+        displayName: "Leased",
+        config: { modelRoute: "default" },
+      };
+      const upsert = (value: LeasedInstance) =>
+        routes.mutateProviderInstance(
+          { mutation: { operation: "upsert", instanceId, instance: value } },
+          caller,
+        );
+      yield* commitAndApply(
+        routes.mutateProviderInstance(
+          { mutation: { operation: "create", instanceId, instance } },
+          caller,
+        ),
+      );
+      const relabelled = { ...instance, displayName: "Renamed while busy" };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* routes.reserveUse(instanceId);
+          const before = yield* routes.capture(instanceId);
+          const result = yield* upsert(next(instance)).pipe(Effect.result);
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure")
+            assert.equal(result.failure.code, "provider_instance_busy");
+          assert.deepStrictEqual(yield* routes.capture(instanceId), before);
+          const saved = yield* commitAndApply(upsert(relabelled));
+          assert.equal(saved.providerInstances[instanceId]?.displayName, "Renamed while busy");
+        }),
+      );
+      yield* commitAndApply(upsert(next(relabelled)));
+    }).pipe(Effect.provide(layer)),
 );
 it.effect(
   "checks the private approval precondition under the settings lock before no-op and secret writes",
@@ -367,5 +465,161 @@ it.effect("rejects a conflicting create instead of replacing a canonical committ
     if (conflict._tag === "Failure")
       assert.equal(conflict.failure.operation, "create-provider-instance");
     assert.deepStrictEqual(yield* routes.capture(instanceId), before);
+  }).pipe(Effect.provide(layer)),
+);
+
+const mutationJson = Schema.toCodecJson(ProviderInstanceMutation);
+/** The mutation as a client sends it, decoded the way the RPC boundary decodes it. */
+const overWire = (mutation: ProviderInstanceMutation) =>
+  Schema.decodeUnknownSync(mutationJson)(
+    JSON.parse(JSON.stringify(Schema.encodeSync(mutationJson)(mutation))),
+  );
+it.effect.each([
+  { case: "rejects a stale confirmation without writing", stale: true },
+  { case: "applies a confirmation made against the current instance", stale: false },
+])("$case", ({ stale }) =>
+  Effect.gen(function* () {
+    const routes = yield* seed;
+    const settings = yield* Settings.ServerSettingsService;
+    const home = {
+      ...base,
+      config: {
+        ...base.config,
+        modelRoute: "opencodex" as const,
+        opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+      },
+    };
+    yield* commitAndApply(
+      routes.mutateProviderInstance(
+        { mutation: { operation: "upsert", instanceId, instance: home } },
+        caller,
+      ),
+    );
+    const confirmed = Settings.redactServerSettingsForClient(yield* settings.getSettings)
+      .providerInstances[instanceId];
+    if (confirmed === undefined) return yield* Effect.die("Expected the seeded instance");
+    if (stale)
+      yield* commitAndApply(
+        routes.mutateProviderInstance(
+          {
+            mutation: {
+              operation: "upsert",
+              instanceId,
+              instance: {
+                ...home,
+                config: {
+                  ...home.config,
+                  modelRoute: "default",
+                  opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+                },
+              },
+            },
+          },
+          caller,
+        ),
+      );
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* Config.ServerConfig;
+    const before = yield* fs.readFileString(config.settingsPath);
+    const request = routes.mutateProviderInstance(
+      {
+        mutation: overWire({
+          operation: "upsert",
+          instanceId,
+          instance: { ...confirmed, config: { ...home.config, opencodexAuth: "none" } },
+          expectedInstance: confirmed,
+        }),
+      },
+      caller,
+    );
+    if (stale) {
+      const state = yield* Routes.CodexRouteState;
+      const changes = yield* settings.subscribeProviderChanges!;
+      const baseline = state.revision();
+      const fiber = yield* request.pipe(Effect.result, Effect.forkScoped);
+      const result = yield* Effect.raceFirst(
+        Fiber.join(fiber),
+        Stream.runHead(
+          changes.pipe(Stream.filter((event) => event.revision.sequence > baseline.sequence)),
+        ).pipe(Effect.andThen(Effect.die("A stale confirmation was committed"))),
+      );
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "provider_instance_stale");
+        assert.equal(
+          result.failure.message,
+          "Settings changed on another device. Review them and try again.",
+        );
+      }
+      assert.equal(yield* fs.readFileString(config.settingsPath), before);
+      const kept = decode(
+        (yield* settings.getSettings).providerInstances[instanceId]?.config ?? {},
+      );
+      assert.deepInclude(kept, {
+        modelRoute: "default",
+        opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+      });
+      return;
+    }
+    const saved = yield* commitAndApply(request);
+    assert.deepInclude(decode(saved.providerInstances[instanceId]?.config ?? {}), {
+      modelRoute: "opencodex",
+      opencodexAuth: "none",
+    });
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  {
+    case: "rejects a first write confirmed against no stored instance once another device stored one",
+    stale: true,
+  },
+  { case: "applies a first write confirmed against no stored instance", stale: false },
+])("$case", ({ stale }) =>
+  Effect.gen(function* () {
+    const routes = yield* seed;
+    const settings = yield* Settings.ServerSettingsService;
+    const id = ProviderInstanceId.make("codex");
+    const upsert = (config: Record<string, unknown>, expectedInstance?: null) =>
+      routes.mutateProviderInstance(
+        {
+          mutation: overWire({
+            operation: "upsert",
+            instanceId: id,
+            instance: { driver: base.driver, config },
+            ...(expectedInstance === null ? { expectedInstance } : {}),
+          }),
+        },
+        caller,
+      );
+    if (stale)
+      yield* commitAndApply(
+        upsert({ modelRoute: "default", opencodexBaseUrl: "http://127.0.0.1:10101/v1" }),
+      );
+    const late = upsert(
+      { modelRoute: "opencodex", opencodexBaseUrl: "http://127.0.0.1:10100/v1" },
+      null,
+    );
+    if (!stale) {
+      const saved = yield* commitAndApply(late);
+      assert.equal(decode(saved.providerInstances[id]?.config ?? {}).modelRoute, "opencodex");
+      return;
+    }
+    const state = yield* Routes.CodexRouteState;
+    const changes = yield* settings.subscribeProviderChanges!;
+    const baseline = state.revision();
+    const fiber = yield* late.pipe(Effect.result, Effect.forkScoped);
+    const result = yield* Effect.raceFirst(
+      Fiber.join(fiber),
+      Stream.runHead(
+        changes.pipe(Stream.filter((event) => event.revision.sequence > baseline.sequence)),
+      ).pipe(Effect.andThen(Effect.die("A stale first write was committed"))),
+    );
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.equal(result.failure.code, "provider_instance_stale");
+    assert.deepInclude(decode((yield* settings.getSettings).providerInstances[id]?.config ?? {}), {
+      modelRoute: "default",
+      opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+    });
   }).pipe(Effect.provide(layer)),
 );

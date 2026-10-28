@@ -48,6 +48,14 @@ export const layer = HttpRouter.add(
     );
     if (decoded._tag === "Failure") return yield* refuse(400, "Invalid runtime session request.");
     const input = decoded.success;
+    if (input.kind === "revoke") {
+      // A Home withdrawing a Child setup bearer it delegated; the answer names that session.
+      const revoked = yield* (yield* EnvironmentAuth.EnvironmentAuth).revokeSession(
+        input.sessionId,
+      );
+      yield* Effect.logInfo("runtime.session.revoked", { sessionId: input.sessionId, revoked });
+      return yield* HttpServerResponse.json({ sessionId: input.sessionId, revoked });
+    }
     const ttl = input.ttl === undefined ? undefined : parseDurationInput(input.ttl);
     if (ttl === null) return yield* refuse(400, "Invalid runtime session ttl.");
     const auth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -62,6 +70,9 @@ export const layer = HttpRouter.add(
               ...(input.runtimeModeCeiling === undefined
                 ? {}
                 : { runtimeModeCeiling: input.runtimeModeCeiling }),
+              ...(input.childSetupPurpose === undefined
+                ? {}
+                : { childSetupPurpose: input.childSetupPurpose }),
             }),
             { json: true },
           )

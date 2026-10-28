@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -16,6 +17,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { fleetSnapshot } from "./parity.testkit.ts";
 import {
+  childConnectionAdmission,
   countLinkTunnels,
   deviceScript,
   guardedSyncScript,
@@ -28,6 +30,7 @@ import {
 } from "./HubOcx.ts";
 
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
+
 const CODE = "ocx_pair_Q0xJRU5UX1RFU1RfQ09ERV9GSVhUVVJFXzAwMDAwMDAwMDA";
 const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("hub-fixture"),
@@ -462,5 +465,218 @@ it.live("starts an admitted ocx with nothing awaited after its permission is rea
     );
     expect(output).toMatchObject({ code: 0, stdout: "link add lidge-ts --json\n" });
     expect(checks).toBe(checksAtPermission);
+  }),
+);
+
+const inviteJson = JSON.stringify({
+  code: CODE,
+  expiresAt: "2026-10-28T00:05:00.000Z",
+  dataUrl: "https://hub.example.invalid",
+  managementUrl: "https://hub.example.invalid/manage",
+});
+
+/** The Home's OpenCodex mints invites; the device's GOAT answers goat_hub_child_connection. */
+const connectionWorld = (
+  answer: (input: Record<string, unknown>) => Record<string, unknown>,
+  started: Array<ReadonlyArray<string>>,
+  calls: Array<Dispatch.SshHostToolCall>,
+) =>
+  hubOcxLayer.pipe(
+    Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+    Layer.provide(
+      Layer.mock(ProcessRunner.ProcessRunner)({
+        run: (input) =>
+          Effect.sync(() => {
+            started.push(input.args);
+            return {
+              stdout: inviteJson,
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Inventory.OpenCodexInventory)({
+        read: Effect.succeed({
+          ...fleetSnapshot("home"),
+          binaries: [{ path: "/usr/local/bin/ocx", version: "2.91.0" }],
+        }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Dispatch.SshRemoteDispatch)({
+        identifyTarget: () => Effect.succeed(EnvironmentId.make("child-env")),
+        callHostTool: (call, authorize) =>
+          authorize.pipe(
+            Effect.map(() => {
+              calls.push(call);
+              return answer(call.arguments);
+            }),
+          ),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+it.effect(
+  "an explicit Hub client join passes its one-use code only to the authorized destination",
+  () =>
+    Effect.gen(function* () {
+      const started: Array<ReadonlyArray<string>> = [];
+      const calls: Array<Dispatch.SshHostToolCall> = [];
+      const echo = (input: Record<string, unknown>) => ({
+        destinationEnvironmentId: input.destinationEnvironmentId,
+        homeEnvironmentId: input.homeEnvironmentId,
+        operationId: input.operationId,
+        kind: "connectHubClient",
+        code: 0,
+        healthy: true,
+      });
+      const ocx = yield* HubOcx.pipe(Effect.provide(connectionWorld(echo, started, calls)));
+      const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+      const handoff = yield* ocx.connectHubClient("mini", 60_000, admission);
+      expect(handoff).toMatchObject({ minted: true, connect: { code: 0 } });
+      expect(JSON.stringify(handoff)).not.toContain(CODE);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        host: "mini",
+        environmentId: "child-env",
+        tool: "goat_hub_child_connection",
+        writes: true,
+        arguments: {
+          destinationEnvironmentId: "child-env",
+          homeEnvironmentId: "hub",
+          operationId: admission.operationId,
+          opencodexConnection: { kind: "connectHubClient", pairingCode: CODE },
+        },
+      });
+      // An ordinary hub.manage session: never a setup purpose, never the prepare tool.
+      expect(calls[0]?.childSetupPurpose).toBeUndefined();
+
+      // An answer for another operation is not this connection's outcome.
+      const otherCalls: Array<Dispatch.SshHostToolCall> = [];
+      const other = yield* HubOcx.pipe(
+        Effect.provide(
+          connectionWorld(
+            (input) => ({ ...echo(input), operationId: "another-operation" }),
+            [],
+            otherCalls,
+          ),
+        ),
+      );
+      expect(
+        (yield* other.connectHubClient("mini", 60_000, admission).pipe(Effect.flip)).reason,
+      ).toBe("unreachable");
+    }),
+);
+
+it.effect("a withdrawn Hub client approval mints no invite and contacts no device", () =>
+  Effect.gen(function* () {
+    const started: Array<ReadonlyArray<string>> = [];
+    const calls: Array<Dispatch.SshHostToolCall> = [];
+    const ocx = yield* HubOcx.pipe(Effect.provide(connectionWorld(() => ({}), started, calls)));
+    const withdrawn = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(false));
+    expect((yield* ocx.connectHubClient("mini", 60_000, withdrawn).pipe(Effect.flip)).reason).toBe(
+      "unreachable",
+    );
+    expect(started).toEqual([]);
+    expect(calls).toEqual([]);
+  }),
+);
+
+/** A device whose GOAT is older than goat_hub_child_connection, or absent, answering `uname`. */
+const unservedWorld = (
+  uname: string,
+  goat: "outdated" | "absent",
+  scripts: Array<string>,
+  calls: Array<Dispatch.SshHostToolCall>,
+) =>
+  hubOcxLayer.pipe(
+    Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+    Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+    Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
+    Layer.provide(
+      Layer.mock(Dispatch.SshRemoteDispatch)({
+        identifyTarget: () =>
+          Effect.succeed(goat === "absent" ? null : EnvironmentId.make("child-env")),
+        ensureRuntime: () => Effect.succeed(false),
+        callHostTool: (call, authorize) =>
+          authorize.pipe(
+            Effect.andThen(
+              Effect.sync(() => void calls.push(call)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new Dispatch.SshRemoteDispatchError({
+                      reason: "remote_outdated",
+                      message: "No goat_hub_child_connection there.",
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        runHostScript: ({ script }) =>
+          Effect.sync(() => {
+            scripts.push(script);
+            const stdout = script.startsWith("uname") ? `${uname}\n` : "";
+            return { stdout: `${stdout}\n__goat_ocx_exit=0\n`, stderr: "" };
+          }),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+it.effect.each([
+  { name: "an older GOAT", goat: "outdated" as const, toolCalls: 1 },
+  { name: "OpenCodex alone", goat: "absent" as const, toolCalls: 0 },
+])(
+  "a POSIX device with $name still disconnects and restarts through the ocx script",
+  ({ goat, toolCalls }) =>
+    Effect.gen(function* () {
+      const scripts: Array<string> = [];
+      const calls: Array<Dispatch.SshHostToolCall> = [];
+      const ocx = yield* HubOcx.pipe(Effect.provide(unservedWorld("Linux", goat, scripts, calls)));
+      const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+      for (const kind of ["disconnect", "restart"] as const)
+        expect(
+          yield* ocx.connection("lidge", { kind, expectedLinkId: "lnk_1" }, 60_000, admission),
+        ).toEqual({ code: 0, stdout: "" });
+      expect(calls).toHaveLength(toolCalls * 2);
+      expect(scripts.filter((script) => !script.startsWith("uname"))).toEqual([
+        deviceScript(["disconnect", "--json"]),
+        deviceScript(["restart"]),
+      ]);
+
+      // A withdrawn approval runs no script, even where the tool is missing.
+      const withdrawn = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(false));
+      scripts.length = 0;
+      const refused = yield* ocx
+        .connection("lidge", { kind: "disconnect", expectedLinkId: "lnk_1" }, 60_000, withdrawn)
+        .pipe(Effect.flip);
+      expect(refused.reason).toBe("unreachable");
+      expect(scripts).toEqual([]);
+    }),
+);
+
+it.effect("a Windows device whose GOAT lacks goat_hub_child_connection runs no ocx script", () =>
+  Effect.gen(function* () {
+    const scripts: Array<string> = [];
+    const calls: Array<Dispatch.SshHostToolCall> = [];
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(unservedWorld("MINGW64_NT-10.0-26200", "outdated", scripts, calls)),
+    );
+    const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+    const refused = yield* ocx
+      .connection("mini", { kind: "disconnect", expectedLinkId: "lnk_1" }, 60_000, admission)
+      .pipe(Effect.flip);
+    expect(refused.message).toContain("Update GOAT on mini");
+    expect(calls).toHaveLength(1);
+    expect(scripts.every((script) => script.startsWith("uname"))).toBe(true);
   }),
 );

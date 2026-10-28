@@ -1,4 +1,9 @@
-import { type AuthSessionId, type HubDeviceChildOptIn, WS_METHODS } from "@goat/contracts";
+import {
+  type AuthSessionId,
+  type HubDeviceChildOptIn,
+  type HubDeviceSetupInput,
+  WS_METHODS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -32,5 +37,7 @@ export const makeOpenCodexRpcHandlers = Effect.fn("OpenCodexRpc.makeHandlers")(f
       childBootstrap
         .setSshOptIn(input.deviceAlias, input.enabled, { kind: "client", sessionId })
         .pipe(Effect.as(input)),
+    // Retries or finishes setup under consent already given; it never gives consent.
+    [WS_METHODS.hubDeviceSetup]: (input: HubDeviceSetupInput) => childBootstrap.setupDevice(input),
   } as const;
 });

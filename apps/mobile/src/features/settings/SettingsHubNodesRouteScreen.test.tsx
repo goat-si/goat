@@ -1,4 +1,10 @@
-import { EnvironmentId, type HostStatusEntry, type HubNode } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  type HostStatusEntry,
+  type HubNode,
+  type OpenCodexChildSetup,
+} from "@goat/contracts";
 import { useSyncExternalStore, act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -23,6 +29,7 @@ const state = vi.hoisted(() => ({
   dismiss: vi.fn(),
   updateSettings: vi.fn(),
   setOptIn: vi.fn(),
+  completeChild: vi.fn(),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -96,6 +103,7 @@ vi.mock("../../state/server", async () => {
       dismissHubNodeNotice: Object.assign(state.dismiss, { permissionAtom }),
       updateSettings: Object.assign(state.updateSettings, { permissionAtom }),
       setHubDeviceChildOptIn: Object.assign(state.setOptIn, { permissionAtom }),
+      setupOpenCodexChild: Object.assign(state.completeChild, { permissionAtom }),
     },
   };
 });
@@ -162,6 +170,7 @@ beforeEach(() => {
   );
   for (const command of [state.check, state.remove, state.dismiss, state.setOptIn])
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+  state.completeChild.mockReset().mockResolvedValue({ _tag: "Success", value: { kind: "ok" } });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -383,4 +392,110 @@ it("offers neither switch for a hub that does not report them", async () => {
   state.hosts = [{ host: "lab", reachability: "ok" }];
   await render();
   expect(container.querySelector('[role="switch"]')).toBeNull();
+});
+
+function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {
+  return {
+    version: 1,
+    operationId: "setup-1",
+    destinationEnvironmentId: EnvironmentId.make("lab"),
+    homeEnvironmentId: EnvironmentId.make(first.environmentId),
+    instanceId: ProviderInstanceId.make("child-codex"),
+    revision: { epoch: "test-epoch", sequence: 1 },
+    steps: [],
+    readiness: "linked",
+    attribution: "home_zero_local_accounts",
+    nextAction: "retry",
+    ...overrides,
+  };
+}
+
+it("keeps a linked Child listed as unverified and starts setup only when asked", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hosts = [
+    { host: "lab", reachability: "ok", opencodexChild: { state: "child", checkedAt: 0 } },
+  ];
+  await render();
+  expect(container.textContent).toContain("Linked to OpenCodex");
+  expect(container.textContent).toContain("Linked · Codex not verified");
+  expect(container.textContent).not.toContain("Ready");
+  expect(state.completeChild).not.toHaveBeenCalled();
+  await act(async () => button("Continue setup").click());
+  expect(state.completeChild).toHaveBeenCalledExactlyOnceWith({
+    environmentId: first.environmentId,
+    input: { deviceAlias: "lab" },
+  });
+  expect(state.refreshHosts).toHaveBeenCalled();
+});
+
+it("shows the failed step's reason without Ready and offers Continue setup again", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hosts = [
+    {
+      host: "lab",
+      reachability: "ok",
+      opencodexChild: {
+        state: "child",
+        checkedAt: 0,
+        setup: childSetupFixture({
+          readiness: "invalid",
+          failure: {
+            code: "probe_failed",
+            step: "inference_verified",
+            message: "Home refused the request.",
+            retryable: true,
+          },
+        }),
+      },
+    },
+  ];
+  state.completeChild.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      kind: "error",
+      failure: {
+        code: "probe_failed",
+        step: "inference_verified",
+        message: "Home is still refusing.",
+        retryable: true,
+      },
+    },
+  });
+  await render();
+  expect(container.textContent).toContain("Home refused the request.");
+  expect(container.textContent).not.toContain("Ready");
+  await act(async () => button("Continue setup").click());
+  expect(container.textContent).toContain("lab: Home is still refusing.");
+});
+
+it("keeps reading status while a linked Child verifies, without starting another request", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hosts = [
+    {
+      host: "lab",
+      reachability: "ok",
+      opencodexChild: {
+        state: "child",
+        checkedAt: 0,
+        setup: childSetupFixture({
+          readiness: "verifying",
+          nextAction: "none",
+          steps: [{ step: "inference_verified", state: "running" }],
+        }),
+      },
+    },
+  ];
+  vi.useFakeTimers();
+  try {
+    await render();
+    expect(container.textContent).toContain("Verify a request through Home…");
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(state.refreshHosts).toHaveBeenCalledOnce();
+    expect(state.completeChild).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });

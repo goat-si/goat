@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
+import { layerProviderHomeInventory } from "./ProviderHomeRuntime.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
@@ -76,6 +77,14 @@ export const deriveProviderInstanceConfigMap = (
   return merged as ProviderInstanceConfigMap;
 };
 
+/** Reconciles one settings snapshot; every runtime built from it is bound to its revision. */
+export const reconcileSnapshot = (
+  mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape,
+  configMap: ProviderInstanceConfigMap,
+  revision: CodexRoute.SettingsRevision | undefined,
+) =>
+  mutator.reconcile(configMap).pipe(Effect.provideService(CodexRoute.HydratingRevision, revision));
+
 const settingsWatcher = (
   suppliedChanges?: Stream.Stream<
     {
@@ -84,12 +93,19 @@ const settingsWatcher = (
     },
     import("@goat/contracts").ServerSettingsError
   >,
+  initial?: {
+    readonly configMap: ProviderInstanceConfigMap;
+    readonly revision: CodexRoute.SettingsRevision | undefined;
+  },
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
       const serverSettings = yield* Settings.ServerSettingsService;
       const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
+      // Initial hydration runs here, not in the registry layer, so it carries its revision too.
+      if (initial !== undefined)
+        yield* reconcileSnapshot(mutator, initial.configMap, initial.revision);
       const settingsChanges: Stream.Stream<
         {
           readonly settings: ServerSettings;
@@ -105,13 +121,18 @@ const settingsWatcher = (
             ));
       yield* settingsChanges.pipe(
         Stream.runForEach((next) =>
-          (next.revision === undefined
-            ? serverSettings.getSettings
-            : Effect.succeed(next.settings)
-          ).pipe(
-            Effect.flatMap((current) =>
-              mutator.reconcile(deriveProviderInstanceConfigMap(current)),
-            ),
+          Effect.gen(function* () {
+            if (next.revision !== undefined)
+              return yield* reconcileSnapshot(
+                mutator,
+                deriveProviderInstanceConfigMap(next.settings),
+                next.revision,
+              );
+            // Read before the settings, so a commit in between can only make this look older.
+            const revision = Option.isSome(routeState) ? routeState.value.revision() : undefined;
+            const settings = yield* serverSettings.getSettings;
+            yield* reconcileSnapshot(mutator, deriveProviderInstanceConfigMap(settings), revision);
+          }).pipe(
             Effect.tap(() =>
               Option.isSome(routeState) && next.revision
                 ? routeState.value.applied(next.revision)
@@ -179,7 +200,7 @@ export const layer: Layer.Layer<
 
     const layerMutable = ProviderInstanceRegistry.layer({
       drivers: BUILT_IN_DRIVERS,
-      configMap: initialConfigMap,
+      configMap: {} as ProviderInstanceConfigMap,
     }).pipe(
       Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
       Layer.provide(Layer.succeed(McpProviderSessions.McpProviderSessions, fencedSessions)),
@@ -202,7 +223,10 @@ export const layer: Layer.Layer<
           event.revision.sequence > initial.revision.sequence,
       ),
     );
-    return settingsWatcher(afterInitial).pipe(
+    return settingsWatcher(afterInitial, {
+      configMap: initialConfigMap,
+      revision: initial?.revision,
+    }).pipe(
       Layer.provideMerge(layerMutable),
       Layer.tap(() =>
         Option.isSome(routeState) && initial?.revision
@@ -218,3 +242,6 @@ export const layer: Layer.Layer<
   never,
   ProviderInstanceRegistryHydrationEnv
 >;
+
+/** The server's registry, with the OpenCodex inventory that routed Home drivers read. */
+export const layerWithProviderHome = layer.pipe(Layer.provide(layerProviderHomeInventory));

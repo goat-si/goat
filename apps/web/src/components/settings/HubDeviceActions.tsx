@@ -142,8 +142,8 @@ export function HubDeviceActionButtons({
             <AlertDialogTitle>Remove {device.alias} from the hub?</AlertDialogTitle>
             <AlertDialogDescription>
               GOAT disconnects {device.alias} from this Home and restarts its OpenCodex, then
-              revokes the link here. {device.alias} goes back to its own sign-ins, and its model
-              traffic stops going through the hub.
+              revokes the link here. Its model traffic stops going through the hub, so instances
+              there that use Home need their own sign-in or another route.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -306,7 +306,8 @@ export function AddHubDevice({
       </form>
       <p className="text-xs text-muted-foreground">
         The device needs OpenCodex and a direct SSH alias on this machine. GOAT checks its host key
-        against the key it pinned for that alias before linking.
+        against the key it pinned for that alias before linking. Linking alone does not verify Codex
+        there; the device shows Ready after a request through Home succeeds.
       </p>
       {submitted === null ? null : (
         <HubActionResult entry={actions.entry(submitted)} actions={actions} />

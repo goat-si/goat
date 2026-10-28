@@ -125,6 +125,9 @@ export function formatIssuedSession(
         subject: session.subject,
         client: session.client,
         expiresAt: toIsoString(session.expiresAt),
+        ...(session.childSetupPurpose === undefined
+          ? {}
+          : { childSetupPurpose: session.childSetupPurpose }),
       },
       null,
       2,

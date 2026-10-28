@@ -16,6 +16,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
+import type { NativeWindowsSelection } from "./runtimeWindows.ts";
+
 // A cold archive launch also downloads and unpacks a ~70 MB release archive
 // and may wait on another installer's lock. The budgets nest: the checksum
 // file is tiny and the archive download is bounded; a waiter outlasts both
@@ -125,6 +127,8 @@ export interface PreparedRemoteRuntime {
   readonly appServerPort?: number;
   /** The app server ran at launch but could not serve this client, so it took the managed one. */
   readonly appServerDeclined?: boolean;
+  /** The goat.exe a native Windows host runs without a POSIX shell, and its launch identity. */
+  readonly nativeWindows?: NativeWindowsSelection;
 }
 
 export const requestedRuntime = (

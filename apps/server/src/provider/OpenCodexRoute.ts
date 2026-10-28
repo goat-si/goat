@@ -17,6 +17,11 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { parse } from "smol-toml";
 import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
+import {
+  codexHomeRouteArgv,
+  isAuthlessCodexHomeProvider,
+  usesAuthlessCodexHome,
+} from "./CodexHomeRouteConfig.ts";
 
 export class OpenCodexRouteUnavailable extends Schema.TaggedError<OpenCodexRouteUnavailable>()(
   "OpenCodexRouteUnavailable",
@@ -59,6 +64,8 @@ const endpointFailureReason = (baseUrl: string) =>
   `OpenCodex didn't answer correctly at ${baseUrl}. Check that OpenCodex is running, then check status.`;
 const CATALOG_MISSING = "Could not find OpenCodex's model catalog";
 const CONFIG_UNVERIFIED = "Could not verify the effective Codex endpoint.";
+const MANAGED_NEEDS_NONE =
+  "Managed Codex uses Home with None authentication. OpenAI authentication for Home is available on an instance that uses your Codex CLI.";
 
 /** Only a host-local, credential-free API can be used as a Home route. */
 export function normalizeOpenCodexBaseUrl(value: string): string {
@@ -82,12 +89,12 @@ export function normalizeOpenCodexBaseUrl(value: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 const codexRouteEnvironment = (
-  settings: Pick<CodexSettings, "setupMode" | "modelRoute" | "opencodexBaseUrl">,
+  settings: Pick<CodexSettings, "setupMode" | "modelRoute" | "opencodexBaseUrl" | "opencodexAuth">,
   environment: NodeJS.ProcessEnv,
 ) => {
   if (settings.modelRoute !== "opencodex") return environment;
-  if (settings.setupMode === "managed")
-    throw unavailable("OpenCodex routing needs a Codex instance that uses your Codex CLI.");
+  if (settings.setupMode === "managed" && !usesAuthlessCodexHome(settings))
+    throw unavailable(MANAGED_NEEDS_NONE);
   return { ...environment, OPENAI_BASE_URL: normalizeOpenCodexBaseUrl(settings.opencodexBaseUrl) };
 };
 
@@ -169,11 +176,14 @@ export const verifyEffectiveCodexRoute = (
     const userHome = yield* HostProcess.HomeDirectory;
     const root = record(config);
     const pointer = root?.model_catalog_json;
+    const base = normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl);
+    const routeMatches = usesAuthlessCodexHome(input.settings)
+      ? root?.model_provider === "opencodex" &&
+        isAuthlessCodexHomeProvider(record(record(root.model_providers)?.opencodex), base)
+      : root?.model_provider === "openai" && root.openai_base_url === base;
     if (
-      root?.model_provider !== "openai" ||
-      root.openai_base_url !== normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl) ||
-      readEffectiveBaseUrl(root, input.execution.environment) !==
-        normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl) ||
+      !routeMatches ||
+      readEffectiveBaseUrl(root, input.execution.environment) !== base ||
       typeof pointer !== "string" ||
       path.resolve(input.execution.cwd, expandHomePath(pointer, userHome)) !== expectedCatalogPath
     )
@@ -204,7 +214,6 @@ const Health = Schema.Struct({
 });
 const Models = Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) });
 const Link = Schema.Struct({ role: Schema.String });
-const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const encodeCacheKey = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(Status));
 const decodeHealth = Schema.decodeUnknownEffect(Health);
@@ -231,10 +240,8 @@ const make = Effect.gen(function* () {
   const positives = new Map<string, number>();
   const catalog = (input: RouteInput) =>
     Effect.gen(function* () {
-      if (input.settings.setupMode === "managed")
-        return yield* unavailable(
-          "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
-        );
+      if (input.settings.setupMode === "managed" && !usesAuthlessCodexHome(input.settings))
+        return yield* unavailable(MANAGED_NEEDS_NONE);
       const configPath = path.join(input.execution.home, "config.toml");
       let pointer: unknown;
       if (yield* fs.exists(configPath)) {
@@ -393,23 +400,15 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(Effect.fail(failure)));
       }),
     );
-  const launchArgs = (input: RouteInput) =>
-    Effect.gen(function* () {
-      if (input.settings.modelRoute !== "opencodex") return [];
-      const baseUrl = yield* Effect.try({
-        try: () => normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl),
-        catch: () => unavailable(INVALID_ADDRESS),
-      });
-      const selected = yield* catalog(input);
-      return [
-        "-c",
-        'model_provider="openai"',
-        "-c",
-        `openai_base_url=${encodeString(baseUrl)}`,
-        "-c",
-        `model_catalog_json=${encodeString(selected.filename)}`,
-      ];
+  const launchArgs = Effect.fn("OpenCodexRoute.launchArgs")(function* (input: RouteInput) {
+    if (input.settings.modelRoute !== "opencodex") return [];
+    const baseUrl = yield* Effect.try({
+      try: () => normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl),
+      catch: () => unavailable(INVALID_ADDRESS),
     });
+    const selected = yield* catalog(input);
+    return codexHomeRouteArgv(input.settings, baseUrl, selected.filename);
+  });
   const inspect = (input: RouteInput, fresh = false) =>
     Effect.gen(function* () {
       if (input.settings.modelRoute !== "opencodex") return { modelRoute: "default" as const };
@@ -472,6 +471,7 @@ const make = Effect.gen(function* () {
         input.execution.home,
         input.execution.cwd,
         selected.identity,
+        input.settings.opencodexAuth,
       ]);
       const now = yield* Clock.currentTimeMillis;
       if (!fresh && (positives.get(key) ?? 0) > now)
@@ -549,6 +549,7 @@ const make = Effect.gen(function* () {
         input.execution.cwd,
         input.settings.modelRoute,
         input.settings.opencodexBaseUrl,
+        input.settings.opencodexAuth,
         fresh,
       ]);
       const existing = inFlight.get(key);

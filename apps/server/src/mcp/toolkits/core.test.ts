@@ -219,10 +219,8 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_host_status",
     "goat_host_uncordon",
     "goat_html_list",
-    "goat_hub_device_join",
-    "goat_hub_device_leave",
-    "goat_hub_device_repair",
-    "goat_hub_device_verify",
+    ...["connection", "prepare", "status"].map((verb) => `goat_hub_child_${verb}`),
+    ...["join", "leave", "repair", "setup", "verify"].map((v) => `goat_hub_device_${v}`),
     "goat_hub_opencodex_sync",
     "goat_origin_report",
     "goat_origin_report_receipt",
@@ -328,7 +326,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(188);
+  expect(names.size).toBe(192);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],

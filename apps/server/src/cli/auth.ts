@@ -5,6 +5,7 @@ import {
   AuthSettingsWriteScope,
   AuthSessionId,
   AuthStandardClientScopes,
+  ChildSetupPurpose,
   RuntimeMode,
 } from "@goat/contracts";
 import * as Console from "effect/Console";
@@ -13,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
@@ -188,6 +190,12 @@ const sessionIssueCommand = Command.make("issue", {
   tokenOnly: tokenOnlyFlag,
   json: jsonFlag,
   runtimeModeCeiling: runtimeModeCeilingFlag,
+  // A Home's bounded Child setup purpose, signed into a read-scoped MCP bearer. An older GOAT
+  // rejects this flag, so its issuer never hands back a broader session in its place.
+  childSetupPurpose: Flag.String("child-setup-purpose").pipe(
+    Flag.withSchema(Schema.fromJsonString(ChildSetupPurpose)),
+    Flag.optional,
+  ),
 }).pipe(
   Command.withDescription("Issue a scoped bearer access token for headless or remote clients."),
   Command.withHandler((flags) =>
@@ -204,6 +212,9 @@ const sessionIssueCommand = Command.make("issue", {
                 ...(Option.isSome(flags.subject) ? { subject: flags.subject.value } : {}),
                 ...(Option.isSome(flags.runtimeModeCeiling)
                   ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
+                  : {}),
+                ...(Option.isSome(flags.childSetupPurpose)
+                  ? { childSetupPurpose: flags.childSetupPurpose.value }
                   : {}),
               });
               yield* Console.log(

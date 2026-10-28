@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { ProviderHomeRequestInput, ProviderHomeRequestResultJson } from "./providerHomeRequest.ts";
+import { ServerProvider } from "./server.ts";
 
 const inputCodec = Schema.toCodecJson(ProviderHomeRequestInput);
 // Excess-property handling is a decoder option, not a schema annotation.
@@ -14,6 +15,9 @@ const decodeRawInput = Schema.decodeUnknownSync(ProviderHomeRequestInput, {
 const encodeInput = Schema.encodeSync(inputCodec);
 const decodeResult = Schema.decodeUnknownSync(ProviderHomeRequestResultJson);
 const encodeResult = Schema.encodeSync(ProviderHomeRequestResultJson);
+const providerCodec = Schema.toCodecJson(ServerProvider);
+const decodeProvider = Schema.decodeUnknownSync(providerCodec);
+const encodeProvider = Schema.encodeSync(providerCodec);
 
 const approval = {
   kind: "needs_human",
@@ -128,5 +132,32 @@ describe("OpenCodex Home approval request codecs", () => {
         }),
       ).toThrow();
     }),
+  );
+
+  it.effect(
+    "round-trips an observed Pi Home endpoint while accepting older snapshots without Home fields",
+    () =>
+      Effect.sync(() => {
+        const old = {
+          instanceId: "pi",
+          driver: "pi",
+          enabled: true,
+          installed: true,
+          version: "fixture",
+          status: "ready",
+          auth: { status: "unknown" },
+          checkedAt: "2026-10-27T00:00:00.000Z",
+          models: [],
+        };
+        expect(decodeProvider(old).homeRoute).toBeUndefined();
+        const observed = { modelRoute: "opencodex", effectiveBaseUrl: "http://127.0.0.1:10100/v1" };
+        const result = decodeProvider(
+          JSON.parse(
+            JSON.stringify(encodeProvider(decodeProvider({ ...old, homeRoute: observed }))),
+          ),
+        );
+        expect(result.homeRoute).toEqual(observed);
+        expect(() => decodeProvider({ ...old, homeRoute: { modelRoute: "future" } })).toThrow();
+      }),
   );
 });

@@ -14,6 +14,7 @@ const HOST_ARGUMENTS = {
   "hub.device_join": ["deviceAlias"],
   "hub.device_leave": ["deviceAlias"],
   "hub.device_repair": ["deviceAlias"],
+  "hub.device_setup": ["deviceAlias"],
   "ssh.host_forget": ["host"],
   "ssh.host_prepare": ["host"],
   "ssh.runtime_update": ["host"],

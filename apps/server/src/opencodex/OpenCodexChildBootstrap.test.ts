@@ -1,308 +1,35 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { AuthSessionId, EnvironmentId } from "@goat/contracts";
 import {
-  AuthSessionId,
-  DEFAULT_SERVER_SETTINGS,
-  CloudMachineError,
-  EnvironmentId,
-  type AuthClientSession,
-  type AuthEnvironmentScope,
-  type HubDeviceOperationResult,
-} from "@goat/contracts";
-import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
+  OPEN_CODEX_PINNED_VERSION,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as SessionStore from "../auth/SessionStore.ts";
-import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
 import * as AutomationHold from "../automationHold.ts";
-import * as ServerConfig from "../config.ts";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as HubMembership from "../hub/HubMembership.ts";
-import { type DevicePlatform, HubOcx } from "../hub/HubOcx.ts";
-import { fleetSnapshot } from "../hub/parity.testkit.ts";
-import * as Settings from "../serverSettings.ts";
-import type { SshAliasEvent, SshAliasListener } from "../sshRemote/SshAliasEvents.ts";
-import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
-import { PREPARE_EXIT } from "./childPrepare.ts";
-import * as Bootstrap from "./OpenCodexChildBootstrap.ts";
-import * as Inventory from "./OpenCodexInventory.ts";
+import { build, type Machine, MINUTE, PERSON, setup } from "./OpenCodexChildBootstrap.testkit.ts";
 
-const MINUTE = 60_000;
-
-const joinResult = (
-  alias: string,
-  allowed: boolean,
-  joined: HubDeviceOperationResult["state"],
-) => ({
-  deviceAlias: alias,
-  action: "join" as const,
-  state: allowed ? joined : ("failed" as const),
-  message: allowed ? `${alias} is linked to this Home.` : "Permission was withdrawn.",
-  steps: [],
-});
-
-interface Machine {
-  hub: boolean;
-  homeVersion: string;
-  platform: DevicePlatform;
-  prepareExit: number;
-  joined: HubDeviceOperationResult["state"];
-  owned: Set<string>;
-  /** Machines the cloud catalog no longer counts as this server's: deleted or forgotten. */
-  removed: Set<string>;
-  catalogReadable: boolean;
-  /** Link releases the hub holds as pending, which survive a restart. */
-  pending: Set<string>;
-  revokes: boolean;
-  /** Each catalog check and release the bootstrap ran, in order. */
-  hubEvents: Queue.Queue<string>;
-  autoJoin: boolean;
-  /** SSH hosts GOAT set up, by the revision of their config and pinned key. */
-  revisions: Map<string, string>;
-  revisionReadable: boolean;
-  /** Bumped by each Forget, as SshHostSetup does. */
-  generations: Map<string, number>;
-  /** Live client sessions and their scopes. */
-  sessions: Map<string, ReadonlyArray<AuthEnvironmentScope>>;
-  /** Past their expiry: still listed while connected, refused by readActiveScopes. */
-  expired: Set<string>;
-  /** Runs inside the nth authority read, before it answers. */
-  duringSessionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
-  /** Runs inside the nth settings read, which can wait on storage, before it answers. */
-  duringSettingsRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
-  /** Runs inside the nth read of the alias's SSH files, before it answers. */
-  duringRevisionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
-  /** A full settings read answers from this captured hub state while it is set. */
-  capturedHub: { readonly enabled: boolean; readonly autoJoin: boolean } | undefined;
-  /** Runs while OpenCodex is being prepared on the machine. */
-  duringPrepare: Effect.Effect<void>;
-}
-
-const PERSON = { kind: "client" as const, sessionId: AuthSessionId.make("person") };
-
-const clientSession = (
-  sessionId: string,
-  scopes: ReadonlyArray<AuthEnvironmentScope>,
-): AuthClientSession => ({
-  sessionId: AuthSessionId.make(sessionId),
-  subject: "person",
-  scopes: [...scopes],
-  method: "browser-session-cookie",
-  client: { deviceType: "desktop" },
-  issuedAt: DateTime.makeUnsafe(0),
-  expiresAt: DateTime.makeUnsafe(86_400_000),
-  lastConnectedAt: null,
-  connected: true,
-  current: false,
-});
-
-/** Boat, the machine and the Home's OpenCodex as doubles; the bootstrap and its file are real. */
-const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
-  baseDir: string,
-  machine: Machine,
-  calls: string[],
-) {
-  let ready: (alias: string) => Effect.Effect<void> = () => Effect.void;
-  let sshEvent: SshAliasListener = () => Effect.void;
-  let sessionReads = 0;
-  let settingsReads = 0;
-  let revisionReads = 0;
-  let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
-  let invalidated: (
-    alias: string,
-    cause: CloudMachines.CloudAliasInvalidation,
-  ) => Effect.Effect<void> = () => Effect.void;
-  const context = yield* Layer.build(
-    Bootstrap.layer.pipe(
-      Layer.provide(
-        Layer.mock(CloudMachines.CloudMachineService)({
-          onReady: (listener) => Effect.sync(() => void (ready = listener)),
-          onRemoving: (listener) => Effect.sync(() => void (removing = listener)),
-          onAliasInvalidated: (listener) => Effect.sync(() => void (invalidated = listener)),
-          owns: (alias) => Effect.sync(() => machine.owned.has(alias)),
-          isRemoved: (alias) =>
-            Queue.offer(machine.hubEvents, `removed? ${alias}`).pipe(
-              Effect.andThen(
-                machine.catalogReadable
-                  ? Effect.succeed(machine.removed.has(alias))
-                  : Effect.fail(new CloudMachineError({ reason: "storage_failed" })),
-              ),
-            ),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(HubOcx)({
-          devicePlatform: () => Effect.sync(() => machine.platform),
-          prepareDevice: (alias, version) =>
-            Effect.sync(() => {
-              calls.push(`prepare ${alias} ${version}`);
-              return {
-                code: machine.prepareExit,
-                stdout: machine.prepareExit === 0 ? "2.91.0" : "",
-              };
-            }).pipe(Effect.tap(() => Effect.suspend(() => machine.duringPrepare))),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(HubMembership.HubMembership)({
-          // Like HubMembership, each reads its permission once more before linking.
-          joinProvisioned: (_scope, alias, gate) =>
-            Effect.gen(function* () {
-              calls.push(`join ${alias}`);
-              return joinResult(alias, yield* gate, machine.joined);
-            }),
-          joinWithConsent: (_scope, alias, consent) =>
-            Effect.gen(function* () {
-              const person = yield* consent;
-              calls.push(`join ${alias} as ${person?.sessionId ?? "nobody"}`);
-              return joinResult(alias, person !== undefined, machine.joined);
-            }),
-          requestRelease: (alias) => Effect.sync(() => void machine.pending.add(alias)),
-          pendingReleases: Effect.sync(() => [...machine.pending]),
-          releaseProvisioned: (alias) =>
-            Effect.sync(() => {
-              if (machine.revokes) machine.pending.delete(alias);
-              return {
-                deviceAlias: alias,
-                action: "leave" as const,
-                state: machine.revokes ? ("ready" as const) : ("failed" as const),
-                message: "",
-                steps: [],
-              };
-            }).pipe(Effect.tap(() => Queue.offer(machine.hubEvents, `release ${alias}`))),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(SshHostSetup.SshHostSetup)({
-          aliasRevision: (alias) =>
-            machine.revisionReadable
-              ? Effect.gen(function* () {
-                  const hook = machine.duringRevisionRead;
-                  if (hook !== undefined && ++revisionReads === hook.at) yield* hook.run;
-                  return machine.revisions.get(alias);
-                })
-              : Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "PermissionDenied",
-                    module: "FileSystem",
-                    method: "readFileString",
-                  }),
-                ),
-          aliasGeneration: (alias) => Effect.sync(() => machine.generations.get(alias) ?? 0),
-          onAlias: (listener) => Effect.sync(() => void (sshEvent = listener)),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(SessionStore.SessionStore)({
-          cookieName: "goat_session",
-          legacyCookieName: undefined,
-          listActive: () =>
-            Effect.sync(() =>
-              [...machine.sessions].map(([id, scopes]) => clientSession(id, scopes)),
-            ),
-          readActiveScopes: (sessionId) =>
-            Effect.gen(function* () {
-              const hook = machine.duringSessionRead;
-              if (hook !== undefined && ++sessionReads === hook.at) yield* hook.run;
-              const scopes = machine.sessions.get(sessionId);
-              if (scopes === undefined || machine.expired.has(sessionId))
-                return yield* new SessionStore.UnknownSessionTokenError({ sessionId });
-              return scopes;
-            }),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(Inventory.OpenCodexInventory)({
-          read: Effect.sync(() => ({
-            ...fleetSnapshot("home"),
-            binaries: [{ path: "/usr/local/bin/ocx", version: machine.homeVersion }],
-          })),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(Settings.ServerSettingsService)({
-          // As in serverSettings: a full read can answer from state captured before it waited.
-          getSettings: Effect.sync(() => ({
-            ...DEFAULT_SERVER_SETTINGS,
-            hub: {
-              ...DEFAULT_SERVER_SETTINGS.hub,
-              enabled: machine.capturedHub?.enabled ?? machine.hub,
-              autoJoinCloudMachines: machine.capturedHub?.autoJoin ?? machine.autoJoin,
-            },
-          })),
-          committedHub: Effect.gen(function* () {
-            const hook = machine.duringSettingsRead;
-            if (hook !== undefined && ++settingsReads === hook.at) yield* hook.run;
-            return {
-              ...DEFAULT_SERVER_SETTINGS.hub,
-              enabled: machine.hub,
-              autoJoinCloudMachines: machine.autoJoin,
-            };
-          }),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerEnvironment.ServerEnvironment)({
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("home")),
-        }),
-      ),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
-    ),
-  );
-  return {
-    bootstrap: Context.get(context, Bootstrap.OpenCodexChildBootstrap),
-    stateDir: Context.get(context, ServerConfig.ServerConfig).stateDir,
-    /** Boat finished readying the machine, as CloudMachineService reports it. */
-    ready: (alias: string) => ready(alias),
-    /** CloudMachineService is about to delete or forget the machine. */
-    removing: (alias: string) => removing(alias),
-    invalidated: (alias: string, cause: CloudMachines.CloudAliasInvalidation) =>
-      invalidated(alias, cause),
-    /** SshHostSetup finished a setup, or began a Forget. */
-    ssh: (alias: string, event: SshAliasEvent) => sshEvent(alias, event),
-  };
-});
-
-const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
-  overrides: Partial<Machine> = {},
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-child-bootstrap-" });
-  const machine: Machine = {
-    hub: true,
-    homeVersion: "2.91.0",
-    platform: "posix",
-    prepareExit: 0,
-    joined: "child",
-    owned: new Set(["boat-builder"]),
-    removed: new Set(),
-    catalogReadable: true,
-    pending: new Set(),
-    revokes: true,
-    hubEvents: yield* Queue.unbounded<string>(),
-    autoJoin: true,
-    revisions: new Map([["lidge-ts", "rev-1"]]),
-    revisionReadable: true,
-    generations: new Map(),
-    sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),
-    expired: new Set(),
-    duringSessionRead: undefined,
-    duringSettingsRead: undefined,
-    duringRevisionRead: undefined,
-    capturedHub: undefined,
-    duringPrepare: Effect.void,
-    ...overrides,
-  };
-  const calls: string[] = [];
-  return { machine, calls, baseDir, ...(yield* build(baseDir, machine, calls)) };
-});
+/** A test-only pin with Windows Remote Link support; no real GOAT pin has one yet. */
+const windowsPins = {
+  [OPEN_CODEX_PINNED_VERSION]: {
+    "win32-x64": {
+      version: OPEN_CODEX_PINNED_VERSION,
+      target: "bun-windows-x64",
+      url: "https://fixture.invalid/ocx-windows.zip",
+      sha256: "0".repeat(64),
+      archiveBytes: 1,
+      publishedAt: "2026-10-28T00:00:00Z",
+      layout: { executable: "ocx.exe", gui: "gui/dist/index.html", keyring: "keyring" },
+      remoteLinkWindows: true,
+    },
+  },
+};
 
 it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("held: dispatches no child setup; release: the queued machine joins", () =>
@@ -374,21 +101,81 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
-  it.effect("a machine without npm is blocked with that reason and retried after ten minutes", () =>
+  it.effect(
+    "compiled installer failure is blocked with install_failed and retried after ten minutes",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ prepareFailure: "installation_failed" });
+        expect(yield* home.bootstrap.ensure("boat-builder")).toMatchObject({
+          state: "blocked",
+          reason: "install_failed",
+        });
+        expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
+        yield* home.ready("boat-builder");
+        expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("blocked");
+        home.machine.prepareFailure = undefined;
+        yield* TestClock.adjust(10 * MINUTE);
+        yield* home.ready("boat-builder");
+        expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("running");
+        expect((yield* home.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+      }),
+  );
+
+  it.effect("ensures GOAT before preparing a fresh Child", () =>
     Effect.gen(function* () {
-      const home = yield* setup({ prepareExit: PREPARE_EXIT.npmMissing });
+      const home = yield* setup();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      home.machine.duringEnsure = Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const job = yield* home.bootstrap.ensure("boat-builder").pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      expect(home.calls).toEqual([]);
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(job))?.state).toBe("child");
+      expect(home.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
+    }),
+  );
+
+  it.effect("blocks with goat_runtime_missing when runtime provisioning remains pending", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ runtime: false });
       expect(yield* home.bootstrap.ensure("boat-builder")).toMatchObject({
         state: "blocked",
-        reason: "npm_missing",
+        reason: "goat_runtime_missing",
+        message: "GOAT's runtime is not available there. Finish SSH setup and retry.",
       });
-      expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
-      yield* home.ready("boat-builder");
-      expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("blocked");
-      home.machine.prepareExit = 0;
-      yield* TestClock.adjust(10 * MINUTE);
-      yield* home.ready("boat-builder");
-      expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("running");
-      expect((yield* home.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+      expect(home.calls).toEqual([]);
+      // The new reason and a legacy npm one both read back after a restart.
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${home.stateDir}/opencodex-child-bootstrap.json`;
+      const saved = JSON.parse(yield* fs.readFileString(file));
+      yield* fs.writeFileString(
+        file,
+        JSON.stringify({
+          ...saved,
+          "boat-legacy": { state: "blocked", checkedAt: 1, reason: "npm_missing" },
+        }),
+      );
+      const restarted = yield* build(home.baseDir, home.machine, home.calls);
+      expect((yield* restarted.bootstrap.status("boat-builder"))?.reason).toBe(
+        "goat_runtime_missing",
+      );
+      expect((yield* restarted.bootstrap.status("boat-legacy"))?.reason).toBe("npm_missing");
+    }),
+  );
+
+  it.effect("withdrawn consent during runtime provisioning prevents OpenCodex preparation", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringEnsure = home.bootstrap
+        .setSshOptIn("lidge-ts", false, PERSON)
+        .pipe(Effect.orDie);
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual([]);
+      expect(yield* home.bootstrap.status("lidge-ts")).toBeUndefined();
     }),
   );
 
@@ -418,6 +205,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({
         state: "blocked",
         reason: "platform_unsupported",
+        message: WINDOWS_REMOTE_LINK_UNPINNED,
       });
       const oldHome = yield* setup({ homeVersion: "2.60.0" });
       expect(yield* oldHome.bootstrap.ensure("boat-builder")).toMatchObject({
@@ -431,6 +219,30 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       });
       expect([...windows.calls, ...oldHome.calls]).toEqual([]);
     }),
+  );
+
+  it.effect(
+    "a consented Windows Child reaches preparation and Remote Link once GOAT pins Windows support",
+    () =>
+      Effect.gen(function* () {
+        const windows = yield* setup({ platform: "windows", releases: windowsPins });
+        expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({ state: "child" });
+        expect(windows.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
+      }),
+  );
+
+  it.effect(
+    "a native Windows Child named only by its typed status stops before linking without a pin",
+    () =>
+      Effect.gen(function* () {
+        const windows = yield* setup({ nativeWindows: true });
+        expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({
+          state: "blocked",
+          reason: "platform_unsupported",
+          message: WINDOWS_REMOTE_LINK_UNPINNED,
+        });
+        expect(windows.calls).toEqual(["prepare boat-builder 2.91.0"]);
+      }),
   );
 
   it.effect("a stopped machine keeps its setup and link; a removed one releases its link", () =>
@@ -727,11 +539,13 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
 
   it.effect("a withdrawal or Forget during the last consent read before linking wins", () =>
     Effect.gen(function* () {
-      // Authority is read when consent is given, before the setup, after preparing, and last by
-      // the join itself under the hub permit; the change lands inside that last read.
+      // Authority is read when consent is given, before the setup, around ensuring GOAT's
+      // runtime, when identifying the Child, when binding its setup purpose, after preparing,
+      // and by the join itself under the hub permit; the change lands inside the last read
+      // before the join.
       const opted = yield* setup();
       opted.machine.duringSessionRead = {
-        at: 4,
+        at: 12,
         run: opted.bootstrap.setSshOptIn("lidge-ts", false, PERSON).pipe(Effect.orDie),
       };
       yield* opted.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
@@ -740,7 +554,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
 
       const forgotten = yield* setup();
       forgotten.machine.duringSessionRead = {
-        at: 4,
+        at: 12,
         run: Effect.sync(() => void forgotten.machine.generations.set("lidge-ts", 1)).pipe(
           Effect.andThen(forgotten.ssh("lidge-ts", "forgotten")),
           Effect.orDie,
@@ -817,8 +631,9 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       ];
       for (const end of endings) {
         const home = yield* setup();
-        // Hub state is read before the setup, after preparing, and last by the join itself.
-        home.machine.duringSettingsRead = { at: 3, run: Effect.sync(() => end(home.machine)) };
+        // Hub state is read before the setup, around ensuring GOAT's runtime, when identifying
+        // the Child, when binding its setup purpose, after preparing, and last by the join.
+        home.machine.duringSettingsRead = { at: 7, run: Effect.sync(() => end(home.machine)) };
         yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
         expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
           state: "blocked",
@@ -832,9 +647,11 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("a hub turned off while the alias's files are read last still stops the join", () =>
     Effect.gen(function* () {
       const home = yield* setup();
-      // Read when consent is given, before the setup, after preparing, and last by the join.
+      // Read when consent is given, before the setup, around ensuring GOAT's runtime, when
+      // identifying the Child, when binding its setup purpose, after preparing, and last by the
+      // join.
       home.machine.duringRevisionRead = {
-        at: 4,
+        at: 8,
         run: Effect.sync(() => void (home.machine.hub = false)),
       };
       yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);

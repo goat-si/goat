@@ -16,8 +16,10 @@ import { OpenCodeDriver, type OpenCodeDriverEnv } from "@goat/provider-opencode/
 import { MuseDriver, type MuseDriverEnv } from "@goat/provider-muse/server";
 import { PiDriver, type PiDriverEnv } from "@goat/provider-pi/server";
 import type { AnyProviderDriver, ProviderUsageReaderEnv } from "@goat/provider-core/server/driver";
+import { withProviderHomeRoute, type ProviderHomeDriverEnv } from "./ProviderHomeDriver.ts";
 
 export type BuiltInDriversEnv =
+  | ProviderHomeDriverEnv
   | AcpRegistryDriverEnv
   | AntigravityDriverEnv
   | ClaudeDriverEnv
@@ -34,15 +36,15 @@ export type BuiltInDriversEnv =
 
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
-  ClaudeDriver,
+  withProviderHomeRoute("claudeAgent", ClaudeDriver),
   ClaudeCloudDriver,
   CursorDriver,
   CursorCloudDriver,
   GrokDriver,
   FxDriver,
-  OpenCodeDriver,
+  withProviderHomeRoute("opencode", OpenCodeDriver),
   AntigravityDriver,
-  PiDriver,
+  withProviderHomeRoute("pi", PiDriver),
   MuseDriver,
   AcpRegistryDriver,
   DevinCloudDriver,

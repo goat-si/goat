@@ -3,6 +3,7 @@ import {
   CustomModelSetting,
   makeBinaryPathSetting,
   makeProviderSettingsSchema,
+  ProviderHomeRouteFields,
   secretSetting,
   TrimmedString,
 } from "@goat/contracts";
@@ -11,6 +12,7 @@ import * as Schema from "effect/Schema";
 
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
+    ...ProviderHomeRouteFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),

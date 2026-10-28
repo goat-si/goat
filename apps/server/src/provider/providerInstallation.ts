@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as CodexInstallation from "./CodexInstallation.ts";
+import { usesAuthlessCodexHome } from "./CodexHomeRouteConfig.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
@@ -93,7 +94,9 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
           "This instance uses a custom executable. Clear its binary path to manage installation in GOAT.",
       });
     }
-    return { installation, driver: instance.driverKind };
+    // Managed Home with None runs only GOAT's release, so a Codex on PATH cannot satisfy it.
+    const managedRelease = isCodex && "opencodexAuth" in config && usesAuthlessCodexHome(config);
+    return { installation, driver: instance.driverKind, managedRelease };
   });
 
   const failure =
@@ -106,8 +109,14 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
       new ProviderSetupError({ instanceId, operation: error.operation, detail: error.detail });
 
   const start = Effect.fn("ProviderInstallation.start")(function* (input: ProviderSetupInput) {
-    const { installation } = yield* requireInstance(input.instanceId, "install", true);
-    return yield* installation.start.pipe(Effect.mapError(failure(input.instanceId)));
+    const { installation, managedRelease } = yield* requireInstance(
+      input.instanceId,
+      "install",
+      true,
+    );
+    return yield* (managedRelease ? codexInstallation.startManagedOnly : installation.start).pipe(
+      Effect.mapError(failure(input.instanceId)),
+    );
   });
 
   const cancel = Effect.fn("ProviderInstallation.cancel")(function* (

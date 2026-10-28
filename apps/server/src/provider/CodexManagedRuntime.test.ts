@@ -19,7 +19,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
-import { makeCodexManagedRuntime } from "./CodexManagedRuntime.ts";
+import { makeCodexManagedRuntime, resolveAuthlessManagedRuntime } from "./CodexManagedRuntime.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import { codexAppServerArgs } from "./codexLaunchArgs.ts";
 
@@ -276,14 +276,14 @@ it.live.each(
     ),
 );
 
-it.effect(
-  "does not compose a Home route for managed Codex before acquiring installation or credentials",
-  () =>
+it.effect.each(["openai", "none"] as const)(
+  "keeps token sharing off a %s Home route before acquiring installation or credentials",
+  (opencodexAuth) =>
     makeCodexManagedRuntime({
       instanceId: ProviderInstanceId.make("managed-home"),
       enabled: true,
       environment: {},
-      config: decodeSettings({ setupMode: "managed", modelRoute: "opencodex" }),
+      config: decodeSettings({ setupMode: "managed", modelRoute: "opencodex", opencodexAuth }),
     }).pipe(
       Effect.result,
       Effect.map((result) => {
@@ -291,7 +291,7 @@ it.effect(
         if (result._tag === "Failure")
           assert.equal(
             result.failure.message,
-            "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+            "Managed Codex uses Home with None authentication. OpenAI authentication for Home is available on an instance that uses your Codex CLI.",
           );
       }),
       Effect.provide(
@@ -306,6 +306,101 @@ it.effect(
             HttpClient.make(() => Effect.die("No HTTP before managed route rejection")),
           ),
         ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
+);
+
+it.effect.each(["codex", "codex-child"])(
+  "resolves %s Home None through one effective home and holds the managed executable until its scope closes",
+  (id) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sharedHome = yield* fs.makeTempDirectoryScoped({ prefix: "authless-runtime-" });
+      yield* fs.writeFileString(
+        path.join(sharedHome, "config.toml"),
+        "# preserved configuration\n",
+      );
+      yield* fs.writeFileString(
+        path.join(sharedHome, "auth.json"),
+        "synthetic-native-auth-unchanged",
+      );
+      const settings = decodeSettings({
+        setupMode: "managed",
+        modelRoute: "opencodex",
+        opencodexAuth: "none",
+        homePath: sharedHome,
+        launchArgs: "--profile wrong",
+      });
+      const executable = {
+        executablePath: "/isolated/pinned/bin/codex",
+        version: "0.156.1",
+        source: "managed" as const,
+        managedVersionDirectory: "/isolated/pinned",
+      };
+      let leases = 0;
+      const installer = Layer.mock(CodexInstallation.CodexInstallation)({
+        managedDirectory: "/isolated/pinned",
+        acquire: (options) =>
+          Effect.gen(function* () {
+            assert.equal(options?.managedOnly, true);
+            leases++;
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                leases--;
+              }),
+            );
+            return executable;
+          }),
+      });
+      const ambient = {
+        CODEX_HOME: "/wrong/home",
+        OPENAI_API_KEY: "synthetic-ambient",
+        ACCESS_TOKEN: "synthetic-ambient",
+        OPENAI_BASE_URL: "https://wrong.invalid/v1",
+        GOAT_CODEX_LAUNCH_ARGS: "--profile wrong",
+      };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* resolveAuthlessManagedRuntime({
+            settings,
+            instanceId: ProviderInstanceId.make(id),
+            environment: ambient,
+          });
+          assert.equal(leases, 1);
+          assert.equal(runtime.config.binaryPath, executable.executablePath);
+          assert.equal(runtime.config.setupMode, "managed");
+          assert.equal(runtime.config.launchArgs, "");
+          assert.equal(runtime.config.homePath, runtime.home);
+          assert.equal(runtime.environment.CODEX_HOME, runtime.home);
+          for (const name of [
+            "OPENAI_API_KEY",
+            "ACCESS_TOKEN",
+            "OPENAI_BASE_URL",
+            "GOAT_CODEX_LAUNCH_ARGS",
+          ])
+            assert.equal(runtime.environment[name], "");
+          if (id === "codex") assert.equal(runtime.home, sharedHome);
+          else {
+            assert.notEqual(runtime.home, sharedHome);
+            assert.equal(
+              yield* fs.readLink(path.join(runtime.home, "config.toml")),
+              path.join(sharedHome, "config.toml"),
+            );
+          }
+        }),
+      ).pipe(Effect.provide(installer));
+      assert.equal(leases, 0);
+      assert.equal(
+        yield* fs.readFileString(path.join(sharedHome, "auth.json")),
+        "synthetic-native-auth-unchanged",
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "authless-runtime-config-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
       ),
     ),
 );

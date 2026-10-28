@@ -150,6 +150,8 @@ export const makeSsh = (
     publishProviderDiagnosis: unused,
     runRemoteScript: unused,
     runHostScript: unused,
+    provisionedRuntimeExecutable: unused,
+    ensureRuntime: unused,
     preflightTarget: unused,
     identifyTarget: unused,
     listHosts: unused,
@@ -157,6 +159,7 @@ export const makeSsh = (
     validateLaunchAttachments: unused,
     launchThread: unused,
     callHostTool: unused,
+    revokeChildSetupSessions: unused,
     connectedHosts: Effect.succeed([]),
     proxyEndpoint: (target) =>
       Effect.sync(() => {

@@ -73,6 +73,7 @@ import {
   shouldMoveToAppServer,
 } from "./appServer.ts";
 import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
+import { makeRemoteScripts, type RuntimeExecutableShape } from "./runtimeExecutable.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -97,6 +98,7 @@ import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
+import * as NativeWindows from "./runtimeWindows.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
 import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
 import { makePreparationRetries } from "./preparationRetry.ts";
@@ -276,7 +278,8 @@ export type SshSetupOutcome =
       readonly fix: SshHostFailure["fix"];
     };
 
-export interface SshEnvironmentManagerShape extends ExistingServerRouteShape {
+export interface SshEnvironmentManagerShape
+  extends ExistingServerRouteShape, RuntimeExecutableShape {
   readonly readyEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<
@@ -1669,6 +1672,12 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           "goat.runtime.requestedVersion",
           selected.requestedVersion,
         );
+        if (selected.nativeWindows !== undefined) {
+          const native = NativeWindows.launchWindowsRuntime(target, input ?? {}, selected);
+          const launched = yield* restore(native);
+          if (onLaunched !== undefined) yield* onLaunched({ status: "ready" });
+          return launched;
+        }
         const result = folded ?? (yield* launch(selected));
         if (!getLastNonEmptyOutputLine(result.stdout)) {
           return yield* new SshLaunchError({
@@ -1863,7 +1872,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   input?: SshAuth.SshAuthOptions & { readonly ownedOnly?: boolean },
 ): Effect.fn.Return<
   void,
-  SshCommandError | SshInvalidTargetError,
+  SshCommandError | SshInvalidTargetError | SshLaunchError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const stateKey = REMOTE_RUNTIME_STATE_KEY;
@@ -1878,6 +1887,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
   }).pipe(
+    NativeWindows.orNativeStop(target, input ?? {}),
     Effect.tapError((cause) =>
       Effect.logWarning("ssh.remoteServer.stop.failed", {
         ...sshTargetLogFields(target),
@@ -1906,7 +1916,7 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   input?: SshAuth.SshAuthOptions,
 ): Effect.fn.Return<
   string,
-  SshCommandError | SshInvalidTargetError,
+  SshCommandError | SshInvalidTargetError | SshLaunchError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const result = yield* runSshCommand(target, {
@@ -1916,7 +1926,7 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-  });
+  }).pipe(NativeWindows.orNativeLog(target, input ?? {}));
   return result.stdout.trim();
 });
 
@@ -4711,32 +4721,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return (appServerRefusals.get(key) ?? 0) > (yield* Clock.currentTimeMillis) ? "managed" : null;
   });
 
-  const runRemoteScript = Effect.fn("ssh/tunnel.runRemoteScript")(function* (
-    target: DesktopSshEnvironmentTarget,
-    input: { readonly script: string; readonly timeoutMs?: number },
-  ): Effect.fn.Return<
-    { readonly stdout: string; readonly stderr: string },
-    SshEnvironmentEffectError,
-    SshEnvironmentEffectContext
-  > {
-    const { resolvedTarget, key } = yield* resolveManagedTarget(target);
-    yield* validateManagedPin(resolvedTarget);
-    return yield* runWithSshAuth({
-      key,
-      keyOnly: managedAliases.has(resolvedTarget.alias),
-      target: resolvedTarget,
-      operation: (authOptions) =>
-        runSshCommand(resolvedTarget, {
-          remoteCommandArgs: ["sh", "-s"],
-          stdin: input.script,
-          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-          ...(authOptions.authSecret === undefined ? {} : { authSecret: authOptions.authSecret }),
-          ...(authOptions.batchMode === undefined ? {} : { batchMode: authOptions.batchMode }),
-          ...(authOptions.interactiveAuth === undefined
-            ? {}
-            : { interactiveAuth: authOptions.interactiveAuth }),
-        }),
-    });
+  const { runRemoteScript, provisionedRuntimeExecutable, nativeId } = makeRemoteScripts({
+    tunnels,
+    generations,
+    isClosed: () => closed,
+    managedAliases,
+    resolveManagedTarget,
+    validateManagedPin,
+    runWithSshAuth,
   });
 
   const beginSetupOperation: SshEnvironmentManagerShape["beginSetupOperation"] = Effect.fn(
@@ -4957,11 +4949,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     existingEnvironment: withSharing(routes.existingEnvironment),
     existingEnvironmentOther: withSharing(routes.existingEnvironmentOther),
     issueExistingMcpSession: withSharing(routes.issueExistingMcpSession),
+    revokeExistingMcpSession: withSharing(routes.revokeExistingMcpSession),
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
     issueClientSession: withSharing(issueClientSession),
     attachedServerKind,
     runRemoteScript: withSharing(runRemoteScript),
+    provisionedRuntimeExecutable: withSharing(provisionedRuntimeExecutable),
+    nativeEnvironmentId: withSharing(nativeId),
   });
 });
 

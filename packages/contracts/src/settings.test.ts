@@ -748,17 +748,23 @@ describe("OpenCodex Home routing", () => {
     expect(decodeCodexSettings({ launchArgs: "--enable feature" })).toMatchObject({
       modelRoute: "default",
       opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+      opencodexAuth: "openai",
       launchArgs: "--enable feature",
     });
     expect(decodeCodexSettings({ opencodexBaseUrl: "  " }).opencodexBaseUrl).toBe("");
   });
 
-  it.each(["default", "opencodex"])(
-    "round-trips both Codex route fields through an instance mutation (%s)",
-    (modelRoute) => {
+  it.each([
+    ["default", "openai"],
+    ["opencodex", "openai"],
+    ["opencodex", "none"],
+  ])(
+    "round-trips the Codex route and Home authentication through an instance mutation (%s, %s)",
+    (modelRoute, opencodexAuth) => {
       const config = decodeCodexSettings({
         setupMode: "existing",
         modelRoute,
+        opencodexAuth,
         opencodexBaseUrl: "http://127.0.0.1:10101/v1",
         launchArgs: "--enable feature",
       });
@@ -776,8 +782,9 @@ describe("OpenCodex Home routing", () => {
     },
   );
 
-  it("rejects an unknown Codex model route", () => {
+  it("rejects an unknown Codex model route or Home authentication", () => {
     expect(() => decodeCodexSettings({ modelRoute: "direct" })).toThrow();
+    expect(() => decodeCodexSettings({ opencodexAuth: "authless" })).toThrow();
   });
 
   it("round-trips provider_instance_busy errors", () => {

@@ -69,7 +69,14 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexInstallation from "../opencodex/OpenCodexInstallation.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
+import * as OpenCodexChildReady from "../opencodex/OpenCodexChildReady.ts";
+import * as ChildReadyDispatch from "../opencodex/ChildReadyDispatch.ts";
+import * as ChildReadyJournal from "../opencodex/ChildReadyJournal.ts";
+import * as ChildSetupAuthority from "../opencodex/ChildSetupAuthority.ts";
+import * as CodexReadyProbe from "../opencodex/CodexReadyProbe.ts";
+import * as ChildOpenCodexStartup from "../opencodex/ChildOpenCodexStartup.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
@@ -1061,12 +1068,24 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   // The cloud machine service is the runtime's shared reference, so readiness reaches it.
   Layer.provideMerge(
     OpenCodexChildBootstrap.layer.pipe(
+      Layer.provide(ChildReadyDispatch.layer),
       Layer.provide(HubOcx.layer),
       Layer.provide(SshRemoteDispatchLive.layerCloudMachines),
     ),
   ),
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
+  ),
+  // The Child side of a Home's setup, served by goat_hub_child_* on this machine.
+  Layer.provideMerge(
+    OpenCodexChildReady.layer.pipe(
+      Layer.provide(ChildReadyJournal.layer),
+      Layer.provide(ChildSetupAuthority.layer),
+      Layer.provide(CodexReadyProbe.layer),
+      Layer.provide(ChildOpenCodexStartup.layer.pipe(Layer.provide(ProcessRunner.layer))),
+      Layer.provide(ProcessRunner.layer),
+      Layer.provide(Profiles.layer),
+    ),
   ),
   Layer.provide(RepositoryInventory.layer),
   Layer.provideMerge(OpenCodexManagedUpdate.layerService),
@@ -1076,6 +1095,8 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
+  // One installer for inventory ownership and managed updates, so its lock is shared too.
+  Layer.provideMerge(OpenCodexInstallation.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),

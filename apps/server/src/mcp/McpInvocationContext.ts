@@ -1,6 +1,7 @@
 import {
   type AuthMcpClientAccess,
   type AuthEnvironmentScope,
+  type ChildSetupPurpose,
   type EnvironmentAuthorizationError,
   type EnvironmentId,
   McpCapabilityUnavailableError,
@@ -49,6 +50,8 @@ export const clientRuntimeModeCeiling = (client: McpClientCaller | undefined): R
 
 /** Thread callers default to their own thread; client callers need thread for tools that act as the caller. */
 export interface McpInvocationScope {
+  /** A Home's signed Child setup purpose; McpToolAccess admits it only to the Child setup tools. */
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly readOnly?: boolean;
   /** Trusted typed mentions for this credential generation; never supplied by MCP arguments. */
   readonly screenBindingHints?: ScreenBindingHints;

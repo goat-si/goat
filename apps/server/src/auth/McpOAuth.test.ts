@@ -5,13 +5,20 @@ import {
   AuthStandardClientScopes,
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
+  type ChildSetupPurpose,
   EnvironmentHttpApi,
+  EnvironmentId,
 } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 import * as Etag from "effect/http/Etag";
 import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -21,12 +28,17 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as ToolAdmission from "../mcp/ToolAdmission.ts";
+import * as LocalAuthority from "../opencodex/ChildSetupAuthority.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as McpOAuth from "./McpOAuth.ts";
 import * as McpOAuthHttp from "./mcpOAuthHttp.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as Sessions from "./SessionStore.ts";
 import * as AuthHttp from "./http.ts";
 
 class AuthTestApi extends HttpApi.make("environment")
@@ -761,4 +773,186 @@ it.live("pairing approval cannot add memory scopes absent from the code", () =>
       expect(denied.redirectTo).toBeUndefined();
     }),
   ),
+);
+
+// A Home's Child setup purpose, issued as a real signed bearer and admitted by the production
+// authenticator and tool admission; only the final tool effect is a counter.
+const setupBearer = Effect.gen(function* () {
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const now = yield* Clock.currentTimeMillis;
+  const destination = EnvironmentId.make("child");
+  const purpose: ChildSetupPurpose = {
+    purpose: "opencodex-child-setup",
+    homeEnvironmentId: EnvironmentId.make("home"),
+    destinationEnvironmentId: destination,
+    operationId: "setup-1",
+    grantId: "consent-1",
+    grantRevision: 1,
+    issuedAt: now,
+    phase: "installOpenCodex",
+    phaseId: "phase-1",
+    phaseDeadline: now + 15 * 60_000,
+    expiresAt: now + 20 * 60_000,
+  };
+  const issued = yield* auth.issueSession({
+    subject: "mcp-client",
+    scopes: ["orchestration:read"],
+    ttl: Duration.minutes(1),
+    childSetupPurpose: purpose,
+  });
+  const authenticate = () =>
+    Effect.gen(function* () {
+      const authenticator = yield* McpHttpServer.McpClientAuthenticator;
+      const invocation = yield* authenticator.authenticate(
+        HttpServerRequest.fromWeb(
+          at("/mcp", { headers: { authorization: `Bearer ${issued.token}` } }),
+        ),
+      );
+      if (invocation === undefined) return yield* Effect.fail("unauthenticated" as const);
+      return invocation;
+    }).pipe(
+      Effect.provide(
+        McpOAuth.layerMcpClientAuthenticator.pipe(
+          Layer.provide(Layer.succeed(EnvironmentAuth.EnvironmentAuth, auth)),
+          Layer.provide(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(destination),
+            }),
+          ),
+        ),
+      ),
+    );
+  const invocation = yield* authenticate();
+  const executions = yield* Ref.make(0);
+  const admit = yield* ToolAdmission.make().pipe(
+    Effect.provide(Layer.mock(Profiles.PermissionProfiles)({})),
+  );
+  const call = (tool: string, effect: "read" | "write") =>
+    admit(tool, effect, {}, () =>
+      Ref.update(executions, (count) => count + 1).pipe(
+        Effect.as({ content: [{ type: "text" as const, text: "setup service admitted" }] }),
+      ),
+    ).pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, invocation));
+  return {
+    auth,
+    sessionId: issued.sessionId,
+    purpose,
+    invocation,
+    authenticate,
+    call,
+    runs: Ref.get(executions),
+  };
+});
+const layerSetupBearer = layerEnvironmentAuth.pipe(Layer.provideMerge(NodeServices.layer));
+
+it.effect("admits a Child setup tool using the purpose from a real issued bearer", () =>
+  Effect.gen(function* () {
+    const { invocation, purpose, call, runs } = yield* setupBearer;
+    expect(invocation.childSetupPurpose).toEqual(purpose);
+    expect(yield* call(agentSurfaceRegistry["hub.child_prepare"].name, "write")).toMatchObject({
+      content: [{ type: "text", text: "setup service admitted" }],
+    });
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("refuses unrelated writes and reads for a purpose-bearing bearer before handlers", () =>
+  Effect.gen(function* () {
+    const { call, runs } = yield* setupBearer;
+    const write = yield* call(agentSurfaceRegistry["provider.update"].name, "write");
+    const read = yield* call("goat_host_status", "read");
+    const connection = yield* call(agentSurfaceRegistry["hub.child_connection"].name, "write");
+    for (const refused of [write, read, connection])
+      expect(JSON.stringify(refused)).toContain("capability_denied");
+    expect(yield* runs).toBe(0);
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("refuses an expired purpose bearer at authentication and on a retained invocation", () =>
+  Effect.gen(function* () {
+    const { authenticate, call, runs } = yield* setupBearer;
+    yield* TestClock.adjust("1 minute");
+    expect((yield* Effect.result(authenticate()))._tag).toBe("Failure");
+    expect(
+      JSON.stringify(yield* call(agentSurfaceRegistry["hub.child_prepare"].name, "write")),
+    ).toContain("capability_denied");
+    expect(yield* runs).toBe(0);
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("refuses a revoked purpose bearer at authentication and before setup admission", () =>
+  Effect.gen(function* () {
+    const { auth, sessionId, authenticate, call, runs } = yield* setupBearer;
+    yield* auth.revokeSession(sessionId);
+    expect((yield* Effect.result(authenticate()))._tag).toBe("Failure");
+    expect(
+      JSON.stringify(yield* call(agentSurfaceRegistry["hub.child_prepare"].name, "write")),
+    ).toContain("capability_denied");
+    expect(yield* runs).toBe(0);
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("refuses a Child setup purpose on a bearer with general write scopes", () =>
+  Effect.gen(function* () {
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    const { purpose } = yield* setupBearer;
+    const issued = yield* auth
+      .issueSession({
+        subject: "mcp-client",
+        scopes: ["orchestration:read", "orchestration:operate"],
+        childSetupPurpose: purpose,
+      })
+      .pipe(Effect.result);
+    expect(issued._tag).toBe("Failure");
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+// The Child's own checks run on the authenticated invocation itself, kept across expiry and
+// revocation, as a commit-time recheck would see it.
+const localAuthorityFixture = Effect.gen(function* () {
+  const bearer = yield* setupBearer;
+  const authority = LocalAuthority.make(
+    bearer.purpose.destinationEnvironmentId,
+    yield* Sessions.SessionStore,
+  );
+  const input = {
+    destinationEnvironmentId: bearer.purpose.destinationEnvironmentId,
+    homeEnvironmentId: bearer.purpose.homeEnvironmentId,
+    operationId: bearer.purpose.operationId,
+    action: "installOpenCodex" as const,
+  };
+  return { ...bearer, authority, input };
+});
+
+it.effect("the Child refuses a revoked signed setup session before any mutation", () =>
+  Effect.gen(function* () {
+    const f = yield* localAuthorityFixture;
+    yield* f.authority.authorize(f.input, f.invocation);
+    yield* f.auth.revokeSession(f.sessionId);
+    const result = yield* f.authority.authorize(f.input, f.invocation).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("setup_approval_revoked");
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("the Child refuses an expired purpose on a retained authenticated invocation", () =>
+  Effect.gen(function* () {
+    const f = yield* localAuthorityFixture;
+    yield* TestClock.adjust("20 minutes");
+    const result = yield* f.authority.authorize(f.input, f.invocation).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("purpose_expired");
+  }).pipe(Effect.provide(layerSetupBearer)),
+);
+
+it.effect("the Child refuses a purpose whose signed destination is another environment", () =>
+  Effect.gen(function* () {
+    const f = yield* localAuthorityFixture;
+    const other = LocalAuthority.make(
+      EnvironmentId.make("other-child"),
+      yield* Sessions.SessionStore,
+    );
+    const result = yield* other.authorize(f.input, f.invocation).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("destination_changed");
+  }).pipe(Effect.provide(layerSetupBearer)),
 );

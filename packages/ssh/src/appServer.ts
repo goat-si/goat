@@ -1,5 +1,6 @@
 import {
   AuthGrantScope,
+  type ChildSetupPurpose,
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
   GOAT_RUNTIME_CONTROL_HEADER,
@@ -33,6 +34,12 @@ import {
   shellSingleQuote,
   sshTargetLogFields,
 } from "./remoteRuntime.ts";
+import {
+  NATIVE_WINDOWS,
+  nativeExistingCredential,
+  nativeExistingServer,
+  nativeWindowsAfter,
+} from "./runtimeWindows.ts";
 
 // The app server's directory depends on the channel (`desktopAppServerStateDirs`). Attach to the
 // first live one; otherwise start the managed server. A probe that cannot run stays fail-open
@@ -258,10 +265,17 @@ export const probeExistingServer = Effect.fn("ssh/appServer.probeExisting")(func
     }),
     timeoutMs: 20_000,
     ...sshOptions(input),
-  }).pipe(Effect.option);
-  return Option.isNone(result)
-    ? { kind: "unusable" }
-    : parseExistingServerProbe(result.value.stdout);
+  }).pipe(
+    // Native Windows has no sh; GOAT's own runtime there answers through its native path.
+    Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
+    Effect.option,
+  );
+  if (Option.isNone(result)) return { kind: "unusable" };
+  if (result.value === NATIVE_WINDOWS)
+    return yield* nativeExistingServer(target, kind, input ?? {}).pipe(
+      Effect.orElseSucceed((): ExistingServerProbe => ({ kind: "unusable" })),
+    );
+  return parseExistingServerProbe(result.value.stdout);
 });
 
 /** Reads the probe script's answer. Exported for tests. */
@@ -364,7 +378,30 @@ export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCrede
     timeoutStage: "pairing",
     stdin: buildServerCredentialScript(kind, port, request, expectedEnvironmentId),
     ...sshOptions(input),
-  });
+  }).pipe(
+    Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
+    Effect.mapError((error) =>
+      error._tag === "SshLaunchError"
+        ? new SshPairingError({ message: error.message, stdout: "", cause: error })
+        : error,
+    ),
+  );
+  // Native Windows: its goat.exe issues or revokes through the same runtime endpoint.
+  if (result === NATIVE_WINDOWS)
+    return yield* nativeExistingCredential(
+      target,
+      kind,
+      port,
+      request,
+      input ?? {},
+      expectedEnvironmentId,
+    ).pipe(
+      Effect.mapError((error) =>
+        error._tag === "SshLaunchError"
+          ? new SshPairingError({ message: error.message, stdout: "", cause: error })
+          : error,
+      ),
+    );
   const marker = /^GOAT_HTTP_STATUS=(\d{3})$/mu.exec(result.stdout);
   const body = marker === null ? result.stdout : result.stdout.slice(0, marker.index).trim();
   if (marker?.[1] !== "200")
@@ -396,7 +433,8 @@ export const appServerSessionRequest = (input: {
   readonly ttl: string;
   readonly label: string;
   readonly runtimeModeCeiling?: string | null;
-}): Option.Option<RuntimeSessionRequest> => {
+  readonly childSetupPurpose?: ChildSetupPurpose;
+}): Option.Option<Extract<RuntimeSessionRequest, { kind: "session" }>> => {
   const [first, ...rest] = input.scopes;
   if (first === undefined || !isGrantScope(first) || !rest.every(isGrantScope))
     return Option.none();
@@ -409,6 +447,9 @@ export const appServerSessionRequest = (input: {
     ttl: input.ttl,
     label: input.label,
     ...(ceiling === undefined ? {} : { runtimeModeCeiling: ceiling }),
+    ...(input.childSetupPurpose === undefined
+      ? {}
+      : { childSetupPurpose: input.childSetupPurpose }),
   });
 };
 

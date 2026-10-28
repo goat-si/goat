@@ -43,6 +43,7 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
+import { createHubDeviceCommands } from "./hubDeviceCommands.ts";
 import {
   isRpcClientError,
   request,
@@ -1400,32 +1401,12 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
     }),
     ...createDecisionEnvironmentAtoms(runtime),
-    verifyHubDevice: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hub:device-verify",
-      tag: WS_METHODS.hubDeviceVerify,
-    }),
+    ...createHubDeviceCommands(runtime),
     /** Asks this machine's managed OpenCodex update to check now, from the update dialog. */
     checkOpenCodexUpdate: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:check-opencodex-update",
       tag: WS_METHODS.serverCheckOpenCodexUpdate,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
-    joinHubDevice: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hub:device-join",
-      tag: WS_METHODS.hubDeviceJoin,
-    }),
-    leaveHubDevice: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hub:device-leave",
-      tag: WS_METHODS.hubDeviceLeave,
-    }),
-    repairHubDevice: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hub:device-repair",
-      tag: WS_METHODS.hubDeviceRepair,
-    }),
-    /** A person's standing consent to join an SSH host as the hub's OpenCodex Child. */
-    setHubDeviceChildOptIn: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:hub:device-child-opt-in",
-      tag: WS_METHODS.hubDeviceChildOptIn,
     }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",

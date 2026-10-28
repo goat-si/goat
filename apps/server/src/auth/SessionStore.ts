@@ -6,6 +6,7 @@ import {
   type AuthClientSession,
   type AuthEnvironmentScope,
   AuthWebSocketTicketUse,
+  ChildSetupPurpose,
   type ClientSurface,
   RuntimeMode,
   type ServerAuthSessionMethod,
@@ -40,8 +41,15 @@ import {
   signPayload,
   timingSafeEqualBase64Url,
 } from "./utils.ts";
+import * as ChildSetupSession from "./childSetupSession.ts";
+import {
+  createDefaultClientMetadata,
+  toAuthClientSession,
+  toClientMetadata,
+} from "./sessionClientMetadata.ts";
 
 export interface IssuedSession {
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly sessionId: AuthSessionId;
   readonly token: string;
   readonly method: ServerAuthSessionMethod;
@@ -61,6 +69,7 @@ export interface VerifiedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly runtimeModeCeiling?: RuntimeMode;
+  readonly childSetupPurpose?: ChildSetupPurpose;
 }
 
 export interface VerifiedWebSocketTicket extends VerifiedSession {
@@ -382,6 +391,7 @@ export class SessionStore extends Context.Service<
       readonly client?: AuthClientMetadata;
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
+      readonly childSetupPurpose?: ChildSetupPurpose;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
@@ -456,6 +466,7 @@ const SessionClaims = Schema.Struct({
   method: Schema.Literals(["browser-session-cookie", "bearer-access-token", "dpop-access-token"]),
   jkt: Schema.optionalKey(Schema.String),
   rtc: Schema.optionalKey(RuntimeMode),
+  csp: Schema.optionalKey(ChildSetupPurpose),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -474,37 +485,6 @@ type WebSocketClaims = typeof WebSocketClaims.Type;
 
 const decodeSessionClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(SessionClaims));
 const decodeWebSocketClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(WebSocketClaims));
-
-function createDefaultClientMetadata(): AuthClientMetadata {
-  return {
-    deviceType: "unknown",
-  };
-}
-
-function toClientMetadata(record: {
-  readonly label: string | null;
-  readonly ipAddress: string | null;
-  readonly userAgent: string | null;
-  readonly deviceType: AuthClientMetadata["deviceType"];
-  readonly os: string | null;
-  readonly browser: string | null;
-}): AuthClientMetadata {
-  return {
-    ...(record.label ? { label: record.label } : {}),
-    ...(record.ipAddress ? { ipAddress: record.ipAddress } : {}),
-    ...(record.userAgent ? { userAgent: record.userAgent } : {}),
-    deviceType: record.deviceType,
-    ...(record.os ? { os: record.os } : {}),
-    ...(record.browser ? { browser: record.browser } : {}),
-  };
-}
-
-function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthClientSession {
-  return {
-    ...input,
-    current: false,
-  };
-}
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -810,9 +790,15 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ cause }))),
       );
       const issuedAt = yield* DateTime.now;
-      const expiresAt = DateTime.add(issuedAt, {
-        milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
-      });
+      const purpose = input?.childSetupPurpose;
+      const ttl = Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL);
+      const milliseconds = ChildSetupSession.ttlMs(input, issuedAt.epochMilliseconds, ttl);
+      if (milliseconds === undefined)
+        return yield* new SessionCredentialIssueError({
+          sessionId,
+          cause: ChildSetupSession.refused(),
+        });
+      const expiresAt = DateTime.add(issuedAt, { milliseconds });
       const claims: SessionClaims = {
         v: 1,
         kind: "session",
@@ -822,6 +808,7 @@ export const make = Effect.gen(function* () {
         method: input?.method ?? "browser-session-cookie",
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
         ...(input?.runtimeModeCeiling ? { rtc: input.runtimeModeCeiling } : {}),
+        ...(purpose === undefined ? {} : { csp: purpose }),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -911,6 +898,7 @@ export const make = Effect.gen(function* () {
         expiresAt: expiresAt,
         scopes: claims.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+        ...(claims.csp === undefined ? {} : { childSetupPurpose: claims.csp }),
       } satisfies IssuedSession;
     },
   );
@@ -990,6 +978,8 @@ export const make = Effect.gen(function* () {
     );
 
     const observedAt = yield* DateTime.now;
+    if (!ChildSetupSession.claimsValid(claims, observedAt.epochMilliseconds))
+      return yield* new InvalidSessionTokenPayloadError({ cause: ChildSetupSession.refused() });
     const expiresAt = DateTime.make(claims.exp);
     if (Option.isNone(expiresAt)) {
       return yield* new InvalidSessionExpirationClaimError({
@@ -1037,6 +1027,7 @@ export const make = Effect.gen(function* () {
       scopes: claims.scopes,
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
       ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
+      ...(claims.csp === undefined ? {} : { childSetupPurpose: claims.csp }),
     } satisfies VerifiedSession;
   });
 

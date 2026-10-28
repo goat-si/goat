@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import { fixture as routeFixture } from "./OpenCodexRoute.testkit.ts";
 import { checkCodexProviderStatus } from "./CodexProvider.ts";
+// Recorded from the pinned Codex 0.156.1 config/read in an isolated home.
+import nativeConfigRead from "./testFixtures/codexHomeConfigRead.0.156.1.json" with { type: "json" };
 import { assert, it } from "@effect/vitest";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
@@ -223,5 +225,52 @@ it.effect(
       assert.equal(snapshot.codexRoute?.state, "home");
       assert.isUndefined(snapshot.codexRoute?.effectiveBaseUrl);
       assert.equal(snapshot.status, "error");
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.each(
+  Object.entries(nativeConfigRead.captures).map(([name, capture]) => ({
+    name,
+    capture,
+    accepted: name === "clean" || name === "missing_requires_openai_auth",
+  })),
+)(
+  "stops a Home None probe before account or model requests unless the recorded provider is authless: $name",
+  ({ capture, accepted }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fixture = yield* routeFixture({ role: "home" });
+      const home = fixture.input.execution.home;
+      const effective = {
+        model_provider: capture.model_provider,
+        model_catalog_json: fixture.catalog,
+        model_providers: { opencodex: capture.opencodex },
+      };
+      const peer = ROUTED_CODEX.replace(
+        "const write = (message)",
+        `Object.assign(overrides, ${JSON.stringify(effective)});\nconst write = (message)`,
+      ).replace(
+        "if (id === undefined) return;",
+        'if (id === undefined) return; fs.appendFileSync(process.env.CODEX_HOME + "/requests.jsonl", method + "\\n");',
+      );
+      const binary = `${home}/credential-codex`;
+      yield* fs.writeFileString(binary, peer);
+      yield* fs.chmod(binary, 0o755);
+      const snapshot = yield* checkCodexProviderStatus(
+        { ...fixture.input.settings, opencodexAuth: "none", binaryPath: binary },
+        undefined,
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      const requests = (yield* fs.readFileString(`${home}/requests.jsonl`)).trim().split("\n");
+      assert.include(requests, "config/read");
+      if (accepted) {
+        assert.equal(snapshot.status, "ready");
+        assert.include(requests, "account/read");
+        return;
+      }
+      assert.equal(snapshot.status, "error");
+      assert.isUndefined(snapshot.codexRoute?.effectiveBaseUrl);
+      assert.notInclude(requests, "account/read");
+      assert.notInclude(requests, "model/list");
     }).pipe(Effect.provide(NodeServices.layer)),
 );

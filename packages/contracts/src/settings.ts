@@ -34,7 +34,7 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
-import { CodexModelRoute, DEFAULT_OPENCODEX_BASE_URL } from "./codexRoute.ts";
+import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } from "./codexRoute.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
@@ -616,10 +616,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("default" as const)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    opencodexBaseUrl: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed(DEFAULT_OPENCODEX_BASE_URL)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
+    ...CodexHomeSettingsFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
@@ -696,6 +693,7 @@ const InstanceIdleCompaction = Schema.Literals(
 
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
+    ...ProviderHomeRouteFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
@@ -1792,6 +1790,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     code: Schema.optionalKey(
       Schema.Literals([
         "provider_instance_busy",
+        "provider_instance_stale",
         "computer_use_unavailable",
         "computer_use_install_failed",
       ]),
@@ -1807,6 +1806,8 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     if (this.code === "provider_instance_busy") {
       return "End this instance's active sessions before changing its model route.";
     }
+    if (this.code === "provider_instance_stale")
+      return "Settings changed on another device. Review them and try again.";
     if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
       return this.reason ?? "Computer use cannot run on this host.";
     }

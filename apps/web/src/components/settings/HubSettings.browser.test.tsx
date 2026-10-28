@@ -2,11 +2,15 @@ import { RegistryContext } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ProviderInstanceId,
+  type ChildReadyProof,
   type GoatHostStatusResult,
   type HostStatusEntry,
   type HubNode,
   type HubNodesSnapshot,
   type HubParityResult,
+  type OpenCodexChildBootstrapStatus,
+  type OpenCodexChildSetup,
   type OpenCodexInventorySnapshot,
   type ServerSettings,
 } from "@goat/contracts";
@@ -31,6 +35,7 @@ const state = vi.hoisted(() => ({
   join: vi.fn(),
   leave: vi.fn(),
   repair: vi.fn(),
+  completeChild: vi.fn(),
   scope: vi.fn(),
 }));
 vi.mock("../../state/server", () => ({
@@ -44,6 +49,11 @@ vi.mock("../../state/server", () => ({
     joinHubDevice: { label: "hub:join", run: state.join, permissionAtom: state.permission },
     leaveHubDevice: { label: "hub:leave", run: state.leave, permissionAtom: state.permission },
     repairHubDevice: { label: "hub:repair", run: state.repair, permissionAtom: state.permission },
+    setupOpenCodexChild: {
+      label: "hub:child-setup",
+      run: state.completeChild,
+      permissionAtom: state.permission,
+    },
     hubNodesLive: ({ environmentId }: { environmentId: string }) => state.nodes.get(environmentId),
     checkHubNodes: {
       label: "nodes:check",
@@ -270,6 +280,7 @@ function setup() {
     return { _tag: "Success", value: { deviceAlias: "lidge-ts", parity } };
   });
   for (const command of [state.join, state.leave, state.repair]) command.mockReset();
+  state.completeChild.mockReset().mockResolvedValue({ _tag: "Success", value: { kind: "ok" } });
   return { registry, source, [Symbol.dispose]: () => registry.dispose() };
 }
 
@@ -752,4 +763,199 @@ it("lists the hosts goatclaw has not reached first and folds the rest into +N", 
   await expect
     .element(screen.getByText("lidge-ts needs a GOAT update · studio-mini waiting · +2"))
     .toBeVisible();
+});
+
+function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {
+  return {
+    version: 1,
+    operationId: "setup-1",
+    destinationEnvironmentId: EnvironmentId.make("test-child-env"),
+    homeEnvironmentId: environmentId,
+    instanceId: ProviderInstanceId.make("child-codex"),
+    revision: { epoch: "test-epoch", sequence: 1 },
+    steps: [],
+    readiness: "linked",
+    attribution: "home_zero_local_accounts",
+    nextAction: "retry",
+    ...overrides,
+  };
+}
+
+const childProof: ChildReadyProof = {
+  version: 1,
+  operationId: "setup-1",
+  destinationEnvironmentId: EnvironmentId.make("test-child-env"),
+  homeEnvironmentId: environmentId,
+  instanceId: ProviderInstanceId.make("child-codex"),
+  configFingerprint: "config-1",
+  executablePath: "/test/bin/codex",
+  executableVersion: "test-version",
+  linkId: "test-link",
+  listenerInstanceId: "test-listener",
+  linkConnectionGeneration: "test-generation",
+  settingsDigest: "settings-1",
+  catalogDigest: "catalog-1",
+  model: "home-model",
+  completedAt: 0,
+  expiresAt: 86_400_000,
+  attribution: "home_zero_local_accounts",
+  localAccountsDigest: "empty-local-accounts",
+};
+
+const readyChild = childSetupFixture({
+  readiness: "ready",
+  nextAction: "none",
+  steps: [{ step: "inference_verified", state: "succeeded" }],
+  proof: childProof,
+});
+
+const childHost = (opencodexChild: OpenCodexChildBootstrapStatus): HostStatusEntry => ({
+  host: "test-child",
+  reachability: "ok",
+  opencodexChild,
+});
+
+function showChild(
+  fixture: ReturnType<typeof setup>,
+  opencodexChild: OpenCodexChildBootstrapStatus,
+) {
+  fixture.registry.set(
+    fixture.source,
+    AsyncResult.success<GoatHostStatusResult>({ hosts: [childHost(opencodexChild)] }),
+  );
+}
+
+it("keeps a linked Child unverified until Home reports its request proof, without starting setup on a read", async () => {
+  using fixture = setup();
+  showChild(fixture, { state: "child", checkedAt: 0 });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const row = device(screen, "test-child");
+  await expect.element(row.getByText("Linked to OpenCodex", { exact: true })).toBeVisible();
+  await expect.element(row.getByRole("status")).toHaveTextContent("Linked · Codex not verified");
+  showChild(fixture, { state: "child", checkedAt: 0, setup: readyChild });
+  await expect.element(row.getByRole("status")).toHaveTextContent("Ready");
+  await expect.element(row.getByText("Verified with home-model", { exact: false })).toBeVisible();
+  await expect.element(row.getByRole("button", { name: "Continue setup" })).not.toBeInTheDocument();
+  expect(state.completeChild).not.toHaveBeenCalled();
+});
+
+it("finishes a linked Child's setup on the selected Home only when Continue setup is clicked", async () => {
+  using fixture = setup();
+  showChild(fixture, { state: "child", checkedAt: 0 });
+  state.completeChild.mockImplementationOnce(async () => {
+    showChild(fixture, { state: "child", checkedAt: 0, setup: readyChild });
+    return { _tag: "Success", value: { kind: "ok", setup: readyChild } };
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const row = device(screen, "test-child");
+  await expect
+    .element(row.getByText("one small request through Home", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(row.getByRole("button", { name: "Continue setup" }));
+  await expect.element(row.getByRole("status")).toHaveTextContent("Ready");
+  expect(state.completeChild).toHaveBeenCalledOnce();
+  expect(state.completeChild.mock.calls[0]?.[1]).toEqual({
+    environmentId,
+    input: { deviceAlias: "test-child" },
+  });
+});
+
+it("replaces Continue setup with update guidance after the Home reports remote_outdated", async () => {
+  using fixture = setup();
+  showChild(fixture, { state: "child", checkedAt: 0 });
+  state.completeChild.mockImplementationOnce(async () => {
+    showChild(fixture, {
+      state: "child",
+      checkedAt: 0,
+      nextAction: "update_goat",
+      actionable: false,
+      failure: {
+        code: "remote_outdated",
+        step: "goat_available",
+        message: "Child does not support setup yet.",
+        retryable: false,
+      },
+    });
+    return { _tag: "Success", value: { kind: "ok" } };
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const row = device(screen, "test-child");
+  await userEvent.click(row.getByRole("button", { name: "Continue setup" }));
+  await expect
+    .element(row.getByText("Update GOAT on Home and this Child, then refresh status."))
+    .toBeVisible();
+  await expect
+    .element(row.getByText("Child does not support setup yet.", { exact: true }))
+    .toBeVisible();
+  await expect.element(row.getByRole("button", { name: "Continue setup" })).not.toBeInTheDocument();
+  await expect.element(row.getByRole("status")).not.toHaveTextContent("Ready");
+});
+
+it("shows a failed setup request inline, naming the device, and lets the Home retry it", async () => {
+  using fixture = setup();
+  showChild(fixture, {
+    state: "child",
+    checkedAt: 0,
+    setup: childSetupFixture({
+      readiness: "invalid",
+      steps: [{ step: "codex_installed", state: "failed" }],
+      failure: {
+        code: "installation_failed",
+        step: "codex_installed",
+        message: "Codex installation failed.",
+        retryable: true,
+      },
+    }),
+  });
+  state.completeChild.mockResolvedValueOnce({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Home is unavailable.")),
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const row = device(screen, "test-child");
+  await expect.element(row.getByText("Codex installation failed.", { exact: true })).toBeVisible();
+  await userEvent.click(row.getByText("Setup steps"));
+  await expect
+    .element(row.getByText("Install Codex:", { exact: false }))
+    .toHaveTextContent("Install Codex: Failed");
+  await userEvent.click(row.getByRole("button", { name: "Continue setup" }));
+  await expect
+    .element(row.getByRole("alert"))
+    .toHaveTextContent("test-child: Home is unavailable.");
+  await userEvent.click(row.getByRole("button", { name: "Continue setup" }));
+  await vi.waitFor(() => expect(state.completeChild).toHaveBeenCalledTimes(2));
+});
+
+it("keeps setup readable but not startable without permission on the selected Home", async () => {
+  using fixture = setup();
+  state.permission.mockReturnValue(Atom.make(false));
+  showChild(fixture, { state: "child", checkedAt: 0 });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const row = device(screen, "test-child");
+  await expect.element(row.getByRole("status")).toHaveTextContent("Linked · Codex not verified");
+  await expect.element(row.getByRole("button", { name: "Continue setup" })).toBeDisabled();
+  await expect
+    .element(row.getByText("Managing this device needs permission on the selected Home."))
+    .toBeVisible();
+  expect(state.completeChild).not.toHaveBeenCalled();
 });

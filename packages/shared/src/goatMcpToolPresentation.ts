@@ -490,6 +490,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Sync", "Syncing", "Synced", "OpenCodex models"],
     "environment-update",
   ),
+  goat_hub_device_setup: tool(["Set up", "Setting up", "Set up", "a Child"], "environment-update"),
+  goat_hub_child_prepare: tool(
+    ["Prepare", "Preparing", "Prepared", "this Child"],
+    "environment-update",
+  ),
+  goat_hub_child_status: tool(["Read", "Reading", "Read", "Child setup"], "host-status"),
+  goat_hub_child_connection: tool(
+    ["Change", "Changing", "Changed", "this Child's connection"],
+    "environment-update",
+  ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
   goat_fallback_chain_get: tool(["Read", "Reading", "Read", "fallback chains"], "environment-read"),
   goat_fallback_chain_set: tool(

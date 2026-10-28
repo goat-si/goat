@@ -25,8 +25,14 @@ import * as NodeCrypto from "node:crypto";
 import * as Settings from "../serverSettings.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
+import { providerHomeRouteKey, supportsProviderHome } from "./ProviderHomeAdapters.ts";
 
 export type SettingsRevision = { readonly epoch: string; readonly sequence: number };
+/** The settings revision whose snapshot the registry is hydrating; unset outside hydration. */
+export const HydratingRevision = Context.Reference<SettingsRevision | undefined>(
+  "goat/provider/CodexRouteService/HydratingRevision",
+  { defaultValue: () => undefined },
+);
 export type ApprovedInstancePrecondition = {
   readonly handoffId: TurnItemId;
   readonly environmentId: EnvironmentId;
@@ -45,6 +51,36 @@ export const instanceFingerprint = (instance: unknown) =>
       ) ?? "null",
     )
     .digest("hex");
+/**
+ * Rejects an upsert whose client-confirmed instance no longer matches the stored one; null means
+ * none was stored. Clients see redacted settings, so both sides are compared in that form. Called
+ * under the settings lock.
+ */
+export const ensureExpectedProviderInstance = (
+  settings: ServerSettings,
+  mutation: ProviderInstanceMutation,
+  settingsPath: string,
+) => {
+  if (mutation.operation !== "upsert" || mutation.expectedInstance === undefined)
+    return Effect.void;
+  const current =
+    Settings.redactServerSettingsForClient(settings).providerInstances[mutation.instanceId];
+  return (
+    mutation.expectedInstance === null
+      ? current === undefined
+      : current !== undefined &&
+        instanceFingerprint(current) === instanceFingerprint(mutation.expectedInstance)
+  )
+    ? Effect.void
+    : Effect.fail(
+        new ServerSettingsError({
+          settingsPath,
+          operation: "normalize",
+          providerInstanceId: mutation.instanceId,
+          code: "provider_instance_stale",
+        }),
+      );
+};
 class ProviderInstanceBusyError extends ServerSettingsError {
   override get message() {
     return "Wait for this instance's active turns to finish before changing its model route.";
@@ -63,15 +99,17 @@ class RouteSettingsError extends ServerSettingsError {
   }
 }
 const decodeCodex = Schema.decodeUnknownOption(CodexSettings);
-const routeKey = (instance: ProviderInstanceConfig | undefined) => {
+/** Route identity an active use fences: model route, Home authentication and base URL. */
+export const codexRouteKey = (instance: ProviderInstanceConfig | undefined) => {
   if (instance?.driver !== "codex") return undefined;
   const config = decodeCodex(instance.config ?? {});
   if (Option.isNone(config)) return "invalid";
   const base = config.value.opencodexBaseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL;
+  const route = `${config.value.modelRoute}:${config.value.opencodexAuth}`;
   try {
-    return `${config.value.modelRoute}:${new URL(base).toString().replace(/\/+$/, "")}`;
+    return `${route}:${new URL(base).toString().replace(/\/+$/, "")}`;
   } catch {
-    return `${config.value.modelRoute}:invalid:${base}`;
+    return `${route}:invalid:${base}`;
   }
 };
 /** Internal coordination port. Settings owns persistence; the facade owns authorization.
@@ -82,8 +120,32 @@ export class CodexRouteState extends Context.Service<
   {
     readonly admission: Semaphore.Semaphore;
     readonly revision: () => SettingsRevision;
+    /**
+     * Refuses a construction whose settings snapshot is older than the instance's latest committed
+     * change; the newer snapshot rebuilds it.
+     */
+    readonly assertCurrent: (
+      id: ProviderInstanceId,
+      revision: SettingsRevision | undefined,
+    ) => Effect.Effect<void, ServerSettingsError>;
+    /**
+     * Binds a runtime built from an effective entry for the lifetime of the caller's scope, the
+     * registry's per-instance scope. Removal, replacement by any driver and a failed replacement
+     * close it, so a retained reference stops being admitted. Supersession is checked again here,
+     * after construction, so an obsolete runtime is never published.
+     */
+    readonly bindRuntime: (
+      id: ProviderInstanceId,
+      identity: string,
+      revision: SettingsRevision | undefined,
+    ) => Effect.Effect<string, ServerSettingsError, Scope.Scope>;
+    readonly assertGeneration: (
+      id: ProviderInstanceId,
+      expected: string,
+    ) => Effect.Effect<void, ServerSettingsError>;
     readonly reserveUse: (
       id: ProviderInstanceId,
+      expectedGeneration?: string,
     ) => Effect.Effect<void, ServerSettingsError, Scope.Scope>;
     readonly validate: (
       current: ServerSettings,
@@ -106,6 +168,29 @@ const makeState = Effect.gen(function* () {
   const epoch = NodeCrypto.randomUUID();
   let sequence = 0;
   const leases = new Map<string, number>();
+  const bound = new Map<string, string>();
+  const changedAt = new Map<string, number>();
+  let bindings = 0;
+  const assertCurrent = (id: ProviderInstanceId, hydrating: SettingsRevision | undefined) =>
+    Effect.suspend(() =>
+      hydrating !== undefined &&
+      hydrating.epoch === epoch &&
+      (changedAt.get(id) ?? 0) > hydrating.sequence
+        ? Effect.fail(
+            RouteSettingsError.explained(
+              "Provider settings changed again before this runtime started. Applying the newer settings.",
+            ),
+          )
+        : Effect.void,
+    );
+  const assertGeneration = (id: ProviderInstanceId, expected: string) =>
+    Effect.suspend(() =>
+      bound.get(id) === expected
+        ? Effect.void
+        : Effect.fail(
+            RouteSettingsError.explained("This provider runtime was replaced. Refresh and retry."),
+          ),
+    );
   const pending = new Map<
     number,
     {
@@ -132,10 +217,37 @@ const makeState = Effect.gen(function* () {
   return CodexRouteState.of({
     admission,
     revision,
-    reserveUse: (id) =>
+    assertCurrent: Effect.fn("CodexRouteState.assertCurrent")(function* (id, hydrating) {
+      yield* admission.withPermits(1)(assertCurrent(id, hydrating));
+    }),
+    bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity, hydrating) {
+      return yield* Effect.acquireRelease(
+        admission.withPermits(1)(
+          assertCurrent(id, hydrating).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                // Unique per binding, so an identical rebuild does not revive a closed runtime.
+                const token = `${identity}#${++bindings}`;
+                bound.set(id, token);
+                return token;
+              }),
+            ),
+          ),
+        ),
+        (token) =>
+          Effect.sync(() => {
+            if (bound.get(id) === token) bound.delete(id);
+          }),
+      );
+    }),
+    assertGeneration: Effect.fn("CodexRouteState.assertGeneration")(function* (id, expected) {
+      yield* admission.withPermits(1)(assertGeneration(id, expected));
+    }),
+    reserveUse: (id, expectedGeneration) =>
       admission.withPermits(1)(
         Effect.acquireRelease(
           Effect.gen(function* () {
+            if (expectedGeneration !== undefined) yield* assertGeneration(id, expectedGeneration);
             if ([...pending.values()].some((entry) => entry.ids.includes(id)))
               return yield* RouteSettingsError.explained(
                 "Provider settings are awaiting application. Refresh and retry.",
@@ -165,7 +277,7 @@ const makeState = Effect.gen(function* () {
             approval.expectedRevision.sequence !== sequence ||
             instanceFingerprint(current.providerInstances[approval.instanceId]) !==
               approval.expectedFingerprint ||
-            current.providerInstances[approval.instanceId]?.driver !== "codex")
+            !supportsProviderHome(current.providerInstances[approval.instanceId]?.driver))
         )
           return yield* RouteSettingsError.explained("This approval is stale. Ask again.");
         for (const rawId of new Set([
@@ -182,7 +294,10 @@ const makeState = Effect.gen(function* () {
               "Provider settings are awaiting application. Refresh and retry.",
             );
           if (
-            routeKey(current.providerInstances[id]) !== routeKey(next.providerInstances[id]) &&
+            (codexRouteKey(current.providerInstances[id]) ??
+              providerHomeRouteKey(current.providerInstances[id])) !==
+              (codexRouteKey(next.providerInstances[id]) ??
+                providerHomeRouteKey(next.providerInstances[id])) &&
             (leases.get(id) ?? 0) > 0
           )
             return yield* new ProviderInstanceBusyError({
@@ -208,6 +323,7 @@ const makeState = Effect.gen(function* () {
               instanceFingerprint(current.providerInstances[id]) !==
               instanceFingerprint(next.providerInstances[id]),
           );
+        for (const id of ids) changedAt.set(id, sequence);
         if (ids.length > 0)
           pending.set(sequence, { ids, ack: yield* Deferred.make<void, ServerSettingsError>() });
         return revision();
@@ -279,8 +395,10 @@ const make = Effect.gen(function* () {
       (settings.withStoredSettingsSnapshot ?? settings.withSettingsSnapshot)((snapshot) =>
         Effect.gen(function* () {
           const instance = snapshot.providerInstances[id];
-          if (!instance || instance.driver !== "codex")
-            return yield* RouteSettingsError.explained("Choose an existing Codex instance.");
+          if (!instance || !supportsProviderHome(instance.driver))
+            return yield* RouteSettingsError.explained(
+              "Choose an existing Codex, Claude Code, OpenCode, or Pi instance.",
+            );
           return {
             instance,
             fingerprint: instanceFingerprint(instance),

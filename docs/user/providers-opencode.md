@@ -37,6 +37,19 @@ fail, check the URL, credentials, and OpenCode version, then refresh provider st
 After a lost connection, send another prompt to reconnect to the same OpenCode
 session.
 
+## Use OpenCodex Home
+
+A OpenCode instance can send its model requests through your
+[OpenCodex Home](./providers-codex.md#use-opencodex-home) and use Home's
+accounts and shared quota. In the instance's settings in **Settings →
+Providers**, set **Model route** to **OpenCodex Home**. **OpenCodex address** is
+OpenCodex on the machine running the instance, `http://127.0.0.1:10100/v1` by
+default. An agent can also ask you to approve the change. A routed instance
+uses only the models Home offers. If Home is unavailable, requests fail; GOAT
+never switches to another account. Set **Model route** back to **Provider
+settings** to stop. Memory summaries from OpenCode are unavailable while the
+instance uses Home.
+
 ## Approvals
 
 OpenCode follows the shared [permission modes](./permission-modes.md). **Auto** has

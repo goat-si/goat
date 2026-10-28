@@ -1,4 +1,13 @@
-import type { HostStatusEntry, HubNode, OpenCodexChildBootstrapStatus } from "@goat/contracts";
+import {
+  childReadyProofIsCurrent,
+  withoutUnprovenReady,
+  type ChildReadyNextAction,
+  type ChildReadyStep,
+  type HostStatusEntry,
+  type HubNode,
+  type OpenCodexChildBootstrapStatus,
+  type OpenCodexChildSetup,
+} from "@goat/contracts";
 
 import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
 
@@ -9,20 +18,37 @@ import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
  */
 
 export type ChildSetupReason = NonNullable<OpenCodexChildBootstrapStatus["reason"]>;
+type ChildSetupStepOutcome = OpenCodexChildSetup["steps"][number]["state"];
 
 export interface ChildSetup {
-  readonly state: Exclude<OpenCodexChildBootstrapStatus["state"], "child">;
-  readonly tone: "progress" | "warning" | "destructive";
-  /** "OpenCodex Child setup blocked: npm missing". */
+  readonly state: OpenCodexChildBootstrapStatus["state"];
+  readonly tone: "progress" | "success" | "warning" | "destructive";
+  /** "OpenCodex Child setup blocked: npm missing", "Linked · Codex not verified", "Ready". */
   readonly label: string;
   /** What the Home said happened, when it said. */
   readonly detail: string | null;
   readonly checkedAt: number;
+  /** The SSH alias the Home's setup command takes; never a display label. */
+  readonly host: string | null;
+  readonly steps: ReadonlyArray<{
+    readonly label: string;
+    readonly outcome: ChildSetupStepOutcome;
+  }>;
+  readonly nextAction: ChildReadyNextAction;
+  /** Whether nextAction is a command this client may send; guidance is never actionable. */
+  readonly actionable: boolean;
+  /** The button for an actionable nextAction. */
+  readonly actionLabel: string | null;
+  /** What a person does when the next step is theirs, such as updating GOAT. */
+  readonly guidance: string | null;
+  /** The Child's own request through Home that makes it Ready. */
+  readonly proof: { readonly model: string; readonly completedAt: number } | null;
 }
 
 const CHILD_REASON_LABEL: Record<ChildSetupReason, string> = {
   home_unavailable: "the hub's OpenCodex cannot install it",
   platform_unsupported: "platform not supported",
+  goat_runtime_missing: "GOAT isn't installed there yet; GOAT installs it first, then retries",
   npm_missing: "npm missing",
   install_failed: "install failed",
   ocx_unusable: "OpenCodex does not run there",
@@ -30,28 +56,145 @@ const CHILD_REASON_LABEL: Record<ChildSetupReason, string> = {
   unreachable: "machine unreachable",
   link_failed: "link failed",
   consent_revoked: "turned off because the session that allowed it lost access",
+  setup_step_timeout: "A setup step timed out. Retry setup.",
 };
 
 const CHILD_STATE = {
   running: { tone: "progress", label: "Setting up as OpenCodex Child" },
+  child: { tone: "warning", label: "Linked · Codex not verified" },
   degraded: { tone: "warning", label: "OpenCodex Child degraded" },
   blocked: { tone: "destructive", label: "OpenCodex Child setup blocked" },
 } as const satisfies Record<ChildSetup["state"], Pick<ChildSetup, "tone" | "label">>;
 
-/** Null once the machine is a Child, and for hosts whose Home never set one up or predates it. */
-export function presentChildSetup(
+const CHILD_STEP_LABEL: Record<ChildReadyStep, string> = {
+  goat_available: "Prepare GOAT",
+  opencodex_running: "Start OpenCodex",
+  link_established: "Link to Home",
+  codex_installed: "Install Codex",
+  instance_routed: "Route Codex through Home",
+  inference_verified: "Verify a request through Home",
+};
+
+export const CHILD_STEP_OUTCOME_LABEL: Record<ChildSetupStepOutcome, string> = {
+  pending: "Waiting",
+  running: "In progress",
+  succeeded: "Done",
+  failed: "Failed",
+};
+
+/** A button label for the actions a client sends, and guidance text for the rest. */
+const CHILD_NEXT_STEP_LABEL = {
+  none: null,
+  continue_setup: "Continue setup",
+  retry: "Continue setup",
+  reconnect_home: "Repair link",
+  review_settings: "Review this Child's provider settings, then refresh status.",
+  update_goat: "Update GOAT on Home and this Child, then refresh status.",
+} as const satisfies Record<ChildReadyNextAction, string | null>;
+
+export const CHILD_SETUP_QUOTA_NOTE =
+  "Setup ends with one small request through Home, using its shared quota.";
+export const CHILD_SETUP_PERMISSION_NOTE =
+  "Managing this device needs permission on the selected Home.";
+
+const SENDABLE_ACTIONS: ReadonlySet<ChildReadyNextAction> = new Set([
+  "continue_setup",
+  "retry",
+  "reconnect_home",
+]);
+
+function currentProof(setup: OpenCodexChildSetup, checkedAt: number) {
+  const proof = setup.proof;
+  return proof !== undefined &&
+    setup.attribution === "home_zero_local_accounts" &&
+    proof.operationId === setup.operationId &&
+    proof.destinationEnvironmentId === setup.destinationEnvironmentId &&
+    proof.homeEnvironmentId === setup.homeEnvironmentId &&
+    proof.instanceId === setup.instanceId &&
+    childReadyProofIsCurrent(proof, checkedAt)
+    ? { model: proof.model, completedAt: proof.completedAt }
+    : null;
+}
+
+/**
+ * One machine's progress from linked to Ready. `current` is false when the latest status read
+ * failed: a Ready shown then could be stale, so it is withheld with any action until a refresh.
+ */
+function presentChildReadiness(
   status: OpenCodexChildBootstrapStatus | undefined,
+  host: string | null = null,
+  current = true,
 ): ChildSetup | null {
-  if (status === undefined || status.state === "child") return null;
-  const { tone, label } = CHILD_STATE[status.state];
+  if (status === undefined) return null;
+  const setup = status.setup === undefined ? undefined : withoutUnprovenReady(status.setup);
+  // Nested setup supersedes the outer recovery fields an older record carried.
+  const failure = setup === undefined ? status.failure : setup.failure;
+  const proposed =
+    setup?.nextAction ??
+    status.nextAction ??
+    (status.state === "child" || status.state === "degraded" ? "continue_setup" : "none");
+  // Update guidance needs the typed refusal or nested setup; a bare outer field proves nothing.
+  const nextAction: ChildReadyNextAction = !current
+    ? "none"
+    : failure?.code === "remote_outdated"
+      ? "update_goat"
+      : proposed === "update_goat" && setup === undefined
+        ? "none"
+        : proposed;
+  const actionable =
+    SENDABLE_ACTIONS.has(nextAction) && (setup !== undefined || status.actionable !== false);
+  const steps = setup?.steps ?? [];
+  const failed = failure !== undefined || steps.some((step) => step.state === "failed");
+  const proof =
+    current &&
+    status.state === "child" &&
+    setup?.readiness === "ready" &&
+    !failed &&
+    steps.every((step) => step.state === "succeeded")
+      ? currentProof(setup, status.checkedAt)
+      : null;
+  const running = steps.find((step) => step.state === "running");
+  const moving =
+    status.state === "running" || running !== undefined || setup?.readiness === "verifying";
+  const base = CHILD_STATE[status.state];
   const reason = status.reason === undefined ? null : CHILD_REASON_LABEL[status.reason];
   return {
     state: status.state,
-    tone,
-    label: reason === null ? label : `${label}: ${reason}`,
-    detail: status.message?.trim() || null,
+    tone: !current
+      ? "warning"
+      : proof !== null
+        ? "success"
+        : failed
+          ? "destructive"
+          : moving
+            ? "progress"
+            : base.tone,
+    label: !current
+      ? "Setup status unavailable. Refresh status."
+      : proof !== null
+        ? "Ready"
+        : running !== undefined
+          ? `${CHILD_STEP_LABEL[running.step]}…`
+          : reason === null
+            ? base.label
+            : `${base.label}: ${reason}`,
+    detail: failure?.message.trim() || status.message?.trim() || null,
     checkedAt: status.checkedAt,
+    host,
+    steps: steps.map((step) => ({ label: CHILD_STEP_LABEL[step.step], outcome: step.state })),
+    nextAction,
+    actionable,
+    actionLabel: actionable ? CHILD_NEXT_STEP_LABEL[nextAction] : null,
+    guidance: SENDABLE_ACTIONS.has(nextAction) ? null : CHILD_NEXT_STEP_LABEL[nextAction],
+    proof,
   };
+}
+
+/** Fleet's unfinished-setup alert: null once the machine is linked, verified or not. */
+export function presentChildSetup(status: OpenCodexChildBootstrapStatus | undefined) {
+  const setup = presentChildReadiness(status);
+  if (setup === null || setup.state === "child" || setup.tone === "success") return null;
+  return { ...setup, tone: setup.tone };
 }
 
 /** The SSH host alias the switch writes to, and whether it is on. */
@@ -91,6 +234,8 @@ export function hubDeviceList(input: {
   readonly nodes: ReadonlyArray<HubNode> | null;
   readonly snapshot: HubSnapshot | null;
   readonly hosts: ReadonlyArray<HostStatusEntry>;
+  /** False after a failed status read, so an older Ready is not shown as current. */
+  readonly statusCurrent?: boolean;
 }): ReadonlyArray<HubDeviceRow> {
   const nodes = input.nodes ?? [];
   const byRoute = new Map<string, HubNode>();
@@ -147,7 +292,11 @@ export function hubDeviceList(input: {
   };
   for (const entry of input.hosts) {
     if (entry.host === null) continue;
-    const childSetup = presentChildSetup(entry.opencodexChild);
+    const childSetup = presentChildReadiness(
+      entry.opencodexChild,
+      entry.host,
+      input.statusCurrent ?? true,
+    );
     const childOptIn =
       entry.opencodexChildOptIn === undefined
         ? null

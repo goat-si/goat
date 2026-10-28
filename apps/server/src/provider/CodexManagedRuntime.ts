@@ -13,6 +13,7 @@ import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
 import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 import { COMMAND_TIMEOUT_MS } from "./CodexManagedTokenProtocol.ts";
 import { materializeCodexShadowHome } from "./Drivers/CodexHomeLayout.ts";
+import { usesAuthlessCodexHome } from "./CodexHomeRouteConfig.ts";
 
 export interface CodexEffectiveRuntime {
   readonly config: CodexSettings;
@@ -20,6 +21,7 @@ export interface CodexEffectiveRuntime {
   readonly revision: string;
 }
 const decodeSettings = Schema.decodeSync(CodexSettings);
+const encodeRevision = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const managedCodexLaunchArgs = (command: string, args: ReadonlyArray<string>) =>
   [
     'model_provider="openai_token_sharing"',
@@ -31,6 +33,92 @@ const managedCodexLaunchArgs = (command: string, args: ReadonlyArray<string>) =>
   ]
     .map((value) => `-c ${JSON.stringify(value)}`)
     .join(" ");
+const MANAGED_NEEDS_NONE =
+  "Managed Codex uses Home with None authentication. OpenAI authentication for Home is available on an instance that uses your Codex CLI.";
+
+/**
+ * Managed Codex through Home with None: GOAT's managed executable and instance home, with no
+ * token broker, secret store or ChatGPT sign-in. `acquire` holds the installation lease in the
+ * caller's scope; `installed` only resolves the active release for status checks.
+ */
+export const resolveAuthlessManagedRuntime = Effect.fn("CodexManagedRuntime.resolveAuthless")(
+  function* (input: {
+    readonly settings: CodexSettings;
+    readonly instanceId: ProviderInstanceId;
+    readonly environment: NodeJS.ProcessEnv;
+    readonly acquisition?: "acquire" | "installed";
+  }) {
+    const setupError = (operation: "install" | "runtime", detail: string) =>
+      new ProviderSetupError({ instanceId: input.instanceId, operation, detail });
+    if (input.settings.setupMode !== "managed" || !usesAuthlessCodexHome(input.settings))
+      return yield* setupError(
+        "runtime",
+        "The authless managed runtime needs managed Codex with Home and None authentication.",
+      );
+    const installation = yield* CodexInstallation.CodexInstallation;
+    const server = yield* ServerConfig.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const homeLayout = yield* resolveManagedCodexHomeLayout(
+      server.stateDir,
+      input.instanceId,
+      input.settings,
+    );
+    const home = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+    const executable = yield* (
+      input.acquisition === "installed"
+        ? installation.resolve({ managedOnly: true })
+        : installation.acquire({ managedOnly: true })
+    ).pipe(
+      Effect.mapError(() =>
+        setupError("install", "Set up managed Codex before starting a session."),
+      ),
+    );
+    yield* materializeCodexShadowHome(homeLayout).pipe(
+      Effect.mapError((cause) => setupError("runtime", cause.message)),
+    );
+    yield* fs
+      .makeDirectory(home, { recursive: true })
+      .pipe(
+        Effect.mapError(() =>
+          setupError("runtime", "Could not prepare the managed Codex runtime."),
+        ),
+      );
+    // Launchers extend the server environment, so empty values are needed to shadow ambient ones.
+    const environment: NodeJS.ProcessEnv = {
+      ...input.environment,
+      CODEX_HOME: home,
+      OPENAI_API_KEY: "",
+      ACCESS_TOKEN: "",
+      OPENAI_BASE_URL: "",
+      GOAT_CODEX_LAUNCH_ARGS: "",
+    };
+    const legacyLaunchArgs = legacyEnvName("GOAT_CODEX_LAUNCH_ARGS");
+    if (legacyLaunchArgs !== undefined) environment[legacyLaunchArgs] = "";
+    return {
+      binaryPath: executable.executablePath,
+      home,
+      homeLayout,
+      config: decodeSettings({
+        ...input.settings,
+        binaryPath: executable.executablePath,
+        homePath: home,
+        launchArgs: "",
+      }),
+      environment,
+      revision: encodeRevision([
+        input.settings.opencodexAuth,
+        input.settings.opencodexBaseUrl,
+        executable.executablePath,
+        executable.version,
+        home,
+      ]),
+    } satisfies CodexEffectiveRuntime & {
+      readonly binaryPath: string;
+      readonly home: string;
+      readonly homeLayout: typeof homeLayout;
+    };
+  },
+);
 
 export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(function* (options: {
   readonly instanceId: ProviderInstanceId;
@@ -42,7 +130,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
     return yield* new ProviderSetupError({
       instanceId: options.instanceId,
       operation: "runtime",
-      detail: "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+      detail: MANAGED_NEEDS_NONE,
     });
   const installation = yield* CodexInstallation.CodexInstallation;
   const config = yield* ServerConfig.ServerConfig;
