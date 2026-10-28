@@ -560,3 +560,27 @@ it("does not credit a click with a focus or a download other work caused", () =>
       effect: "suspected_noop",
     });
   }));
+
+it("credits a popup to the link the click followed, not to one an earlier click opened late", () =>
+  fixture(async (page) => {
+    await page.route("https://page.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<p id="still">static</p><a id="help" target="_blank" href="https://page.test/help">help</a>`,
+      }),
+    );
+    // An earlier click's window whose first response was slow appears right after this press.
+    await page.exposeFunction("earlierWindowOpens", () => page.emit("popup", page));
+    await page.goto("https://page.test/");
+    await page.evaluate(
+      `document.addEventListener("mouseup", () => earlierWindowOpens(), { once: true })`,
+    );
+    await expect(ServerBrowserPage.click(page, { selector: "#still" })).resolves.toMatchObject({
+      effect: "suspected_noop",
+    });
+    await page.focus("#help");
+    await expect(ServerBrowserPage.click(page, { selector: "#help" })).resolves.toMatchObject({
+      effect: "confirmed",
+      evidence: expect.arrayContaining(["popup"]),
+    });
+  }));

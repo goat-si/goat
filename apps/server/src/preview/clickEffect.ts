@@ -140,6 +140,7 @@ const INSTALL = `(() => {
       pressed = false;
       dismissible = new Set();
     }
+    if (event.type === "click") opensWindow(event);
     // Changes pending from before this event are ambient.
     observer.takeRecords();
     dispatching.add(event);
@@ -184,6 +185,18 @@ const INSTALL = `(() => {
   const onFocus = (event) => related(event) && note("focus");
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
+  // A link the click follows into a new window opens a popup unless a handler cancels the click,
+  // judged after its dispatch. A window an earlier click opened is not this click's.
+  const opensWindow = (event) => {
+    const link = event.composedPath().find((node) => node.tagName === "A" && node.href);
+    if (!link || ["", "_self", "_parent", "_top"].includes(link.target)) return;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      if (!event.defaultPrevented) note("popup");
+    };
+    channel.port2.postMessage(null);
+  };
   // Judged after the event's dispatch, in a message task (timers can be throttled), since a guard
   // listener may cancel it after this one ran.
   const onNavigate = (event) => {
@@ -320,24 +333,13 @@ const findAim = async (page: Page, locator: Locator | null, point: Point): Promi
  */
 export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) => {
   const seen = new Set<ClickEvidence>();
-  let armed = false;
-  let wake = constVoid;
-  const woke = new Promise<void>((resolve) => (wake = resolve));
-  // A popup needs the user activation the click gave; one opened without it is blocked.
-  const onPopup = () => {
-    if (!armed) return;
-    seen.add("popup");
-    wake();
-  };
-  page.on("popup", onPopup);
-  // A page that cannot run script, or that a dialog holds, still reports popups and dialogs.
+  // A page that cannot run script, or that a dialog holds, still reports a dialog the press opened.
   const installing = Promise.resolve()
     .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
     .catch(() => undefined);
   const watch = await bounded(installing, INSTALL_MS);
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {
-    page.off("popup", onPopup);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
     if (watch) stopWatch(watch);
   };
@@ -349,7 +351,6 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   let first: Promise<void> | undefined;
   let navigated: Promise<void> | undefined;
   const arm = async (aim: ClickAim) => {
-    armed = true;
     const target: unknown = "element" in aim ? aim.element : aim.point;
     await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
     first = watch
@@ -364,7 +365,7 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
       if (dialog) seen.add("dialog");
       else {
         // The first signal's kinds arrive with it, before a navigation can replace the document.
-        await bounded(Promise.race([woke, first]));
+        await bounded(first);
         // A navigation the click started was noted before the press returned, so this is quick.
         await bounded(navigated, 5);
         // A failed read proves nothing.
