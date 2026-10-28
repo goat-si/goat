@@ -1,5 +1,7 @@
 import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+import * as Lineage from "./orchestratorMcpThreadLineage.ts";
+export * from "./orchestratorMcpThreadLineage.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -527,6 +529,7 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   settled: Schema.optional(Schema.Boolean),
   snoozed: Schema.optional(Schema.Boolean),
   includeSubagents: Schema.optional(Schema.Boolean),
+  ...Lineage.OrchestratorMcpThreadLineageFilter,
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
 });
@@ -564,6 +567,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
+  ...Lineage.OrchestratorMcpThreadLineageItemFields,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -678,7 +682,14 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   host: Schema.optional(OrchestratorMcpHost),
   itemId: Schema.optional(TurnItemId),
   textOffset: Schema.optional(NonNegativeInt),
-  view: Schema.optional(Schema.Literals(["messages", "activity"])),
+  view: Schema.optional(Schema.Literals(["messages", "activity", "summary"])).annotate({
+    description:
+      'messages (default) for messages and plans, activity for every timeline item, or summary for state without items: phase, foldState, last answer, pending requests and result. Example: {"threadId":"<id>","view":"summary"}',
+  }),
+  tail: Schema.optional(clampedPositiveInt(50)).annotate({
+    description:
+      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition or itemId. Example: {"threadId":"<id>","tail":3}',
+  }),
   afterPosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
@@ -778,6 +789,7 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
    * Optional because hosts running an older GOAT do not send it.
    */
   result: Schema.optional(Schema.NullOr(ThreadResult)),
+  ...Lineage.OrchestratorMcpThreadReadSummaryFields,
 });
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
@@ -863,22 +875,6 @@ export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatu
  * (waiting_input) or an approval (waiting_approval), waiting on something
  * else, or one of the terminal run statuses.
  */
-export const OrchestratorMcpThreadPhase = Schema.Literals([
-  "idle",
-  "queued",
-  "starting",
-  "running",
-  "waiting_input",
-  "waiting_approval",
-  "waiting",
-  "completed",
-  "failed",
-  "interrupted",
-  "cancelled",
-  "rolled_back",
-]);
-export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
-
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
@@ -886,7 +882,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   title: Schema.String,
-  phase: OrchestratorMcpThreadPhase,
+  phase: Lineage.OrchestratorMcpThreadPhase,
   /** Whether the described run does no more work. */
   terminal: Schema.Boolean,
   /** The active run, or the latest one when none is active; null before the first run. */

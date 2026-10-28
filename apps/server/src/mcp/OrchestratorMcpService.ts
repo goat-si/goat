@@ -42,15 +42,12 @@ import {
   type OrchestratorMcpTarget,
   type OrchestratorMcpTaskCancelInput,
   type OrchestratorMcpTaskCancelResult,
-  type OrchestratorMcpThreadDetail,
   type OrchestratorMcpThreadInterruptInput,
   type OrchestratorMcpThreadRetryInput,
   type OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadInterruptResult,
   type OrchestratorMcpThreadListInput,
-  type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadListResult,
-  type OrchestratorMcpThreadPullRequest,
   type OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadReadResult,
   type OrchestratorMcpThreadRun,
@@ -83,10 +80,6 @@ import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import { formatThreadLink } from "@goat/shared/threadLinks";
-import {
-  normalizeThreadPullRequestKey,
-  visibleThreadPullRequests,
-} from "../sourceControl/threadPullRequests.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -134,6 +127,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -153,7 +147,8 @@ import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell, threadOrganization } from "./threadStatus.ts";
+import { statusFromShell } from "./threadStatus.ts";
+import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
@@ -176,6 +171,12 @@ const TASK_WAKE_EVENTS = [
   { thread: "child", eventType: "turn-item.updated" },
 ] as const;
 const DEFAULT_THREAD_LIST_LIMIT = 50;
+const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
 const DEFAULT_THREAD_READ_LIMIT = 50;
 const DEFAULT_THREAD_RUN_LIMIT = 10;
 const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
@@ -271,6 +272,15 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadReadInput,
   ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
+  /** A summary or tail read of the caller's finished task child, here or on a host, has seen it. */
+  readonly acknowledgeChildRead: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpThreadReadInput,
+    observed: Pick<
+      OrchestratorMcpThreadReadResult["thread"],
+      "status" | "activeRunId" | "latestRunId"
+    >,
+  ) => Effect.Effect<void, OrchestratorMcpFailure>;
   readonly sendToThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
@@ -928,120 +938,6 @@ function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
     : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
 }
 
-function threadSettlement(
-  thread: Pick<OrchestrationV2ThreadShell, "settledOverride" | "settledAt">,
-): Pick<OrchestratorMcpThreadListItem, "settled" | "settledAt"> {
-  const settled = thread.settledOverride === "settled";
-  return {
-    settled,
-    settledAt: settled && thread.settledAt !== null ? DateTime.formatIso(thread.settledAt) : null,
-  };
-}
-
-function threadSnooze(
-  thread: Parameters<typeof isSnoozed>[0],
-  nowMs: number,
-): Pick<OrchestratorMcpThreadListItem, "snoozed" | "snoozedUntil"> {
-  const snoozed = isSnoozed(thread, nowMs);
-  return {
-    snoozed,
-    snoozedUntil:
-      snoozed && thread.snoozedUntil != null ? DateTime.formatIso(thread.snoozedUntil) : null,
-  };
-}
-
-function threadPullRequests(
-  links: OrchestrationV2ThreadShell["pullRequests"],
-): OrchestratorMcpThreadPullRequest[] {
-  return visibleThreadPullRequests(links ?? []).map((link) => ({
-    host: normalizeThreadPullRequestKey(link).host,
-    repository: link.repository,
-    number: link.number,
-    url: link.url,
-    source: link.source,
-    state: link.snapshot?.state ?? null,
-  }));
-}
-
-function listItemFromShell(
-  shell: OrchestrationV2ThreadShell,
-  nowMs: number,
-): OrchestratorMcpThreadListItem {
-  return {
-    threadId: shell.id,
-    projectId: shell.projectId,
-    title: shell.title,
-    link: formatThreadLink(shell.id, shell.title),
-    createdBy: shell.createdBy,
-    creationSource: shell.creationSource,
-    status: shell.activityRunStatus ?? shell.status,
-    latestRunId: shell.latestRunId,
-    providerInstanceId: shell.modelSelection.instanceId,
-    model: shell.modelSelection.model,
-    runtimeMode: shell.runtimeMode,
-    interactionMode: shell.interactionMode,
-    linkedPullRequest: shell.linkedPullRequest ?? null,
-    pullRequests: threadPullRequests(shell.pullRequests),
-    ...threadSettlement(shell),
-    ...threadSnooze(shell, nowMs),
-    parentThreadId: shell.lineage.parentThreadId,
-    relationshipToParent: shell.lineage.relationshipToParent,
-    itemCount: shell.visibleItemCount,
-    createdAt: DateTime.formatIso(shell.createdAt),
-    updatedAt: DateTime.formatIso(shell.updatedAt),
-  };
-}
-
-function threadDetail(
-  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
-  itemCount: number,
-  shell: OrchestrationV2ThreadShell,
-  nowMs: number,
-): OrchestratorMcpThreadDetail {
-  const latest = ThreadManagementService.latestRun(projection);
-  const active = ThreadManagementService.latestActiveRun(projection);
-  return {
-    threadId: projection.thread.id,
-    projectId: projection.thread.projectId,
-    title: projection.thread.title,
-    link: formatThreadLink(projection.thread.id, projection.thread.title),
-    createdBy: projection.thread.createdBy,
-    creationSource: projection.thread.creationSource,
-    status: active?.status ?? latest?.status ?? "idle",
-    latestRunId: latest?.id ?? null,
-    activeRunId: active?.id ?? null,
-    providerInstanceId: projection.thread.modelSelection.instanceId,
-    model: projection.thread.modelSelection.model,
-    runtimeMode: projection.thread.runtimeMode,
-    interactionMode: projection.thread.interactionMode,
-    linkedPullRequest: projection.thread.linkedPullRequest ?? null,
-    pullRequests: threadPullRequests(projection.thread.pullRequests),
-    titleRegeneration:
-      projection.thread.titleRegeneration === undefined ||
-      projection.thread.titleRegeneration === null
-        ? null
-        : {
-            requestId: projection.thread.titleRegeneration.requestId,
-            startedAt: DateTime.formatIso(projection.thread.titleRegeneration.startedAt),
-          },
-    branch: projection.thread.branch,
-    worktreePath: projection.thread.worktreePath,
-    parentThreadId: projection.thread.lineage.parentThreadId,
-    relationshipToParent: projection.thread.lineage.relationshipToParent,
-    runCount: projection.runs.length,
-    itemCount,
-    pendingRequestCount: projection.runtimeRequests.filter(
-      (request) => request.status === "pending",
-    ).length,
-    archived: projection.thread.archivedAt !== null,
-    ...threadSettlement(projection.thread),
-    ...threadSnooze(shell, nowMs),
-    ...threadOrganization(projection.thread, latest, shell),
-    createdAt: DateTime.formatIso(projection.thread.createdAt),
-    updatedAt: DateTime.formatIso(projection.thread.updatedAt),
-  };
-}
-
 function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
   return {
     runId: run.id,
@@ -1626,6 +1522,8 @@ const make = Effect.gen(function* () {
     waitTimedOut = false,
     acknowledgeTerminal = false,
     acknowledgementOperation = "task-status-acknowledge",
+    /** A read saw this run finish: acknowledge only that result, as this snapshot holds it. */
+    observedRunId?: RunId | null,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
     yield* requireCapability(scope);
     const parentProjection = yield* loadProjection(scope.thread.threadId);
@@ -1892,8 +1790,20 @@ const make = Effect.gen(function* () {
       endsTaskWait(result) || task.completionDelivery?.state === "disposed"
         ? result
         : { ...result, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT };
-    if (acknowledgeTerminal)
-      yield* acknowledgeTaskResult(scope, task, parentProjection, status, acknowledgementOperation);
+    if (
+      acknowledgeTerminal &&
+      (observedRunId === undefined || result.latestTerminalRunId === observedRunId)
+    )
+      yield* acknowledgeTaskResult(
+        scope,
+        task,
+        parentProjection,
+        status,
+        acknowledgementOperation,
+        observedRunId === undefined
+          ? undefined
+          : delegatedTaskRevision(scope.thread.threadId, parentProjection.contextTransfers, task),
+      );
     return response;
   });
 
@@ -1965,12 +1875,17 @@ const make = Effect.gen(function* () {
       effect.pipe(Effect.timeoutOption(Duration.millis(timeoutMs)), Effect.map(Option.flatten)),
   );
 
+  const { launchGraph, pendingRequestCountOf, readShells, readSummary } = View.makeLineageReads(
+    threadManagement,
+    threadManagementFailure,
+  );
   const acknowledgeTaskResult = (
     scope: McpThreadInvocationScope,
     task: OrchestrationV2Subagent,
     parentProjection: Pick<OrchestrationV2ThreadProjection, "runs">,
     status: OrchestratorMcpDelegateTaskResult["status"],
     acknowledgementOperation: string,
+    expectedRevision?: ReturnType<typeof delegatedTaskRevision>,
   ) =>
     Effect.gen(function* () {
       if (
@@ -1995,6 +1910,7 @@ const make = Effect.gen(function* () {
             observingRun?.providerInstanceId === scope.thread.providerInstanceId
               ? observingRun.id
               : null,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -3562,20 +3478,29 @@ const make = Effect.gen(function* () {
       if (input.allProjects === true && input.projectId !== undefined) {
         return yield* failure("invalid_request", "Pass either projectId or allProjects, not both.");
       }
+      const lineage = View.resolveLineageFilter(input, parent?.thread.id);
+      if (lineage === null) return yield* failure("invalid_request", View.SELF_NEEDS_THREAD);
+      // A lineage filter spans projects, since a thread can start work in any of them.
       const projectId =
-        input.allProjects === true
+        input.allProjects === true ||
+        (View.hasLineageFilter(lineage) && input.projectId === undefined)
           ? undefined
           : yield* resolveProjectTarget(parent, input.projectId);
-      const projectThreads = yield* threadManagement
-        .listProjectThreads({
-          projectId,
-          includeSubagents: input.includeSubagents !== false,
-        })
-        .pipe(
-          Effect.mapError((error) =>
-            failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`),
-          ),
-        );
+      const listFailure = (error: unknown) =>
+        failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`);
+      const edges = yield* threadManagement.listLaunchEdges().pipe(Effect.mapError(listFailure));
+      const projectThreads = View.hasLineageFilter(lineage)
+        ? (yield* readShells(
+            edges.flatMap((edge) =>
+              (projectId === undefined || edge.projectId === projectId) &&
+              View.matchesLineage(edge, lineage)
+                ? [edge.id]
+                : [],
+            ),
+          )).filter((thread) => input.includeSubagents !== false || View.listedByDefault(thread))
+        : yield* threadManagement
+            .listProjectThreads({ projectId, includeSubagents: input.includeSubagents !== false })
+            .pipe(Effect.mapError(listFailure));
       const nowMs = yield* Clock.currentTimeMillis;
       const statuses = input.statuses === undefined ? null : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
@@ -3585,7 +3510,7 @@ const make = Effect.gen(function* () {
         )
         .filter(
           (thread) =>
-            input.settled === undefined || threadSettlement(thread).settled === input.settled,
+            input.settled === undefined || View.threadSettlement(thread).settled === input.settled,
         )
         .filter(
           (thread) => input.snoozed === undefined || isSnoozed(thread, nowMs) === input.snoozed,
@@ -3598,25 +3523,52 @@ const make = Effect.gen(function* () {
       const limit = input.limit ?? DEFAULT_THREAD_LIST_LIMIT;
       const page = filtered.slice(cursor, cursor + limit);
       const nextCursor = cursor + page.length < filtered.length ? cursor + page.length : null;
+      // Fold states need only the shells of what is folded under this page.
+      const graph = launchGraph(edges);
+      const shells = new Map(projectThreads.map((thread) => [thread.id, thread] as const));
+      const folded = [...graph.reach(page.map((thread) => thread.id))];
+      for (const thread of yield* readShells(folded.filter((id) => !shells.has(id))))
+        shells.set(thread.id, thread);
+      const foldStateOf = graph.foldStates(shells, nowMs);
       return {
         projectId: projectId ?? null,
         currentThreadId: parent?.thread.id ?? null,
-        threads: page.map((shell) => listItemFromShell(shell, nowMs)),
+        threads: yield* Effect.forEach(page, (shell) =>
+          pendingRequestCountOf(shell).pipe(
+            Effect.map((pendingRequestCount) =>
+              View.listItemFromShell(shell, nowMs, {
+                foldState: foldStateOf(shell.id),
+                pendingRequestCount,
+              }),
+            ),
+          ),
+        ),
         nextCursor,
         total: filtered.length,
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {
       const { parent, target, shell } = yield* loadReadableThread(scope, input.threadId);
-      const view = input.view ?? "messages";
-      const afterPosition = input.afterPosition ?? -1;
-      const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
+      const summary = input.view === "summary";
+      // Both read the thread's end, so a position or item to start from contradicts them.
+      if (
+        (summary || input.tail !== undefined) &&
+        (input.afterPosition !== undefined ||
+          input.itemId !== undefined ||
+          (summary && input.tail !== undefined))
+      )
+        return yield* failure(
+          "invalid_request",
+          "Pass view summary or tail, not both, and neither with afterPosition or itemId.",
+        );
+      const view = input.view === "activity" ? "activity" : "messages";
       const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
       const timeline = yield* threadManagement
         .getTimelinePage(input.threadId, {
-          afterPosition,
-          limit,
+          afterPosition: input.afterPosition ?? -1,
+          limit: summary ? 0 : (input.tail ?? input.limit ?? DEFAULT_THREAD_READ_LIMIT),
           view,
+          ...(input.tail === undefined ? {} : { tail: true }),
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
@@ -3654,8 +3606,11 @@ const make = Effect.gen(function* () {
       const returnedRunIds = new Set(
         page.filter((row) => row.sourceThreadId === target.thread.id).map((row) => row.item.runId),
       );
+      // A tail read acknowledges in HostThreadsMcpService, once its result is assembled too.
       const tasks =
-        parent === undefined ? [] : directAppOwnedChildTasks(parent, target, returnedRunIds);
+        parent === undefined || input.tail !== undefined
+          ? []
+          : directAppOwnedChildTasks(parent, target, returnedRunIds);
       if (
         parent !== undefined &&
         scope.thread !== undefined &&
@@ -3697,13 +3652,21 @@ const make = Effect.gen(function* () {
         target.providerThreads ?? [],
         target.runs.find((run) => run.id === (shell.activeRunId ?? shell.latestRunId)),
       );
+      const summaryDigest = summary ? yield* readSummary(shell, target, timeline.totalItems) : null;
       return {
         ...(cloudTask === undefined ? {} : { cloudTask }),
-        thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
+        thread: View.threadDetail(
+          target,
+          timeline.totalItems,
+          shell,
+          yield* Clock.currentTimeMillis,
+        ),
         recentRuns: target.runs
           .toSorted((left, right) => right.ordinal - left.ordinal)
-          .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
+          .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
           .map(threadRun),
+        ...(summaryDigest === null ? {} : { summaryDigest }),
+        ...(input.tail === undefined ? {} : { tailStartPosition: page[0]?.position ?? null }),
         items: page.map((row) =>
           timelineItem({
             row,
@@ -3714,9 +3677,35 @@ const make = Effect.gen(function* () {
           }),
         ),
         nextPosition: page.at(-1)?.position ?? null,
-        hasMore: timeline.hasMore,
+        // A summary returns no items, so there is nothing to page through.
+        hasMore: !summary && timeline.hasMore,
       } satisfies OrchestratorMcpThreadReadResult;
     }),
+    acknowledgeChildRead: Effect.fn("OrchestratorMcpService.acknowledgeChildRead")(
+      function* (scope, input, observed) {
+        if (scope.thread === undefined || (input.view !== "summary" && input.tail === undefined))
+          return;
+        // Only what the read showed: a finished child, and for a local task the run that finished.
+        if (observed.activeRunId !== null || !TERMINAL_THREAD_STATUSES.has(observed.status)) return;
+        const threadScope = scope as McpThreadInvocationScope;
+        const parent = yield* loadProjection(scope.thread.threadId);
+        const tasks = View.unacknowledgedTasks(parent, (task) =>
+          input.host === undefined
+            ? task.remote === undefined && task.childThreadId === input.threadId
+            : task.remote?.host === input.host && task.remote.threadId === input.threadId,
+        );
+        // A remote task has one result, its launched run; a local one can finish again later.
+        for (const task of tasks)
+          yield* readTask(
+            threadScope,
+            task.id,
+            false,
+            true,
+            "thread-read-acknowledge",
+            task.remote === undefined ? observed.latestRunId : undefined,
+          );
+      },
+    ),
     sendToThread: Effect.fn("OrchestratorMcpService.sendToThread")(function* (scope, input) {
       const remoteSender = yield* acceptRemoteSender(scope, input.remoteSender);
       const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);

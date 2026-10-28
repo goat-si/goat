@@ -3538,6 +3538,10 @@ export const OrchestrationV2Command = Schema.Union([
     parentThreadId: ThreadId,
     taskId: NodeId,
     observedByRunId: Schema.NullOr(RunId),
+    /** The task as the caller saw it; once it has another result or is promoted, nothing changes. */
+    expectedRevision: Schema.optional(
+      Schema.Struct({ resultCount: NonNegativeInt, promoted: Schema.Boolean }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.completion-delivery.dispose"),

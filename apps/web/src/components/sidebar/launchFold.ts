@@ -2,8 +2,19 @@ import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environmen
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId } from "@goat/contracts";
 import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
+import {
+  foldsUnderLauncher,
+  type LaunchChildState,
+  type LaunchLift,
+  launchStateOfLift,
+  moreUrgentLaunchLift,
+  ownLaunchLift,
+  staysFoldedUnderLauncher,
+} from "@goat/shared/threadLaunchState";
 
-import { sidebarDelegatedChildState, type SidebarChildAttention } from "../Sidebar.logic";
+import type { SidebarChildAttention } from "../Sidebar.logic";
+
+export type { LaunchChildState, LaunchLift };
 
 export type LaunchFoldThread = Pick<
   EnvironmentThreadShell,
@@ -23,10 +34,6 @@ export type LaunchFoldThread = Pick<
   readonly source: Pick<EnvironmentThreadShell["source"], "launchedBy" | "pendingRuntimeRequest">;
 };
 
-export type LaunchChildState = "attention" | "working" | "finished";
-/** The most urgent state among a row's folded descendants; "unseen" is finished but unread. */
-export type LaunchLift = SidebarChildAttention | "working" | "unseen";
-
 export interface LaunchFold<T> {
   /** Threads that keep a top-level row, in input order. */
   readonly roots: readonly T[];
@@ -41,23 +48,15 @@ export interface LaunchFold<T> {
   readonly unseenKeys: ReadonlySet<string>;
 }
 
-const LIFT_RANK: Record<LaunchLift, number> = { approval: 0, input: 1, working: 2, unseen: 3 };
 const STATE_RANK: Record<LaunchChildState, number> = { attention: 0, working: 1, finished: 2 };
 
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
-/**
- * The thread that launched this one with thread.launch, create_threads or ssh.thread_launch.
- * task.create children and provider subagents belong to the subagent model instead.
- */
+/** The launcher row a thread folds under, when it folds under one at all. */
 function launcherKeyOf(thread: LaunchFoldThread): string | null {
   const launcher = thread.source.launchedBy;
-  if (
-    launcher?.kind !== "launch" ||
-    launcher.via === "delegate_task" ||
-    thread.lineage.relationshipToParent === "subagent"
-  )
+  if (launcher === undefined || !foldsUnderLauncher({ ...thread, launchedBy: launcher }))
     return null;
   return scopedThreadKey(
     scopeThreadRef(launcher.environmentId ?? thread.environmentId, launcher.threadId),
@@ -72,22 +71,21 @@ function subagentOwnerKeyOf(thread: LaunchFoldThread): string | null {
     : null;
 }
 
-function ownLiftOf(
+const ownLiftOf = (
   thread: LaunchFoldThread,
   delegated: SidebarChildAttention | undefined,
   unseen: boolean,
-): LaunchLift | null {
-  if (thread.hasPendingApprovals || delegated === "approval") return "approval";
-  if (thread.hasPendingUserInput || delegated === "input") return "input";
-  if (sidebarDelegatedChildState(thread) !== "finished") return "working";
-  return unseen ? "unseen" : null;
-}
-
-const moreUrgent = (left: LaunchLift | null, right: LaunchLift | null) =>
-  left === null ? right : right === null || LIFT_RANK[left] <= LIFT_RANK[right] ? left : right;
-
-const stateOfLift = (lift: LaunchLift | null): LaunchChildState =>
-  lift === null || lift === "unseen" ? "finished" : lift === "working" ? "working" : "attention";
+) =>
+  ownLaunchLift(
+    {
+      hasPendingApprovals: thread.hasPendingApprovals,
+      hasPendingUserInput: thread.hasPendingUserInput,
+      runtimeStatus: thread.runtime?.status,
+      pendingBackgroundTaskCount: thread.pendingBackgroundTasks.length,
+    },
+    delegated,
+    unseen,
+  );
 
 /**
  * Folds launched threads under their launcher's row in `visible` (a subagent launcher: its owner's
@@ -113,7 +111,7 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   for (const thread of input.visible) {
     const own = keyOf(thread);
     let candidate = launcherKeyOf(thread);
-    if (candidate === null || thread.pinnedAt != null) continue;
+    if (candidate === null) continue;
     const seen = new Set([own]);
     while (candidate !== null && !seen.has(candidate) && !visibleByKey.has(candidate)) {
       seen.add(candidate);
@@ -155,17 +153,19 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       const child = visibleByKey.get(childKey);
       const childLift = decide(childKey);
       if (child === undefined) continue;
-      if (childLift !== null && effectiveSnoozed(thread, { now: input.now })) continue;
       // Live work lifts a settled launcher into Priority; finished or unread work you have not
       // settled would sit in the closed settled shelf, so it keeps its row.
       if (
-        (childLift === null || childLift === "unseen") &&
-        thread.settledOverride === "settled" &&
-        child.settledOverride !== "settled"
+        !staysFoldedUnderLauncher({
+          childLift,
+          childSettled: child.settledOverride === "settled",
+          launcherSnoozed: effectiveSnoozed(thread, { now: input.now }),
+          launcherSettled: thread.settledOverride === "settled",
+        })
       )
         continue;
       parentKeyByKey.set(childKey, key);
-      below = moreUrgent(below, childLift);
+      below = moreUrgentLaunchLift(below, childLift);
     }
     if (below !== null) liftByKey.set(key, below);
     // Only a thread that may fold lifts as unread; a row's own unread is its own rank.
@@ -175,7 +175,7 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       candidateParent.has(key) && input.unseen?.(thread) === true,
     );
     if (own === "unseen") unseenKeys.add(key);
-    const lift = moreUrgent(own, below);
+    const lift = moreUrgentLaunchLift(own, below);
     subtreeLiftByKey.set(key, lift);
     return lift;
   };
@@ -184,7 +184,7 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
     if (!candidateParent.has(key)) decide(key);
   }
   const stateByKey = new Map<string, LaunchChildState>();
-  for (const [key, lift] of subtreeLiftByKey) stateByKey.set(key, stateOfLift(lift));
+  for (const [key, lift] of subtreeLiftByKey) stateByKey.set(key, launchStateOfLift(lift));
   const childrenByParentKey = new Map<string, T[]>();
   for (const [childKey, parentKey] of parentKeyByKey) {
     const child = visibleByKey.get(childKey);

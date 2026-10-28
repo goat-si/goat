@@ -111,6 +111,7 @@ const threadsLayer = (
       getLaunchedPendingQuestions: unused,
       assertReviewTaskSendAllowed: unused,
       listActiveSubagentThreadIds: unused,
+      listLaunchEdges: unused,
       getThreadShell: unused,
       getShellSnapshot: unused,
       readShellSnapshot: unused,
