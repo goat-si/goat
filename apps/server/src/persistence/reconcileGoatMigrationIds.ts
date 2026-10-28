@@ -53,6 +53,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "McpEvalJournal",
   "DecisionRoutes",
   "HubConnectAccess",
+  "ChannelBotSessions",
 ]);
 
 type MigrationEntry<E> = readonly [

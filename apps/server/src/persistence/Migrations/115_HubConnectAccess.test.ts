@@ -32,6 +32,6 @@ it.effect(
           { subject: "paired", connect_access_generation: null },
         ]);
       }
-      expect(yield* runMigrations()).toEqual([]);
+      expect(yield* runMigrations({ toMigrationInclusive: 115 })).toEqual([]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
