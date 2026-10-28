@@ -1,6 +1,7 @@
 import { replaceTextRange } from "@goat/shared/composerTrigger";
 
 import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
+import type { VoiceTranscriptionLocation } from "./routing.ts";
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
 
@@ -10,6 +11,8 @@ export type VoiceInputState = {
   readonly phase: VoiceInputPhase;
   readonly error: string | null;
   readonly errorAction: "retry" | "settings" | null;
+  /** Set while recording and transcribing when the transcriber reports it. */
+  readonly location?: VoiceTranscriptionLocation;
 };
 
 export function voiceInputBlocksSubmission(state: VoiceInputState): boolean {
@@ -273,7 +276,7 @@ export class VoiceInputController {
       }
       this.capturedDraft = capturedDraft;
       this.dependencies.recorder.record({ forDuration: VOICE_RECORDING_LIMIT_SECONDS });
-      this.setState({ phase: "recording", error: null, errorAction: null });
+      this.setState({ phase: "recording", error: null, errorAction: null, ...this.location() });
     } catch {
       if (this.isCurrent(operationToken))
         this.setError("Could not start voice recording.", "retry");
@@ -372,7 +375,7 @@ export class VoiceInputController {
     if (this.finishing || this.state.phase !== "recording") return;
     this.finishing = true;
     const operationToken = this.operationToken;
-    this.setState({ phase: "transcribing", error: null, errorAction: null });
+    this.setState({ phase: "transcribing", error: null, errorAction: null, ...this.location() });
 
     try {
       if (!alreadyStopped) await this.dependencies.recorder.stop();
@@ -496,6 +499,11 @@ export class VoiceInputController {
 
   private setError(error: string, errorAction: VoiceInputState["errorAction"]): void {
     this.setState({ phase: "error", error, errorAction });
+  }
+
+  private location(): Pick<VoiceInputState, "location"> {
+    const location = this.transcription?.location;
+    return location ? { location } : {};
   }
 
   private setState(state: VoiceInputState): void {

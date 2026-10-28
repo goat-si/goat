@@ -219,6 +219,14 @@ describe("VoiceInputController", () => {
   );
 
   it("uses the native five-minute cap and commits one final transcript", async () => {
+    const location = { kind: "this-device" as const };
+    const located = createHarness({
+      getTranscriber: () => ({ prepare: async () => ({ ...preparedTranscription(), location }) }),
+    });
+    await located.controller.start();
+    expect(located.controller.currentState).toMatchObject({ phase: "recording", location });
+    located.controller.cancel();
+
     const harness = createHarness();
     await harness.controller.start();
     expect(harness.recorder.record).toHaveBeenCalledWith({

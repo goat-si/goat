@@ -32,3 +32,9 @@ export {
   type EnvironmentVoiceRequestContext,
   type RemoteVoiceTranscriberOptions,
 } from "./remoteTranscription.ts";
+export {
+  resolveVoiceTranscriptionRoute,
+  voiceTranscriptionRequest,
+  type VoiceTranscriptionLocation,
+  type VoiceTranscriptionRoute,
+} from "./routing.ts";

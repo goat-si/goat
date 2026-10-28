@@ -80,6 +80,7 @@ async function prepareVoiceTranscription(
     throwIfVoiceTranscriptionAborted(signal);
     return {
       locale: supportedLocale,
+      location: { kind: "this-device" },
       transcribe: (uri, options) => transcribeVoiceRecording(uri, supportedLocale, options),
     };
   } catch (error) {

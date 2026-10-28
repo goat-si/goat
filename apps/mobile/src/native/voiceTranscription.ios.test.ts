@@ -24,7 +24,8 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 
-import { getLocalVoiceTranscriber } from "./voiceTranscription.ios";
+import { EnvironmentId } from "@goat/contracts";
+import { getLocalVoiceTranscriber, getVoiceTranscriber } from "./voiceTranscription.ios";
 
 const audio = new ArrayBuffer(4);
 const nativeTranscript: TranscriptionResult = {
@@ -56,6 +57,29 @@ afterEach(() => {
 });
 
 describe("getLocalVoiceTranscriber", () => {
+  it("reports the device that actually transcribes, including the fallback to the environment", async () => {
+    const options = { signal: new AbortController().signal };
+    const environment = {
+      kind: "environment" as const,
+      environmentId: EnvironmentId.make("studio"),
+      label: "Mac Studio",
+    };
+    const remote = {
+      prepare: vi.fn(async () => ({
+        locale: "sv-SE",
+        transcribe: async () => "",
+        location: environment,
+      })),
+    };
+    expect((await getVoiceTranscriber(remote)!.prepare(options)).location).toEqual({
+      kind: "this-device",
+    });
+    for (const code of ["AppleTranscriptionUnsupportedLocale", "AppleTranscriptionUnavailable"]) {
+      mocks.prepare.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+      expect((await getVoiceTranscriber(remote)!.prepare(options)).location).toEqual(environment);
+    }
+  });
+
   it("does not start native transcription after cancellation during a file read", async () => {
     const enteredRead = deferred<void>();
     const readResult = deferred<ArrayBuffer>();

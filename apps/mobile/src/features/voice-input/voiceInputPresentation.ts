@@ -1,5 +1,13 @@
 import type { VoiceInputState } from "@goat/client-runtime/voice-input";
 
+/** Names the device that receives the audio: on-device speech or the connected environment. */
+function transcribedOn(state: VoiceInputState): string {
+  if (!state.location) return "";
+  return state.location.kind === "this-device"
+    ? " · on this device"
+    : ` · on ${state.location.label}`;
+}
+
 export type VoiceComposerPresentation = {
   readonly leadingAction: "cancel" | null;
   readonly trailingAction: "mic" | "confirm";
@@ -48,7 +56,7 @@ export function resolveVoiceComposerPresentation(
         trailingAction: "confirm",
         showsSend: false,
         statusKind: "active",
-        statusLabel: `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
+        statusLabel: `Recording ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}${transcribedOn(state)}`,
         confirmationEnabled: true,
       };
     }
@@ -58,7 +66,7 @@ export function resolveVoiceComposerPresentation(
         trailingAction: "confirm",
         showsSend: false,
         statusKind: "active",
-        statusLabel: "Transcribing",
+        statusLabel: `Transcribing${transcribedOn(state)}`,
         confirmationEnabled: false,
       };
   }
