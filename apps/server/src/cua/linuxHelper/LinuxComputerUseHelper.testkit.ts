@@ -345,7 +345,6 @@ export async function connect(
       return focusByPid.get(pid) ?? focus.current;
     },
     uinputWritable: async () => false,
-    settle: async () => undefined,
     newId: () => "o" + ++id,
     now: () => clock.now,
     signals,

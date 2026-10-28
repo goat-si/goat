@@ -3,7 +3,6 @@ import type {
   ComputerUseActionResult,
   ComputerUseElement,
   ComputerUseKey,
-  ComputerUseObservation,
   ComputerUseRefusal,
   ComputerUseRefusalReason,
 } from "@goat/contracts";
@@ -313,14 +312,12 @@ export const driverRefusalCode = (structured: unknown): string | undefined => {
 };
 
 /**
- * Types the driver's answer to one action. after is the diff the helper read once the action
- * settled; undefined when it could not read one. Driver errors are refusals only when the
- * driver says nothing was sent; any other error after dispatch stays unverifiable.
+ * Types the driver's answer without an automatic readback. Driver errors are refusals only
+ * when the driver says nothing was sent; any other error after dispatch stays unverifiable.
  */
 export function linuxActionResult(
   request: ComputerUseActionRequest,
   result: DriverToolResult,
-  after: ComputerUseObservation | undefined,
 ): ComputerUseActionResult {
   const structured = result.structured;
   const code = driverRefusalCode(structured);
@@ -346,7 +343,6 @@ export function linuxActionResult(
   const extra = {
     delivery: request.delivery,
     ...(detail === undefined ? {} : { detail }),
-    ...(after === undefined ? {} : { observation: after }),
   };
   if (result.isError || effect === "partial")
     return {
@@ -355,35 +351,5 @@ export function linuxActionResult(
       dispatch: "dispatched_unknown",
     };
   if (effect === "confirmed") return { ...extra, outcome: "confirmed", dispatch: "verified" };
-  if (effect === "suspected_noop" || effect === "not_applied" || effect === "no_drop")
-    return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
-  // The driver could not tell; the helper's own diff after settling decides. A full read is not
-  // comparable with what the agent saw, so it decides nothing. Only a change to the element the
-  // action named is evidence of its effect: other changes may come from the app itself.
-  if (after === undefined || after.kind === "full")
-    return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
-  const target = targetElement(request);
-  if (
-    target !== undefined &&
-    (after.changed.some((element) => element.ref === target) || after.removed.includes(target))
-  )
-    return { ...extra, outcome: "confirmed", dispatch: "verified" };
   return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
-}
-
-/** The element ref an action names, when it names one. */
-function targetElement(request: ComputerUseActionRequest): string | undefined {
-  switch (request.action) {
-    case "setValue":
-    case "performAction":
-      return request.element;
-    case "drag":
-      return "element" in request.from ? request.from.element : undefined;
-    case "pressKey":
-      return undefined;
-    case "typeText":
-      return request.at && "element" in request.at ? request.at.element : undefined;
-    default:
-      return "element" in request.at ? request.at.element : undefined;
-  }
 }

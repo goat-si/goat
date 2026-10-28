@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { actionResultFromDriver, driverCallFor, type ActionContext } from "./computerUseActions.ts";
 import { makeObservationTracker, type DriverWindowState } from "./computerUseObservation.ts";
+import { classifyComputerUseActionOutcome } from "./actionOutcomeSafety.ts";
 
 const read = (snapshot: number): DriverWindowState => ({
   pid: 10,
@@ -213,6 +214,24 @@ describe("computer use keys on mac", () => {
 });
 
 describe("computer use action review regressions", () => {
+  it.each(["no_drop", "suspected_noop", "not_applied"])(
+    "keeps possibleCommit true after the driver's %s effect",
+    (effect) => {
+      const { request } = setup();
+      const result = actionResultFromDriver(request({ action: "pressKey", key: "enter" }), {
+        isError: effect === "not_applied",
+        text: "Input was attempted.",
+        structured: { effect },
+      });
+      expect(classifyComputerUseActionOutcome(result)).toMatchObject({
+        possibleCommit: true,
+        retryClass: "never",
+        writeStatus: "may_have_applied",
+      });
+      expect(computerUseNextStep(result)).toBe("observe");
+    },
+  );
+
   it("does not call an error a refusal unless the driver says nothing was sent", () => {
     const { save, request } = setup();
     const click = request({ action: "pressKey", key: "a" });
