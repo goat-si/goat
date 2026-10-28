@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as References from "effect/References";
 import * as Stream from "effect/Stream";
@@ -27,9 +28,14 @@ const layerServerSettings = () =>
   );
 
 it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
-  it.effect.each(["primary", "symlink target"] as const)(
-    "reattaches the settings %s watcher and resyncs detached edits and repointing",
-    (source) =>
+  it.effect.each([
+    ["primary", "error"],
+    ["symlink target", "error"],
+    ["primary", "end"],
+    ["symlink target", "end"],
+  ] as const)(
+    "reattaches the settings %s watcher after %s and resyncs detached edits and repointing",
+    ([source, outcome]) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -44,8 +50,14 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
         let detached = false;
         let retryLookups = 0;
         let armed = false;
-        const logger = Logger.make(() => {
-          if (armed) Deferred.doneUnsafe(diagnosed, Effect.void);
+        const logger = Logger.make(({ message }) => {
+          if (
+            armed &&
+            Array.isArray(message) &&
+            message[0] === "Background operation stopped; retrying"
+          ) {
+            Deferred.doneUnsafe(diagnosed, Effect.void);
+          }
         });
         const controlledFs = FileSystem.FileSystem.of({
           ...fs,
@@ -66,17 +78,18 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
                 ) {
                   Deferred.doneUnsafe(reattached, Effect.void);
                 }
-                return directory === failedDirectory && count <= (source === "primary" ? 2 : 1)
+                return directory === failedDirectory && count === 1
                   ? Stream.fromEffect(
                       Effect.gen(function* () {
                         yield* Deferred.await(fail);
-                        return yield* PlatformError.systemError({
-                          _tag: "Unknown",
-                          module: "FileSystem",
-                          method: "watch",
-                        });
+                        if (outcome === "error")
+                          return yield* PlatformError.systemError({
+                            _tag: "Unknown",
+                            module: "FileSystem",
+                            method: "watch",
+                          });
                       }),
-                    ).pipe(Stream.ensuring(Deferred.succeed(closed, undefined)))
+                    ).pipe(Stream.drain, Stream.ensuring(Deferred.succeed(closed, undefined)))
                   : Stream.never;
               }),
             ),
@@ -112,7 +125,7 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
           armed = true;
           yield* Deferred.succeed(fail, undefined);
           yield* Deferred.await(closed);
-          yield* Deferred.await(diagnosed);
+          if (outcome === "error") yield* Deferred.await(diagnosed);
           detached = true;
           const changed = '{ "responseStreamingMode": "paragraph" }';
           if (source === "primary") yield* fs.writeFileString(settingsPath, changed);
@@ -138,5 +151,82 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
           Effect.provideService(References.MinimumLogLevel, "Trace"),
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("repointing settings cancels the old target without restarting healthy watchers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const notifications = yield* PubSub.unbounded<FileSystem.WatchEvent>();
+      const oldAttached = yield* Deferred.make<void>();
+      const oldClosed = yield* Deferred.make<void>();
+      const newAttached = yield* Deferred.make<void>();
+      const counts = new Map<string, number>();
+      const active = new Map<string, number>();
+      let oldDirectory = "";
+      let newDirectory = "";
+      const controlledFs = FileSystem.FileSystem.of({
+        ...fs,
+        watch: (directory, options) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const subscription = yield* PubSub.subscribe(notifications);
+              counts.set(directory, (counts.get(directory) ?? 0) + 1);
+              active.set(directory, (active.get(directory) ?? 0) + 1);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  active.set(directory, (active.get(directory) ?? 0) - 1);
+                  if (directory === oldDirectory) Deferred.doneUnsafe(oldClosed, Effect.void);
+                }),
+              );
+              options?.onReady?.();
+              if (directory === oldDirectory) Deferred.doneUnsafe(oldAttached, Effect.void);
+              if (directory === newDirectory) Deferred.doneUnsafe(newAttached, Effect.void);
+              return Stream.fromSubscription(subscription).pipe(
+                Stream.filter((event) => path.dirname(event.path) === directory),
+              );
+            }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig.ServerConfig;
+        oldDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-watch-old-" });
+        newDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-watch-new-" });
+        const oldTarget = path.join(oldDirectory, "settings.json");
+        const newTarget = path.join(newDirectory, "settings.json");
+        yield* fs.writeFileString(oldTarget, '{ "responseStreamingMode": "turn" }');
+        yield* fs.writeFileString(newTarget, '{ "responseStreamingMode": "paragraph" }');
+        yield* fs.remove(settingsPath, { force: true });
+        yield* fs.symlink(oldTarget, settingsPath);
+        yield* service.start;
+        yield* Deferred.await(oldAttached);
+        yield* TestClock.adjust("100 millis");
+        yield* service.withSettingsSnapshot(() => Effect.void);
+        const seen = yield* Queue.unbounded<ServerSettings>();
+        const changes = yield* service.subscribeChanges;
+        yield* changes.pipe(
+          Stream.filter((settings) => settings.responseStreamingMode === "paragraph"),
+          Stream.runForEach((settings) => Queue.offer(seen, settings)),
+          Effect.forkScoped,
+        );
+        yield* fs.remove(settingsPath);
+        yield* fs.symlink(newTarget, settingsPath);
+        yield* PubSub.publish(notifications, { _tag: "Update", path: settingsPath });
+        yield* Deferred.await(newAttached);
+        yield* Deferred.await(oldClosed);
+        yield* TestClock.adjust("100 millis");
+        assert.equal((yield* Queue.take(seen)).responseStreamingMode, "paragraph");
+        yield* TestClock.adjust("60 seconds");
+        assert.equal(counts.get(path.dirname(settingsPath)), 2);
+        assert.equal(counts.get(oldDirectory), 1);
+        assert.equal(counts.get(newDirectory), 1);
+        assert.equal(active.get(oldDirectory), 0);
+        assert.equal(active.get(newDirectory), 1);
+      }).pipe(
+        Effect.provide(layerServerSettings()),
+        Effect.provideService(FileSystem.FileSystem, controlledFs),
+      );
+    }).pipe(Effect.scoped),
   );
 });
