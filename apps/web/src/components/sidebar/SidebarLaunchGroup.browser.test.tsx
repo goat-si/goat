@@ -82,7 +82,7 @@ describe("SidebarLaunchGroup", () => {
     await expect
       .element(screen.getByRole("status", { name: "Order" }))
       .toHaveTextContent(
-        [key("coordinator"), key("asking"), key("lane-1"), key("lane-2")].join(" "),
+        [key("coordinator"), key("asking"), key("lane-2"), key("lane-1")].join(" "),
       );
   });
 
@@ -111,11 +111,11 @@ describe("SidebarLaunchGroup", () => {
       { router: false },
     );
     await screen.getByRole("button", { name: /^Launched threads/ }).click();
-    await expect.element(screen.getByText("lane-5")).toBeVisible();
-    await expect.element(screen.getByText("lane-6")).not.toBeInTheDocument();
+    await expect.element(screen.getByText("lane-3")).toBeVisible();
+    await expect.element(screen.getByText("lane-2")).not.toBeInTheDocument();
 
     await screen.getByRole("button", { name: "+2 more" }).click();
-    await expect.element(screen.getByText("lane-7")).toBeVisible();
+    await expect.element(screen.getByText("lane-1")).toBeVisible();
   });
 
   it("opens every group on the way to a routed thread past the limit", async () => {
@@ -123,7 +123,7 @@ describe("SidebarLaunchGroup", () => {
     const threads = [
       thread("coordinator"),
       ...lanes(7),
-      thread("grandchild", { launchedBy: "lane-7" }),
+      thread("grandchild", { launchedBy: "lane-1" }),
     ];
     await using screen = await render(
       <LaunchList threads={threads} route={key("grandchild")} />,
@@ -136,7 +136,7 @@ describe("SidebarLaunchGroup", () => {
       .toHaveTextContent(
         [
           key("coordinator"),
-          ...Array.from({ length: 7 }, (_, index) => key(`lane-${index + 1}`)),
+          ...Array.from({ length: 7 }, (_, index) => key(`lane-${7 - index}`)),
           key("grandchild"),
         ].join(" "),
       );
