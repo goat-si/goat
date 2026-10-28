@@ -334,7 +334,6 @@ export const make = Effect.gen(function* () {
     }
     if (refreshLookups) {
       invalidateLookupsForRescan = false;
-      shellClosedThreads.clear();
     }
     const threads = yield* projections.getSettlementCandidates(threadId);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
@@ -591,7 +590,8 @@ export const make = Effect.gen(function* () {
       groups.entries(),
       ([key, group]) =>
         Effect.gen(function* () {
-          const cached = threadId === undefined ? lookupCache.get(key) : undefined;
+          const cached =
+            threadId === undefined && !refreshLookups ? lookupCache.get(key) : undefined;
           const pullRequest =
             cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
               ? cached.value
@@ -657,7 +657,7 @@ export const make = Effect.gen(function* () {
   // A thread that just stopped must not wait behind a full sweep or another thread's host
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
   const admission = yield* SettlementAdmission.make({
-    targeted: (threadId: ThreadId, refresh) =>
+    targeted: (threadId: ThreadId, refresh): ReturnType<typeof runSweep> =>
       Effect.suspend(() => {
         if (refresh) {
           if (
@@ -667,6 +667,7 @@ export const make = Effect.gen(function* () {
             shellClosedThreads.add(threadId);
           } else {
             invalidateLookupsForRescan = true;
+            return admission.enqueueFull.pipe(Effect.andThen(runSweep(null, threadId)));
           }
         }
         return runSweep(null, threadId);

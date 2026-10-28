@@ -139,15 +139,14 @@ export function settlementAdmissionTests({
           snapshot: makeSnapshot([]),
           currentThreads: [marker],
           settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
-          onCandidateRead: (id) =>
-            Effect.gen(function* () {
-              if (id === undefined && (yield* Ref.get(forceFull))) {
-                yield* Deferred.succeed(fullEntered, undefined);
-                yield* Deferred.await(releaseFull);
-              }
-            }),
-          branchPullRequest: (input, options) =>
-            Effect.gen(function* () {
+          onCandidateRead: Effect.fn("settlementAdmissionTest.onCandidateRead")(function* (id) {
+            if (id === undefined && (yield* Ref.get(forceFull))) {
+              yield* Deferred.succeed(fullEntered, undefined);
+              yield* Deferred.await(releaseFull);
+            }
+          }),
+          branchPullRequest: Effect.fn("settlementAdmissionTest.branchPullRequest")(
+            function* (input, options) {
               if (input.branch.startsWith("blocker-") && !options?.refresh) {
                 yield* Queue.offer(entered, undefined);
                 yield* Deferred.await(releaseTargets);
@@ -158,7 +157,8 @@ export function settlementAdmissionTests({
                 if (call === 2) yield* Deferred.await(releaseRepeat);
               }
               return branchResult(input.branch, options?.refresh);
-            }),
+            },
+          ),
         });
         yield* Effect.gen(function* () {
           const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
@@ -210,14 +210,15 @@ export function settlementAdmissionTests({
           snapshot: makeSnapshot([thread]),
           currentThreads: [marker],
           settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
-          branchPullRequest: (input, options) =>
-            Effect.gen(function* () {
+          branchPullRequest: Effect.fn("settlementAdmissionTest.branchPullRequest")(
+            function* (input, options) {
               if (input.branch.startsWith("blocker-")) {
                 yield* Queue.offer(entered, undefined);
                 yield* Deferred.await(release);
               }
               return branchResult(input.branch, options?.refresh);
-            }),
+            },
+          ),
         });
         yield* Effect.gen(function* () {
           const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
