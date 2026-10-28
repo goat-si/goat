@@ -12,7 +12,7 @@ import {
   ScreenRunError,
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
-import { cellProgram } from "./ScreenCellScope.ts";
+import { keptCell, plainCell, sloppyProbe } from "./ScreenCellScope.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
 import { screenTargetNote } from "./ScreenTargetNotes.ts";
 import { screenTargetPrelude } from "./ScreenTargetPrelude.ts";
@@ -198,33 +198,41 @@ export async function runScreenChild(
     note.dispose();
     // Runs after the prelude so every name the prelude defines counts as the runtime's own.
     const keepDeclarations = `      {
-        const own = new Set(Object.getOwnPropertyNames(globalThis));
-        own.add('__screenKeep');
-        // A kept name reads and writes the cell's own binding, so its closures and later cells
-        // share one value. The probe runs under a throwing stand-in for the global, so a name that
-        // is not a binding of the cell reaches neither a getter nor an inherited property.
-        Object.defineProperty(globalThis, '__screenKeep', {
-          value: (name, read, write) => {
-            if (own.has(name)) return;
-            const previous = Object.getOwnPropertyDescriptor(globalThis, name);
-            if (previous && !previous.configurable) return;
-            const absent = {};
-            Object.defineProperty(globalThis, name, {
-              get() { throw absent; }, set() { throw absent; }, configurable: true,
-            });
-            try { read(); } catch {
-              delete globalThis[name];
-              if (previous) Object.defineProperty(globalThis, name, previous);
-              return;
-            }
-            Object.defineProperty(globalThis, name, {
-              get: read,
-              set: write ?? (() => { throw new TypeError('Assignment to constant variable.'); }),
-              configurable: true,
-              enumerable: true,
-            });
-          },
-        });
+        // Captured before any cell runs, so saving calls nothing a cell can replace.
+        const global = globalThis;
+        const define = Object.defineProperty;
+        const describe = Object.getOwnPropertyDescriptor;
+        const FIELDS = ['value', 'writable', 'get', 'set', 'enumerable', 'configurable'];
+        // A copy with no prototype, so redefining reads nothing a cell put on Object.prototype.
+        const bare = (descriptor) => {
+          const copy = { __proto__: null };
+          for (let i = 0; i < FIELDS.length; i++)
+            if (describe(descriptor, FIELDS[i]) !== undefined) copy[FIELDS[i]] = descriptor[FIELDS[i]];
+          return copy;
+        };
+        const own = Object.create(null);
+        for (const name of Object.getOwnPropertyNames(global)) own[name] = true;
+        own.__screenKeep = true;
+        // A kept name reads and writes the cell's own binding (QuickJS refuses writes to a const),
+        // so its closures and later cells share one value. The probe runs under a throwing stand-in,
+        // so a name that is not the cell's binding reaches neither a getter nor an inherited property.
+        define(global, '__screenKeep', { __proto__: null, value: (name, read, write) => {
+          if (own[name] === true) return;
+          const found = describe(global, name);
+          const previous = found === undefined ? undefined : bare(found);
+          if (previous && previous.configurable !== true) return;
+          const absent = {};
+          const refuse = () => { throw absent; };
+          define(global, name, { __proto__: null, get: refuse, set: refuse, configurable: true });
+          try { read(); } catch {
+            delete global[name];
+            if (previous) define(global, name, previous);
+            return;
+          }
+          define(global, name, {
+            __proto__: null, get: read, set: write, configurable: true, enumerable: true,
+          });
+        } });
       }`;
     const setup = `${screenTargetPrelude(methods)}\n${keepDeclarations}`;
     const evaluated = vm.evalCode(setup);
@@ -232,6 +240,7 @@ export async function runScreenChild(
   };
   initialize();
   const reset = () => {
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
     vm.dispose();
@@ -277,10 +286,52 @@ export async function runScreenChild(
       : { value: { partial: kept } as NonNullable<ScreenRunResult["value"]> };
   };
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The running cell's saver: called once it settles, or dropped unsaved when it ends otherwise. */
+  let saverHandle: ReturnType<typeof vm.getProp> | undefined;
+  const dropSaver = () => {
+    saverHandle?.dispose();
+    saverHandle = undefined;
+  };
+  const compiles = (code: string) => {
+    const result = vm.evalCode(code);
+    (result.error ?? result.value).dispose();
+    return result.error === undefined;
+  };
+  // Starts the cell and returns its promise and the saver for its top-level bindings. A cell the
+  // saver cannot wrap runs as written and keeps nothing.
+  const startCell = (source: string, suffix: string) => {
+    const strict = !compiles(sloppyProbe(source));
+    const kept = vm.evalCode(keptCell(source, suffix, strict));
+    if (kept.error !== undefined) {
+      kept.error.dispose();
+      const cellFunction = vm.unwrapResult(vm.evalCode(plainCell(source)));
+      const promise = vm.unwrapResult(vm.callFunction(cellFunction, vm.undefined));
+      cellFunction.dispose();
+      return { promise, save: () => {} };
+    }
+    const run = vm.getProp(kept.value, 0);
+    dropSaver();
+    const saver = vm.getProp(kept.value, 1);
+    saverHandle = saver;
+    kept.value.dispose();
+    const called = vm.callFunction(run, vm.undefined);
+    run.dispose();
+    const save = () => {
+      // A cell that ended by its deadline or a reset no longer owns the saver.
+      if (saverHandle !== saver) return;
+      saverHandle = undefined;
+      const result = vm.callFunction(saver, vm.undefined);
+      (result.error ?? result.value).dispose();
+      saver.dispose();
+    };
+    if (called.error !== undefined) save();
+    return { promise: vm.unwrapResult(called), save };
+  };
   const finish = (result: ChildResult) => {
     clearTimeout(deadlineTimer);
     deadlineTimer = undefined;
     admitted = false;
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
     emit(result);
@@ -356,8 +407,8 @@ export async function runScreenChild(
         Math.max(0, deadline - Date.now()),
       );
       try {
-        const evaluation = vm.evalCode(cellProgram(cell.source));
-        const handle = vm.unwrapResult(evaluation);
+        const started = startCell(cell.source, cell.cellId.replaceAll(/[^A-Za-z0-9]/g, ""));
+        const handle = started.promise;
         const settled = vm.resolvePromise(handle);
         handle.dispose();
         runtime.executePendingJobs();
@@ -368,6 +419,8 @@ export async function runScreenChild(
                 (outcome.error ?? outcome.value)?.dispose();
                 return;
               }
+              // Saving publishes the cell's bindings as globals, so it waits until the cell's
+              // own result and error are read: a getter on them sees what it would unwrapped.
               if (outcome.error) {
                 // A host failure the guest let escape still carries its host receipt verbatim.
                 const receipt =
@@ -380,6 +433,7 @@ export async function runScreenChild(
                 const thrown = hostReceipt === undefined ? targetError(outcome.error) : undefined;
                 const dumped = hostReceipt ?? vm.dump(outcome.error);
                 outcome.error.dispose();
+                started.save();
                 let error: ScreenRunResult["error"];
                 if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
                   try {
@@ -423,6 +477,7 @@ export async function runScreenChild(
               const resultHandle = vm.unwrapResult(outcome);
               const value = vm.dump(resultHandle) as unknown;
               resultHandle.dispose();
+              started.save();
               const json = JSON.stringify(value);
               const bounded =
                 json === undefined || screenBytes(json) > currentLimits.returnBytes
@@ -441,9 +496,13 @@ export async function runScreenChild(
                 truncated,
               });
             },
-            () => finish({ t: "result", cellId, status: "failed", console: linesOut, truncated }),
+            () => {
+              started.save();
+              finish({ t: "result", cellId, status: "failed", console: linesOut, truncated });
+            },
           )
           .catch(() => {
+            started.save();
             if (cellId === cell.cellId)
               finish({
                 t: "result",
@@ -465,6 +524,7 @@ export async function runScreenChild(
     }
   } finally {
     lines.close();
+    dropSaver();
     for (const promise of pending.values()) promise.dispose();
     vm.dispose();
     runtime.dispose();

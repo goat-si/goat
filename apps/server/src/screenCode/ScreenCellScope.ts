@@ -1,7 +1,7 @@
 /**
- * Carries a cell's top-level declarations into the next cell: the body runs as an async function,
- * and the wrapper copies each top-level binding onto the guest's globals however the body ends.
- * The scan is lexical and may name too much, never wrongly; a name that is not a binding copies nothing.
+ * Carries a cell's top-level declarations into the next cell. The scan is lexical and only picks
+ * the names to try: QuickJS compiles the result, and the guest keeps a name only when it is the
+ * cell's own binding. A miss keeps one value less; it never changes what the cell does.
  */
 
 interface Token {
@@ -289,53 +289,28 @@ export function topLevelBindings(source: string): ReadonlyArray<string> {
   return [...declaredBindings(tokenize(source)).keys()];
 }
 
-const CONTINUES_EXPRESSION = new Set("( [ . , ? : = < > & | ^ * % / + - `".split(" "));
-
-/** Whether a token after a line break carries on the expression before it, so no semicolon goes in. */
-const continuesExpression = (tokens: ReadonlyArray<Token>, index: number) => {
-  const token = tokens[index];
-  if (token === undefined) return false;
-  if (token.kind === "word") return token.value === "in" || token.value === "instanceof";
-  const next = tokens[index + 1];
-  const joined = next !== undefined && next.start === token.start + 1;
-  // A prefix ++ or -- may not continue the line before it; + + and - - are binary.
-  if ((token.value === "+" || token.value === "-") && joined && next.value === token.value)
-    return false;
-  // != and !== compare with the line before; a lone ! starts a new statement.
-  if (token.value === "!") return joined && next.value === "=";
-  return CONTINUES_EXPRESSION.has(token.value);
-};
-
-/** Whether the cell opens with a "use strict" directive, after any comments and other directives. */
-function opensStrict(tokens: ReadonlyArray<Token>): boolean {
-  for (let k = 0; k < tokens.length; k++) {
-    const token = tokens[k];
-    if (token?.kind !== "value" || !/^['"]/.test(token.value)) return false;
-    const next = tokens[k + 1];
-    const ends =
-      next === undefined ||
-      next.value === ";" ||
-      next.value === "}" ||
-      (next.lineBreakBefore && !continuesExpression(tokens, k + 1));
-    if (!ends) return false;
-    if (token.value === "'use strict'" || token.value === '"use strict"') return true;
-    if (next?.value === ";") k++;
-  }
-  return false;
-}
+/** The cell as written, as the async function the child calls. */
+export const plainCell = (source: string) => `(async () => {\n${source}\n})`;
 
 /**
- * The cell as the async function the child evaluates. `__screenKeep` is the guest's own keeper:
- * it publishes each top-level binding as a global accessor over the binding itself.
+ * Compiles only when the cell's body is sloppy: QuickJS, not this scanner, reads its directives.
+ * Appending an empty statement and a with statement changes nothing else about a valid body.
  */
-export function cellProgram(source: string): string {
-  const tokens = tokenize(source);
-  const keep = [...declaredBindings(tokens)]
-    .map(
-      ([name, constant]) =>
-        `__screenKeep(${JSON.stringify(name)},()=>${name}${constant ? "" : `,(v)=>{${name}=v;}`});`,
-    )
+export const sloppyProbe = (source: string) => `(async () => {\n${source}\n;with({}){}\n})`;
+
+/**
+ * Evaluates to [cell, save]: one statement in front of the body hands out the saver, which the
+ * child calls once the cell settles. Helper names carry the cell's id and the keeper is captured
+ * outside its scope. The statement demotes the cell's directives, so strict restates them.
+ */
+export function keptCell(source: string, suffix: string, strict: boolean): string {
+  const keep = `__k_${suffix}`;
+  const save = `__s_${suffix}`;
+  const value = `__v_${suffix}`;
+  // Every name gets a setter: QuickJS refuses a write to a const, whatever the scanner thought.
+  const calls = [...declaredBindings(tokenize(source)).keys()]
+    .map((name) => `${keep}(${JSON.stringify(name)},()=>${name},(${value})=>{${name}=${value};});`)
     .join("");
-  const strict = opensStrict(tokens) ? '"use strict";' : "";
-  return `(async () => {${strict}let __screenExport;try{__screenExport=()=>{${keep}};\n${source}\n}finally{__screenExport?.();}})()`;
+  const directive = strict ? '"use strict";' : "";
+  return `(() => {const ${keep}=__screenKeep;let ${save};return [async () => {${directive}${save}=()=>{${calls}};\n${source}\n}, () => { ${save}?.(); }];})()`;
 }
