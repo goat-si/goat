@@ -705,12 +705,13 @@ export function useThreadComposerState() {
       () => scheduleUnusedComposerAttachmentCleanup(attachments),
       (error: unknown) => {
         // Restore with uncapped append; capped merge could drop attachments added during the failed write.
+        // Append first: the merge persists synchronously, so its write then includes them.
+        appendComposerDraftAttachments(threadKey, attachments, { allowOverflow: true });
         void mergeComposerDraftContent(threadKey, {
           text,
           context: draft.context,
           attachments: [],
         });
-        appendComposerDraftAttachments(threadKey, attachments, { allowOverflow: true });
         setThreadComposerError(
           threadKey,
           error instanceof Error ? error.message : "Failed to save the queued message.",
