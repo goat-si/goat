@@ -244,6 +244,23 @@ export function ServerBrowserSurface(props: {
   const probeRef = useRef<TouchProbe | null>(null);
   const lastProbeRef = useRef<{ x: number; y: number; editable: boolean; at: number } | null>(null);
   const firstFrame = useEffectEvent(() => onFirstFrame?.());
+  // The cursor's spot depends on the canvas box, the painted frame size and the page viewport.
+  const replaceDrawnCursor = useEffectEvent(() => {
+    const canvas = canvasRef.current;
+    const drawn = agentPointerRef.current;
+    if (!canvas || !drawn || privateRef.current) return;
+    const { width, height, clientWidth, clientHeight } = canvas;
+    agentPointerRef.current = { ...drawn, width, height };
+    const viewport = viewportRef.current;
+    setAgentCursor((current) =>
+      replaceAgentCursor(
+        current,
+        drawn.pointer,
+        { width, height, clientWidth, clientHeight },
+        viewport,
+      ),
+    );
+  });
   const viewportChanged = useEffectEvent((viewport: PreviewStreamViewport) =>
     onViewport?.(viewport),
   );
@@ -385,6 +402,7 @@ export function ServerBrowserSurface(props: {
       capTimer = setTimeout(growCap, previous === null ? 0 : RESIZE_THROTTLE_MS * 2);
     };
     const stopObserving = observeResize(element, () => {
+      replaceDrawnCursor();
       if (timer !== null) return;
       timer = setTimeout(measure, sizeRef.current === null ? 0 : RESIZE_THROTTLE_MS);
     });
@@ -402,10 +420,7 @@ export function ServerBrowserSurface(props: {
     const painter = createPreviewFramePainter(canvas, () => {
       const drawn = agentPointerRef.current;
       if (drawn && (drawn.width !== canvas.width || drawn.height !== canvas.height)) {
-        agentPointerRef.current = { ...drawn, width: canvas.width, height: canvas.height };
-        setAgentCursor((current) =>
-          replaceAgentCursor(current, drawn.pointer, canvas, viewportRef.current),
-        );
+        replaceDrawnCursor();
       }
       if (hasFrameRef.current) return;
       hasFrameRef.current = true;
@@ -442,6 +457,7 @@ export function ServerBrowserSurface(props: {
           else inputRef.current?.blur();
         },
         onPointer: (pointer) => {
+          if (privateRef.current) return;
           // A thumbnail shows where the agent points, without the click marker's repainting ping.
           const shown: PreviewStreamPointer =
             thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" };
@@ -458,6 +474,7 @@ export function ServerBrowserSurface(props: {
         onFileChooser: setFileChooser,
         onViewport: (viewport) => {
           viewportRef.current = viewport;
+          replaceDrawnCursor();
           viewportChanged(viewport);
         },
         onControl: (next) => {

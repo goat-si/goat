@@ -43,9 +43,8 @@ export function placeAgentCursor(
 }
 
 /**
- * The drawn cursor after a painted frame resized the canvas: it moves to where its pointer lands
- * now and keeps its phase and owner. A pointer can arrive before the first frame is decoded, when
- * the canvas still has its default size.
+ * The drawn cursor after the canvas, its box or the viewport changed: it moves to where its pointer
+ * lands now and keeps its phase and owner. An unmoved cursor, or one with no box, keeps its object.
  */
 export function replaceAgentCursor(
   current: AgentCursorPlacement | null,
@@ -53,6 +52,8 @@ export function replaceAgentCursor(
   canvas: PaintedCanvas,
   viewport: PreviewStreamViewport | null,
 ): AgentCursorPlacement | null {
-  const placed = current && placeAgentCursor(pointer, canvas, viewport);
-  return placed && current ? { ...current, left: placed.left, top: placed.top } : current;
+  if (!current || canvas.clientWidth < 1 || canvas.clientHeight < 1) return current;
+  const placed = placeAgentCursor(pointer, canvas, viewport);
+  if (!placed || (placed.left === current.left && placed.top === current.top)) return current;
+  return { ...current, left: placed.left, top: placed.top };
 }
