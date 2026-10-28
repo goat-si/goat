@@ -17,9 +17,8 @@ import type {
   StorageCleanupReportEntry,
 } from "@goat/contracts";
 import { resolveWorktreeCleanup } from "@goat/shared/projectSettings";
-import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
+import { makeStorageCleanupWorker } from "./storageCleanupWorker.ts";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -28,7 +27,6 @@ import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import type { PlatformError } from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
@@ -36,7 +34,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
-import * as AutomationHold from "./automationHold.ts";
 import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -188,7 +185,6 @@ export class StorageCleanup extends Context.Service<
 
 const make = Effect.gen(function* () {
   const auxiliary = yield* AuxiliarySqlite.AuxiliarySqlite;
-  const automationHold = yield* AutomationHold.AutomationHold;
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* Settings.ServerSettingsService;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -1179,31 +1175,8 @@ const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(reportRef, latestReport);
     return latestReport;
   });
-  const automaticSweepQueued = yield* Ref.make(false);
-  const worker = yield* makeDrainableWorker(
-    (completion: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined) =>
-      Effect.gen(function* () {
-        if (completion === undefined) {
-          yield* Ref.set(automaticSweepQueued, false);
-          if ((yield* automationHold.current) !== null) return;
-        }
-        const trigger = completion === undefined ? "automatic" : "manual";
-        const exit = yield* Effect.exit(sweep(trigger));
-        if (completion !== undefined) yield* Deferred.done(completion, exit);
-        else
-          yield* exit.pipe(
-            Effect.catchCause((cause) => Effect.logWarning("storage cleanup failed", { cause })),
-          );
-      }),
-  );
-  const requestSweep = Ref.getAndSet(automaticSweepQueued, true).pipe(
-    Effect.flatMap((queued) => (queued ? Effect.void : worker.enqueue(undefined))),
-  );
-  const runNow = Effect.gen(function* () {
-    const completion = yield* Deferred.make<StorageCleanupReport, ServerSettingsError>();
-    yield* worker.enqueue(completion);
-    return yield* Deferred.await(completion);
-  });
+  const worker = yield* makeStorageCleanupWorker(sweep);
+  const { runNow, requestSweep } = worker;
   const start = Effect.fn("StorageCleanup.start")(function* () {
     const unsubscribe = yield* terminals.subscribeMetadata((event) =>
       Effect.sync(() => {

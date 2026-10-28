@@ -2986,27 +2986,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     let unsubscribe: (() => void) | null = null;
 
     return Effect.gen(function* () {
-      const bufferedEvents: TerminalEvent[] = [];
+      let dirty = false;
       let deliverLive = false;
 
       unsubscribe = yield* subscribe((event) => {
         if (!deliverLive) {
-          bufferedEvents.push(event);
+          // Metadata snapshots reconcile every session, including removals, without retaining output.
+          if (shouldPublishTerminalMetadataEvent(event)) dirty = true;
           return Effect.void;
         }
 
         return offerMetadataEvent(listener, event);
       });
 
-      const terminals = yield* readAllTerminalMetadata();
-      yield* listener({
-        type: "snapshot",
-        terminals,
-      });
-
-      for (const event of bufferedEvents) {
-        yield* offerMetadataEvent(listener, event);
-      }
+      do {
+        dirty = false;
+        const terminals = yield* readAllTerminalMetadata();
+        yield* listener({ type: "snapshot", terminals });
+      } while (dirty);
 
       deliverLive = true;
       return () => {
