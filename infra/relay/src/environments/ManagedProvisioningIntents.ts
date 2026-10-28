@@ -1,3 +1,4 @@
+import { assertEnabled } from "../auth/MintControl.ts";
 import { EndpointIdentity } from "./EndpointIdentity.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -31,6 +32,7 @@ const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration;
   return ManagedProvisioningIntents.of({
     prepare: Effect.fn("ManagedProvisioningIntents.prepare")(function* (a) {
+      yield* assertEnabled(config);
       const admitted = yield* access.admit(a.userId);
       return yield* tx
         .run(

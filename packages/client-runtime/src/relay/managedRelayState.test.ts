@@ -61,6 +61,8 @@ function resetRegistry() {
 
 function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Service"]>) {
   return ManagedRelay.ManagedRelayClient.of({
+    deleteAccount: () => Effect.die("Account deletion is outside this fixture"),
+    getAccountDeletion: () => Effect.die("Account deletion is outside this fixture"),
     relayUrl: "https://relay.example.test",
     listEnvironments: () => Effect.succeed([environment]),
     listDevices: () => Effect.succeed([device]),

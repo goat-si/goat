@@ -19,7 +19,7 @@ export const AccountOperationProgress = Schema.Struct({
 });
 export type AccountOperationProgress = typeof AccountOperationProgress.Type;
 export function operationProgress(
-  kind: "suspend" | "allow",
+  kind: "suspend" | "allow" | "delete",
   completed: boolean,
 ): AccountOperationProgress {
   const done = { state: "done" as const, attempts: 1 };
@@ -28,11 +28,11 @@ export function operationProgress(
   return {
     version: 1,
     steps: {
-      relay_denied: kind === "suspend" ? done : unused,
-      identities_retired: kind === "suspend" ? done : unused,
-      intents_abandoned: kind === "suspend" ? done : unused,
-      credentials_revoked: kind === "suspend" ? done : unused,
-      devices_ineligible: kind === "suspend" ? done : unused,
+      relay_denied: kind !== "allow" ? done : unused,
+      identities_retired: kind !== "allow" ? done : unused,
+      intents_abandoned: kind !== "allow" ? done : unused,
+      credentials_revoked: kind !== "allow" ? done : unused,
+      devices_ineligible: kind !== "allow" ? done : unused,
       hooks_cleared: kind === "allow" ? unused : completed ? done : pending,
       relay_allowed: kind === "allow" ? done : unused,
       completed: completed ? done : pending,

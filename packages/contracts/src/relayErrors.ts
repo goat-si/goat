@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 import { DpopFailureReason, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ConnectAuthenticationErrors } from "./connectAssurance.ts";
+import {
+  ConnectAuthenticationErrors,
+  RelayAuthenticationStrengthError,
+} from "./connectAssurance.ts";
+
+export { RelayAuthenticationStrengthError };
 
 export const RelayRateLimitOperation = Schema.Literals([
   "link_challenge",
@@ -15,7 +20,7 @@ export class RelayAccountAccessDeniedError extends Schema.TaggedError<RelayAccou
   "RelayAccountAccessDeniedError",
   {
     code: Schema.Literal("account_access_denied"),
-    reason: Schema.Literals(["not_invited", "suspended"]),
+    reason: Schema.Literals(["not_invited", "suspended", "account_deleted"]),
     traceId: TrimmedNonEmptyString,
   },
   { httpApiStatus: 403 },
@@ -121,7 +126,30 @@ export class RelayAuthorizationUnavailableError extends Schema.TaggedError<Relay
     return "GOAT Connect authorization is temporarily unavailable.";
   }
 }
+export class RelayMintDisabledError extends Schema.TaggedError<RelayMintDisabledError>()(
+  "RelayMintDisabledError",
+  { code: Schema.Literal("relay_mint_disabled"), traceId: TrimmedNonEmptyString },
+  { httpApiStatus: 503 },
+) {
+  override get message(): string {
+    return "Relay credential issuance and tunnel provisioning are paused.";
+  }
+}
+export class RelayAccountDeletionConflictError extends Schema.TaggedError<RelayAccountDeletionConflictError>()(
+  "RelayAccountDeletionConflictError",
+  { code: Schema.Literal("account_deletion_conflict"), traceId: TrimmedNonEmptyString },
+  { httpApiStatus: 409 },
+) {}
+export class RelayAccountDeletionUnavailableError extends Schema.TaggedError<RelayAccountDeletionUnavailableError>()(
+  "RelayAccountDeletionUnavailableError",
+  { code: Schema.Literal("account_deletion_unavailable"), traceId: TrimmedNonEmptyString },
+  { httpApiStatus: 503 },
+) {}
 export const RelayAccountPolicyErrors = [
+  RelayAccountDeletionUnavailableError,
+  RelayMintDisabledError,
+  RelayAuthenticationStrengthError,
+  RelayAccountDeletionConflictError,
   RelayAccountAccessDeniedError,
   RelayAccountEpochStaleError,
   RelayEnvironmentRelinkRequiredError,

@@ -12,7 +12,7 @@
 
 Deployment and client configuration for GOAT Connect. The [architecture note](../internals/goat-connect.md)
 explains the trust boundaries; the [relay README](../../infra/relay/README.md#deployment) owns relay
-provisioning instructions.
+provisioning instructions. See [signing-key incidents](./connect-signing-key-compromise.md) for issuance pause and host remediation.
 
 ## Public application configuration
 
@@ -163,9 +163,10 @@ codesign -d --entitlements :- "/Applications/GOAT (Nightly).app"
 ## Invite beta access and suspension
 
 Clerk sign-up restrictions control who can create an identity. Relay access is a separate,
-explicit invitation keyed by Clerk user ID; an absent account is denied. Clerk dashboard bans
-and deletes do not synchronize relay status during the beta. Use the relay operator workflow
-below. A Clerk ban or unban is an optional manual action; the relay never performs it.
+explicit invitation keyed by Clerk user ID; an absent account is denied. Clerk dashboard bans do not synchronize relay status. A verified `user.deleted` webhook requests
+the same terminal deletion as the account page or operator CLI; delivery can be delayed. Configure
+`/v1/webhooks/clerk` with a separate `CLERK_WEBHOOK_SIGNING_SECRET`, monitor failures and replay
+failed deliveries in Clerk. The lifecycle never calls Clerk administration APIs.
 
 Provision a nonempty `RELAY_OPERATOR_SECRET` through the trusted deployment environment, and
 supply the same secret and an HTTPS `RELAY_OPERATOR_URL` to the operator CLI. Keep the secret out
@@ -175,6 +176,7 @@ of command arguments, logs, client configuration, and browser bundles. From `inf
 vp run accounts:access show user_fixture
 vp run accounts:access allow user_fixture --key 10000000-0000-4000-8000-000000000001
 vp run accounts:access suspend user_fixture --key 10000000-0000-4000-8000-000000000002
+vp run accounts:access delete user_fixture --key 10000000-0000-4000-8000-000000000003
 ```
 
 These example IDs are fixtures. Each intentional command needs a fresh idempotency key. Reusing
@@ -182,8 +184,8 @@ one for a different command returns a conflict. A suspension first commits relay
 new account epoch, retires endpoint identities, and invalidates relay trust and delivery
 eligibility. It returns an operation record; HTTP 202 and CLI exit 2 mean hook cleanup is still
 pending. Use `operation <id>` to inspect it or `resume <id>` to advance it. The five-minute cron
-also resumes due operations in bounded batches. Opposite transitions conflict while cleanup is
-pending. Allow creates a new epoch only after relay cleanup finishes; it restores none of the
+also resumes due operations in bounded batches. Delete supersedes unfinished allow or suspend work. Other opposite transitions conflict while cleanup is
+pending. A deleted subject can never be invited or allowed again. Allow creates a new epoch only after relay cleanup finishes; it restores none of the
 old credentials, registrations, queued deliveries, or held hooks.
 
 The default limits are one held current-generation tunnel allocation, ten active environment
@@ -214,10 +216,62 @@ and SSH sessions. An external send already admitted before suspension may finish
 restore delivery eligibility. The beta supports one owning account per environment key.
 Transfer requires unlink and cleanup on the existing owner followed by a fresh signed link.
 
+## Deletion, retained denial and offline machines
+
+The account page and hosted `/account/delete` flow erase relay data before calling Clerk's
+`user.delete()`. Initial human acceptance verifies a V2 session JWT, exact issuer/audience/authorized
+party, active matching session and wp7's conservative `fva` freshness bounds for both factors.
+OAuth and template identities cannot authorize destruction. Until wp7 is integrated, a stale
+session must sign in again with MFA and resume; native and Electron origins require explicitly
+verified configuration, not a guessed origin. Status and accepted-operation retries do not demand
+another fresh factor.
+
+For operator deletion, read `show <subject>` or `operation <id>` until relay erasure completes,
+then delete the Clerk identity manually. Never infer completion from sign-out or an absent Clerk
+user. Required hook/counter failures keep erasure pending. Unassignable legacy delivery rows keep
+it pending for investigation. A provider cleanup outage does not restore relay access or block
+the client's final identity step. The retired-name collector keeps scanning throughout beta.
+
+After erasure, raw subject fields are null. The retained inventory is the digest-keyed denial row
+(internal row ID, final epoch, terminal timestamps), minimal canonical operation (ID, digest,
+status, request kind, host counts, identity-deletion observation and timestamps), deterministic
+host-receipt IDs with credential/target digests, retired endpoint names/hostnames and closed
+hook/counter markers. No push tokens, labels, webhook bodies or environment public keys remain
+in those stores. Global replay records keep their normal expiry to prevent replay. Privacy policy
+work must disclose these pseudonymous exceptions and provider queue/log/backup retention.
+
+Canonical results expire after 90 days: owner GET/DELETE then returns only
+`{status:"deleted",deletedAt}` without counts or an operation ID. Terminal denial survives;
+retries and duplicate webhooks never create a replacement operation or epoch. Pending host
+receipts have no time expiry during beta. An acknowledgment atomically settles all credentials
+for one target and consolidates its count once. Completed receipts are removed; authenticated,
+bound duplicate acknowledgments return terminal no-op success so a lost response can settle.
+
+Supported hosts probe their installed HTTPS relay at startup and every five minutes, including
+publish-only hosts. A verified cleanup receipt triggers local journaled withdrawal of all
+cloud-connect grants and sessions, standard and hub-scoped, before installed trust is removed.
+An acknowledgment journal can retry after trust removal and cannot fence a new explicit link.
+Generic authentication/network errors never prove deletion. Old or unreachable hosts remain
+unconfirmed; update or unlink them through an independently trusted path. A machine offline
+until beta ends must be unlinked locally. Independent LAN/Tailscale/SSH sessions and local
+projects are outside account deletion.
+
+Do not restore a beta database backup into admission. A restore is permitted only after it has
+been reconciled against the current deletion-digest ledger and all deleted owners are denied
+before any Worker or consumer serves traffic. Losing that ledger is a restore blocker.
+
 ## Migrating a relay to account policy
 
 Keep admission closed and drain old Workers, queue consumers, and outstanding provisioning
-before applying the forward migrations and guarded runtime together. The migration refuses
+before applying the forward migrations and guarded runtime together. The additive deletion
+migration keeps legacy digest columns nullable to preserve populated wp3 state without putting
+a secret in migration SQL. The first guarded account transaction derives the stage-bound HMAC
+with `RELAY_SUBJECT_DIGEST_KEY`, locks that digest and backfills all legacy linkage atomically.
+Read-only admission permits only the legacy raw identity while its digest is absent; erasure
+requires a nonnull digest and never leaves a raw subject. Keep this independent key stable for
+beta. Old binaries that ignore terminal denial must not run after rollout. wp7-owned key and
+approval tables must join the same fenced erasure graph when wp7 lands; do not deploy that
+integration with a purge path that omits them. The migration refuses
 conflicting active environment keys, malformed allocation identities, and negative tunnel
 limits. Resolve those records explicitly; it never picks an owner or invites historical users.
 Legacy endpoint identities bind to the running stage on first guarded use because a sanitized

@@ -12,7 +12,6 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as TestClock from "effect/testing/TestClock";
 import * as ConnectAccounts from "./ConnectAccounts.ts";
-import { RelayRateLimits } from "../accounts/RelayRateLimits.ts";
 import { policyServicesLayer } from "../accounts/test/PolicyPostgresLayers.ts";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as RelayDb from "../db.ts";
@@ -76,12 +75,7 @@ export const postgresFixture = Layer.mergeAll(
 ).pipe(Layer.provideMerge(databaseFixture));
 
 /** Real account policy over the fixture database; consumers supply RelayConfiguration and Crypto. */
-export const postgresPolicyFixture = Layer.mergeAll(
-  policyServicesLayer(),
-  Layer.succeed(RelayRateLimits, {
-    charge: Effect.fn("RelayRateLimits.charge")(function* () {}),
-  }),
-);
+export const postgresPolicyFixture = policyServicesLayer();
 
 export const awaitPostgresMilestone = Effect.fn("test.awaitPostgresMilestone")(function* <A, E>(
   milestone: Deferred.Deferred<void>,

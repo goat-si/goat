@@ -1,3 +1,6 @@
+import { subjectDigest } from "./SubjectDigest.ts";
+import { AccountErasure } from "./AccountErasure.ts";
+import { type RelayAccountDeletionStatus, type RelayAccountDeletion } from "@goat/contracts/relay";
 import { AccountOperationProgress, operationProgress } from "./AccountOperationProgress.ts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -26,16 +29,20 @@ export class AccountLifecycleConflict extends Schema.TaggedError<AccountLifecycl
       "cleanup_pending",
       "epoch_exhausted",
       "operation_not_found",
+      "account_deleted",
     ]),
   },
 ) {}
 export interface AccountOperation {
   readonly id: string;
-  readonly user_id: string;
-  readonly kind: "suspend" | "allow";
+  readonly user_id: string | null;
+  readonly subject_digest: string;
+  readonly identity_deleted: number;
+  readonly host_acknowledged: number;
+  readonly kind: "suspend" | "allow" | "delete";
   readonly account_epoch: number;
   readonly expected_epoch: number;
-  readonly state: "pending" | "running" | "completed";
+  readonly state: "pending" | "running" | "completed" | "superseded";
   readonly completed_at: string | null;
   readonly claim_version: number;
   readonly next_attempt_at: string;
@@ -48,7 +55,7 @@ export class AccountLifecycle extends Context.Service<
   {
     readonly request: (input: {
       readonly userId: string;
-      readonly kind: "suspend" | "allow";
+      readonly kind: "suspend" | "allow" | "delete";
       readonly idempotencyKey: string;
     }) => Effect.Effect<AccountOperation, LifecycleError>;
     readonly resume: (id: string) => Effect.Effect<AccountOperation, LifecycleError>;
@@ -61,13 +68,22 @@ export class AccountLifecycle extends Context.Service<
       },
       LifecycleError
     >;
+    readonly requestDelete: (input: {
+      readonly userId: string;
+      readonly idempotencyKey: string;
+      readonly identityDeleted?: boolean;
+    }) => Effect.Effect<RelayAccountDeletion, LifecycleError>;
+    readonly getDeletion: (
+      userId: string,
+    ) => Effect.Effect<RelayAccountDeletionStatus, LifecycleError>;
     readonly scanPending: Effect.Effect<void, RelayAuthorizationUnavailableError>;
   }
 >()("goat-relay/accounts/AccountLifecycle") {}
 const operationColumns =
-  "id,user_id,kind,account_epoch,expected_epoch,state,completed_at,claim_version,next_attempt_at,last_error_code,step_state";
+  "id,user_id,subject_digest,identity_deleted,host_acknowledged,kind,account_epoch,expected_epoch,state,completed_at,claim_version,next_attempt_at,last_error_code,step_state";
 const make = Effect.gen(function* () {
   const db = yield* RelayDb;
+  const erasure = yield* AccountErasure;
   const sql = db.$client;
   const tx = yield* AccountTransactions;
   const crypto = yield* Crypto.Crypto;
@@ -88,42 +104,66 @@ const make = Effect.gen(function* () {
   });
   const request = Effect.fn("AccountLifecycle.request")(function* (input: {
     readonly userId: string;
-    readonly kind: "suspend" | "allow";
+    readonly kind: "suspend" | "allow" | "delete";
     readonly idempotencyKey: string;
   }) {
+    const digest = yield* subjectDigest(input.userId).pipe(
+      Effect.provideService(RelayConfiguration, config),
+    );
     const result = yield* tx
       .run(
         { userIds: [input.userId] },
         Effect.gen(function* () {
+          const [terminal] = yield* sql<{
+            deletion_requested_at: string | null;
+            status: string;
+          }>`SELECT deletion_requested_at,status FROM relay_account_access WHERE subject_digest=${digest}`;
+          if (
+            (terminal?.deletion_requested_at || terminal?.status === "deleted") &&
+            input.kind !== "delete"
+          )
+            return yield* new AccountLifecycleConflict({ code: "account_deleted" });
           const [duplicate] = yield* sql<
             AccountOperation & { request_hash: string }
-          >`SELECT ${sql.literal(operationColumns)},request_hash FROM relay_account_operations WHERE user_id=${input.userId} AND (idempotency_key=${input.idempotencyKey} OR id IN (SELECT operation_id FROM relay_account_operation_requests WHERE user_id=${input.userId} AND idempotency_key=${input.idempotencyKey}))`;
+          >`SELECT ${sql.literal(operationColumns)},request_hash FROM relay_account_operations WHERE subject_digest=${digest} AND (idempotency_key=${input.idempotencyKey} OR id IN (SELECT operation_id FROM relay_account_operation_requests WHERE subject_digest=${digest} AND idempotency_key=${input.idempotencyKey}))`;
           if (duplicate) {
             if (duplicate.request_hash !== input.kind)
               return yield* new AccountLifecycleConflict({ code: "idempotency_conflict" });
             return duplicate.id;
           }
+          if (input.kind === "delete") {
+            const [canonical] = yield* sql<{
+              id: string;
+            }>`SELECT id FROM relay_account_operations WHERE subject_digest=${digest} AND kind='delete' LIMIT 1`;
+            if (canonical) return canonical.id;
+            if (terminal?.status === "deleted")
+              return yield* new AccountLifecycleConflict({ code: "account_deleted" });
+          }
           const [pending] = yield* sql<{
             id: string;
-            kind: "suspend" | "allow";
-          }>`SELECT id,kind FROM relay_account_operations WHERE user_id=${input.userId} AND completed_at IS NULL`;
-          if (pending) {
+            kind: "suspend" | "allow" | "delete";
+          }>`SELECT id,kind FROM relay_account_operations WHERE subject_digest=${digest} AND completed_at IS NULL`;
+          if (pending && input.kind === "delete" && pending.kind !== "delete") {
+            yield* sql`UPDATE relay_account_operations SET state='superseded',completed_at=now(),claim_version=claim_version+1,lease_owner=NULL,lease_expires_at=NULL WHERE id=${pending.id}`;
+          } else if (pending) {
             if (pending.kind !== input.kind)
               return yield* new AccountLifecycleConflict({ code: "operation_in_progress" });
-            yield* sql`INSERT INTO relay_account_operation_requests(user_id,idempotency_key,operation_id) VALUES (${input.userId},${input.idempotencyKey},${pending.id})`;
+            yield* sql`INSERT INTO relay_account_operation_requests(user_id,subject_digest,idempotency_key,operation_id) VALUES (${input.userId},${digest},${input.idempotencyKey},${pending.id})`;
             return pending.id;
           }
           const [current] = yield* sql<{
-            status: "allowed" | "suspended";
+            status: "allowed" | "suspended" | "deleted";
             account_epoch: number;
-          }>`SELECT status,account_epoch FROM relay_account_access WHERE user_id=${input.userId} FOR UPDATE`;
-          const same = current?.status === (input.kind === "allow" ? "allowed" : "suspended");
+          }>`SELECT status,account_epoch FROM relay_account_access WHERE subject_digest=${digest} FOR UPDATE`;
+          const same =
+            input.kind !== "delete" &&
+            current?.status === (input.kind === "allow" ? "allowed" : "suspended");
           if (same) {
             const [canonical] = yield* sql<{
               id: string;
-            }>`SELECT id FROM relay_account_operations WHERE user_id=${input.userId} AND kind=${input.kind} AND account_epoch=${current.account_epoch} ORDER BY created_at DESC LIMIT 1`;
+            }>`SELECT id FROM relay_account_operations WHERE subject_digest=${digest} AND kind=${input.kind} AND account_epoch=${current.account_epoch} ORDER BY created_at DESC LIMIT 1`;
             if (canonical) {
-              yield* sql`INSERT INTO relay_account_operation_requests(user_id,idempotency_key,operation_id) VALUES (${input.userId},${input.idempotencyKey},${canonical.id})`;
+              yield* sql`INSERT INTO relay_account_operation_requests(user_id,subject_digest,idempotency_key,operation_id) VALUES (${input.userId},${digest},${input.idempotencyKey},${canonical.id})`;
               return canonical.id;
             }
           }
@@ -146,11 +186,12 @@ const make = Effect.gen(function* () {
           }
           const [operation] = yield* sql<{
             id: string;
-          }>`INSERT INTO relay_account_operations(user_id,kind,account_epoch,expected_epoch,idempotency_key,request_hash,state,step_state,completed_at) VALUES (${input.userId},${input.kind},${epoch},${current?.account_epoch ?? 0},${input.idempotencyKey},${input.kind},${input.kind === "allow" || same ? "completed" : "pending"},${sql.json(operationProgress(input.kind, input.kind === "allow" || same))},${input.kind === "allow" || same ? DateTime.formatIso(yield* DateTime.now) : null}) RETURNING id`;
+          }>`INSERT INTO relay_account_operations(user_id,subject_digest,kind,account_epoch,expected_epoch,idempotency_key,request_hash,state,step_state,completed_at) VALUES (${input.userId},${digest},${input.kind},${epoch},${current?.account_epoch ?? 0},${input.idempotencyKey},${input.kind},${input.kind === "allow" || same ? "completed" : "pending"},${sql.json(operationProgress(input.kind, input.kind === "allow" || same))},${input.kind === "allow" || same ? DateTime.formatIso(yield* DateTime.now) : null}) RETURNING id`;
           if (!operation) return yield* unavailable();
-          yield* sql`INSERT INTO relay_account_operation_requests(user_id,idempotency_key,operation_id) VALUES (${input.userId},${input.idempotencyKey},${operation.id})`;
+          yield* sql`INSERT INTO relay_account_operation_requests(user_id,subject_digest,idempotency_key,operation_id) VALUES (${input.userId},${digest},${input.idempotencyKey},${operation.id})`;
           if (same) return operation.id;
-          if (input.kind === "suspend") {
+          if (input.kind === "delete") yield* erasure.capture(input.userId, digest);
+          if (input.kind === "suspend" || input.kind === "delete") {
             if (!config.managedEndpointNamespace) return yield* unavailable();
             yield* sql`UPDATE relay_endpoint_identities SET stage=${config.managedEndpointNamespace} WHERE user_id=${input.userId} AND stage='__legacy__'`;
             const identities = yield* sql<{
@@ -197,6 +238,9 @@ const make = Effect.gen(function* () {
             yield* sql`INSERT INTO relay_account_operation_resources(operation_id,resource_kind,resource_id,owner_user_id,resource_epoch,outcome) SELECT ${operation.id},'live_activity',device_id,user_id,account_epoch,'done' FROM relay_live_activities WHERE user_id=${input.userId}`;
             yield* sql`INSERT INTO relay_account_operation_resources(operation_id,resource_kind,resource_id,owner_user_id,resource_epoch,environment_id,allocation_incarnation_id,captured_generation,endpoint_key,outcome) SELECT ${operation.id},'allocation',incarnation_id::text,user_id,account_epoch,environment_id,incarnation_id,generation,right(tunnel_name,16),'done' FROM relay_managed_endpoint_allocations WHERE user_id=${input.userId} AND deleted_at IS NULL`;
             yield* sql`INSERT INTO relay_account_operation_resources(operation_id,resource_kind,resource_id,owner_user_id,resource_epoch,environment_id,allocation_incarnation_id,captured_generation,endpoint_key,outcome) SELECT ${operation.id},'intent',id::text,user_id,account_epoch,environment_id,allocation_incarnation_id,allocation_generation,endpoint_key,'done' FROM relay_managed_provisioning_intents WHERE user_id=${input.userId} AND state IN ('intent','created')`;
+            if (input.kind === "delete")
+              yield* sql`INSERT INTO relay_account_operation_resources(operation_id,resource_kind,resource_id,owner_user_id,endpoint_key)
+              SELECT ${operation.id},'hooks',tunnel_name,${input.userId},endpoint_key FROM relay_retired_endpoints WHERE user_id=${input.userId} OR subject_digest=${digest} ON CONFLICT DO NOTHING`;
             yield* sql`UPDATE relay_endpoint_identities SET high_water_generation=high_water_generation+1 WHERE user_id=${input.userId}`;
             yield* sql`UPDATE relay_managed_endpoint_allocations SET deleted_at=now(),capacity_released_at=now(),generation=generation+1 WHERE user_id=${input.userId} AND deleted_at IS NULL`;
             yield* sql`UPDATE relay_managed_provisioning_intents SET state='abandoned',updated_at=now() WHERE user_id=${input.userId} AND state IN ('intent','created')`;
@@ -207,7 +251,7 @@ const make = Effect.gen(function* () {
             yield* sql`UPDATE relay_mobile_devices SET delivery_disabled_at=now() WHERE user_id=${input.userId}`;
             yield* sql`UPDATE relay_live_activities SET delivery_disabled_at=now() WHERE user_id=${input.userId}`;
           }
-          yield* sql`INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES (${input.userId},${input.kind === "allow" ? "allowed" : "suspended"},${epoch}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,account_epoch=excluded.account_epoch,updated_at=now()`;
+          yield* sql`INSERT INTO relay_account_access(user_id,subject_digest,status,account_epoch,deletion_requested_at) VALUES (${input.userId},${digest},${input.kind === "allow" ? "allowed" : "suspended"},${epoch},${input.kind === "delete" ? DateTime.formatIso(yield* DateTime.now) : null}) ON CONFLICT(subject_digest) DO UPDATE SET status=excluded.status,account_epoch=excluded.account_epoch,deletion_requested_at=excluded.deletion_requested_at,updated_at=now()`;
           return operation.id;
         }),
       )
@@ -216,7 +260,9 @@ const make = Effect.gen(function* () {
   });
   const resume = Effect.fn("AccountLifecycle.resume")(function* (id: string) {
     const operation = yield* getOperation(id);
-    if (operation.state === "completed") return operation;
+    if (operation.completed_at !== null) return operation;
+    if (!operation.user_id) return yield* unavailable();
+    const userId = operation.user_id;
     const lease = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
     const [claimed] = yield* sql<{
       claim_version: number;
@@ -234,17 +280,23 @@ const make = Effect.gen(function* () {
           id: string;
         }>`UPDATE relay_account_operations SET lease_expires_at=now()+interval '60 seconds' WHERE id=${id} AND lease_owner=${lease} AND claim_version=${claimed.claim_version} AND lease_expires_at>now() RETURNING id`;
         if (!renewed) return;
-        yield* inbox.clear({ endpointKey: resource.endpoint_key });
+        yield* inbox.clear({ endpointKey: resource.endpoint_key, retire: true });
         yield* sql`UPDATE relay_account_operation_resources SET outcome='done',updated_at=now() WHERE operation_id=${id} AND resource_kind='hooks' AND resource_id=${resource.resource_id} AND EXISTS(SELECT 1 FROM relay_account_operations WHERE id=${id} AND lease_owner=${lease} AND claim_version=${claimed.claim_version})`;
       }
+      if (operation.kind === "delete")
+        yield* erasure.closeCounters(userId, operation.subject_digest);
       yield* tx.run(
-        { userIds: [operation.user_id] },
+        { userIds: [userId] },
         Effect.gen(function* () {
           const [finished] = yield* sql<{
             id: string;
-          }>`UPDATE relay_account_operations SET state='completed',completed_at=now(),updated_at=now(),step_state=${sql.json(operationProgress("suspend", true))},lease_owner=NULL,lease_expires_at=NULL WHERE id=${id} AND lease_owner=${lease} AND claim_version=${claimed.claim_version} AND NOT EXISTS(SELECT 1 FROM relay_account_operation_resources WHERE operation_id=${id} AND outcome<>'done') RETURNING id`;
-          if (finished)
-            yield* sql`DELETE FROM relay_environment_owners WHERE user_id=${operation.user_id} AND state='releasing'`;
+          }>`UPDATE relay_account_operations SET state='completed',completed_at=now(),updated_at=now(),step_state=${sql.json(operationProgress(operation.kind, true))},lease_owner=NULL,lease_expires_at=NULL WHERE id=${id} AND lease_owner=${lease} AND claim_version=${claimed.claim_version} AND NOT EXISTS(SELECT 1 FROM relay_account_operation_resources WHERE operation_id=${id} AND outcome<>'done') RETURNING id`;
+          if (finished) {
+            if (operation.kind === "delete")
+              yield* erasure.purge(userId, operation.subject_digest, id);
+            else
+              yield* sql`DELETE FROM relay_environment_owners WHERE user_id=${userId} AND state='releasing'`;
+          }
         }),
       );
     }).pipe(Effect.mapError(unavailable), Effect.result);
@@ -257,17 +309,92 @@ const make = Effect.gen(function* () {
     );
     return yield* getOperation(id);
   });
+  const getDeletion = Effect.fn("AccountLifecycle.getDeletion")(function* (userId: string) {
+    const digest = yield* subjectDigest(userId).pipe(
+      Effect.provideService(RelayConfiguration, config),
+    );
+    const [access] = yield* sql<{
+      status: string;
+      relay_erased_at: string | null;
+    }>`SELECT status,relay_erased_at::text AS relay_erased_at FROM relay_account_access WHERE subject_digest=${digest}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    const [op] =
+      yield* sql<AccountOperation>`SELECT ${sql.literal(operationColumns)} FROM relay_account_operations WHERE subject_digest=${digest} AND kind='delete' AND (completed_at IS NULL OR completed_at > now()-interval '90 days') LIMIT 1`.pipe(
+        Effect.mapError(unavailable),
+      );
+    if (!op)
+      return access?.status === "deleted" && access.relay_erased_at
+        ? { status: "deleted" as const, deletedAt: access.relay_erased_at }
+        : { status: "absent" as const };
+    const [hosts] = yield* sql<{
+      pending: number;
+    }>`SELECT count(DISTINCT target_digest)::int AS pending FROM relay_host_revocations WHERE subject_digest=${digest}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    return {
+      status: "progress" as const,
+      operationId: op.id,
+      relayState: op.completed_at ? ("erased" as const) : ("erasing" as const),
+      step: op.completed_at ? ("relay_erasure_completed" as const) : ("relay_denied" as const),
+      relayDenied: true as const,
+      hostCleanup: {
+        pending: hosts?.pending ?? 0,
+        acknowledged: op.host_acknowledged,
+        unsupported: 0,
+      },
+      endpointCleanup: "pending" as const,
+      identityAction: op.identity_deleted
+        ? ("already_deleted" as const)
+        : ("delete_clerk_user" as const),
+      ...(op.completed_at ? {} : { retryAfterSeconds: 30 }),
+      ...(op.last_error_code ? { lastErrorCode: op.last_error_code } : {}),
+      traceId: "relay",
+    };
+  });
+  const requestDelete = Effect.fn("AccountLifecycle.requestDelete")(function* (input: {
+    userId: string;
+    idempotencyKey: string;
+    identityDeleted?: boolean;
+  }) {
+    const existing = yield* getDeletion(input.userId);
+    if (existing.status === "deleted") return existing;
+    const outcome = yield* request({ ...input, kind: "delete" }).pipe(Effect.result);
+    if (outcome._tag === "Failure") {
+      if (
+        outcome.failure._tag === "AccountLifecycleConflict" &&
+        outcome.failure.code === "account_deleted"
+      ) {
+        const terminal = yield* getDeletion(input.userId);
+        if (terminal.status !== "absent") return terminal;
+      }
+      return yield* outcome.failure;
+    }
+    const op = outcome.success;
+    if (input.identityDeleted)
+      yield* sql`UPDATE relay_account_operations SET identity_deleted=1 WHERE id=${op.id}`.pipe(
+        Effect.mapError(unavailable),
+      );
+    const result = yield* getDeletion(input.userId);
+    if (result.status === "absent") return yield* unavailable();
+    return result;
+  });
   return AccountLifecycle.of({
+    requestDelete,
+    getDeletion,
     request,
     resume,
     getOperation,
     getAccount: Effect.fn("AccountLifecycle.getAccount")(function* (userId) {
+      const digest = yield* subjectDigest(userId).pipe(
+        Effect.provideService(RelayConfiguration, config),
+      );
       const [access] = yield* sql<{
         status: string;
         account_epoch: number;
-      }>`SELECT status,account_epoch FROM relay_account_access WHERE user_id=${userId}`;
+      }>`SELECT status,account_epoch FROM relay_account_access WHERE subject_digest=${digest} OR (subject_digest IS NULL AND user_id=${userId})`;
       const operations =
-        yield* sql<AccountOperation>`SELECT ${sql.literal(operationColumns)} FROM relay_account_operations WHERE user_id=${userId} ORDER BY created_at DESC LIMIT 20`;
+        yield* sql<AccountOperation>`SELECT ${sql.literal(operationColumns)} FROM relay_account_operations WHERE subject_digest=${digest} OR (subject_digest IS NULL AND user_id=${userId}) ORDER BY created_at DESC LIMIT 20`;
       return {
         status: access?.status ?? "not_invited",
         accountEpoch: access?.account_epoch ?? null,
@@ -275,6 +402,9 @@ const make = Effect.gen(function* () {
       };
     }, Effect.mapError(unavailable)),
     scanPending: Effect.gen(function* () {
+      yield* sql`DELETE FROM relay_account_operations WHERE kind='delete' AND completed_at<now()-interval '90 days' AND user_id IS NULL`.pipe(
+        Effect.mapError(unavailable),
+      );
       const due = yield* sql<{
         id: string;
       }>`SELECT id FROM relay_account_operations WHERE completed_at IS NULL AND next_attempt_at<=now() AND (lease_expires_at IS NULL OR lease_expires_at<now()) ORDER BY next_attempt_at LIMIT 20`.pipe(

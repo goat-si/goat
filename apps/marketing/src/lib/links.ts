@@ -1,6 +1,7 @@
 const REPOSITORY = "https://github.com/goat-si/goat";
 
 export const LINKS = {
+  deleteAccount: "https://app.trygoat.ai/account/delete",
   repository: REPOSITORY,
   guides: `${REPOSITORY}/tree/dev/docs/user`,
   contributing: `${REPOSITORY}/blob/dev/CONTRIBUTING.md`,

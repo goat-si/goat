@@ -4,6 +4,8 @@ import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 
 export const ManagedRelayRequestAction = Schema.Literals([
   "exchange relay DPoP access token",
+  "delete relay account",
+  "read relay account deletion",
   "list relay-managed environments",
   "list relay client devices",
   "create relay environment link challenge",

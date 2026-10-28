@@ -15,11 +15,15 @@ export async function runAccountAccess(
   if (url.protocol !== "https:" || url.username || url.password)
     throw new Error("RELAY_OPERATOR_URL must be an HTTPS origin without embedded credentials.");
   const [command, value, ...flags] = argv;
-  if (!value || !command || !["show", "suspend", "allow", "operation", "resume"].includes(command))
+  if (
+    !value ||
+    !command ||
+    !["show", "suspend", "allow", "delete", "operation", "resume"].includes(command)
+  )
     throw new Error(
-      "Usage: accounts:access show|suspend|allow <user> [--key <id>] or operation|resume <id>",
+      "Usage: accounts:access show|suspend|allow|delete <user> [--key <id>] or operation|resume <id>",
     );
-  const mutation = command === "suspend" || command === "allow";
+  const mutation = command === "suspend" || command === "allow" || command === "delete";
   const key = flags[0] === "--key" ? flags[1] : undefined;
   if (
     (mutation && (!key || flags.length !== 2 || !/^[A-Za-z0-9_-]{1,255}$/u.test(key))) ||

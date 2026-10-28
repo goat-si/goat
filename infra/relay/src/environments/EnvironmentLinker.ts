@@ -1,3 +1,4 @@
+import { assertEnabled } from "../auth/MintControl.ts";
 import * as AccountAccess from "../accounts/AccountAccess.ts";
 import * as AccountTransactions from "../accounts/AccountTransactions.ts";
 import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
@@ -170,6 +171,7 @@ const make = Effect.gen(function* () {
 
   return EnvironmentLinker.of({
     link: Effect.fn("relay.environment_linker.link")(function* (input) {
+      yield* assertEnabled(config);
       const admitted = yield* access.admit(input.userId);
       const now = yield* DateTime.now;
       const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);

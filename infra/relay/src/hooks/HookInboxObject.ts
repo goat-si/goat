@@ -26,7 +26,10 @@ export class HookInboxObject extends Cloudflare.DurableObject<
     /** Holds a request for `baseUrl`; false when the inbox is full and nothing was stored. */
     readonly hold: (hook: HookInboxStore.HeldHook, baseUrl: string) => Call<boolean>;
     readonly wake: (baseUrl: string) => Call<boolean>;
-    readonly clear: (authorization?: HookDeliveryAuthorization.HookAuthorization) => Call<void>;
+    readonly clear: (
+      authorization?: HookDeliveryAuthorization.HookAuthorization,
+      retire?: boolean,
+    ) => Call<void>;
   }
 >()("HookInboxObject") {}
 
@@ -96,8 +99,13 @@ export const makeWithAuthorization = Effect.fn("HookInboxObject.makeWithAuthoriz
     yield* run(HookInboxStore.migrate);
 
     const scheduleBy = Effect.fn("HookInboxObject.scheduleBy")(function* (at: number) {
+      if (yield* run(HookInboxStore.isClosed)) {
+        yield* state.storage.deleteAlarm();
+        return;
+      }
       const current = yield* state.storage.getAlarm();
       if (current === null || current > at) yield* state.storage.setAlarm(at);
+      if (yield* run(HookInboxStore.isClosed)) yield* state.storage.deleteAlarm();
     });
 
     // withInboxSpan supplies each method's root span; avoid a second wrapper span.
@@ -117,13 +125,18 @@ export const makeWithAuthorization = Effect.fn("HookInboxObject.makeWithAuthoriz
         function* (baseUrl: string) {
           const pending = yield* run(HookInboxStore.wake(baseUrl));
           yield* Effect.annotateCurrentSpan({ "relay.inbox.pending": pending });
-          if (pending) yield* state.storage.setAlarm(yield* Clock.currentTimeMillis);
+          if (pending) yield* scheduleBy(yield* Clock.currentTimeMillis);
           return pending;
         },
         withInboxSpan("relay.inbox.wake", inboxId),
       ),
       clear: Effect.fnUntraced(
-        function* (owner?: HookDeliveryAuthorization.HookAuthorization) {
+        function* (owner?: HookDeliveryAuthorization.HookAuthorization, retire?: boolean) {
+          if (retire) {
+            yield* run(HookInboxStore.close);
+            yield* state.storage.deleteAlarm();
+            return;
+          }
           const pending = owner
             ? yield* run(HookInboxStore.clearOwned(owner))
             : (yield* run(HookInboxStore.clear), false);

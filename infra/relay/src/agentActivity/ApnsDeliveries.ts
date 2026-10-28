@@ -498,6 +498,7 @@ export const make = Effect.gen(function* () {
         );
       if (input.sourceJobId) {
         const claim = yield* attempts.claimSourceJob({
+          accountEpoch: input.target.account_epoch,
           userId: input.target.user_id,
           environmentId: null,
           threadId: null,
@@ -645,6 +646,7 @@ export const make = Effect.gen(function* () {
         });
       } else {
         yield* attempts.record({
+          accountEpoch: input.target.account_epoch,
           userId: input.target.user_id,
           environmentId: null,
           threadId: null,
@@ -717,6 +719,7 @@ export const make = Effect.gen(function* () {
         );
       if (input.sourceJobId) {
         const claim = yield* attempts.claimSourceJob({
+          accountEpoch: input.target.account_epoch,
           userId: input.target.user_id,
           environmentId: notification.environmentId,
           threadId: notification.threadId,
@@ -822,6 +825,7 @@ export const make = Effect.gen(function* () {
         });
       } else {
         yield* attempts.record({
+          accountEpoch: input.target.account_epoch,
           userId: input.target.user_id,
           environmentId: notification.environmentId,
           threadId: notification.threadId,

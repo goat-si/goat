@@ -1,3 +1,9 @@
+import * as CloudSessionFence from "./CloudSessionFence.ts";
+import {
+  createDefaultClientMetadata,
+  toClientMetadata,
+  toAuthClientSession,
+} from "./sessionMetadata.ts";
 import {
   AuthSessionId,
   AuthStandardClientScopes,
@@ -390,6 +396,7 @@ export class SessionStore extends Context.Service<
      * with no SQL or lock, so it is safe inside a SQL transaction. Covers sessions loaded at
      * startup, issued here, or accepted by `verify`, including ones another process issued.
      */
+    readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
     readonly readActiveScopes: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope>, SessionCredentialError>;
@@ -474,37 +481,6 @@ type WebSocketClaims = typeof WebSocketClaims.Type;
 
 const decodeSessionClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(SessionClaims));
 const decodeWebSocketClaims = Schema.decodeUnknownEffect(Schema.fromJsonString(WebSocketClaims));
-
-function createDefaultClientMetadata(): AuthClientMetadata {
-  return {
-    deviceType: "unknown",
-  };
-}
-
-function toClientMetadata(record: {
-  readonly label: string | null;
-  readonly ipAddress: string | null;
-  readonly userAgent: string | null;
-  readonly deviceType: AuthClientMetadata["deviceType"];
-  readonly os: string | null;
-  readonly browser: string | null;
-}): AuthClientMetadata {
-  return {
-    ...(record.label ? { label: record.label } : {}),
-    ...(record.ipAddress ? { ipAddress: record.ipAddress } : {}),
-    ...(record.userAgent ? { userAgent: record.userAgent } : {}),
-    deviceType: record.deviceType,
-    ...(record.os ? { os: record.os } : {}),
-    ...(record.browser ? { browser: record.browser } : {}),
-  };
-}
-
-function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthClientSession {
-  return {
-    ...input,
-    current: false,
-  };
-}
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -614,6 +590,8 @@ export const make = Effect.gen(function* () {
       Effect.andThen(PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId })),
       Effect.asVoid,
     );
+
+  const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
 
   /** Registers a running verify; yields its ticket and the removal count it started at. */
   const beginVerify = Ref.modify(activeScopes, (current) => {
@@ -918,6 +896,7 @@ export const make = Effect.gen(function* () {
   const readActiveScopes: SessionStore["Service"]["readActiveScopes"] = Effect.fn(
     "SessionStore.readActiveScopes",
   )(function* (sessionId) {
+    yield* cloudFence.guardId(sessionId);
     const record = (yield* Ref.get(activeScopes)).records.get(sessionId);
     if (!record) return yield* new UnknownSessionTokenError({ sessionId });
     const observedAt = yield* DateTime.now;
@@ -1252,7 +1231,12 @@ export const make = Effect.gen(function* () {
               (cause) => new SessionCredentialVerificationError({ sessionId, cause }),
             ),
           );
-        if (Option.isNone(row) || row.value.revokedAt !== null) return;
+        if (
+          Option.isNone(row) ||
+          row.value.revokedAt !== null ||
+          (yield* cloudFence.denied(sessionId))
+        )
+          return;
         const now = yield* DateTime.now;
         const remaining = row.value.expiresAt.epochMilliseconds - now.epochMilliseconds;
         if (remaining <= 0) return;
@@ -1270,13 +1254,17 @@ export const make = Effect.gen(function* () {
   });
 
   return SessionStore.of({
+    setCloudWithdrawalPending: cloudFence.setPending,
     readActiveScopes,
     cookieName,
     legacyCookieName,
-    issue: (input) => authorityLock.withPermit(issue(input).pipe(Effect.uninterruptible)),
-    verify,
+    issue: (input) =>
+      authorityLock.withPermit(
+        issue(input).pipe(Effect.tap(cloudFence.observe), Effect.uninterruptible),
+      ),
+    verify: (token) => verify(token).pipe(Effect.tap(cloudFence.guard)),
     issueWebSocketToken,
-    verifyWebSocketToken,
+    verifyWebSocketToken: (token) => verifyWebSocketToken(token).pipe(Effect.tap(cloudFence.guard)),
     listActive,
     awaitInvalidation,
     get streamChanges() {

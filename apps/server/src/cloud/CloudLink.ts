@@ -1,3 +1,4 @@
+import * as CloudLinkRevocation from "./CloudLinkRevocation.ts";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createPublicKey.
 import * as NodeCrypto from "node:crypto";
@@ -542,6 +543,12 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const revocation = yield* CloudLinkRevocation.make;
+  yield* revocation.resumeLocal.pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("GOAT Connect local withdrawal remains pending", { errorTag: cause._tag }),
+    ),
+  );
 
   const withSecrets = Effect.provideService(ServerSecretStore.ServerSecretStore, secrets);
   const withRuntimeFiles = <A, E>(
@@ -669,6 +676,7 @@ const make = Effect.gen(function* () {
     });
     return yield* endpointRuntime.withLinkStateLock(
       Effect.gen(function* () {
+        yield* environmentAuth.withCloudCredentialPermit(Effect.void);
         const [runtimeBytes, markerBytes] = yield* Effect.all([
           secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
           secrets.get(CLOUD_ENDPOINT_CONFIRMED_ORIGIN),
@@ -709,6 +717,12 @@ const make = Effect.gen(function* () {
     },
   ) {
     const apply = Effect.gen(function* () {
+      if (yield* revocation.pending)
+        return yield* new CloudLinkInternalError({
+          operation: "persist-relay-config",
+          cause: "Local withdrawal journal remains pending",
+        });
+      yield* environmentAuth.withCloudCredentialPermit(Effect.void);
       yield* validateRelayConfigPayload(payload);
       if (payload.connectAuthPolicyVersion !== 1)
         return yield* new CloudLinkProofRejectedError({ request: "mint" });
@@ -941,6 +955,13 @@ const make = Effect.gen(function* () {
       { concurrency: 8 },
     );
     return {
+      cloudLinkRevocation: (yield* revocation.pending.pipe(
+        Effect.mapError(
+          (cause) => new CloudLinkInternalError({ operation: "read-relay-config", cause }),
+        ),
+      ))
+        ? "pending"
+        : "complete",
       linked: Option.isSome(cloudUserId),
       linkRevoked: Option.isSome(cloudUserId) && Option.isSome(revoked),
       cloudUserId: Option.isSome(cloudUserId) ? bytesToString(cloudUserId.value) : null,
@@ -963,35 +984,12 @@ const make = Effect.gen(function* () {
     Effect.catchIf(ServerSecretStore.isSecretStoreError, internalError("read-relay-config")),
   );
 
-  const unlink = Effect.fn("environment.cloud.unlink")(
-    function* () {
-      return yield* endpointRuntime.withLinkStateLock(
-        Effect.gen(function* () {
-          yield* environmentAuth
-            .setCloudLinkTrust(null)
-            .pipe(Effect.catch(internalError("remove-relay-config")));
-          const endpointRuntimeStatus = yield* endpointRuntime.applyConfig(null);
-          yield* Effect.all(
-            [
-              secrets.remove(CLOUD_LINKED_USER_ID),
-              secrets.remove(RELAY_URL_SECRET),
-              secrets.remove(RELAY_ISSUER_SECRET),
-              secrets.remove(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
-              secrets.remove(CLOUD_MINT_PUBLIC_KEY),
-              secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG),
-              secrets.remove(CLOUD_ENDPOINT_CONFIRMED_ORIGIN),
-              secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
-              secrets.remove(HOLD_WEBHOOKS_WHILE_OFFLINE_SECRET),
-              secrets.remove(CLOUD_LINK_REVOKED),
-            ],
-            { concurrency: 10 },
-          );
-          yield* setCliDesiredCloudLink(false).pipe(withSecrets);
-          return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
-        }),
-      );
-    },
-    Effect.catchIf(ServerSecretStore.isSecretStoreError, internalError("remove-relay-config")),
+  const unlink = Effect.fn("environment.cloud.unlink")(() =>
+    revocation.unlink.pipe(
+      Effect.mapError(
+        (cause) => new CloudLinkInternalError({ operation: "remove-relay-config", cause }),
+      ),
+    ),
   );
 
   const pushHoldWebhooksWhileOffline = Effect.fn("CloudPreferences.pushHoldWebhooksWhileOffline")(
@@ -1174,121 +1172,125 @@ const make = Effect.gen(function* () {
 
   const mintCredential = Effect.fn("environment.cloud.mintCredential")(
     (request: RelayCloudMintCredentialRequest) =>
+      // Same order as withdrawal (link-state lock, then credential permit) so neither can deadlock.
       endpointRuntime.withLinkStateLock(
-        Effect.gen(function* () {
-          const cloudMintPublicKey = yield* secrets
-            .get(CLOUD_MINT_PUBLIC_KEY)
-            .pipe(
-              Effect.flatMap((bytes) =>
-                Option.isSome(bytes)
-                  ? Effect.succeed(bytesToString(bytes.value))
-                  : Effect.fail(new EnvironmentAuth.ServerAuthCloudMintPublicKeyMissingError({})),
-              ),
-            );
-          const relayIssuer = yield* secrets
-            .get(RELAY_ISSUER_SECRET)
-            .pipe(
-              Effect.flatMap((bytes) =>
-                Option.isSome(bytes)
-                  ? Effect.succeed(bytesToString(bytes.value))
-                  : secrets
-                      .get(RELAY_URL_SECRET)
-                      .pipe(
-                        Effect.flatMap((fallbackBytes) =>
-                          Option.isSome(fallbackBytes)
-                            ? Effect.succeed(bytesToString(fallbackBytes.value))
-                            : Effect.fail(
-                                new EnvironmentAuth.ServerAuthCloudRelayIssuerMissingError({}),
-                              ),
+        environmentAuth.withCloudCredentialPermit(
+          Effect.gen(function* () {
+            const cloudMintPublicKey = yield* secrets
+              .get(CLOUD_MINT_PUBLIC_KEY)
+              .pipe(
+                Effect.flatMap((bytes) =>
+                  Option.isSome(bytes)
+                    ? Effect.succeed(bytesToString(bytes.value))
+                    : Effect.fail(new EnvironmentAuth.ServerAuthCloudMintPublicKeyMissingError({})),
+                ),
+              );
+            const relayIssuer = yield* secrets
+              .get(RELAY_ISSUER_SECRET)
+              .pipe(
+                Effect.flatMap((bytes) =>
+                  Option.isSome(bytes)
+                    ? Effect.succeed(bytesToString(bytes.value))
+                    : secrets
+                        .get(RELAY_URL_SECRET)
+                        .pipe(
+                          Effect.flatMap((fallbackBytes) =>
+                            Option.isSome(fallbackBytes)
+                              ? Effect.succeed(bytesToString(fallbackBytes.value))
+                              : Effect.fail(
+                                  new EnvironmentAuth.ServerAuthCloudRelayIssuerMissingError({}),
+                                ),
+                          ),
                         ),
-                      ),
+                ),
+              );
+            const environmentId = yield* environment.getEnvironmentId;
+            const linkedCloudUserId = yield* readInstalledCloudUserId;
+            const now = yield* DateTime.now;
+            const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
+            const proofOption = yield* verifyRelayJwt({
+              publicKey: cloudMintPublicKey,
+              token: request.proof,
+              typ: RELAY_MINT_REQUEST_TYP,
+              issuer: normalizeRelayIssuer(relayIssuer),
+              audience: `goat-env:${environmentId}`,
+              nowEpochSeconds: nowSeconds,
+            }).pipe(Effect.flatMap(decodeCloudMintProof), Effect.option);
+            if (
+              Option.isNone(proofOption) ||
+              proofOption.value.connectAuthPolicyVersion !== 1 ||
+              proofOption.value.assurance?.policyVersion !== 1 ||
+              proofOption.value.assurance.userId !== proofOption.value.sub ||
+              Option.getOrNull(
+                yield* secrets.get("cloud-connect-auth-policy-version"),
+              )?.toString() !== stringToBytes("1").toString() ||
+              proofOption.value.environmentId !== environmentId ||
+              proofOption.value.sub !== linkedCloudUserId ||
+              proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
+              !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
+              !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
+            ) {
+              return yield* new CloudLinkProofRejectedError({ request: "mint" });
+            }
+            const proof = proofOption.value;
+
+            const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
+            const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
+            const consumedReplayGuards = yield* consumeCloudReplayGuards({
+              secrets,
+              names: [jtiSecretName, nonceSecretName],
+              value: stringToBytes(DateTime.formatIso(now)),
+            });
+            if (!consumedReplayGuards) {
+              return yield* new CloudLinkProofReplayedError({ request: "mint" });
+            }
+
+            const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+            const issued = yield* environmentAuth.createPairingLink({
+              scopes: AuthStandardClientScopes,
+              subject: "cloud-connect",
+              ttl: Duration.minutes(2),
+              label: "GOAT Connect connect",
+              proofKeyThumbprint: proof.clientProofKeyThumbprint,
+            });
+            const responsePayload = {
+              connectAuthPolicyVersion: 1,
+              iss: `goat-env:${environmentId}`,
+              aud: normalizeRelayIssuer(relayIssuer),
+              sub: environmentId,
+              jti: yield* crypto.randomUUIDv4(),
+              iat: nowSeconds,
+              exp: Math.floor(issued.expiresAt.epochMilliseconds / 1_000),
+              environmentId,
+              clientProofKeyThumbprint: proof.clientProofKeyThumbprint,
+              requestNonce: proof.nonce,
+              credential: issued.credential,
+            } satisfies RelayEnvironmentMintResponseProofPayload;
+            const responseProof = yield* signRelayJwt({
+              privateKey: keyPair.privateKey,
+              typ: RELAY_MINT_RESPONSE_TYP,
+              payload: responsePayload,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({
+                    cause,
+                  }),
               ),
             );
-          const environmentId = yield* environment.getEnvironmentId;
-          const linkedCloudUserId = yield* readInstalledCloudUserId;
-          const now = yield* DateTime.now;
-          const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
-          const proofOption = yield* verifyRelayJwt({
-            publicKey: cloudMintPublicKey,
-            token: request.proof,
-            typ: RELAY_MINT_REQUEST_TYP,
-            issuer: normalizeRelayIssuer(relayIssuer),
-            audience: `goat-env:${environmentId}`,
-            nowEpochSeconds: nowSeconds,
-          }).pipe(Effect.flatMap(decodeCloudMintProof), Effect.option);
-          if (
-            Option.isNone(proofOption) ||
-            proofOption.value.connectAuthPolicyVersion !== 1 ||
-            proofOption.value.assurance?.policyVersion !== 1 ||
-            proofOption.value.assurance.userId !== proofOption.value.sub ||
-            Option.getOrNull(
-              yield* secrets.get("cloud-connect-auth-policy-version"),
-            )?.toString() !== stringToBytes("1").toString() ||
-            proofOption.value.environmentId !== environmentId ||
-            proofOption.value.sub !== linkedCloudUserId ||
-            proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
-            !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
-            !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
-          ) {
-            return yield* new CloudLinkProofRejectedError({ request: "mint" });
-          }
-          const proof = proofOption.value;
-
-          const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
-          const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
-          const consumedReplayGuards = yield* consumeCloudReplayGuards({
-            secrets,
-            names: [jtiSecretName, nonceSecretName],
-            value: stringToBytes(DateTime.formatIso(now)),
-          });
-          if (!consumedReplayGuards) {
-            return yield* new CloudLinkProofReplayedError({ request: "mint" });
-          }
-
-          const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
-          const issued = yield* environmentAuth.createPairingLink({
-            scopes: AuthStandardClientScopes,
-            subject: "cloud-connect",
-            ttl: Duration.minutes(2),
-            label: "GOAT Connect connect",
-            proofKeyThumbprint: proof.clientProofKeyThumbprint,
-          });
-          const responsePayload = {
-            connectAuthPolicyVersion: 1,
-            iss: `goat-env:${environmentId}`,
-            aud: normalizeRelayIssuer(relayIssuer),
-            sub: environmentId,
-            jti: yield* crypto.randomUUIDv4(),
-            iat: nowSeconds,
-            exp: Math.floor(issued.expiresAt.epochMilliseconds / 1_000),
-            environmentId,
-            clientProofKeyThumbprint: proof.clientProofKeyThumbprint,
-            requestNonce: proof.nonce,
-            credential: issued.credential,
-          } satisfies RelayEnvironmentMintResponseProofPayload;
-          const responseProof = yield* signRelayJwt({
-            privateKey: keyPair.privateKey,
-            typ: RELAY_MINT_RESPONSE_TYP,
-            payload: responsePayload,
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({
-                  cause,
-                }),
-            ),
-          );
-          return {
-            credential: issued.credential,
-            expiresAt: DateTime.formatIso(issued.expiresAt),
-            proof: responseProof,
-          } satisfies RelayEnvironmentMintResponse;
-        }),
+            return {
+              credential: issued.credential,
+              expiresAt: DateTime.formatIso(issued.expiresAt),
+              proof: responseProof,
+            } satisfies RelayEnvironmentMintResponse;
+          }),
+        ),
       ),
     Effect.catchIf(ServerSecretStore.isSecretStoreError, internalError("issue-credential")),
     Effect.catchTags({ PlatformError: internalError("issue-credential") }),
   );
 
+  yield* revocation.start;
   return CloudLink.of({
     linkProof,
     applyRelayConfig,

@@ -19,14 +19,24 @@ const time = (name: string) => timestamp(name, { withTimezone: true, mode: "stri
 export const relayAccountAccess = pgTable(
   "relay_account_access",
   {
-    userId: varchar("user_id", { length: 255 }).primaryKey(),
-    status: varchar("status", { length: 16 }).notNull().$type<"allowed" | "suspended">(),
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectDigest: text("subject_digest").unique(),
+    userId: varchar("user_id", { length: 255 }).unique(),
+    deletionRequestedAt: time("deletion_requested_at"),
+    relayErasedAt: time("relay_erased_at"),
+    status: varchar("status", { length: 16 })
+      .notNull()
+      .$type<"allowed" | "suspended" | "deleted">(),
     accountEpoch: integer("account_epoch").notNull(),
     createdAt: time("created_at").notNull().defaultNow(),
     updatedAt: time("updated_at").notNull().defaultNow(),
   },
   (t) => [
-    check("relay_access_status", sql`${t.status} IN ('allowed','suspended')`),
+    check("relay_access_status", sql`${t.status} IN ('allowed','suspended','deleted')`),
+    check(
+      "relay_deleted_identity",
+      sql`${t.status} <> 'deleted' OR (${t.subjectDigest} IS NOT NULL AND ${t.userId} IS NULL AND ${t.relayErasedAt} IS NOT NULL)`,
+    ),
     check("relay_access_epoch", sql`${t.accountEpoch} >= 1`),
   ],
 );
@@ -35,13 +45,18 @@ export const relayAccountOperations = pgTable(
   "relay_account_operations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: varchar("user_id", { length: 255 }).notNull(),
-    kind: varchar("kind", { length: 16 }).notNull().$type<"suspend" | "allow">(),
+    subjectDigest: text("subject_digest"),
+    userId: varchar("user_id", { length: 255 }),
+    identityDeleted: integer("identity_deleted").notNull().default(0),
+    hostAcknowledged: integer("host_acknowledged").notNull().default(0),
+    kind: varchar("kind", { length: 16 }).notNull().$type<"suspend" | "allow" | "delete">(),
     accountEpoch: integer("account_epoch").notNull(),
     expectedEpoch: integer("expected_epoch").notNull(),
     idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
     requestHash: text("request_hash").notNull(),
-    state: varchar("state", { length: 16 }).notNull().$type<"pending" | "running" | "completed">(),
+    state: varchar("state", { length: 16 })
+      .notNull()
+      .$type<"pending" | "running" | "completed" | "superseded">(),
     stepState: jsonb("step_state").notNull().$type<AccountOperationProgress>(),
     leaseOwner: uuid("lease_owner"),
     leaseExpiresAt: time("lease_expires_at"),
@@ -54,14 +69,17 @@ export const relayAccountOperations = pgTable(
     completedAt: time("completed_at"),
   },
   (t) => [
-    uniqueIndex("idx_relay_operation_idempotency").on(t.userId, t.idempotencyKey),
+    uniqueIndex("idx_relay_operation_idempotency").on(t.subjectDigest, t.idempotencyKey),
     uniqueIndex("idx_relay_operation_pending")
-      .on(t.userId)
+      .on(t.subjectDigest)
       .where(sql`${t.completedAt} IS NULL`),
     index("idx_relay_operation_due").on(t.nextAttemptAt, t.leaseExpiresAt),
     check("relay_operation_epochs", sql`${t.accountEpoch} >= 1 AND ${t.expectedEpoch} >= 0`),
-    check("relay_operation_kind", sql`${t.kind} IN ('suspend','allow')`),
-    check("relay_operation_state", sql`${t.state} IN ('pending','running','completed')`),
+    check("relay_operation_kind", sql`${t.kind} IN ('suspend','allow','delete')`),
+    check(
+      "relay_operation_state",
+      sql`${t.state} IN ('pending','running','completed','superseded')`,
+    ),
   ],
 );
 
@@ -123,10 +141,11 @@ export const relayRetiredEndpoints = pgTable(
   "relay_retired_endpoints",
   {
     stage: text("stage").notNull(),
-    userId: varchar("user_id", { length: 255 }).notNull(),
-    environmentId: text("environment_id").notNull(),
+    subjectDigest: text("subject_digest"),
+    userId: varchar("user_id", { length: 255 }),
+    environmentId: text("environment_id"),
     generation: integer("generation").notNull(),
-    endpointKey: text("endpoint_key").notNull(),
+    endpointKey: text("endpoint_key").primaryKey(),
     tunnelName: text("tunnel_name").notNull(),
     hostname: text("hostname").notNull(),
     tunnelId: text("tunnel_id"),
@@ -134,7 +153,6 @@ export const relayRetiredEndpoints = pgTable(
     createdAt: time("created_at").notNull().defaultNow(),
   },
   (t) => [
-    primaryKey({ columns: [t.stage, t.userId, t.environmentId, t.generation] }),
     uniqueIndex("idx_relay_retired_key").on(t.endpointKey),
     uniqueIndex("idx_relay_retired_name").on(t.tunnelName),
     uniqueIndex("idx_relay_retired_hostname").on(t.hostname),
@@ -197,10 +215,23 @@ export const relayAccountOperationRequests = pgTable(
   "relay_account_operation_requests",
   {
     userId: varchar("user_id", { length: 255 }).notNull(),
+    subjectDigest: text("subject_digest"),
     idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
     operationId: uuid("operation_id")
       .notNull()
       .references(() => relayAccountOperations.id),
   },
   (t) => [primaryKey({ columns: [t.userId, t.idempotencyKey] })],
+);
+
+export const relayHostRevocations = pgTable(
+  "relay_host_revocations",
+  {
+    id: text("id").primaryKey(),
+    subjectDigest: text("subject_digest").notNull(),
+    credentialDigest: text("credential_digest").notNull().unique(),
+    targetDigest: text("target_digest").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("idx_relay_revocation_subject_target").on(t.subjectDigest, t.targetDigest)],
 );

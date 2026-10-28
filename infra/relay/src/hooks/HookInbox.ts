@@ -29,6 +29,7 @@ export class HookInbox extends Context.Service<
       readonly baseUrl: string;
     }) => Effect.Effect<boolean, HookInboxError>;
     readonly clear: (input: {
+      readonly retire?: boolean;
       readonly authorization?: HookAuthorization;
       readonly endpointKey: string;
     }) => Effect.Effect<void, HookInboxError>;

@@ -525,6 +525,7 @@ export function connectReachabilityHelpUrl(cause: EnvironmentConnectReachability
 }
 
 export const EnvironmentCloudLinkStateResult = Schema.Struct({
+  cloudLinkRevocation: Schema.optionalKey(Schema.Literals(["pending", "complete"])),
   linked: Schema.Boolean,
   cloudUserId: Schema.NullOr(Schema.String),
   relayUrl: Schema.NullOr(Schema.String),

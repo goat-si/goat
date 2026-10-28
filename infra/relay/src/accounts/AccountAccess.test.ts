@@ -1,3 +1,5 @@
+import { testConfig } from "./test/PolicyPostgresLayers.ts";
+import * as RelayConfiguration from "../Config.ts";
 import { it, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,6 +37,13 @@ it.live("denies absent users and stale epochs across suspend and allow without a
       expect(
         (yield* Effect.flip(access.requireAllowed({ userId: "fixture", accountEpoch: 1 })))._tag,
       ).toBe("RelayAccountEpochStaleError");
-    }).pipe(Effect.provide(AccountAccess.layer.pipe(Layer.provide(dbLayer))));
+    }).pipe(
+      Effect.provide(
+        AccountAccess.layer.pipe(
+          Layer.provide(dbLayer),
+          Layer.provide(RelayConfiguration.layer(testConfig)),
+        ),
+      ),
+    );
   }),
 );

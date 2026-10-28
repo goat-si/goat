@@ -282,3 +282,46 @@ it.live.each(["challenge", "dpop"] as const)(
       }).pipe(Effect.provide(runtime));
     }),
 );
+
+it.effect(
+  "the issuance pause rejects direct service minting and disabling the pause restores signed credential issuance",
+  () =>
+    Effect.gen(function* () {
+      const issue = Effect.gen(function* () {
+        const service = yield* RelayTokens.RelayTokens;
+        return yield* service.issueLinkChallenge({
+          userId: "fixture-owner",
+          request: {
+            notificationsEnabled: true,
+            liveActivitiesEnabled: true,
+            managedTunnelsEnabled: false,
+          },
+          jti: "fixture-nonce",
+          issuedAtEpochSeconds: 100,
+          expiresAtEpochSeconds: 200,
+        });
+      });
+      const makeLayer = (mintDisabled: boolean) =>
+        RelayTokens.layer.pipe(
+          Layer.provide(policyUnitLayer),
+          Layer.provide(RelayConfiguration.layer({ ...config, mintDisabled })),
+        );
+      expect((yield* issue.pipe(Effect.provide(makeLayer(true)), Effect.flip))._tag).toBe(
+        "RelayMintDisabledError",
+      );
+      const token = yield* issue.pipe(Effect.provide(makeLayer(false)));
+      const verified = yield* Effect.gen(function* () {
+        return yield* (yield* RelayTokens.RelayTokens).verifyLinkChallenge({
+          token,
+          userId: "fixture-owner",
+          request: {
+            notificationsEnabled: true,
+            liveActivitiesEnabled: true,
+            managedTunnelsEnabled: false,
+          },
+          nowEpochSeconds: 150,
+        });
+      }).pipe(Effect.provide(makeLayer(false)));
+      expect(verified?.sub).toBe("fixture-owner");
+    }),
+);

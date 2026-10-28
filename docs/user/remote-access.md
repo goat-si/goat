@@ -17,6 +17,14 @@ Previously linked servers start normally and keep their stored link dormant.
 Saved environments with only a GOAT Connect route show as unavailable; add a
 direct or Tailscale route, or forget the environment in connection settings.
 
+For invited builds with GOAT Connect enabled, open the GOAT Connect account page and choose
+**Delete account**, or visit the hosted app's `/account/delete` page. Verify with MFA within ten
+minutes. Relay data is deleted first; refresh status to resume, then finish deleting the sign-in
+account. If the final identity step fails, sign in to the same account and resume. Machines with
+unconfirmed cleanup can keep existing local sessions until they reconnect or you unlink them
+locally. Older machines need an update or local unlink; a machine offline until beta ends needs
+local unlink. Local projects and independent connections stay on your machines.
+
 ## Connect your phone to a hub
 
 A hub is the one GOAT server your phone pairs with, ideally a machine that stays

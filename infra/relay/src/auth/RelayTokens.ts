@@ -1,3 +1,4 @@
+import { assertEnabled } from "./MintControl.ts";
 import * as AccountAccess from "../accounts/AccountAccess.ts";
 import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import {
@@ -147,6 +148,7 @@ const make = Effect.gen(function* () {
   const issueLinkChallenge: RelayTokens["Service"]["issueLinkChallenge"] = Effect.fn(
     "relay.tokens.issue_link_challenge",
   )(function* (input) {
+    yield* assertEnabled(config);
     const admitted = yield* access.admit(input.userId);
     yield* rates.charge({ userId: input.userId, operation: "link_challenge" });
     yield* access.requireAllowed(admitted);
@@ -209,6 +211,7 @@ const make = Effect.gen(function* () {
   const issueDpopAccessToken: RelayTokens["Service"]["issueDpopAccessToken"] = Effect.fn(
     "relay.tokens.issue_dpop_access_token",
   )(function* (input) {
+    yield* assertEnabled(config);
     const admitted = yield* access.admit(input.userId);
     yield* rates.charge({ userId: input.userId, operation: "dpop_token" });
     yield* access.requireAllowed(admitted);

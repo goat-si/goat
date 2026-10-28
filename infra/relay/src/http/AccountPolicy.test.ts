@@ -45,6 +45,7 @@ import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 
 it("classifies every authenticated endpoint by its typed endpoint name", () => {
   for (const group of [
+    RelayApi.groups.account,
     RelayApi.groups.client,
     RelayApi.groups.dpopClient,
     RelayApi.groups.mobile,

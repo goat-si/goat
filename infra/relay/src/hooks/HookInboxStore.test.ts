@@ -206,3 +206,22 @@ describe("HookInboxStore", () => {
     ),
   );
 });
+
+it.effect(
+  "retiring an inbox permanently removes held payloads and refuses late hold and wake",
+  () =>
+    withInbox(
+      Effect.gen(function* () {
+        yield* HookInboxStore.hold(yield* hook("before-close"), BASE_URL);
+        yield* HookInboxStore.close;
+        expect(yield* HookInboxStore.isClosed).toBe(true);
+        expect(yield* HookInboxStore.hold(yield* hook("late"), BASE_URL)).toBeNull();
+        expect(yield* HookInboxStore.wake(BASE_URL)).toBe(false);
+        yield* HookInboxStore.migrate;
+        expect(yield* HookInboxStore.isClosed).toBe(true);
+        const sql = yield* SqlClient.SqlClient;
+        expect(yield* sql`SELECT id FROM held_hooks`).toEqual([]);
+        expect(yield* sql`SELECT id FROM held_hooks_target`).toEqual([]);
+      }),
+    ),
+);

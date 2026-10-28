@@ -199,6 +199,9 @@ describe("releaseManagedTunnelOnShutdown", () => {
           EnvironmentAuth.EnvironmentAuth,
           EnvironmentAuth.EnvironmentAuth.of({
             setCloudLinkTrust: () => Effect.void,
+            withCloudCredentialPermit: (effect) => effect,
+            withdrawCloudCredentials: () => Effect.void,
+            completeCloudWithdrawal: () => Effect.void,
           } as EnvironmentAuth.EnvironmentAuth["Service"]),
         ),
         Effect.provideService(
@@ -215,16 +218,20 @@ describe("releaseManagedTunnelOnShutdown", () => {
         Effect.provideService(
           HttpClient.HttpClient,
           HttpClient.make((request) =>
-            Effect.sync(() => {
-              harness.requests.push(request);
-            }).pipe(
-              Effect.andThen(harness.onRequest?.(request) ?? Effect.void),
-              Effect.andThen(
-                harness.respondEffect ??
-                  Effect.sync(() => (harness.respond ?? (() => Response.json({ ok: true })))()),
-              ),
-              Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
-            ),
+            request.url.includes("/cloud-revocation")
+              ? Effect.succeed(
+                  HttpClientResponse.fromWeb(request, new Response(null, { status: 404 })),
+                )
+              : Effect.sync(() => {
+                  harness.requests.push(request);
+                }).pipe(
+                  Effect.andThen(harness.onRequest?.(request) ?? Effect.void),
+                  Effect.andThen(
+                    harness.respondEffect ??
+                      Effect.sync(() => (harness.respond ?? (() => Response.json({ ok: true })))()),
+                  ),
+                  Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
+                ),
           ),
         ),
 

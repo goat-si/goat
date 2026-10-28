@@ -1,12 +1,11 @@
-import {
-  isManagedEndpointNotFound,
-  isManagedEndpointTunnelInUse,
-} from "./managedEndpointOrigin.ts";
+import { assertEnabled } from "../auth/MintControl.ts";
 export {
   isManagedEndpointNotFound,
   isManagedEndpointTunnelInUse,
 } from "./managedEndpointOrigin.ts";
 import {
+  isManagedEndpointNotFound,
+  isManagedEndpointTunnelInUse,
   formatOriginService,
   normalizeHostname,
   isLoopbackOrigin,
@@ -35,7 +34,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-
 import type {
   RelayManagedEndpoint,
   RelayManagedEndpointOrigin,
@@ -663,6 +661,7 @@ export const make = Effect.gen(function* () {
       readonly origin: RelayManagedEndpointOrigin;
       readonly endpoint: RelayManagedEndpoint;
     }) {
+      yield* assertEnabled(config);
       if (!isLoopbackOrigin(input.origin)) {
         return yield* new ManagedEndpointOriginNotAllowed({
           userId: input.userId,
@@ -1087,6 +1086,7 @@ export const make = Effect.gen(function* () {
       return Option.getOrElse(released, () => false);
     }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
+      yield* assertEnabled(config);
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
         "relay.environment_id": input.environmentId,
