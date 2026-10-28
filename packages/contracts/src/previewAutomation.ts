@@ -410,12 +410,36 @@ export const PreviewAutomationSelectResult = Schema.Struct({
 });
 export type PreviewAutomationSelectResult = typeof PreviewAutomationSelectResult.Type;
 
+const PagePoint = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
+
 export const PreviewAutomationDragInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
-  source: Locator,
-  target: Locator,
+  source: Schema.optional(Locator),
+  target: Schema.optional(Locator),
+  from: Schema.optional(PagePoint).annotate({
+    description: "Viewport point where the drag starts, for maps and canvases without elements.",
+  }),
+  to: Schema.optional(PagePoint),
+  steps: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })).annotate({
+      description: "Pointer moves between from and to. Default 10.",
+    }),
+  ),
   timeoutMs: OptionalTimeoutMs,
-});
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      (input.source !== undefined &&
+        input.target !== undefined &&
+        input.from === undefined &&
+        input.to === undefined) ||
+      (input.from !== undefined &&
+        input.to !== undefined &&
+        input.source === undefined &&
+        input.target === undefined) ||
+      "Provide source and target locators, or from and to points.",
+  ),
+);
 export type PreviewAutomationDragInput = typeof PreviewAutomationDragInput.Type;
 
 export const PreviewAutomationUploadInput = Schema.Struct({
@@ -468,11 +492,18 @@ export const PreviewAutomationScrollInput = Schema.Struct({
   deltaY: Schema.optional(Schema.Finite),
   selector: Schema.optional(LegacySelector),
   locator: Schema.optional(Locator),
+  x: Schema.optional(Schema.Finite).annotate({
+    description: "With y, send a real wheel at this viewport point, as for zooming a map.",
+  }),
+  y: Schema.optional(Schema.Finite),
 }).check(
   Schema.makeFilter((input) => {
     if (input.selector !== undefined && input.locator !== undefined) {
       return "Provide at most one of selector or locator.";
     }
+    if ((input.x === undefined) !== (input.y === undefined)) return "Provide x and y together.";
+    if (input.x !== undefined && (input.selector !== undefined || input.locator !== undefined))
+      return "Provide a point or a locator, not both.";
     return input.deltaX !== undefined || input.deltaY !== undefined || "Provide deltaX or deltaY.";
   }),
 );
@@ -802,14 +833,28 @@ export class PreviewAutomationUnsupportedClientError extends Schema.TaggedError<
   }
 }
 
+/** The tab a caller named was a popup that closed: where its opener is, so the caller can go back. */
+export const PreviewAutomationClosedPopup = Schema.Struct({
+  openerTabId: TrimmedNonEmptyString,
+  openerOpen: Schema.Boolean,
+});
+export type PreviewAutomationClosedPopup = typeof PreviewAutomationClosedPopup.Type;
+
+export const closedPopupMessage = (tabId: string, popup: PreviewAutomationClosedPopup) =>
+  popup.openerOpen
+    ? `Tab ${tabId}, a popup, has closed. Its opener ${popup.openerTabId} is still open: pass tabId ${popup.openerTabId} to continue there.`
+    : `Tab ${tabId}, a popup, has closed and its opener ${popup.openerTabId} is gone too. Choose a tab from goat_preview_status.`;
+
 export class PreviewAutomationTabNotFoundError extends Schema.TaggedError<PreviewAutomationTabNotFoundError>()(
   "PreviewAutomationTabNotFoundError",
   {
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
+    closedPopup: Schema.optional(PreviewAutomationClosedPopup),
   },
 ) {
   override get message(): string {
+    if (this.tabId && this.closedPopup) return closedPopupMessage(this.tabId, this.closedPopup);
     return this.tabId
       ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_call {path:"preview.open"}.`
       : `No active preview tab was found for ${this.operation}. Call goat_call {path:"preview.open"} first.`;

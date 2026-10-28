@@ -93,6 +93,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
@@ -321,6 +322,8 @@ interface ServerTab {
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
   agentOperating: boolean;
+  /** Whose input last reached this tab, and so whose popups it opens. */
+  readonly popups: AgentTabState.PopupAttribution;
   fileChooserIntercepted: boolean;
   readonly onFileChooser: (chooser: FileChooser) => void;
 
@@ -406,6 +409,7 @@ const make = Effect.gen(function* () {
 
   const closedPendingTabs = new Set<string>();
   const adoptedPages = new Map<string, { readonly page: Page; readonly openerTabId: string }>();
+  const closedPopups = new AgentTabState.ClosedPopups();
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
@@ -593,6 +597,7 @@ const make = Effect.gen(function* () {
     if (tabs.get(key) !== tab) return;
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
+    if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
     tab.closing = true;
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
@@ -693,6 +698,7 @@ const make = Effect.gen(function* () {
       actionTimeline: [],
       control,
       agentOperating: false,
+      popups: new AgentTabState.PopupAttribution(),
       fileChooserIntercepted: false,
       onFileChooser: (chooser) => void offerFileChooser(tab, chooser),
       isolatedContext,
@@ -788,6 +794,7 @@ const make = Effect.gen(function* () {
     updateFileChooserInterception(tab);
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
     page.on("popup", (popup) => void adoptPopup(tab, popup));
+    void AgentTabState.watchOpenings(cdp, tab, () => Date.now()).catch(constVoid);
     // Playwright cannot reload a crashed page, so it must leave the tab list.
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
@@ -1103,7 +1110,8 @@ const make = Effect.gen(function* () {
   };
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const agentId = opener.control.agentId;
+    const targetId = await AgentTabState.targetIdOf(popup).catch(() => undefined);
+    const agentId = opener.popups.owner(targetId, opener, Date.now());
     if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
       await popup.close().catch(constVoid);
       return;
@@ -1119,9 +1127,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
-        ...(opener.control.agentId === null
-          ? {}
-          : { automationOwner: opener.control.agentId, reveal: false }),
+        ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
             page: popup,
@@ -1130,8 +1136,7 @@ const make = Effect.gen(function* () {
       }),
     ).then(
       (snapshot) => {
-        if (opener.control.agentId === null)
-          controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+        if (agentId === null) controller?.push({ _tag: "popup", tabId: snapshot.tabId });
       },
       async () => {
         await popup.close().catch(constVoid);
@@ -1617,22 +1622,14 @@ const make = Effect.gen(function* () {
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
     );
     if (!request.tabIdExplicit && owned.length > 1)
-      throw new BrowserControlInterrupted(
-        'Multiple tabs belong to this agent session. Pass a tabId from goat_call {path:"preview.open"} or goat_call {path:"preview.status"} tabs.',
-        "tabRequired",
-      );
+      throw new BrowserControlInterrupted(AgentTabState.tabChoice(owned), "tabRequired");
     const tab =
       request.tabId === undefined
         ? latestThreadTab(request.threadId, request.agentSessionId)
         : await runPromise(
             findTab(request.threadId, request.tabId).pipe(Effect.orElseSucceed(constVoid)),
           );
-    if (!tab) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationTabNotFoundError",
-        'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
-      );
-    }
+    if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted(
@@ -1855,10 +1852,14 @@ const make = Effect.gen(function* () {
           );
         const generation = tab.control.generation;
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
+        if (tab.agentOperating)
+          tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(tab, request, deadlineMs, signal);
         } finally {
+          if (tab.agentOperating)
+            tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
@@ -1909,12 +1910,10 @@ const make = Effect.gen(function* () {
         await runPromise(
           manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
         );
-        await applySetting(tab, setting);
-        return {
-          tabId: tab.tabId,
-          setting,
-          viewport: tab.page.viewportSize() ?? UNATTACHED_FILL_VIEWPORT,
-        };
+        const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
+          applySetting(tab, setting),
+        );
+        return { tabId: tab.tabId, setting, ...sized(setting) };
       }
       case "setColorScheme": {
         const { colorScheme } = input as PreviewAutomationSetColorSchemeInput;
