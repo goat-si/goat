@@ -455,18 +455,12 @@ export function render(inventory: Inventory): string {
     "## Schemas and envelopes",
     "",
     "- **Undeclared arguments.** " +
-      extraKeys.length +
-      " of " +
-      tools.length +
-      " published input schemas say " +
-      code('"additionalProperties": true') +
-      ", but every registration refuses undeclared arguments at call time (" +
-      at(
-        "apps/server/src/mcp/McpHttpServer.ts",
-        /const refuseUndeclaredArguments/,
-        "refuseUndeclaredArguments",
-      ) +
-      "). A client that validates against the schema cannot learn the real contract.",
+      (extraKeys.length === 0
+        ? "Every published input schema closes its top level"
+        : extraKeys.length + " of " + tools.length + " published input schemas leave it open") +
+      ", and every registration refuses undeclared arguments at call time (" +
+      at("apps/server/src/mcp/McpHttpServer.ts", /const applyToolContracts/, "applyToolContracts") +
+      ").",
     "- **Two failure modes.** Tools split " +
       [...failureModes.entries()]
         .map(([mode, members]) => members.length + " " + code(mode))
@@ -917,16 +911,16 @@ function rankedFixes(
         ) +
         " to fail on an undescribed field.",
     },
-    {
-      title: "Publish the real argument contract.",
-      body:
-        n.extraKeys +
-        " schemas advertise " +
-        code("additionalProperties: true") +
-        " while the server refuses extra keys. Emit " +
-        code("false") +
-        " so schema-validating clients reject a bad call before sending it.",
-    },
+    ...(n.extraKeys === 0
+      ? []
+      : [
+          {
+            title: "Publish the real argument contract.",
+            body:
+              n.extraKeys +
+              " schemas leave their top level open while the server refuses extra keys. Close them so schema-validating clients reject a bad call before sending it.",
+          },
+        ]),
     {
       title: "Retry keys on every mutating tool.",
       body:

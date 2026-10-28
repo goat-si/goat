@@ -15,6 +15,8 @@ import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { type ListedTool, loadServedCatalog } from "./servedCatalog.ts";
+
 export const repoRoot = NodePath.resolve(import.meta.dirname, "../..");
 const serverRoot = NodePath.join(repoRoot, "apps/server");
 const mcpServerFile = "apps/server/src/mcp/McpHttpServer.ts";
@@ -71,7 +73,7 @@ export interface ToolEntry {
     readonly needsApproval: boolean;
   };
   readonly mutating: boolean;
-  /** The published schema allows extra keys; McpHttpServer refuses them at call time. */
+  /** The input schema /mcp serves does not close its top level, so a client may send extra keys. */
   readonly acceptsUndeclaredArguments: boolean;
   readonly clientRequestId: boolean;
   /** The registry marks it `idempotency: "key"`, so GOAT reserves its clientRequestId. */
@@ -418,6 +420,24 @@ const READ_ACCESS = new Set(["reads", "readsOrReachesHost", "readsAsCaller"]);
 const isMutating = (access: string | null, readOnlyHint: boolean) =>
   access === null || access === "actsAsCaller" ? !readOnlyHint : !READ_ACCESS.has(access);
 
+/** Input schemas by the name /mcp lists each tool under, as the server serves them. */
+export const servedInputSchemas = (
+  tools: ReadonlyArray<ListedTool>,
+): ReadonlyMap<string, JsonSchema> => {
+  const schemas = new Map<string, JsonSchema>();
+  for (const tool of tools) {
+    if (schemas.has(tool.name)) throw new Error("The served catalog lists " + tool.name + " twice");
+    schemas.set(tool.name, (tool.inputSchema ?? {}) as JsonSchema);
+  }
+  return schemas;
+};
+
+export const servedInputFor = (schemas: ReadonlyMap<string, JsonSchema>, name: string) => {
+  const schema = schemas.get(name);
+  if (schema === undefined) throw new Error("The served catalog has no tool " + name);
+  return schema;
+};
+
 export async function collectTools(): Promise<{
   tools: ReadonlyArray<ToolEntry>;
   unmountedToolkits: ReadonlyArray<string>;
@@ -425,7 +445,6 @@ export async function collectTools(): Promise<{
   const { Tool } = await importFrom("effect/ai");
   const Context = await importFrom("effect/Context");
   const ToolApi = Tool as {
-    getJsonSchema: (tool: ToolLike) => JsonSchema;
     getJsonSchemaFromSchema: (schema: unknown) => JsonSchema;
     Readonly: unknown;
     Destructive: unknown;
@@ -440,6 +459,7 @@ export async function collectTools(): Promise<{
   )) as {
     resolveAgentSurfaceEntry: (name: string) => unknown;
     isKeyedWrite: (entry: unknown) => boolean;
+    listedToolName: (entry: unknown) => string;
   };
   const keyed = (name: string) => {
     const entry = resolve.resolveAgentSurfaceEntry(name);
@@ -451,6 +471,13 @@ export async function collectTools(): Promise<{
   const registered = new Map(
     Object.values(agentSurfaceRegistry).map((entry) => [entry.name, entry.toolkit]),
   );
+  const catalog = await loadServedCatalog();
+  let served: ReadonlyMap<string, JsonSchema>;
+  try {
+    served = servedInputSchemas(catalog.tools);
+  } finally {
+    await catalog.dispose();
+  }
 
   const mcpServerSource = readLines(mcpServerFile).join("\n");
   const mountedFiles = new Set<string>();
@@ -498,7 +525,10 @@ export async function collectTools(): Promise<{
         const declarationFile = tool.name.startsWith("goat_storage_")
           ? "apps/server/src/mcp/toolkits/storage/tools.ts"
           : toolsFile;
-        const input = ToolApi.getJsonSchema(tool);
+        const input = servedInputFor(
+          served,
+          resolve.listedToolName(resolve.resolveAgentSurfaceEntry(tool.name)),
+        );
         const success = ToolApi.getJsonSchemaFromSchema(tool.successSchema);
         const failure = ToolApi.getJsonSchemaFromSchema(tool.failureSchema);
         const tags = new Set<string>();
