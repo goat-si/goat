@@ -106,7 +106,7 @@ it.effect(
     }),
 );
 
-it.effect("typed text the field reads back is a confirmed receipt; text it does not is not", () =>
+it.effect("typed text stays unverifiable, whatever the page answers about it", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
     yield* fixture.dispatch("claim_tab");
@@ -120,7 +120,7 @@ it.effect("typed text the field reads back is a confirmed receipt; text it does 
       .journal.filter((entry) => entry.receipt.method === "type_text")
       .map((entry) => [entry.receipt.category, entry.receipt.evidence]);
     expect(receipts).toEqual([
-      ["confirmed", ["input:value"]],
+      ["unverifiable", ["dispatched; observe to confirm"]],
       ["unverifiable", ["dispatched; observe to confirm"]],
     ]);
   }),

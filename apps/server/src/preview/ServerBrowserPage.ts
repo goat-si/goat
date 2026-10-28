@@ -38,14 +38,6 @@ import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffec
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
-  boundedRead,
-  deadlineExpiry,
-  probeAfter,
-  probeBefore,
-  retireProbe,
-  typedEffect,
-} from "./typedEffect.ts";
-import {
   narrowTree,
   resetSnapshotDiff,
   snapshotOptionsResult,
@@ -840,31 +832,15 @@ export const type = async (
         "The target is not an enabled text field, so no text was typed.",
       );
     }
-    // Evidence reads never outlast the action: a page that stops answering leaves the input
-    // delivered and unverifiable, and frees the tab's queue.
-    const { expired, clear } = deadlineExpiry(deadline);
-    // A text field's value and selection just before the input predict what it should hold after;
-    // a probe notes whether this input's own trusted insert reaches the field.
-    const pending =
-      handle !== null && input.text !== "" ? probeBefore(handle, deadline) : undefined;
-    const probe = pending ? await boundedRead(pending, expired) : undefined;
-    if (pending && !probe) void pending.then(retireProbe, constVoid);
-    try {
-      remaining(deadline);
-      gate();
-      // One input after the gate: a key press is held off by the input fence; inserted text is a
-      // single call with nothing to wait for.
-      if (input.text === "") {
-        if (input.clear) await page.keyboard.press("Delete");
-        return undefined;
-      }
-      await page.keyboard.insertText(input.text);
-      const after = probe ? await boundedRead(probeAfter(probe), expired) : undefined;
-      return typedEffect(probe?.before, input.text, after);
-    } finally {
-      clear();
-      retireProbe(probe);
+    remaining(deadline);
+    gate();
+    // One input after the gate: a key press is held off by the input fence; inserted text is a
+    // single call with nothing to wait for.
+    if (input.text === "") {
+      if (input.clear) await page.keyboard.press("Delete");
+      return;
     }
+    await page.keyboard.insertText(input.text);
   } finally {
     void handle?.dispose().catch(constVoid);
   }

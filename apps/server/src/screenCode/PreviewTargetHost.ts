@@ -838,25 +838,23 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
-      // A click the browser saw change something, or typed text the field reads back, is
-      // confirmed, and so is a navigation that reached its page; nothing seen stays unverifiable,
-      // since late effects can follow, so the cell goes on and one observation settles it.
+      // A click the browser saw change something is confirmed, and so is a navigation that
+      // reached its page; nothing seen stays unverifiable, since late effects can follow, so the
+      // cell goes on and one observation settles it. Typed text stays unverifiable: no read the
+      // page cannot also produce tells this input's insert from the page's own.
       const seen =
-        (operation === "click" || operation === "type") &&
-        typeof result === "object" &&
-        result !== null
+        operation === "click" && typeof result === "object" && result !== null
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
       const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
-      const kind = operation === "type" ? "input" : "click";
       return {
         value: result,
         category: confirmed ? "confirmed" : "unverifiable",
         evidence: navigated
           ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
           : confirmed && seen
-            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `${kind}:${String(each)}`)
+            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `click:${String(each)}`)
             : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
