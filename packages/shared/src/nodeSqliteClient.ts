@@ -1148,25 +1148,26 @@ const make = Effect.fn("makeWithDatabase")(function* (
 
   const writer = { name: "writer" as const, lock: semaphore, connection };
   let activeWriter: ConnectionOwner | undefined;
-  const route = Effect.andThen(
-    workerWriter?.available ?? Effect.void,
-    Effect.withFiber<
-      {
-        readonly name: Acquired["connection"];
-        readonly lock: Semaphore.Semaphore;
-        readonly connection: Connection;
-      },
-      SqlError
-    >((fiber) =>
-      acquireReader !== undefined && Context.get(fiber.context, ReadOnly)
-        ? Effect.map(acquireReader, (readerConnection) => ({
-            name: "reader" as const,
-            lock: readerSemaphore,
-            connection: readerConnection,
-          }))
-        : Effect.succeed(writer),
-    ),
+  const selectConnection = Effect.withFiber<
+    {
+      readonly name: Acquired["connection"];
+      readonly lock: Semaphore.Semaphore;
+      readonly connection: Connection;
+    },
+    SqlError
+  >((fiber) =>
+    acquireReader !== undefined && Context.get(fiber.context, ReadOnly)
+      ? Effect.map(acquireReader, (readerConnection) => ({
+          name: "reader" as const,
+          lock: readerSemaphore,
+          connection: readerConnection,
+        }))
+      : Effect.succeed(writer),
   );
+  const route =
+    workerWriter === undefined
+      ? selectConnection
+      : Effect.andThen(workerWriter.available, selectConnection);
 
   const acquired = (
     target: { readonly name: Acquired["connection"] },
