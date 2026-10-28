@@ -1,7 +1,9 @@
 import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
+  environmentDeliversBuiltInSkill,
   resolveProjectBuiltInSkillEnabled,
+  type BuiltInSkillName,
 } from "@goat/contracts";
 import {
   builtInSkillEnvironmentPatch,
@@ -38,12 +40,31 @@ export function AgentToolsSettings() {
   return (
     <SettingsSection id="agent-tools" title="Agent tools">
       <AgentToolListingSetting />
-      <DevelopmentDisciplineSetting />
+      <BuiltInSkillSetting
+        name="goat-discipline"
+        label="Development discipline"
+        searchId="goat-discipline-skill"
+        projectDescription="Built in. Off keeps $goat-discipline out of this project's $ menu and turns. Inherit follows the environment."
+        environmentDescription="Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
+      />
+      <BuiltInSkillSetting
+        name="goat-docs"
+        label="GOAT Docs"
+        searchId="goat-docs-skill"
+        projectDescription="Built in. Off keeps $goat-docs out of this project's $ menu and turns. Inherit follows the environment."
+        environmentDescription="Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns."
+      />
     </SettingsSection>
   );
 }
 
-export function DevelopmentDisciplineSetting() {
+function BuiltInSkillSetting(props: {
+  readonly name: BuiltInSkillName;
+  readonly label: string;
+  readonly searchId: Parameters<typeof searchableSetting>[0];
+  readonly projectDescription: string;
+  readonly environmentDescription: string;
+}) {
   const { scope, connectedEnvironments, targets } = useSettingsScope();
   const canWrite = useScopedSettingsWriteAllowed();
   const persistServer = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -51,22 +72,19 @@ export function DevelopmentDisciplineSetting() {
   const projectScope = scope.kind === "project" || scope.kind === "checkout";
   const supported =
     connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.devDisciplineSkill === true,
+    connectedEnvironments.every((environment) =>
+      environmentDeliversBuiltInSkill(
+        environment.serverConfig?.environment.capabilities,
+        props.name,
+      ),
     );
   const values = targets.map((target) => ({
-    enabled: resolveProjectBuiltInSkillEnabled(
-      target.settings,
-      target.projectId,
-      "goat-discipline",
-    ),
+    enabled: resolveProjectBuiltInSkillEnabled(target.settings, target.projectId, props.name),
     override:
       target.projectId === null
         ? undefined
-        : target.settings.projectSettingsOverrides[target.projectId]?.builtInSkills?.[
-            "goat-discipline"
-          ]?.enabled,
+        : target.settings.projectSettingsOverrides[target.projectId]?.builtInSkills?.[props.name]
+            ?.enabled,
   }));
   const reference = values[0];
   const mixed = values.some(
@@ -94,13 +112,13 @@ export function DevelopmentDisciplineSetting() {
                 projectSettingsOverrides: builtInSkillProjectPatch(
                   previous,
                   projectIds,
-                  "goat-discipline",
+                  props.name,
                   enabled,
                 ),
               }
             : builtInSkillEnvironmentPatch(
                 previous.disabledBuiltInSkills,
-                "goat-discipline",
+                props.name,
                 enabled === true,
               ),
         },
@@ -131,13 +149,9 @@ export function DevelopmentDisciplineSetting() {
   if (!supported) return null;
   return (
     <SettingsRow
-      {...searchableSetting("goat-discipline-skill")}
+      {...searchableSetting(props.searchId)}
       mixed={mixed}
-      description={
-        projectScope
-          ? "Built in. Off keeps $goat-discipline out of this project's $ menu and turns. Inherit follows the environment."
-          : "Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
-      }
+      description={projectScope ? props.projectDescription : props.environmentDescription}
       control={
         projectScope ? (
           <Select
@@ -148,7 +162,7 @@ export function DevelopmentDisciplineSetting() {
                 void save(value === "inherit" ? undefined : value === "on");
             }}
           >
-            <SelectTrigger size="sm" aria-label="Development discipline">
+            <SelectTrigger size="sm" aria-label={props.label}>
               <SelectValue>
                 {mixed
                   ? "Mixed"
@@ -167,7 +181,7 @@ export function DevelopmentDisciplineSetting() {
           </Select>
         ) : (
           <Switch
-            aria-label="Development discipline"
+            aria-label={props.label}
             mixed={mixed}
             checked={!mixed && reference?.enabled === true}
             disabled={!canWrite || pending || targets.length === 0}

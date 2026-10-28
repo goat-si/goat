@@ -1,4 +1,8 @@
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
+import {
+  carriesComputerUseSkill,
+  carriesScreenCodeSkill,
+} from "@goat/provider-core/server/mcpSession";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -22,4 +26,9 @@ export const askComputer = (
   input: Omit<Parameters<Manager["open"]>[0], "turnCapabilities">,
 ) => manager.open({ ...input, turnCapabilities: ["computer-use"] }).pipe(Effect.provide(skillOff));
 
-export { carriesComputerUseSkill as carriesSkill } from "@goat/provider-core/server/mcpSession";
+/**
+ * Whether a turn carries GOAT's desktop guidance: the computer use skill, or, on a turn that lists
+ * goat_screen_run and so hides the driver's own tools, the screen-code skill that replaces it.
+ */
+export const carriesSkill = (config: Parameters<typeof carriesComputerUseSkill>[0]) =>
+  carriesComputerUseSkill(config) || carriesScreenCodeSkill(config);

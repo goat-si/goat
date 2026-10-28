@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  MESSAGE_NAMED_BUILTIN_SKILLS,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
@@ -278,6 +279,7 @@ export const make = Effect.gen(function* () {
       projectProviderInstanceOverrides: true,
       providerInstancePreconditions: true,
       devDisciplineSkill: true,
+      builtInSkills: [...MESSAGE_NAMED_BUILTIN_SKILLS],
       threadSnooze: true,
       threadPromotion: true,
       environmentThemes: true,

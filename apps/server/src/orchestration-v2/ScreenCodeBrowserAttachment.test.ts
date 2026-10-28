@@ -12,7 +12,7 @@ it("gives a browser-only turn its installed screen-code path and keeps guidance 
   const stateDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-browser-guide-"));
   try {
     const active = resolveBuiltInSkills({ attached: ["browser"] }).active;
-    expect(active).toEqual(["screen-code"]);
+    expect(active).toEqual(["browser", "screen-code"]);
     const path = installScreenCodeSkillAt(stateDir);
     expect(path).toBe(NodePath.join(stateDir, "skills", "screen-code", "SKILL.md"));
     expect(NodeFS.existsSync(path!)).toBe(true);

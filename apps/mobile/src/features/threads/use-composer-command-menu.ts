@@ -241,7 +241,12 @@ export function useComposerCommandMenu({
       ServerSettings,
       "enableCua" | "disabledBuiltInSkills" | "projectSettingsOverrides"
     >;
-    readonly environment: { readonly capabilities: { readonly devDisciplineSkill?: boolean } };
+    readonly environment: {
+      readonly capabilities: {
+        readonly builtInSkills?: ReadonlyArray<string>;
+        readonly devDisciplineSkill?: boolean;
+      };
+    };
   } | null;
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
@@ -275,6 +280,7 @@ export function useComposerCommandMenu({
     selectedProviderStatus,
     serverConfig?.settings,
     {
+      builtInSkills: serverConfig?.environment.capabilities.builtInSkills,
       devDisciplineSkill: serverConfig?.environment.capabilities.devDisciplineSkill,
       projectId: thread?.projectId,
     },

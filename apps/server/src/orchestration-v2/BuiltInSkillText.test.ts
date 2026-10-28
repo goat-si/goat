@@ -138,3 +138,24 @@ describe("goat-discipline delivery to the provider", () => {
     }),
   );
 });
+
+describe("goat-docs delivery to the provider", () => {
+  it.effect("carries the docs-first workflow only on the turn that names it", () =>
+    Effect.gen(function* () {
+      const named = yield* send("How do I reach GOAT over Tailscale? $goat-docs");
+      expect(named).toContain('<goat_skill name="goat-docs">');
+      expect(named).toContain("docs.search");
+      expect(blocks(named)).toBe(0);
+      expect(yield* send("How do I reach GOAT over Tailscale?")).toBe(
+        "How do I reach GOAT over Tailscale?",
+      );
+      const optedOut = Option.some({
+        getSettings: Effect.succeed({
+          ...DEFAULT_SERVER_SETTINGS,
+          disabledBuiltInSkills: ["goat-docs"],
+        }),
+      });
+      expect(yield* send("Explain $goat-docs", { settings: optedOut })).toBe("Explain $goat-docs");
+    }),
+  );
+});

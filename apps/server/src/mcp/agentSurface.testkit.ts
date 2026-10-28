@@ -103,6 +103,7 @@ import { FleetToolkit } from "./toolkits/fleet/tools.ts";
 import { FleetResourcesToolkit } from "./toolkits/fleet/resources/tools.ts";
 import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
 import { ThreadDiffToolkit } from "./toolkits/threadDiff/tools.ts";
+import { DocsToolkit } from "./toolkits/docs/tools.ts";
 import { FleetHealthToolkit } from "./toolkits/fleet/healthTools.ts";
 import * as HostHealthMonitor from "../fleet/health/HostHealthMonitor.ts";
 import * as FleetHostStates from "../fleet/health/FleetHostStates.ts";
@@ -145,6 +146,7 @@ export const toolkits = {
   fleetResources: FleetResourcesToolkit,
   hostStatus: HostStatusToolkit,
   threadDiff: ThreadDiffToolkit,
+  docs: DocsToolkit,
   fleetHealth: FleetHealthToolkit,
   html: HtmlToolkit,
   memory: MemoryToolkit,

@@ -359,7 +359,7 @@ describe("provider workspace snapshot refresh atom", () => {
   });
 });
 
-describe("the goat-discipline built-in skill in the skill menu", () => {
+describe("message-named built-in skills in the skill menu", () => {
   const settings = {
     enableCua: false,
     disabledBuiltInSkills: [],
@@ -367,24 +367,46 @@ describe("the goat-discipline built-in skill in the skill menu", () => {
       [ProjectId.make("opted-out")]: { builtInSkills: { "goat-discipline": { enabled: false } } },
     },
   };
-  const serving = { devDisciplineSkill: true, projectId: ProjectId.make("ordinary") };
+  const serving = {
+    builtInSkills: ["goat-discipline", "goat-docs"],
+    projectId: ProjectId.make("ordinary"),
+  };
   const menu = (driver: string, context: Parameters<typeof withBuiltInProviderSkills>[3]) =>
     getProviderSkillsForSlashMenu(
       withBuiltInProviderSkills([], { driver: ProviderDriverKind.make(driver) }, settings, context),
       true,
     ).map((skill) => skill.name);
 
-  it("lists it on an ordinary turn with computer use off, for providers that carry GOAT instructions", () => {
-    expect(menu("codex", serving)).toEqual(["browser", "screen-code", "goat-discipline"]);
-    expect(menu("claudeAgent", serving)).toEqual(["browser", "screen-code", "goat-discipline"]);
-    expect(menu("fx", serving)).toEqual(["browser", "screen-code", "goat-discipline"]);
+  it("lists advertised skills for providers that carry GOAT instructions", () => {
+    expect(menu("codex", serving)).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
+      "goat-docs",
+    ]);
+    expect(menu("claudeAgent", serving)).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
+      "goat-docs",
+    ]);
+    expect(menu("fx", serving)).toEqual(["browser", "screen-code", "goat-discipline", "goat-docs"]);
     expect(menu("muse", serving)).toEqual([]);
   });
 
-  it("hides it on a server that does not deliver it", () => {
-    expect(menu("codex", { ...serving, devDisciplineSkill: false })).toEqual([
+  it("omits a skill absent from an explicit server list", () => {
+    expect(menu("codex", { ...serving, builtInSkills: ["goat-discipline"] })).toEqual([
       "browser",
       "screen-code",
+      "goat-discipline",
+    ]);
+  });
+
+  it("keeps discipline on older servers without offering docs", () => {
+    expect(menu("codex", { devDisciplineSkill: true })).toEqual([
+      "browser",
+      "screen-code",
+      "goat-discipline",
     ]);
     expect(menu("codex", undefined)).toEqual(["browser", "screen-code"]);
   });
@@ -393,15 +415,18 @@ describe("the goat-discipline built-in skill in the skill menu", () => {
     expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
       "browser",
       "screen-code",
+      "goat-docs",
     ]);
     expect(menu("codex", { ...serving, projectId: null })).toEqual([
       "browser",
       "screen-code",
       "goat-discipline",
+      "goat-docs",
     ]);
     expect(menu("fx", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
       "browser",
       "screen-code",
+      "goat-docs",
     ]);
   });
 });
