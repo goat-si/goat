@@ -29,7 +29,7 @@ export interface MediaPermissionPolicyOptions<W extends MediaPermissionWebConten
 /**
  * The main window's session grants the microphone only to GOAT's own renderer, in its top
  * frame, for audio alone. Preview partitions keep their own handlers. Other permissions keep
- * Electron's default of allowing, which notifications, clipboard and fullscreen rely on.
+ * Electron's defaults, which notifications, clipboard and fullscreen rely on.
  */
 export function createMediaPermissionPolicy<W extends MediaPermissionWebContents>(
   options: MediaPermissionPolicyOptions<W>,
@@ -98,7 +98,7 @@ export function createMediaPermissionPolicy<W extends MediaPermissionWebContents
       callback: (granted: boolean) => void,
       details: MediaPermissionRequestDetails,
     ) => {
-      if (permission !== "media") return callback(true);
+      if (permission !== "media") return callback(electronDefault(permission));
       if (!allowsAudioRequest(webContents, details)) return callback(false);
       void requestMicrophoneAccess().then((access) =>
         callback(
@@ -113,10 +113,14 @@ export function createMediaPermissionPolicy<W extends MediaPermissionWebContents
       requestingOrigin: string,
       details: MediaPermissionCheckDetails,
     ) =>
-      permission !== "media" ||
-      (details.mediaType === "audio" &&
-        details.isMainFrame === true &&
-        isAppOrigin(requestingOrigin) &&
-        isAppWindow(webContents)),
+      permission !== "media"
+        ? electronDefault(permission)
+        : details.mediaType === "audio" &&
+          details.isMainFrame === true &&
+          isAppOrigin(requestingOrigin) &&
+          isAppWindow(webContents),
   };
 }
+
+// Electron's permission manager allows everything without a handler except this one.
+const electronDefault = (permission: string) => permission !== "deprecated-sync-clipboard-read";

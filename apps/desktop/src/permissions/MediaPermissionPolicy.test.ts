@@ -147,6 +147,11 @@ describe("desktop microphone permission policy", () => {
     expect(
       session.policy.check(session.main, "clipboard-read", "goat://app", { isMainFrame: true }),
     ).toBe(true);
+    expect(
+      session.policy.check(session.main, "deprecated-sync-clipboard-read", "goat://app", {
+        isMainFrame: true,
+      }),
+    ).toBe(false);
   });
 
   it("answers media checks only for audio from the app's main frame", () => {

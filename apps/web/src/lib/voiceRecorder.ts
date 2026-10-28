@@ -58,9 +58,11 @@ function toMicrophoneError(error: unknown): unknown {
   if (name === "NotAllowedError" || name === "SecurityError")
     return new VoiceMicrophoneError(
       "permission-denied",
-      window.desktopBridge
-        ? `GOAT could not use the microphone. Check ${MACOS_MICROPHONE_SETTINGS}`
-        : "The browser blocked the microphone. Allow microphone access for this site in the browser's site settings, then try again.",
+      !window.desktopBridge
+        ? "The browser blocked the microphone. Allow microphone access for this site in the browser's site settings, then try again."
+        : window.desktopBridge.getClientPlatform?.() === "darwin"
+          ? `GOAT could not use the microphone. Check ${MACOS_MICROPHONE_SETTINGS}`
+          : "GOAT could not use the microphone. Allow apps to use the microphone in your system's privacy settings, then try again.",
       false,
       { cause: error },
     );
@@ -303,14 +305,18 @@ export class BrowserVoiceRecorder {
       runtime.firstSignalDeadline = setTimeout(() => {
         runtime.firstSignalDeadline = null;
         if (this.runtime !== runtime || runtime.hasAudioSignal) return;
-        void this.teardown().then(() =>
+        const released = this.teardown();
+        const stoppedGeneration = this.generation;
+        void released.then(() => {
+          // A cancel or a new recording while the device closed owns the recorder now.
+          if (this.generation !== stoppedGeneration) return;
           options.onError?.(
             new VoiceMicrophoneError(
               "no-input",
               "No sound is reaching GOAT from the microphone. Check that the right input is selected and not muted, then try again.",
             ),
-          ),
-        );
+          );
+        });
       }, FIRST_AUDIO_SIGNAL_TIMEOUT_MS);
       this.timer = setInterval(() => {
         if (this.runtime !== runtime) return;
