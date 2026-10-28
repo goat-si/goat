@@ -10,6 +10,7 @@ const page = (facts: Partial<SignInPage> = {}): SignInPage => ({
   validation: [],
   humanStep: null,
   accountChoices: 0,
+  unreadableFrames: 0,
   ...facts,
 });
 const stage = (facts: Partial<SignInPage>, record: SignInRecord = {}, documentGeneration = 1) =>
@@ -59,6 +60,16 @@ describe("the sign-in stage GOAT reports", () => {
     expect(stage(later, { ...sent, handedBackAt: 0 }, 2)).toBe("site_accepted");
     expect(stage(later, { ...sent, handedBackAt: 2 }, 2)).toBe("signed_in");
     expect(stage(later, { handedBackAt: 2 }, 2)).toBe("unknown");
+  });
+
+  it("puts a refused submission before a CAPTCHA the failure page shows", () => {
+    const refused = { submitted: { documentGeneration: 1, at: 1, status: 401 } };
+    expect(stage({ humanStep: "captcha", signIn: false }, refused, 2)).toBe("validation_error");
+  });
+
+  it("does not call a later page accepted while a frame it could not read may hold the form", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    expect(stage({ ...later, unreadableFrames: 1 }, sent, 2)).toBe("unknown");
   });
 
   it("hands CAPTCHA and one-time codes to a person and never picks between accounts", () => {

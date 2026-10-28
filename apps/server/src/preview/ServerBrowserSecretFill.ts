@@ -16,7 +16,7 @@ import * as Effect from "effect/Effect";
 import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { CDPSession, Frame, Page } from "playwright-core";
+import type { BrowserContext, CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
@@ -135,11 +135,18 @@ const PASSWORD_ORIGIN = `function () {
 const IDENTIFIER_OF = `(field) => {
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const named = (input) => /username|email/i.test(input.autocomplete || "");
-  const scope = field.form || field.closest("form") || field.ownerDocument;
-  const inputs = [...scope.querySelectorAll("input")].filter(
+  const collect = (root) => {
+    const found = [...root.querySelectorAll("input")];
+    for (const el of root.querySelectorAll("*")) if (el.shadowRoot) found.push(...collect(el.shadowRoot));
+    return found;
+  };
+  const candidates = (root) => collect(root).filter(
     (input) => input !== field && visible(input) && !input.disabled &&
       (["text", "email", "tel"].includes(input.type) || named(input)),
   );
+  // The nearest scope that has one: the form, the field's shadow root, then the whole document.
+  const scopes = [field.form || field.closest("form"), field.getRootNode(), field.ownerDocument];
+  const inputs = scopes.filter(Boolean).map(candidates).find((found) => found.length > 0) || [];
   const before = inputs.filter((input) => input.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING);
   const id = inputs.find(named) || before[before.length - 1];
   return id ? id.value.trim() : null;
@@ -291,6 +298,20 @@ const originOf = (url: string) => {
 
 const VALIDATION_CHARS = 200;
 
+/** Documents that take their creator's origin rather than one from their URL. */
+const INHERITED_ORIGIN = /^(?:about:|blob:|$)/u;
+
+/** Whether a request carries a filled value whole, as typed or as a URL, form or JSON encodes it. */
+const carriesValue = (text: string, values: ReadonlySet<string>) =>
+  [...values].some((value) =>
+    [
+      value,
+      encodeURIComponent(value),
+      new URLSearchParams({ v: value }).toString().slice(2),
+      JSON.stringify(value).slice(1, -1),
+    ].some((form) => text.includes(form)),
+  );
+
 /** A sign-in request is small; a longer body is checked on its first part only. */
 const SIGN_IN_BODY_CHARS = 256 * 1024;
 
@@ -421,6 +442,25 @@ export const make = Effect.gen(function* () {
   const filledOrigins = new Map<ThreadId, Set<string>>();
   /** Tabs a password went into, a frame of theirs included: their pixels stay off for good. */
   const filledPages = new WeakSet<Page>();
+  /** Origins filled per context: every thread's tab of that profile may show what a site stored. */
+  const contextOrigins = new WeakMap<BrowserContext, Set<string>>();
+  /** Contexts holding such a tab: an about:blank or blob document there may inherit its origin. */
+  const filledContexts = new WeakSet<BrowserContext>();
+  /** Every tab GOAT acted on, by its context, so a fill sees recordings in that context's tabs. */
+  const contextTabs = new WeakMap<BrowserContext, Set<SecretFillTab>>();
+  const track = (tab: SecretFillTab) => {
+    const context = tab.page.context();
+    const known = contextTabs.get(context) ?? new Set<SecretFillTab>();
+    known.add(tab);
+    contextTabs.set(context, known);
+  };
+  /** A page that took a password, and the popups it or they open, keep their pixels off. */
+  const markFilled = (page: Page) => {
+    if (filledPages.has(page)) return;
+    filledPages.add(page);
+    filledContexts.add(page.context());
+    page.on("popup", markFilled);
+  };
   const signIns = new WeakMap<Page, SignInRecord>();
   const watchedForSignIn = new WeakSet<Page>();
   /** Orders submissions and hand backs; only which came first matters. */
@@ -439,9 +479,7 @@ export const make = Effect.gen(function* () {
       const values = filledValues.get(threadId);
       const carried =
         request.url() + "\n" + (request.postData() ?? "").slice(0, SIGN_IN_BODY_CHARS);
-      // A whole encoded value, never a prefix the masker would also hide.
-      if (values === undefined || secretSpans(carried, compileSecretForms(values)).length === 0)
-        return;
+      if (values === undefined || !carriesValue(carried, values)) return;
       const at = ++signInOrder;
       noteSignIn(tab.page, { submitted: { documentGeneration: tab.documentGeneration ?? 0, at } });
       void request.response().then((response) => {
@@ -506,8 +544,14 @@ export const make = Effect.gen(function* () {
       tab.control.secret(
         request.agentSessionId,
         async (fence) => {
-          if (tab.recording !== null || tab.recordingStart !== null)
-            throw refused("This tab is recording. Stop the recording before filling a password.");
+          track(tab);
+          const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
+            (each) => each.recording !== null || each.recordingStart !== null,
+          );
+          if (recording)
+            throw refused(
+              "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
+            );
           const target = await locate(tab, input.selector);
           let kept = false;
           let used = false;
@@ -534,7 +578,12 @@ export const make = Effect.gen(function* () {
             const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
             origins.add(destination);
             filledOrigins.set(request.threadId, origins);
-            filledPages.add(tab.page);
+            const shared = contextOrigins.get(tab.page.context()) ?? new Set<string>();
+            shared.add(destination);
+            contextOrigins.set(tab.page.context(), shared);
+            markFilled(tab.page);
+            // Watching before the value goes in: its own input handler may submit at once.
+            watchSignIn(tab, request.threadId);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
@@ -570,7 +619,6 @@ export const make = Effect.gen(function* () {
               kept = false;
               throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
             }
-            watchSignIn(tab, request.threadId);
             return { destination, verified: input.expectedAccount !== undefined };
           } catch (cause) {
             if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
@@ -598,6 +646,7 @@ export const make = Effect.gen(function* () {
    * text snapshots too once that value shows as plain text.
    */
   const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
+    track(tab);
     const textSnapshot =
       request.operation === "snapshot" &&
       (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
@@ -611,7 +660,12 @@ export const make = Effect.gen(function* () {
     const visualOff = () => {
       if (!visual) return;
       const origins = filledOrigins.get(request.threadId);
-      const shows = (url: string) => origins?.has(originOf(url)) === true;
+      const shared = contextOrigins.get(tab.page.context());
+      const inherits = filledContexts.has(tab.page.context());
+      const shows = (url: string) =>
+        origins?.has(originOf(url)) === true ||
+        shared?.has(originOf(url)) === true ||
+        (inherits && INHERITED_ORIGIN.test(url));
       if (filledPages.has(tab.page) || tab.page.frames().some((frame) => shows(frame.url())))
         throw refused(VISUAL);
     };
@@ -676,7 +730,7 @@ export const make = Effect.gen(function* () {
 
   /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
   const signInStateOf = async (tab: SecretFillTab, threadId: ThreadId) => {
-    const page = await readSignInPage(tab.cdp);
+    const page = await readSignInPage(tab);
     // Masked before the cut, so a cut never leaves the start of a value.
     const masked = page.validation.map((text) => maskText(threadId)(text, VALIDATION_CHARS));
     return signInState(

@@ -18,6 +18,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, describe, expect, vi } from "vite-plus/test";
@@ -79,6 +80,29 @@ const PAGES: Record<string, string> = {
   ].join(""),
   "https://login.test/denied":
     '<title>Denied</title><p role="alert">That password is not right for jun@example.com.</p>',
+  "https://login.test/opens-blank": [
+    '<form><input id="user" autocomplete="username" value="jun@example.com">',
+    '<input id="pw" type="password"></form>',
+    "<script>window.copyToPopup = () => { const popup = window.open('about:blank');",
+    "  popup.document.body.textContent = document.getElementById('pw').value; };</script>",
+  ].join(""),
+  "https://login.test/submits-on-input": [
+    '<form><input id="user" autocomplete="username" value="jun@example.com">',
+    '<input id="pw" type="password"></form>',
+    "<script>document.getElementById('pw').addEventListener('input', (event) =>",
+    "  fetch('https://login.test/api', { method: 'POST', body: 'pw=' + event.target.value }));",
+    "</script>",
+  ].join(""),
+  "https://login.test/shadow": [
+    "<p>Welcome back jun@example.com</p><div id='host'></div><script>",
+    "const root = document.getElementById('host').attachShadow({ mode: 'open' });",
+    'root.innerHTML = \'<input id="user" autocomplete="username" value="wrong@example.com">\' +',
+    '  \'<input id="pw" type="password">\';</script>',
+  ].join(""),
+  "https://login.test/framed-blank":
+    '<iframe id="auth" src="https://auth.test/blank-user"></iframe>',
+  "https://auth.test/blank-user":
+    '<form><input id="user" autocomplete="username"><input id="pw" type="password"></form>',
   "https://login.test/blank-user":
     '<form><input id="user" autocomplete="username"><input id="pw" type="password"></form>',
   "https://login.test/welcome": [
@@ -133,9 +157,8 @@ const scope = {
 const makeSecrets = (beforeConsume: () => Promise<unknown> = async () => {}) => {
   const saved = new Map<string, { readonly origin: string; readonly value: string }>();
   const consumed: Array<string> = [];
-  const save = (origin: string) => {
+  const save = (origin: string, value = `pw_${NodeCrypto.randomUUID()}`) => {
     const ref = SecretRef.make(`secret-ref:${NodeCrypto.randomBytes(16).toString("hex")}`);
-    const value = `pw_${NodeCrypto.randomUUID()}`;
     saved.set(ref, { origin, value });
     return { ref, value };
   };
@@ -719,4 +742,123 @@ describe.skipIf(!chromiumInstalled)("what a filled password may never leave behi
       );
     },
   );
+});
+
+describe.skipIf(!chromiumInstalled)("where a filled password may still show", () => {
+  it.live("keeps the pixels of an about:blank popup the filled page writes into off", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { service, open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/opens-blank");
+        const { ref } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        yield* Effect.promise(() =>
+          Promise.all([page.waitForEvent("popup"), page.evaluate("window.copyToPopup()")]),
+        );
+        // The popup becomes a tab of its own once the server adopts it.
+        const popupTabId = yield* Stream.merge(
+          Stream.succeed(undefined),
+          service.sessionChanges,
+        ).pipe(
+          Stream.mapEffect(() => call<PreviewAutomationStatus>(tabId, "status", {})),
+          Stream.map((status) => status.tabs?.find((each) => each.openerTabId === tabId)?.tabId),
+          Stream.filter((id) => id !== undefined),
+          Stream.runHead,
+        );
+        const pictured = yield* call<object>(Option.getOrThrow(popupTabId), "snapshot", {
+          captureImage: true,
+        }).pipe(Effect.flip);
+        expect(JSON.stringify(pictured)).toContain("stay off");
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("masks a long password a site error echoes whole, however long it is", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId } = yield* open("https://login.test/echo-error");
+        const { ref, value } = secrets.save("https://login.test", "pw_" + "Long9".repeat(1000));
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state.validation.length).toBe(1);
+        expect(JSON.stringify(state)).not.toContain(value.slice(0, 8));
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("does not count another value that only differs in letter case as the password", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/form");
+        const { ref, value } = secrets.save("https://login.test", "abcdef0123456789abcd");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        const body = JSON.stringify("pw=" + value.toUpperCase());
+        yield* Effect.promise(() =>
+          page.evaluate("fetch('https://login.test/api', { method: 'POST', body: " + body + " })"),
+        );
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state.submitted).toBe(false);
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
+  it.live("sees a submission the field's own input handler sends at once", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId } = yield* open("https://login.test/submits-on-input");
+        const { ref } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state.submitted).toBe(true);
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+});
+
+describe.skipIf(!chromiumInstalled)("sign-ins inside shadow roots and frames", () => {
+  it.live(
+    "checks the expected account against an identifier in a shadow root, not page text",
+    () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/shadow");
+          const { ref } = secrets.save("https://login.test");
+          const refused = yield* fill(tabId, {
+            secretRef: ref,
+            selector: "#pw",
+            expectedAccount: "jun@example.com",
+          }).pipe(Effect.flip);
+          expect(JSON.stringify(refused)).toContain("no longer shows the account");
+          expect(yield* Effect.promise(() => page.locator("#pw").inputValue())).toBe("");
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    },
+  );
+
+  it.live("reads a sign-in form inside a frame", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/framed-blank");
+        yield* Effect.promise(() => page.frameLocator("#auth").locator("#pw").focus());
+        const { ref } = secrets.save("https://auth.test");
+        yield* fill(tabId, { secretRef: ref });
+        const state = yield* call<PreviewAutomationSignInState>(tabId, "signInState", {});
+        expect(state).toMatchObject({
+          stage: "partial",
+          fields: { identifier: "empty", password: "filled" },
+        });
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
 });

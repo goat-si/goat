@@ -15,6 +15,7 @@ import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 const threadId = ThreadId.make("secret-fill-unit");
+const otherThread = ThreadId.make("secret-fill-unit-other");
 const ref = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
 const PASSWORD = "pw_unit_secret_value";
 
@@ -26,15 +27,16 @@ const makeTab = (
     readonly fillRefused?: boolean;
     readonly stillFilled?: boolean;
   } = {},
+  /** Tabs of one profile share their browser context, and so their sign-ins. */
+  context: object = {},
 ) => {
   const field = { value: "", type: "password", isConnected: true };
   const closes: Array<() => void> = [];
   let sessionClosed = false;
-  const context = {};
   const page = {
     on: () => page,
     url: () => "https://login.test/",
-    frames: () => [],
+    frames: () => [page],
     mainFrame: () => page,
     context: () => context,
   } as unknown as Page;
@@ -160,6 +162,31 @@ it.live("keeps the pixels of a tab off after a lost fill reply, once its field l
     await expect(fill.guard(tab, request("snapshot", { captureImage: true }))).rejects.toThrow(
       "image snapshots and recordings of it stay off",
     );
+  });
+});
+
+it.live("fills nothing while another tab sharing its sign-ins is recording", () => {
+  const shared = {};
+  const { tab, field } = makeTab({}, shared);
+  const { tab: recorder } = makeTab({}, shared);
+  return withFill(async (fill) => {
+    // The recording tab was acted on, as starting its recording is.
+    await fill.guard(recorder, request("status", {}));
+    recorder.recording = {};
+    const refused = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    expect(String(refused.message)).toContain("is recording");
+    expect(field.value).toBe("");
+  });
+});
+
+it.live("keeps the pixels of another thread's tab of the same profile off on a filled site", () => {
+  const shared = {};
+  const { tab } = makeTab({}, shared);
+  const { tab: other } = makeTab({}, shared);
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    const elsewhere = { ...request("snapshot", { captureImage: true }), threadId: otherThread };
+    await expect(fill.guard(other, elsewhere)).rejects.toThrow("stay off");
   });
 });
 

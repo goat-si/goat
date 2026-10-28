@@ -203,6 +203,19 @@ describe("the sign-in store a profile is pinned to", () => {
     expect(run.pin).toBeUndefined();
   });
 
+  it("refuses a profile whose pin is damaged instead of reading it as unpinned", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-session-"));
+    const contexts = new ServerBrowserContexts({
+      profilesDir: directory,
+      executable: () => Promise.reject(new Error("no browser in this test")),
+    });
+    await NodeFSP.mkdir(NodePath.join(directory, "default"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(directory, "default", "goat-agent-store"), "");
+    await expect(contexts.storePin("default")).rejects.toThrow("cannot read which sign-in store");
+    await expect(contexts.pinStore("default", "server")).rejects.toThrow("cannot read");
+    await NodeFSP.rm(directory, { recursive: true, force: true });
+  });
+
   it("lets a clear requested during an open run after it, so no stale pin survives the clear", async () => {
     const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-session-"));
     const contexts = new ServerBrowserContexts({

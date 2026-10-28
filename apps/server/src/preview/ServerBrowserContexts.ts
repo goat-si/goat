@@ -120,6 +120,7 @@ export class ServerBrowserContexts {
   private readonly contexts = new Map<string, Promise<BrowserContext>>();
   private readonly clearing = new Map<string, Promise<void>>();
   private readonly profileTurns = new Map<string, Promise<void>>();
+  private pinDrafts = 0;
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
 
@@ -236,7 +237,11 @@ export class ServerBrowserContexts {
   async storePin(profileId: string): Promise<PreviewSessionStore | undefined> {
     try {
       const value = (await NodeFSP.readFile(this.storePinPath(profileId), "utf8")).trim();
-      return value === "server" || value === "desktop" ? value : undefined;
+      if (value === "server" || value === "desktop") return value;
+      // A damaged pin is never read as no pin: that could move the profile to the other store.
+      throw new Error(
+        "GOAT cannot read which sign-in store this profile is pinned to. Clear the profile under Settings, Integrations, Browser profiles to start it again.",
+      );
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw cause;
@@ -246,12 +251,17 @@ export class ServerBrowserContexts {
   /** Pins the first store only; returns the pinned one, which differs when another open won. */
   async pinStore(profileId: string, store: PreviewSessionStore): Promise<PreviewSessionStore> {
     await NodeFSP.mkdir(this.profileDirectory(profileId), { recursive: true });
+    // Written whole beside it, then linked in place: the pin is complete or absent, never partial.
+    const draft = this.storePinPath(profileId) + "." + process.pid + "." + ++this.pinDrafts;
+    await NodeFSP.writeFile(draft, store, { flag: "wx" });
     try {
-      await NodeFSP.writeFile(this.storePinPath(profileId), store, { flag: "wx" });
+      await NodeFSP.link(draft, this.storePinPath(profileId));
       return store;
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
       return (await this.storePin(profileId)) ?? store;
+    } finally {
+      await NodeFSP.rm(draft, { force: true });
     }
   }
 

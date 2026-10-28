@@ -22,6 +22,8 @@ export interface SignInPage {
   readonly validation: ReadonlyArray<string>;
   readonly humanStep: "captcha" | "mfa" | null;
   readonly accountChoices: number;
+  /** Frames GOAT could not read, so a sign-in form there may be missed. */
+  readonly unreadableFrames: number;
 }
 
 /** What GOAT recorded on this tab. */
@@ -69,7 +71,9 @@ const PAGE_FACTS = String.raw`function () {
   const scope = signIn ? current[0].form || current[0].closest("form") || document : document;
   for (const el of all(scope, "[aria-invalid=true], [role=alert]")) {
     const text = (el.getAttribute("aria-invalid") === "true" ? el.validationMessage : el.innerText) || "";
-    if (text.trim() && visible(el)) validation.push(text.trim().slice(0, 4000));
+    // Never cut here: a cut text could keep the start of a password the server must mask whole.
+    if (text.trim() && visible(el))
+      validation.push(text.length > 20000 ? "[a message too long to read]" : text.trim());
     if (validation.length >= 3) break;
   }
   const frames = all(document, "iframe").map((frame) => frame.src || "");
@@ -96,20 +100,57 @@ const PAGE_FACTS = String.raw`function () {
   };
 }`;
 
-/** Reads the main document's sign-in facts where the page's own script cannot change them. */
-export const readSignInPage = async (cdp: CDPSession): Promise<SignInPage> => {
-  const { frameTree } = await cdp.send("Page.getFrameTree");
-  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
-    frameId: frameTree.frame.id,
-    worldName: WORLD,
-  });
-  const answer = await cdp.send("Runtime.evaluate", {
-    expression: "(" + PAGE_FACTS + ")()",
-    contextId: executionContextId,
-    returnByValue: true,
-  });
-  if (answer.exceptionDetails) throw new Error("GOAT could not read the page's sign-in state.");
-  return answer.result.value as SignInPage;
+type FrameNode = {
+  readonly frame: { readonly id: string };
+  readonly childFrames?: ReadonlyArray<FrameNode>;
+};
+const frameIds = (node: FrameNode): ReadonlyArray<string> => [
+  node.frame.id,
+  ...(node.childFrames ?? []).flatMap(frameIds),
+];
+
+const readFrame = async (sessions: ReadonlyArray<CDPSession>, frameId: string) => {
+  for (const session of sessions) {
+    const world = await session
+      .send("Page.createIsolatedWorld", { frameId, worldName: WORLD })
+      .catch(() => null);
+    if (world === null) continue;
+    const answer = await session
+      .send("Runtime.evaluate", {
+        expression: "(" + PAGE_FACTS + ")()",
+        contextId: world.executionContextId,
+        returnByValue: true,
+      })
+      .catch(() => null);
+    if (answer && !answer.exceptionDetails)
+      return answer.result.value as Omit<SignInPage, "unreadableFrames">;
+  }
+  return null;
+};
+
+/**
+ * Reads every frame's sign-in facts where the page's own script cannot change them; a password
+ * can go into a frame. The frame with a sign-in form speaks for the tab, the top one otherwise.
+ */
+export const readSignInPage = async (tab: {
+  readonly cdp: CDPSession;
+  readonly frameSessions: ReadonlyMap<unknown, CDPSession>;
+}): Promise<SignInPage> => {
+  const { frameTree } = await tab.cdp.send("Page.getFrameTree");
+  const sessions = [tab.cdp, ...tab.frameSessions.values()];
+  const read = await Promise.all(frameIds(frameTree).map((id) => readFrame(sessions, id)));
+  const facts = read.filter((each) => each !== null);
+  const top = read[0];
+  if (top === null || top === undefined)
+    throw new Error("GOAT could not read the page's sign-in state.");
+  const form = facts.find((each) => each.signIn) ?? top;
+  return {
+    ...form,
+    validation: facts.flatMap((each) => each.validation).slice(0, 3),
+    humanStep: facts.find((each) => each.humanStep !== null)?.humanStep ?? null,
+    accountChoices: Math.max(...facts.map((each) => each.accountChoices)),
+    unreadableFrames: read.length - facts.length,
+  };
 };
 
 /**
@@ -129,13 +170,15 @@ export const signInStage = (
     ...(submitted ? ["a request carried the password GOAT filled"] : []),
     ...(later ? ["the page changed after it"] : []),
   ];
-  if (page.humanStep) return { stage: "human_step", evidence };
   const failed = submitted?.status !== undefined && submitted.status >= 400;
-  if (failed || (page.validation.length > 0 && (page.signIn || submitted !== undefined)))
+  if (failed)
     return {
       stage: "validation_error",
-      evidence: failed ? [...evidence, "the site answered " + submitted.status] : evidence,
+      evidence: [...evidence, "the site answered " + submitted.status],
     };
+  if (page.humanStep) return { stage: "human_step", evidence };
+  if (page.validation.length > 0 && (page.signIn || submitted !== undefined))
+    return { stage: "validation_error", evidence };
   if (page.accountChoices >= 2)
     return {
       stage: "account_choice",
@@ -150,6 +193,11 @@ export const signInStage = (
   }
   if (here) return { stage: "submitted", evidence };
   if (!later) return { stage: "unknown", evidence };
+  if (page.unreadableFrames > 0)
+    return {
+      stage: "unknown",
+      evidence: [...evidence, "a frame GOAT could not read may hold the form"],
+    };
   if (record.handedBackAt !== undefined && submitted && record.handedBackAt > submitted.at)
     return { stage: "signed_in", evidence: [...evidence, "a person handed the tab back after it"] };
   return { stage: "site_accepted", evidence: [...evidence, "no sign-in form or error shows now"] };
