@@ -47,6 +47,7 @@ import {
   settlementAdmissionTests,
 } from "./ThreadSettlementService.admission-test-cases.ts";
 import { settlementSweepCacheTests } from "./ThreadSettlementService.cache-test-cases.ts";
+import { settlementShellHintTests } from "./ThreadSettlementService.shell-hint-test-cases.ts";
 
 import {
   NOW_MS,
@@ -1229,6 +1230,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
 
 describe("ThreadSettlementServiceV2 terminals", () => {
   settlementAdmissionTests({ makeHarness, makeThread, makeSnapshot, startHarness });
+  settlementShellHintTests({ makeHarness, makeThread, makeSnapshot, startHarness });
 
   it.effect("keeps the terminals of a thread re-engaged before the event ran", () =>
     Effect.scoped(
