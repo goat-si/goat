@@ -77,10 +77,6 @@ const textEdit = (target: string) =>
   "const unique = same.length === 1 && own.filter((w) => w.title === title).length === 1;" +
   "return { id, title, hasTarget: unique ? same[0].hasTarget : null, print: unique ? same[0].print : null }; }) };";
 
-const KAKAO =
-  "const windows = cgWindows().filter((w) => w.owner === 'KakaoTalk').map(({ id, title }) => ({ id, title }));" +
-  "return { windows, loggedIn: windows.length > 0 && !windows.some((w) => /^(log ?in|로그인)$/i.test(w.title)) };";
-
 const ownerWindows = (owner: string) =>
   "return { windows: cgWindows().filter((w) => w.owner === " +
   JSON.stringify(owner) +
@@ -100,7 +96,6 @@ export const WITNESSES: Readonly<Record<string, (expect: JsonObject) => Witness>
   calculator: () => ({ body: CALCULATOR, intervalMs: 50 }),
   finder: () => ({ body: ownerWindows("Finder"), intervalMs: 250 }),
   textEdit: (expect) => ({ body: textEdit(String(expect["typedText"] ?? "")), intervalMs: 250 }),
-  kakao: () => ({ body: KAKAO, intervalMs: 250 }),
 };
 
 /** One sample, read once. */

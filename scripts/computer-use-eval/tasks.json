@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "tasks": [
     {
       "id": "calculator-multiply",
@@ -35,15 +35,6 @@
       },
       "witness": "textEdit",
       "oracle": "textEditDiscard",
-      "deadlineMs": 300000
-    },
-    {
-      "id": "kakaotalk-tabs",
-      "surface": "desktop",
-      "prompt": "In KakaoTalk's main window, note which tab is selected in the left sidebar (Friends or Chats), switch to the other one and confirm it is selected, then switch back to the tab that was selected at first. Never open a chat room or a profile. If KakaoTalk is signed out and shows a log-in screen, do nothing in it and report status \"skipped\".",
-      "answerKeys": ["status", "startTab", "visited"],
-      "witness": "kakao",
-      "oracle": "kakaoTabs",
       "deadlineMs": 300000
     },
     {

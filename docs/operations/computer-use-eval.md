@@ -13,18 +13,19 @@ repository.
 expected value or a task's evidence raises the version, and runs of two versions are not compared.
 A fix to the scoring code applies to stored runs through `--rescore`.
 
-| Task                      | The agent                                                                       | Judged by                    |
-| ------------------------- | ------------------------------------------------------------------------------- | ---------------------------- |
-| `calculator-multiply`     | enters 987 × 65 in the open Calculator, reads it, resets the display            | Calculator's display         |
-| `finder-sidebar`          | opens a new Finder window, visits Downloads then Recents, closes it             | Finder window ids and titles |
-| `textedit-korean-discard` | types a Korean sentence in a new TextEdit document, closes it unsaved           | TextEdit text, new files     |
-| `kakaotalk-tabs`          | switches KakaoTalk between Friends and Chats and back, or skips when signed out | KakaoTalk windows            |
-| `web-add-remove`          | clicks Add Element 8 times and counts the Delete buttons                        | tool results                 |
-| `web-checkboxes`          | toggles both checkboxes and reads their state                                   | tool results                 |
-| `web-form`                | fills a public form without submitting it and reads the values back             | tool results                 |
-| `web-parallel-read`       | reads two public pages and reports their titles                                 | tool results                 |
+| Task                      | The agent                                                             | Judged by                    |
+| ------------------------- | --------------------------------------------------------------------- | ---------------------------- |
+| `calculator-multiply`     | enters 987 × 65 in the open Calculator, reads it, resets the display  | Calculator's display         |
+| `finder-sidebar`          | opens a new Finder window, visits Downloads then Recents, closes it   | Finder window ids and titles |
+| `textedit-korean-discard` | types a Korean sentence in a new TextEdit document, closes it unsaved | TextEdit text, new files     |
+| `web-add-remove`          | clicks Add Element 8 times and counts the Delete buttons              | tool results                 |
+| `web-checkboxes`          | toggles both checkboxes and reads their state                         | tool results                 |
+| `web-form`                | fills a public form without submitting it and reads the values back   | tool results                 |
+| `web-parallel-read`       | reads two public pages and reports their titles                       | tool results                 |
 
 Every answer ends with an `EVAL_JSON` line whose `status` is `done`, `failed` or `skipped`.
+
+There is no KakaoTalk task: KakaoTalk may only be read, and it is measured outside this harness.
 
 ## Arms
 
@@ -54,7 +55,9 @@ window showing Downloads and then Recents; the sentence in a new TextEdit window
 end with no new document file. Not seeing a result proves nothing, since a short state can fall
 between samples, so that run is unverified; only positive evidence, such as the sentence still open,
 makes it a failure. Changing, writing into or closing a window that was open before the run is a
-violation, in any sample or the final read.
+violation, in any sample or the final read. A final read that failed or listed a malformed window
+proves neither a change nor a closing, so the run is unverified; violations already seen in a
+sample, and new document files, still count.
 
 No observer can see another product's browser, so a web task passes only when a result of the
 arm's own surface, never the model's text or a file it read, names the task's page and contains
@@ -121,7 +124,6 @@ node scripts/computer-use-eval/run.ts --report runs.jsonl [--campaign <id>] [--r
 Runs are sequential because they share one screen. `--report` prints one report per campaign and
 refuses a campaign whose rows mix task set versions, GOAT builds or models. Leave Calculator open;
 the task resets it.
-The KakaoTalk task expects a skip while KakaoTalk is signed out.
 
 Each row keeps the run's raw observations: the observer's samples and final read, the tool
 results and the agent's final answer. `--rescore` judges stored rows with the current rules, so

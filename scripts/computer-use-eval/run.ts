@@ -11,23 +11,19 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { answerInstruction, type JsonObject } from "../agent-surface/eval/core.ts";
+import { type JsonObject } from "../agent-surface/eval/core.ts";
 import {
   ARMS,
   type ArmSpec,
-  type Observations,
-  COMMON_RULES,
   ORACLES,
   type Task,
   type TimelineEntry,
-  type Transcript,
   codexTranscript,
   goatTranscript,
-  keepObservations,
-  scoreRun,
   validateTaskSet,
 } from "./core.ts";
 import { type RunRow, renderReports, rescoreRow } from "./report.ts";
+import { EMPTY_ROW, HaltError, type Ran, type StepDeps, runStep } from "./step.ts";
 import {
   WITNESSES,
   chromeTabCount,
@@ -45,9 +41,6 @@ const list = (name: string) => argument(name)?.split(",").filter(Boolean);
 
 const RPC_LIMIT_MS = 60_000;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Cleanup that could not be confirmed: the next run would share the screen with a live agent. */
-class HaltError extends Error {}
 
 /** What the current run started, so an operator's Ctrl-C stops it before the runner exits. */
 const active: {
@@ -198,13 +191,6 @@ interface Options {
   readonly model: string;
   readonly effort: string;
   readonly instanceId: string;
-}
-
-interface Ran {
-  readonly transcript: Transcript;
-  readonly wallMs: number | null;
-  readonly ref: string;
-  readonly notes: ReadonlyArray<string>;
 }
 
 /** Tool results can be long; the evidence check needs all of a result, up to this much. */
@@ -547,129 +533,6 @@ const leftoversOf = async (
   };
 };
 
-const promptFor = (task: Task, arm: ArmSpec) =>
-  task.prompt +
-  "\n\n" +
-  arm.instruction +
-  "\n" +
-  COMMON_RULES +
-  answerInstruction(task.answerKeys) +
-  ' The status value is "done", "failed" or "skipped".';
-
-const runStep = async (
-  client: Client | null,
-  task: Task,
-  arm: ArmSpec,
-  options: Options,
-  base: Omit<RunRow, "task" | "surface" | "arm" | "at" | "status">,
-): Promise<RunRow> => {
-  const head = {
-    ...base,
-    task: task.id,
-    surface: task.surface,
-    arm: arm.id,
-    at: new Date().toISOString(),
-  };
-  if (!arm.surfaces.includes(task.surface))
-    return {
-      ...head,
-      status: "unsupported",
-      error: arm.id + " has no " + task.surface + " surface",
-    };
-  const makeWitness = task.witness === null ? undefined : WITNESSES[task.witness];
-  const witness = makeWitness === undefined ? null : makeWitness(task.expect);
-  const read = witness === null ? null : () => readWitness(witness);
-  const before = await snapshot(arm, task);
-  const baseline = read === null ? {} : await read();
-  const sampler = witness === null ? null : sampleUntil(witness);
-  active.observer = sampler;
-  const startedMs = Date.now();
-  let ran: Ran;
-  try {
-    if (arm.driver === "goat") {
-      if (client === null) throw new Error("no GOAT endpoint for a GOAT arm");
-      ran = await runGoat(
-        client,
-        task,
-        promptFor(task, arm),
-        options,
-        "[cu-eval] " + task.id + " · " + arm.id,
-      );
-    } else ran = await runCodex(task, promptFor(task, arm), options);
-  } catch (error) {
-    await sampler?.stop();
-    active.observer = null;
-    if (error instanceof HaltError) throw error;
-    const after = await snapshot(arm, task).catch(() => null);
-    const left = after === null ? null : await leftoversOf(arm, task, before, after, {});
-    return {
-      ...head,
-      status: "error",
-      error: String(error),
-      leftovers: left?.left ?? [],
-      cleanupUnobserved: left?.unobserved ?? true,
-      notes: after === null ? ["the end of the run could not be observed"] : [],
-    };
-  }
-  const samples = (await sampler?.stop()) ?? [];
-  active.observer = null;
-  const final: JsonObject =
-    read === null
-      ? {}
-      : {
-          ...(await read()),
-          ...(task.oracle === "textEditDiscard" ? { savedFiles: documentsSince(startedMs) } : {}),
-        };
-  const after = await snapshot(arm, task);
-  const observed: Observations = {
-    baseline,
-    samples,
-    final,
-    toolOutputs: ran.transcript.steps
-      .filter((step) => step.kind === "tool")
-      .map((step) => step.output),
-    steps: ran.transcript.steps,
-    finalText: ran.transcript.finalText,
-    notes: ran.notes,
-    truncated: ran.transcript.incomplete,
-  };
-  const leftovers = await leftoversOf(arm, task, before, after, final);
-  const scored = scoreRun(task, arm, {
-    ...observed,
-    notes: [...observed.notes, ...leftovers.notes],
-  });
-  return {
-    ...head,
-    status: "ran",
-    ...scored,
-    leftovers: leftovers.left,
-    cleanupUnobserved: leftovers.unobserved,
-    tokens: ran.transcript.tokens,
-    wallMs: ran.wallMs,
-    ref: ran.ref,
-    // Scored from the full observations; the row keeps a cut copy that is marked when cut.
-    observations: keepObservations({ ...observed, notes: [...observed.notes, ...leftovers.notes] }),
-  };
-};
-
-const EMPTY = {
-  contended: false,
-  error: null,
-  claimed: null,
-  answerError: null,
-  actual: null,
-  outcome: null,
-  misreport: null,
-  valueErrors: [],
-  violations: [],
-  leftovers: [],
-  notes: [],
-  metrics: null,
-  tokens: null,
-  wallMs: null,
-  ref: null,
-} as const;
-
 const main = async () => {
   const taskSet = validateTaskSet(
     JSON.parse(NodeFS.readFileSync(new URL("tasks.json", import.meta.url), "utf8")),
@@ -755,8 +618,25 @@ const main = async () => {
     effort: argument("--effort") ?? "high",
     instanceId: argument("--instance") ?? "codex",
   };
+  const deps: StepDeps<Snapshot> = {
+    active,
+    witnessFor: (task) => {
+      const make = task.witness === null ? undefined : WITNESSES[task.witness];
+      return make === undefined ? null : make(task.expect);
+    },
+    readWitness,
+    sampleUntil,
+    documentsSince,
+    snapshot,
+    leftoversOf,
+    runAgent: async (task, arm, prompt) => {
+      if (arm.driver !== "goat") return runCodex(task, prompt, options);
+      if (client === null) throw new Error("no GOAT endpoint for a GOAT arm");
+      return runGoat(client, task, prompt, options, "[cu-eval] " + task.id + " · " + arm.id);
+    },
+  };
   const base = {
-    ...EMPTY,
+    ...EMPTY_ROW,
     kind: "run" as const,
     campaignId: argument("--campaign") ?? new Date().toISOString().slice(0, 16),
     goatVersion,
@@ -766,7 +646,7 @@ const main = async () => {
   for (const step of steps) {
     if (active.stopping) break;
     for (let attempt = 0; ; attempt += 1) {
-      const row = await runStep(client, step.task, step.arm, options, base);
+      const row = await runStep(step.task, step.arm, base, deps);
       NodeFS.appendFileSync(out, JSON.stringify(row) + "\n");
       console.error(
         [
