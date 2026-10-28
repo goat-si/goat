@@ -63,9 +63,14 @@ function answerFields(
   depth = 0,
 ): Readonly<Record<string, unknown>> | undefined {
   if (typeof output === "string") {
-    if (output.length > maxChars || !output.trimStart().startsWith("{")) return undefined;
+    if (output.length > maxChars) return undefined;
+    // OpenCode 2 joins a result's text blocks, so its JSON can follow the screen API's text.
+    const json = output.trimStart().startsWith("{")
+      ? output
+      : output.slice(output.lastIndexOf("\n") + 1);
+    if (!json.trimStart().startsWith("{")) return undefined;
     try {
-      return record(JSON.parse(output));
+      return record(JSON.parse(json));
     } catch {
       return undefined;
     }
@@ -76,8 +81,10 @@ function answerFields(
   const blocks = Array.isArray(output) ? output : object?.content;
   if (!Array.isArray(blocks) || depth > 0) return object;
   for (const block of blocks.slice(0, 8)) {
-    const fields =
-      record(block)?.type === "text" ? answerFields(record(block)?.text, maxChars, 1) : undefined;
+    // Cursor nests a text block's text as {text: {text}}.
+    const blockText =
+      record(block)?.type === "text" ? record(block)?.text : record(record(block)?.text)?.text;
+    const fields = typeof blockText === "string" ? answerFields(blockText, maxChars, 1) : undefined;
     if (fields !== undefined) return fields;
   }
   return object;

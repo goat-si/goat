@@ -187,6 +187,18 @@ describe("ComputerUseCallApps", () => {
         ]),
         // OpenCode 2 keeps the answer as text under a per-thread server name.
         screenCall("goat-thread_1_goat_screen_run", JSON.stringify(result)),
+        // ...and joins the cell API's text before it when the result carries the API.
+        screenCall(
+          "goat-thread_1_goat_screen_run",
+          `// Screen target API\nconst t = screen.app({ name: "x" });\n{\n${JSON.stringify(result)}`,
+        ),
+        // Cursor nests each text block's text as {text: {text}}.
+        screenCall("mcp__goat__goat_screen_run", {
+          content: [
+            { text: { text: "Screen target API" } },
+            { text: { text: JSON.stringify(result) } },
+          ],
+        }),
         // A failed cell's error still lists the receipts of the calls it made.
         screenCall("mcp__goat__goat_screen_run", [{ type: "text", text: JSON.stringify(failure) }]),
       ]) {

@@ -754,6 +754,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         ),
       );
+      // Navigation answers with the page it reached, as a click that navigated may.
+      const reached =
+        typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
+      if (typeof reached === "string")
+        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
       if (call.method === "close_tab") {
         observations.evictTarget(bound.ref.id);
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
