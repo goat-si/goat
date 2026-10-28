@@ -1,9 +1,13 @@
 import {
   buildGoatBotTimeline,
   createGoatBotSendQueue,
+  goatBotActivity,
+  goatBotActivityTask,
   goatBotItemReaders,
   goatBotReplyingSince,
   initialGoatBotEnsure,
+  observeResidentAtom,
+  residentAtomValue,
   retryGoatBotEnsure,
   settleGoatBotEnsure,
   startGoatBotEnsure,
@@ -17,13 +21,16 @@ import type {
   ChannelGatewayError,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
+  ScopedThreadRef,
 } from "@goat/contracts";
-import { useContext, useEffect } from "react";
+import { useCallback, useContext, useEffect, useSyncExternalStore } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { randomUUID } from "~/lib/utils";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
+import { environmentThreadDetails } from "~/state/threads";
 import {
   goatBotHomeReadBack,
   goatBotSupportUnknown,
@@ -196,6 +203,39 @@ function pendingInputsAt(queue: GoatBotSendQueue | undefined, _revision: number)
   return queue?.pendingInputs() ?? [];
 }
 
+/** A worker thread's detail only while another view keeps it loaded; never loads it. */
+function useResidentThreadProjection(ref: ScopedThreadRef | null) {
+  const atom = ref === null ? null : environmentThreadDetails.threadAtom(ref);
+  const resident = atom !== null && residentAtomValue(appAtomRegistry, atom) !== null;
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      atom === null || !resident ? () => {} : observeResidentAtom(appAtomRegistry, atom, onChange),
+    [atom, resident],
+  );
+  const thread = useSyncExternalStore(subscribe, () =>
+    atom === null ? null : residentAtomValue(appAtomRegistry, atom),
+  );
+  return thread?.projection ?? null;
+}
+
+/** What GOAT Bot's acknowledged work is doing, from the conversation and its worker. */
+function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) {
+  const task = goatBotActivityTask({ visibleTurnItems, readers: goatBotItemReaders });
+  const worker = task?.chip.worker;
+  // Thread keys carry no host, so remote work is never looked up locally.
+  const workerRef =
+    worker === undefined || worker.host !== undefined
+      ? null
+      : scopeThreadRef(worker.environmentId, worker.threadId);
+  const shell = useThreadShell(workerRef);
+  const projection = useResidentThreadProjection(workerRef);
+  return goatBotActivity({
+    reading: false,
+    task,
+    worker: workerRef === null ? null : { shell: shell?.source ?? null, projection },
+  });
+}
+
 /** One ensure and send queue per environment, shared by the entry route and thread view. */
 export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
@@ -353,12 +393,14 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     pendingInputs: pendingInputsAt(queue, revision),
     readers: goatBotItemReaders,
   });
+  const activity = useGoatBotWorking(visibleTurnItems);
   return {
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
     availability,
     canOperate,
     rows,
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
+    activity,
     onSend: (text: string) => {
       if (availability.kind === "ready" && canOperate) queue?.submit(text, availability.bot);
     },
