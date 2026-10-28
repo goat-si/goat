@@ -11,9 +11,9 @@ import type * as Semaphore from "effect/Semaphore";
 import type { Interruption } from "./ComputerUseLeaseMessages.ts";
 
 /** Lets a reply already on its way land before the child is judged stuck. */
-export const UNANSWERED_GRACE_MS = 1_000;
+const UNANSWERED_GRACE_MS = 1_000;
 
-export const DRIVER_UNANSWERED: Interruption = {
+const DRIVER_UNANSWERED: Interruption = {
   _tag: "other",
   detail: "helper_restarted",
   message:
