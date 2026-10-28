@@ -41,6 +41,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
+import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
 import {
   appThread,
   settledEvent,
@@ -517,6 +518,7 @@ interface HarnessOptions {
   ) => Effect.Effect<void>;
   readonly onCloseIdle?: () => Effect.Effect<void>;
   readonly onCandidateRead?: (threadId?: ThreadId) => Effect.Effect<void>;
+  readonly onRestoringThreadRead?: (threadId: ThreadId) => Effect.Effect<void>;
   readonly currentThreads?: ReadonlyArray<OrchestrationV2AppThread>;
 }
 
@@ -638,6 +640,8 @@ export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
         ),
       getThread: (threadId) =>
         Effect.gen(function* () {
+          if (!(yield* SkipThreadArchiveRestore))
+            yield* options.onRestoringThreadRead?.(threadId) ?? Effect.void;
           const current = (yield* Ref.get(currentThreads)).find(
             (candidate) => candidate.id === threadId,
           );

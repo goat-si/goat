@@ -36,6 +36,7 @@ import { sourceControlDefinitions } from "../sourceControl/sourceControlDefiniti
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as SettlementAdmission from "./settlementAdmission.ts";
+import { SkipThreadArchiveRestore } from "./ThreadArchiveGate.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -660,7 +661,10 @@ export const make = Effect.gen(function* () {
   ) {
     // A full pass can exclude active threads, so only their fresh lookup consumes the hint.
     if (refresh) {
-      const thread = yield* projections.getThread(threadId);
+      // Metadata only: restoring archived history here would hold the event consumer behind it.
+      const thread = yield* projections
+        .getThread(threadId)
+        .pipe(Effect.provideService(SkipThreadArchiveRestore, true));
       if (
         thread.deletedAt === null &&
         thread.archivedAt === null &&

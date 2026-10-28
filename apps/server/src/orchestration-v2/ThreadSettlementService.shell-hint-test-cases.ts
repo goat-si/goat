@@ -101,6 +101,36 @@ export function settlementShellHintTests({
     );
   }
 
+  it.effect("checks a shell hint's thread without restoring archived history", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const marker = appThread("restore-hint-marker", "settled");
+        const thread = makeThread("restore-hint", { branch: "feature" });
+        const restoringReads = yield* Ref.make<ReadonlyArray<string>>([]);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          currentThreads: [marker, appThread(thread.id, null)],
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+          branchPullRequest: (input, options) =>
+            Effect.succeed(branchResult(input.branch, options?.refresh)),
+          onRestoringThreadRead: (threadId) =>
+            Ref.update(restoringReads, (reads) => [...reads, threadId]),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* Ref.set(fixture.snapshots, makeSnapshot([]));
+          yield* fixture.publishEvent(shellMergeEvent(thread.id));
+          yield* fixture.publishEvent(settledEvent(marker));
+          yield* Queue.take(fixture.closedIdle);
+          yield* service.drain;
+          assert.notInclude(yield* Ref.get(restoringReads), thread.id);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   for (const type of ["thread.deleted", "thread.archived", "thread.settled"] as const) {
     it.effect(`discards a retained shell hint on ${type}`, () =>
       Effect.scoped(
