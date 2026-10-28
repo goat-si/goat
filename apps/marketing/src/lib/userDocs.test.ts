@@ -34,6 +34,27 @@ async function appGuideLinks(directory: string): Promise<string[]> {
   return links;
 }
 
+it("rebuilds the marketing site when only a user guide changes", async () => {
+  const workflow = await NodeFSP.readFile(
+    new URL(".github/workflows/marketing-pages.yml", repository),
+    "utf8",
+  );
+  const paths = workflow.match(/^    paths:\n((?:      - .+\n)+)/m)?.[1];
+  expect(paths).toBeDefined();
+  const patterns = paths!
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().slice(2));
+  for (const name of await NodeFSP.readdir(new URL("docs/user/", repository))) {
+    if (!name.endsWith(".md")) continue;
+    const changedFile = `docs/user/${name}`;
+    expect(
+      patterns.some((pattern) => NodePath.matchesGlob(changedFile, pattern)),
+      changedFile,
+    ).toBe(true);
+  }
+});
+
 it("publishes every source guide and resolves all app docs links and rendered guide links under either site base", async () => {
   const links = (
     await Promise.all(
