@@ -45,7 +45,15 @@ import {
   wantedOlderSettledPages,
 } from "./olderSettledThreads.ts";
 import { threadSearchSubject } from "./threadSearch.ts";
-import { EMPTY_SHELL_STATE, type EnvironmentShellState } from "./shell.ts";
+import {
+  EMPTY_SHELL_STATE,
+  makeEnvironmentShellState,
+  type EnvironmentShellState,
+} from "./shell.ts";
+import { TARGET, makeFamilyHarness } from "./threadFamiliesTestSupport.ts";
+import * as Persistence from "../platform/persistence.ts";
+import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
+import * as Fiber from "effect/Fiber";
 import {
   createThreadFamilyAtoms,
   threadFamilyRead,
@@ -84,13 +92,6 @@ describe("threadFamilyRowsMissingFromShell", () => {
     });
     expect(missing.map((thread) => thread.id)).toEqual(["removed-before-read"]);
   });
-});
-
-const TARGET = new PrimaryConnectionTarget({
-  environmentId: EnvironmentId.make("environment-family"),
-  label: "Family environment",
-  httpBaseUrl: "https://family.example.test",
-  wsBaseUrl: "wss://family.example.test",
 });
 
 describe("createThreadFamilyAtoms", () => {
@@ -253,111 +254,6 @@ describe("createThreadFamilyAtoms", () => {
       }),
     ),
   );
-});
-
-const makeFamilyHarness = Effect.fn(function* () {
-  const started = yield* Queue.unbounded<{
-    threadId: ThreadId;
-    reply: import("effect/Deferred").Deferred<
-      OrchestrationV2ThreadFamily,
-      OrchestrationV2GetShellSnapshotError
-    >;
-    stopped: import("effect/Deferred").Deferred<void>;
-  }>();
-  const activity = { active: 0, peak: 0, calls: 0 };
-  const client = {
-    [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: ({ threadId }: { threadId: ThreadId }) =>
-      Effect.gen(function* () {
-        const reply = yield* Deferred.make<
-          OrchestrationV2ThreadFamily,
-          OrchestrationV2GetShellSnapshotError
-        >();
-        const stopped = yield* Deferred.make<void>();
-        activity.active++;
-        activity.calls++;
-        activity.peak = Math.max(activity.peak, activity.active);
-        yield* Queue.offer(started, { threadId, reply, stopped });
-        return yield* Deferred.await(reply).pipe(
-          Effect.ensuring(Effect.sync(() => activity.active--)),
-          Effect.ensuring(Deferred.succeed(stopped, undefined)),
-        );
-      }),
-  } as unknown as WsRpcProtocolClient;
-  const session = {
-    client,
-    initialConfig: Effect.succeed({ shellThreadFamilies: true } as never),
-    ready: Effect.void,
-    probe: Effect.void,
-    inboundFrames: Effect.succeed(0),
-    closed: Effect.never,
-  } as unknown as RpcSession.RpcSession;
-  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-    target: TARGET,
-    state: yield* SubscriptionRef.make<SupervisorConnectionState>({
-      ...AVAILABLE_CONNECTION_STATE,
-      desired: true,
-      network: "online",
-      phase: "connected",
-      attempt: 1,
-      generation: 1,
-    }),
-    session: yield* SubscriptionRef.make(Option.some(session)),
-    prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
-    connect: Effect.void,
-    disconnect: Effect.void,
-    retryNow: Effect.void,
-  });
-  const supervisorFor = (id: EnvironmentId) =>
-    id === TARGET.environmentId
-      ? supervisor
-      : { ...supervisor, target: new PrimaryConnectionTarget({ ...TARGET, environmentId: id }) };
-  const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (id, effect) =>
-    Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisorFor(id));
-  const followStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["followStream"] = (
-    id,
-    stream,
-  ) =>
-    Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisorFor(id));
-  const runtime = Atom.runtime(
-    Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
-      run,
-      followStream,
-    } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
-  );
-  const shellAt = (
-    generation: number,
-    threads: readonly OrchestrationV2ThreadShell[] = [],
-  ): EnvironmentShellState => ({
-    ...EMPTY_SHELL_STATE,
-    status: "live",
-    authoritativeSession: session,
-    generation,
-    snapshot: Option.some({
-      schemaVersion: 1,
-      snapshotSequence: generation,
-      projects: [],
-      threads,
-      archivedThreads: [],
-    } as OrchestrationV2ShellSnapshot),
-  });
-  const shells = Atom.family((_id: EnvironmentId) => Atom.make(AsyncResult.success(shellAt(1))));
-  const shell = shells(TARGET.environmentId);
-  const families = createThreadFamilyAtoms(runtime, shells);
-  const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (r) =>
-    Effect.sync(() => r.dispose()),
-  );
-  return {
-    started,
-    activity,
-    session,
-    supervisor,
-    runtime,
-    shellAt,
-    shell,
-    shells,
-    families,
-    registry,
-  };
 });
 
 it.effect("serializes actual family requests in one environment before they reach the RPC", () =>
@@ -897,6 +793,112 @@ it.effect(
         yield* AtomRegistry.getResult(h.registry, a, { suspendOnWaiting: true });
         yield* AtomRegistry.getResult(h.registry, b, { suspendOnWaiting: true });
         expect(h.activity.calls).toBe(3);
+      }),
+    ),
+);
+
+it.effect(
+  "rejects a buffered old-session shell snapshot instead of assigning it to a new session",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeFamilyHarness();
+        const oldEvents =
+          yield* Queue.unbounded<import("@goat/contracts").OrchestrationV2ShellStreamItem>();
+        const subscribed = yield* Deferred.make<void>();
+        const produced = yield* Deferred.make<void>();
+        const secondConfig = yield* Deferred.make<void>();
+        const releaseConfig = yield* Deferred.make<void>();
+        const saved = yield* Deferred.make<void>();
+        const releaseSave = yield* Deferred.make<void>();
+        const secondSubscribed = yield* Deferred.make<void>();
+        const config = { shellThreadFamilies: true, shellResumeCompletionMarker: false } as never;
+        const first = {
+          ...h.session,
+          initialConfig: Effect.succeed(config),
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+              Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                Stream.drain,
+                Stream.concat(
+                  Stream.fromEffect(Queue.take(oldEvents)).pipe(
+                    Stream.concat(
+                      Stream.fromEffect(Deferred.succeed(produced, undefined)).pipe(Stream.drain),
+                    ),
+                    Stream.concat(Stream.never),
+                  ),
+                ),
+              ),
+          } as unknown as WsRpcProtocolClient,
+        };
+        const second = {
+          ...first,
+          initialConfig: Deferred.succeed(secondConfig, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseConfig)),
+            Effect.as(config),
+          ),
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+              Stream.fromEffect(Deferred.succeed(secondSubscribed, undefined)).pipe(
+                Stream.drain,
+                Stream.concat(Stream.never),
+              ),
+          } as unknown as WsRpcProtocolClient,
+        };
+        yield* SubscriptionRef.set(h.supervisor.session, Option.some(first));
+        yield* SubscriptionRef.set(
+          h.supervisor.prepared,
+          Option.some({
+            environmentId: TARGET.environmentId,
+            label: TARGET.label,
+            httpBaseUrl: TARGET.httpBaseUrl,
+            socketUrl: TARGET.wsBaseUrl,
+            httpAuthorization: null,
+            target: TARGET,
+          }),
+        );
+        const cache = Persistence.EnvironmentCacheStore.of({
+          loadShell: () => Effect.succeedNone,
+          loadShellMeta: () => Effect.succeedNone,
+          saveShellMeta: () => Effect.void,
+          saveShell: () =>
+            Deferred.succeed(saved, undefined).pipe(Effect.andThen(Deferred.await(releaseSave))),
+          loadThread: () => Effect.succeedNone,
+          saveThread: () => Effect.void,
+          removeThread: () => Effect.void,
+          loadServerConfig: () => Effect.succeedNone,
+          saveServerConfig: () => Effect.void,
+          loadVcsRefs: () => Effect.succeedNone,
+          saveVcsRefs: () => Effect.void,
+          removeVcsRefs: () => Effect.void,
+          clearVcsRefs: () => Effect.void,
+          clear: () => Effect.void,
+        });
+        let loads = 0;
+        const snapshot = (generation: number) => Option.getOrThrow(h.shellAt(generation).snapshot);
+        const state = yield* makeEnvironmentShellState().pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, h.supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          Effect.provideService(ShellSnapshotLoader, {
+            load: () =>
+              Effect.sync(() => (++loads === 1 ? Option.none() : Option.some(snapshot(20)))),
+          }),
+        );
+        yield* Deferred.await(subscribed);
+        const hydrate = yield* state.hydrateFromHub(snapshot(1), NOW).pipe(Effect.forkChild);
+        yield* Deferred.await(saved);
+        yield* Queue.offer(oldEvents, { kind: "snapshot", snapshot: snapshot(10) });
+        yield* Deferred.await(produced);
+        yield* SubscriptionRef.set(h.supervisor.session, Option.some(second));
+        yield* Deferred.await(secondConfig);
+        yield* Deferred.succeed(releaseSave, undefined);
+        yield* Fiber.join(hydrate);
+        yield* Deferred.succeed(releaseConfig, undefined);
+        yield* Deferred.await(secondSubscribed);
+        const current = yield* SubscriptionRef.get(state);
+        expect(loads).toBe(2);
+        expect(Option.getOrThrow(current.snapshot).snapshotSequence).toBe(20);
+        expect(current.authoritativeSession).toBe(second);
       }),
     ),
 );
