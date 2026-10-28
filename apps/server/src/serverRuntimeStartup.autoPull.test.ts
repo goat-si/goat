@@ -140,7 +140,12 @@ it.effect.each([
             shutdown: Effect.void,
           }),
           Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
-          Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.never }),
+          Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
+            configureConcurrency: () => Effect.void,
+            runGeneralOnce: Effect.never,
+            runControlOnce: Effect.never,
+            runCleanupOnce: Effect.never,
+          }),
           Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
             publish: (event) => Effect.succeed({ ...event, sequence: 1 }),
           }),
