@@ -1,7 +1,8 @@
 /**
  * How a channel task settles once its worker's current run ended `completed`. The run's status
  * stays necessary; the outcome the worker reported with goat_thread_report_result decides what
- * the requester sees. Local and remote workers settle through this one rule.
+ * the requester sees, except that a successful GOAT Bot turn delivers its own final text. Local
+ * and remote workers settle through this one rule.
  *
  * @module channelRunOutcome
  */
@@ -19,6 +20,8 @@ const REPORTED_FAILED_FALLBACK = "The worker reported that it could not finish."
 const REPORTED_CANCELLED_FALLBACK = "The worker reported that it stopped before finishing.";
 const REPORTED_BLOCKED_FALLBACK =
   "The worker reported that it is blocked without giving a reason. How should it continue?";
+/** What callers settle with when a run left no text of its own. */
+const NO_FINAL_TEXT = "Finished.";
 
 /**
  * The event that settles `task` after run `runId` completed. `fallbackSummary` is what the task
@@ -69,15 +72,23 @@ export const settleCompletedRun = (input: {
         },
       };
     case "succeeded":
-    case undefined:
+    case undefined: {
+      // A turn's final text is its answer to the person, at the length it needs; the report's
+      // summary stands in only when the turn left none.
+      const fallback = input.fallbackSummary.trim();
+      const turnAnswer =
+        task.kind === "turn" && fallback !== "" && fallback !== NO_FINAL_TEXT
+          ? input.fallbackSummary
+          : undefined;
       return {
         type: "task.completed",
         payload: {
           generation: task.generation,
           runId,
-          summary: summary ?? input.fallbackSummary,
+          summary: turnAnswer ?? summary ?? input.fallbackSummary,
           report: reported === undefined ? "missing" : "present",
         },
       };
+    }
   }
 };
