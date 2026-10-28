@@ -11,7 +11,8 @@ import {
 import * as Schema from "effect/Schema";
 
 const { cwd: _previewCwd, ...previewFields } = ReviewDiffPreviewInput.fields;
-const { cwd: _fileCwd, ...fileFields } = ReviewDiffFileContentsInput.fields;
+// The service reads the new side from the working tree or index, never a head revision.
+const { cwd: _fileCwd, headRef: _fileHead, ...fileFields } = ReviewDiffFileContentsInput.fields;
 const target = {
   projectId: Schema.optionalKey(ProjectId),
   threadId: Schema.optionalKey(ThreadId),

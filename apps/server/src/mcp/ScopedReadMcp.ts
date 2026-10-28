@@ -106,7 +106,13 @@ export const usage = Effect.fn("ScopedReadMcp.usage")(function* (
   )
     return yield* invalid("Usage requires a valid inclusive window of at most 31 days.");
   const service = yield* Usage.UsageService;
-  const data = yield* service.readSummary(input).pipe(Effect.mapError(unavailable));
+  const data = yield* service
+    .readSummary(input)
+    .pipe(
+      Effect.mapError((error) =>
+        error.reason === "invalidWindow" ? invalid(error.detail) : unavailable(),
+      ),
+    );
   const b = budget();
   const result = {
     ...data,
@@ -273,7 +279,7 @@ export const diffFile = Effect.fn("ScopedReadMcp.diffFile")(function* (
   const cwd = yield* checkout(input);
   const { projectId: _project, threadId: _thread, ...request } = input;
   const data = yield* (yield* Review.ReviewService)
-    .getDiffFileContents({ ...request, cwd })
+    .getDiffFileContents({ ...request, headRef: null, cwd })
     .pipe(Effect.mapError(unavailable));
   const b = budget();
   const oldContents = b.text(data.oldContents, RESPONSE_BYTES);

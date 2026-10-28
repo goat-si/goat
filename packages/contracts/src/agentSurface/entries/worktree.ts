@@ -10,14 +10,13 @@ export const worktreeEntries = {
     description:
       "Read bounded old and new file contents from a known GOAT checkout. Requires an explicit filesystem:read client grant and live reauthorization.",
     guide:
-      "Returns oldContents and newContents for a review comparison, capped at 256 KiB per side on a UTF-8 boundary. oldTruncated, newTruncated and truncated mark cuts. Only outside MCP clients with an explicit filesystem:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
+      "Returns oldContents and newContents for a review comparison, capped at 256 KiB per side on a UTF-8 boundary. The new side is the index for staged and the files on disk otherwise. oldTruncated, newTruncated and truncated mark cuts. Only outside MCP clients with an explicit filesystem:read grant and live reauthorization may call this. GOAT thread credentials are refused, including full-access threads. Reads stay on this host.",
     parameters: {
       projectId: "Registered project checkout; supply exactly one of projectId or threadId.",
       threadId: "Registered thread worktree, or its project checkout when unbound.",
       sourceKind: "working-tree, branch-range, staged or unstaged comparison.",
       changeType: "change, rename-pure, rename-changed, new or deleted.",
-      baseRef: "Base revision, or null for the comparison default.",
-      headRef: "Head revision, or null for the comparison default.",
+      baseRef: "Old-side revision, or null for the comparison default.",
       oldPath: "Old repository-relative file path.",
       newPath: "New repository-relative file path.",
     },
@@ -29,7 +28,6 @@ export const worktreeEntries = {
           sourceKind: "working-tree",
           changeType: "change",
           baseRef: null,
-          headRef: null,
           oldPath: "README.md",
           newPath: "README.md",
         },

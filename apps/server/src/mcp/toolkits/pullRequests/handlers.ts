@@ -47,6 +47,7 @@ import {
   PullRequestGuideFailedError,
   PullRequestProjectNotFoundError,
   PullRequestReadFailedError,
+  PullRequestSearchTooLargeError,
   PullRequestRepositoryAmbiguousError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
@@ -202,7 +203,9 @@ function projectForPullRequest(
 }
 
 /** Default rows a search returns in total. */
-const SEARCH_LIMIT = 25;
+const SEARCH_LIMIT = 10;
+// Room for identity, author and counts beside the lists that share the budget.
+const ACTIVITY_LIST_BYTES = READ_BUDGET_BYTES - 16 * 1024;
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -643,14 +646,33 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
-        // Comments first, then review threads in what the budget leaves.
-        const comments = fitItems(activity.comments, READ_BUDGET_BYTES);
-        const reviewThreads = fitItems(activity.reviewThreads, READ_BUDGET_BYTES - comments.used);
+        // Every list shares one budget, in this order; each says how many it left out.
+        let left = ACTIVITY_LIST_BYTES;
+        const take = <A>(items: ReadonlyArray<A>) => {
+          const fit = fitItems(items, left);
+          left -= fit.used;
+          return fit;
+        };
+        const reviewers = take(activity.reviewers ?? []);
+        const comments = take(activity.comments);
+        const reviewThreads = take(activity.reviewThreads);
+        const commits = take(activity.commits);
+        const reactions = take(activity.reactions ?? []);
         return {
           ...identityOf(target),
-          activity: { ...activity, comments: comments.kept, reviewThreads: reviewThreads.kept },
+          activity: {
+            ...activity,
+            ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
+            comments: comments.kept,
+            reviewThreads: reviewThreads.kept,
+            commits: commits.kept,
+            ...(activity.reactions === undefined ? {} : { reactions: reactions.kept }),
+          },
           commentsOmitted: comments.omitted,
           reviewThreadsOmitted: reviewThreads.omitted,
+          commitsOmitted: commits.omitted,
+          reviewersOmitted: reviewers.omitted,
+          reactionsOmitted: reactions.omitted,
         };
       }),
     ),
@@ -699,15 +721,16 @@ const make = Effect.gen(function* () {
         const result = yield* pullRequests
           .list({ ...input, limit })
           .pipe(Effect.mapError(readFailure));
-        // limit applies per repository in the service; the agent gets at most limit in total.
-        const rows = fitItems(result.entries.slice(0, limit), READ_BUDGET_BYTES);
-        const capped = rows.omitted > 0 || result.entries.length > limit;
-        return {
-          entries: rows.kept,
+        // Cursors are per repository, so cutting rows here would skip them on the next page.
+        const page = {
+          entries: result.entries,
           errors: result.errors,
-          truncated: capped || result.truncated,
-          nextCursors: capped ? null : result.nextCursors,
+          truncated: result.truncated,
+          nextCursors: result.nextCursors,
         };
+        if (fitItems([page], READ_BUDGET_BYTES).omitted > 0)
+          return yield* new PullRequestSearchTooLargeError({});
+        return page;
       }),
     ),
     goat_pull_request_stats: McpToolAccess.reads(({ pullRequests: targets }) =>

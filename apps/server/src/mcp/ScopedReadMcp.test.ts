@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   UsageDay,
+  UsageReadError,
   type UsageSummary,
   type ResourceTelemetryHistory,
   type ServerProcessResourceHistoryResult,
@@ -47,7 +48,6 @@ const fileInput = {
   sourceKind: "working-tree" as const,
   changeType: "change" as const,
   baseRef: null,
-  headRef: null,
   oldPath: "a.ts",
   newPath: "a.ts",
 };
@@ -447,6 +447,32 @@ it.effect("caps each diff file side at 256 KiB on a UTF-8 boundary and reports e
     expect(result).toMatchObject({ oldTruncated: true, newTruncated: true, truncated: true });
     expect(result.oldContents).toBe("a".repeat(262143));
     expect(result.newContents).toBe("한".repeat(87381));
+    // The new side is always the working tree or index, so no head revision is passed on.
+    expect(f.calls.find((call) => call.operation === "file")?.input).toMatchObject({
+      headRef: null,
+    });
+  }),
+);
+it.effect("returns the usage service's window refusal as invalid_request", () =>
+  Effect.gen(function* () {
+    const refused = yield* Reads.usage(client(), {
+      ...usageInput,
+      resolution: "hour",
+    }).pipe(
+      Effect.result,
+      Effect.provide(
+        Layer.mock(Usage.UsageService)({
+          readSummary: () =>
+            Effect.fail(
+              new UsageReadError({ reason: "invalidWindow", detail: "sinceTime is required." }),
+            ),
+        }),
+      ),
+    );
+    expect(refused).toMatchObject({
+      _tag: "Failure",
+      failure: { code: "invalid_request", message: "sinceTime is required." },
+    });
   }),
 );
 it.effect(

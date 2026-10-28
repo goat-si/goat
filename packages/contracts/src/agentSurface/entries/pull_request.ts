@@ -145,9 +145,9 @@ export const pullRequestEntries = {
     toolkit: "pullRequests",
     summary: "Read a pull request's comments, review threads and commits from its host",
     description:
-      "Read a pull request's conversation from its host: comments, review threads with their first comments, commits and reactions. Responses stay within 256 KiB; commentsOmitted and reviewThreadsOmitted count what was left out.",
+      "Read a pull request's conversation from its host: comments, review threads with their first comments, commits and reactions. Responses stay within 256 KiB; the *Omitted counts say what was left out.",
     guide:
-      "Pass url, or repository and number (host defaults to the one project holding the repository). The host may already cut long conversations (commentsTruncated, reviewThreadsTruncated); this read then keeps the leading items that fit 256 KiB. Continue one review thread with goat_pull_request_review_thread and its nextCommentsCursor.",
+      "Pass url, or repository and number (host defaults to the one project holding the repository). The host may already cut long conversations (commentsTruncated, reviewThreadsTruncated); this read then keeps the leading reviewers, comments, review threads, commits and reactions that fit 256 KiB together, in that order, and counts the rest in reviewersOmitted, commentsOmitted, reviewThreadsOmitted, commitsOmitted and reactionsOmitted. Continue one review thread with goat_pull_request_review_thread and its nextCommentsCursor.",
     parameters: { url: "The pull request's URL, such as https://github.com/owner/repo/pull/12." },
     examples: [
       {
@@ -242,9 +242,9 @@ export const pullRequestEntries = {
     toolkit: "pullRequests",
     summary: "Search pull requests across this environment's projects",
     description:
-      "Search pull requests in this environment's project repositories by state, involvement, filters or text, as the Pull requests view does. Returns at most limit rows in total (default 25, at most 100).",
+      "Search pull requests in this environment's project repositories by state, involvement, filters or text, as the Pull requests view does. Returns up to limit rows per repository (default 10, at most 50).",
     guide:
-      "Omit projectId to search every project. limit caps the whole result; when more matched, truncated is true and nextCursors is null, so narrow with projectId, query or filters. When every repository's matches fit, nextCursors pages on with the same arguments. errors lists repositories that could not be read.",
+      "Omit projectId to search every project. limit applies to each repository. When truncated is true, pass nextCursors back with the same arguments for the next page; repositories without a cursor are done. A page over 256 KiB is refused rather than cut, so narrow with projectId, query or filters, or lower limit. errors lists repositories that could not be read.",
     parameters: {
       state: "open, closed, merged or all.",
       involvement: "all (default), reviewing or authored, for the signed-in account.",
@@ -252,7 +252,7 @@ export const pullRequestEntries = {
         "{draft?, review?, checks?, labels?, excludedLabels?, author?} as the Pull requests view filters.",
       projectId: "One project to search. Default: every project.",
       query: "Text to match in titles.",
-      limit: "Rows in the whole result, 1 to 100. Default 25.",
+      limit: "Rows per repository, 1 to 50. Default 10.",
       cursors: "nextCursors from the previous result, with the same arguments.",
     },
     examples: [

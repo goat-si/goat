@@ -216,6 +216,15 @@ export class PullRequestReadFailedError extends Schema.TaggedError<PullRequestRe
   }
 }
 
+export class PullRequestSearchTooLargeError extends Schema.TaggedError<PullRequestSearchTooLargeError>()(
+  "PullRequestSearchTooLargeError",
+  {},
+) {
+  override get message(): string {
+    return "These search results exceed 256 KiB. Narrow with projectId, query or filters, or lower limit.";
+  }
+}
+
 export const PullRequestToolError = Schema.Union([
   OrchestratorMcpFailure,
   McpCapabilityUnavailableError,
@@ -235,6 +244,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestRepositoryAmbiguousError,
   PullRequestGuideFailedError,
   PullRequestReadFailedError,
+  PullRequestSearchTooLargeError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 
@@ -432,6 +442,9 @@ const PullRequestActivityTool = Tool.make(agentSurfaceRegistry["pull_request.act
     activity: PullRequestActivity,
     commentsOmitted: Omitted,
     reviewThreadsOmitted: Omitted,
+    commitsOmitted: Omitted,
+    reviewersOmitted: Omitted,
+    reactionsOmitted: Omitted,
   }),
   failure: PullRequestToolError,
   dependencies: readDependencies,
@@ -485,14 +498,14 @@ const PullRequestSearchTool = Tool.make(agentSurfaceRegistry["pull_request.searc
     filters: PullRequestListInput.fields.filters,
     projectId: PullRequestListInput.fields.projectId,
     query: PullRequestListInput.fields.query,
-    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
     cursors: PullRequestListInput.fields.cursors,
   }),
   success: Schema.Struct({
     entries: PullRequestListResult.fields.entries,
     errors: PullRequestListResult.fields.errors,
-    truncated: Schema.Boolean,
-    nextCursors: Schema.NullOr(PullRequestListResult.fields.nextCursors),
+    truncated: PullRequestListResult.fields.truncated,
+    nextCursors: PullRequestListResult.fields.nextCursors,
   }),
   failure: PullRequestToolError,
   dependencies: readDependencies,

@@ -921,25 +921,37 @@ describe("pull request reads within the budget", () => {
                 commentCount: 2,
                 commentsTruncated: false,
                 reviewThreads: [],
-                commits: [],
+                commits: [1, 2].map((n) => ({
+                  oid: `commit-${n}`,
+                  messageHeadline: big,
+                  committedDate: "2026-10-01T00:00:00.000Z",
+                })),
               }),
             diffFileContents: () =>
               Effect.succeed({ oldContents: "é".repeat(200 * 1024), newContents: "ok" }),
-            list: () =>
+            list: (input) =>
               Effect.succeed({
                 viewers: {},
                 providers: [],
-                entries: [entry(1), entry(2), entry(3)],
+                entries:
+                  input.query === "huge"
+                    ? [
+                        { ...entry(4), title: big },
+                        { ...entry(5), title: big },
+                      ]
+                    : [entry(1), entry(2), entry(3)],
                 errors: [],
-                truncated: false,
+                truncated: true,
                 nextCursors: { "github.com/sample-tools/goat": "next" },
               }),
           },
         });
         const target = { url: "https://github.com/sample-tools/goat/pull/12" };
         const activity = yield* harness.call("goat_pull_request_activity", target);
+        // Every list shares one budget: commits after the kept comment are counted as left out.
         expect(activity.activity.comments.map((kept) => kept.id)).toEqual(["c1"]);
-        expect(activity.commentsOmitted).toBe(1);
+        expect([activity.commentsOmitted, activity.commitsOmitted]).toEqual([1, 2]);
+        expect(Buffer.byteLength(JSON.stringify(activity), "utf8")).toBeLessThanOrEqual(256 * 1024);
         const file = yield* harness.call("goat_pull_request_file", {
           ...target,
           changeType: "change",
@@ -949,16 +961,17 @@ describe("pull request reads within the budget", () => {
         expect(Buffer.byteLength(file.oldContents, "utf8")).toBeLessThanOrEqual(256 * 1024);
         expect(file.oldContents.endsWith("é")).toBe(true);
         expect([file.oldTruncated, file.newTruncated]).toEqual([true, false]);
-        // limit caps the whole result; a capped result offers no cursors that would skip rows.
-        expect(
-          yield* harness.call("goat_pull_request_search", { state: "open", limit: 2 }),
-        ).toMatchObject({
+        // Rows are never cut, so the service's cursors continue without a gap.
+        const page = yield* harness.call("goat_pull_request_search", { state: "open", limit: 2 });
+        expect(page.entries).toHaveLength(3);
+        expect(page).toMatchObject({
           truncated: true,
-          nextCursors: null,
+          nextCursors: { "github.com/sample-tools/goat": "next" },
         });
-        expect(
-          (yield* harness.call("goat_pull_request_search", { state: "open", limit: 2 })).entries,
-        ).toHaveLength(2);
+        const huge = yield* harness
+          .call("goat_pull_request_search", { state: "open", query: "huge" })
+          .pipe(Effect.flip);
+        expect(huge._tag).toBe("PullRequestSearchTooLargeError");
       }),
   );
 });
