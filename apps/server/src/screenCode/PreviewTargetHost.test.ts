@@ -84,8 +84,9 @@ it.effect("in-page actions keep refs and the last complete tree for a diff", () 
     expect(again?.outcome).toBe("ok");
     const diff = yield* fixture.observe({ mode: "diff" });
     expect(diff.mode).toBe("diff");
-    expect(diff.indexedText).toBe("+ - button Cancel [0]");
-    expect(diff.elements).toHaveLength(1);
+    // The diff's text shows the change; its elements are every current one, numbered as a full read.
+    expect(diff.indexedText).toBe("+ - button Cancel [1]");
+    expect(diff.elements.map((element) => element.index)).toEqual([0, 1]);
     const stale = yield* fixture.dispatch("click", { ref });
     expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
     const receipt = fixture.bridge
