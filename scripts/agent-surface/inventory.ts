@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - a plain Node script that reads source text and loads the registries; no Effect runtime.
+// @effect-diagnostics nodeBuiltinImport:off - a plain Node script that reads source text and loads the registries; input schemas come from the server's served catalog.
 /**
  * Inventory of GOAT's agent surface, read from source: every tool the `/mcp`
  * endpoint mounts and every command in the `goat` CLI tree. Nothing here is a
