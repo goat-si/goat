@@ -218,7 +218,9 @@ or rate limits.</li>
 Use <strong>Link pull request</strong> in the command palette or <strong>Linked pull requests</strong> panel, or right-click a
 pull request link in the conversation. Creating a pull request from Git actions links it automatically,
 and so does an agent creating one with <code>gh pr create</code> or <code>glab mr create</code>. Agents can link other
-pull requests with <code>goat_call {path:"pull_request.link"}</code>.</p>
+pull requests with <code>goat_call {path:"pull_request.link"}</code>.
+Agents can also read any pull request in a repository that is a project here, fresh from its host:
+<code>pull_request.read</code> returns what the pull request view shows, and <code>pull_request.checks</code> only its checks.</p>
 <p>Use <strong>Link this PR</strong> in a branch-detected badge’s tooltip to keep it with the thread. From a review
 on the Pull requests page, <strong>Link to thread</strong> lets you search for an active thread. The review header
 also lists the threads that link to it, including archived threads, so you can return to their context.</p>
