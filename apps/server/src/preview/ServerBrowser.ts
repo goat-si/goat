@@ -106,6 +106,7 @@ import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch } from "./inPageFetch.ts";
+import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
@@ -606,7 +607,6 @@ const make = Effect.gen(function* () {
     else void tab.page.close().catch(constVoid);
     if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
     void tab.recording?.encoder.close().catch(constVoid);
-    void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
       runFork(manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore));
@@ -825,14 +825,6 @@ const make = Effect.gen(function* () {
     return tab;
   };
 
-  const downloadsRoot = NodePath.join(config.stateDir, "server-browser", "downloads");
-  // Tab ids are opaque server strings; hashing keeps them out of the path.
-  const downloadDir = (tab: ServerTab) =>
-    NodePath.join(
-      downloadsRoot,
-      NodeCrypto.createHash("sha256").update(tabKey(tab.threadId, tab.tabId)).digest("hex"),
-    );
-
   const clearAbortedNavigation = (tab: ServerTab) => {
     if (tab.abortedNavigation !== null) clearTimeout(tab.abortedNavigation.timer);
     tab.abortedNavigation = null;
@@ -862,19 +854,20 @@ const make = Effect.gen(function* () {
 
   const saveDownload = async (tab: ServerTab, download: Download) => {
     const id = NodeCrypto.randomUUID();
-    const path = NodePath.join(downloadDir(tab), id);
+    let path: string | undefined;
     const navigation =
       download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
     if (navigation !== null) clearAbortedNavigation(tab);
     let offered: { readonly id: string; readonly fileName: string } | undefined;
     try {
       if (await download.failure()) return;
-      await NodeFSP.mkdir(downloadDir(tab), { recursive: true, mode: 0o700 });
-      // mkdir leaves the mode of a folder that already exists, such as one an older build made.
-      await NodeFSP.chmod(downloadDir(tab), 0o700);
-      await download.saveAs(path);
-      // saveAs copies with the process umask; a download should stay readable by its owner only.
-      await NodeFSP.chmod(path, 0o600);
+      // A saved download outlives its tab until storage cleanup, like a screenshot.
+      const suggestedName = download.suggestedFilename();
+      path = await publishArtifact(
+        config.browserArtifactsDir,
+        artifactFileName("download", download.url(), { suggestedName }),
+        (target) => download.saveAs(target),
+      );
       const { size } = await NodeFSP.stat(path);
       if (tab.closing || size > DOWNLOAD_MAX_BYTES) {
         await NodeFSP.rm(path, { force: true });
@@ -882,7 +875,7 @@ const make = Effect.gen(function* () {
       }
       const saved: ServerDownload = {
         id,
-        fileName: download.suggestedFilename().slice(0, 255) || "download",
+        fileName: suggestedName.slice(0, 255) || "download",
         path,
         sizeBytes: size,
         url: ServerBrowserPage.withoutDataPayload(download.url()).slice(0, 2048),
@@ -904,7 +897,7 @@ const make = Effect.gen(function* () {
         sizeBytes: saved.sizeBytes,
       });
     } catch (cause) {
-      await NodeFSP.rm(path, { force: true }).catch(constVoid);
+      if (path !== undefined) await NodeFSP.rm(path, { force: true }).catch(constVoid);
       runFork(Effect.logWarning("server preview download failed", { cause }));
     } finally {
       if (navigation !== null && !tab.closing) {
@@ -1959,6 +1952,7 @@ const make = Effect.gen(function* () {
         return inPageFetch(tab.page, tab.control, {
           ...fetchInput,
           timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
+          deadline: deadlineMs,
         });
       }
       case "scrollCollect":
@@ -2039,7 +2033,18 @@ const make = Effect.gen(function* () {
       try: () => {
         ServerBrowserScreen.assertScreenConnection(request, connectionId);
         return answerCall(request.timeoutMs, (deadlineMs) =>
-          runOperation(request, deadlineMs).finally(() => markUsed(request)),
+          runOperation(request, deadlineMs)
+            // After every observation around the operation let the result through.
+            .then((result) =>
+              request.operation === "fetch"
+                ? publishFetchedBody(
+                    config.browserArtifactsDir,
+                    result,
+                    () => performance.now() >= deadlineMs,
+                  )
+                : result,
+            )
+            .finally(() => markUsed(request)),
         );
       },
       catch: ServerBrowserPage.toOperationError,

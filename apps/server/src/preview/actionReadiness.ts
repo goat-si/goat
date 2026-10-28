@@ -80,7 +80,24 @@ export const waitUntilWritable = async (
         throw isTimeout(cause) ? notWritable() : cause;
       });
   }
+  await revealFramesOf(handle, deadline);
   await handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+};
+
+/**
+ * Brings the frames that hold a target into view, outermost first. An off-screen frame from
+ * another site is not rendered, so a target inside it never settles until its frame shows.
+ */
+export const revealFramesOf = async (handle: ElementHandle, deadline: number) => {
+  const chain: Array<ElementHandle> = [];
+  try {
+    for (let frame = await handle.ownerFrame(); frame?.parentFrame(); frame = frame.parentFrame())
+      chain.unshift(await frame.frameElement());
+    for (const element of chain)
+      await element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+  } finally {
+    for (const element of chain) void element.dispose().catch(() => undefined);
+  }
 };
 
 /** The element a locator names now, held for the rest of the action. */

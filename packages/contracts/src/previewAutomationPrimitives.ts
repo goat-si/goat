@@ -55,6 +55,13 @@ export const PreviewAutomationFetchResult = Schema.Struct({
   format: Schema.Literals(["markdown", "text", "raw"]),
   text: Schema.String,
   truncated: Schema.Boolean,
+  savedPath: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "File holding a body that is not text, up to 25 MiB; it stays after the tab closes until storage cleanup.",
+    }),
+  ),
+  sizeBytes: Schema.optional(Schema.Number),
 });
 export type PreviewAutomationFetchResult = typeof PreviewAutomationFetchResult.Type;
 

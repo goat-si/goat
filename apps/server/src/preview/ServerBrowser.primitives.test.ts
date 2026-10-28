@@ -99,6 +99,15 @@ function makeContext() {
         interactiveElements: [],
       };
     }),
+    // The fetch keeps its page result behind a handle; this one wraps the evaluate answer.
+    evaluateHandle: vi.fn(async (expression: string) => {
+      const held = { outcome: await page.evaluate(expression), body: null };
+      return {
+        evaluate: async (read: (value: typeof held, arg?: unknown) => unknown, arg?: unknown) =>
+          read(held, arg),
+        dispose: async () => {},
+      };
+    }),
     ariaSnapshot: vi.fn(async () => '- button "More" [ref=e1]'),
     mouse: {
       click: vi.fn(async () => {}),

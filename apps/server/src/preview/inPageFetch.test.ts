@@ -23,6 +23,7 @@ import {
   truncateText,
 } from "./inPageFetch.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { FETCHED_BODY } from "./browserArtifacts.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 describe("resolveFetchUrl", () => {
@@ -105,16 +106,23 @@ describe("redactSecrets", () => {
 describe("inPageFetch privacy", () => {
   const fakePage = (onEvaluate: () => void = () => undefined) => ({
     url: () => "https://app.example/",
-    evaluate: vi.fn(async () => {
+    evaluateHandle: vi.fn(async () => {
       onEvaluate();
+      const held = {
+        outcome: {
+          url: "https://app.example/me",
+          status: 200,
+          ok: true,
+          contentType: "text/plain",
+          kind: "text",
+          text: "hello",
+          truncated: false,
+        },
+        body: null,
+      };
       return {
-        url: "https://app.example/me",
-        status: 200,
-        ok: true,
-        contentType: "text/plain",
-        kind: "text",
-        text: "hello",
-        truncated: false,
+        evaluate: async (read: (value: typeof held) => unknown) => read(held),
+        dispose: async () => undefined,
       };
     }),
     context: () => ({ cookies: async () => [] }),
@@ -127,7 +135,7 @@ describe("inPageFetch privacy", () => {
     await expect(
       inPageFetch(page as unknown as Page, control, { url: "/me" }),
     ).rejects.toMatchObject({ reason: "privateMode" });
-    expect(page.evaluate).not.toHaveBeenCalled();
+    expect(page.evaluateHandle).not.toHaveBeenCalled();
   });
 
   it("withholds the answer when a secret prompt opened while it ran, even briefly", async () => {
@@ -139,6 +147,43 @@ describe("inPageFetch privacy", () => {
     await expect(
       inPageFetch(page as unknown as Page, control, { url: "/me" }),
     ).rejects.toMatchObject({ reason: "privateMode" });
+  });
+
+  it("gives up on a page that never answers at its deadline, releases its handle and lets the next queued action run", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const control = new SessionControl("agent");
+      const disposed = Promise.withResolvers<void>();
+      const asked = Promise.withResolvers<void>();
+      const page = {
+        url: () => "https://app.example/",
+        evaluateHandle: async () => ({
+          evaluate: () => {
+            asked.resolve();
+            return new Promise<never>(() => undefined);
+          },
+          dispose: async () => disposed.resolve(),
+        }),
+        context: () => ({ cookies: async () => [] }),
+      };
+      // Queued as the server queues tab work: the next action waits for the fetch to settle.
+      const fetching = control
+        .agent("agent", () =>
+          inPageFetch(page as unknown as Page, control, { url: "/me", timeoutMs: 1_000 }),
+        )
+        .then(
+          () => "answered",
+          (error: unknown) => error,
+        );
+      const next = control.agent("agent", async () => "next");
+      await asked.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await fetching).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+      await disposed.promise;
+      expect(await next).toBe("next");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -283,12 +328,15 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(failure).not.toContain("ApiScopedValue456");
   });
 
-  it("returns no content for a body that is not text, and bounds long text", async () => {
-    expect(await inPageFetch(page, control, { url: "/logo.png" })).toMatchObject({
-      format: "raw",
-      text: "",
-      contentType: "image/png",
-    });
+  it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {
+    const image = await inPageFetch(page, control, { url: "/logo.png" });
+    expect(image).toMatchObject({ format: "raw", text: "", contentType: "image/png" });
+    expect([...(image[FETCHED_BODY] ?? [])]).toEqual([137, 80, 78, 71]);
+    // Held under a symbol, the bytes never appear in the result's JSON.
+    expect(JSON.stringify(image)).not.toContain("137");
+    const capped = await inPageFetch(page, control, { url: "/logo.png", maxSavedBytes: 3 });
+    expect(capped).toMatchObject({ format: "raw", text: "", truncated: true });
+    expect(capped[FETCHED_BODY]).toBeUndefined();
     expect((await inPageFetch(page, control, { url: "/korean" })).text).toBe("한국어");
     const long = await inPageFetch(page, control, { url: "/long", maxChars: 50 });
     expect(long.truncated).toBe(true);

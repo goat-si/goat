@@ -12,6 +12,10 @@ it("gives the next useful browser step without claiming action confirmation", ()
     next: "Unconfirmed: check with goat_preview_snapshot diff:true.",
   });
   expect(previewHints("status", { tabId: "tab" })).toEqual({});
+  expect(previewHints("fetch", { format: "raw", truncated: true })).toEqual({
+    next: "Over 25 MiB, so not saved: open the URL with goat_preview_navigate to download it.",
+  });
+  expect(previewHints("fetch", { format: "raw", truncated: false, savedPath: "/x" })).toEqual({});
   expect(snapshotTransportHints({ omitted: ["tree_budget"] }, true)).toMatchObject({
     treeComplete: false,
     omitted: ["tree_budget", "transport_budget"],

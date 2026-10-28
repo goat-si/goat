@@ -129,7 +129,7 @@ it.effect(
   },
 );
 
-it.effect("preview click and evaluate expose safety after MCP result encoding", () => {
+it.effect("preview results and failures expose safety and a next step after MCP encoding", () => {
   const scope: McpInvocationContext.McpInvocationScope = {
     environmentId: EnvironmentId.make("preview-safety-env"),
     requestNamespace: "preview-safety",
@@ -166,6 +166,41 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
               operation: "type",
               requestId: "safety-request",
               timeoutMs: 1,
+            }),
+          );
+        if (request.operation === "hover")
+          return Effect.fail(
+            new PreviewAutomationTimeoutError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "hover",
+              requestId: "safety-request",
+              timeoutMs: 1,
+              interceptedBy:
+                "Pointer intercepted by <div> (dialog). Now at the target: <div> (dialog) #consent.",
+            }),
+          );
+        if (request.operation === "drag")
+          return Effect.fail(
+            new PreviewAutomationControlInterruptedError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "drag",
+              requestId: "safety-request",
+              timeoutMs: 1,
+              remoteTag: "PreviewAutomationControlInterruptedError",
+              remoteMessageLength: 0,
+              cause: undefined,
+              reason: "stopped",
+              dispatched: true,
             }),
           );
         if (request.operation === "press")
@@ -230,7 +265,27 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
     ).toMatchObject({
       _tag: "PreviewAutomationTimeoutError",
       safety: { possibleCommit: true, retryClass: "never" },
+      next: expect.stringMatching(/^Observe first: the input may have landed/),
     });
+    // A real interception may have pressed: the hint names the cover and still says observe first.
+    const covered = yield* server.callTool({
+      name: "goat_preview_hover",
+      arguments: { selector: "button" },
+    });
+    const coveredText = covered.content.find((part) => part.type === "text");
+    expect(coveredText?.type === "text" ? JSON.parse(coveredText.text) : null).toMatchObject({
+      safety: { possibleCommit: true },
+      next: expect.stringMatching(/^Something covered the target .*Observe first/),
+    });
+    // Stop while input was going out is still final: safety stays cautious and no hint is given.
+    const stoppedMidway = yield* server.callTool({
+      name: "goat_preview_drag",
+      arguments: { source: "#a", target: "#b" },
+    });
+    const midwayText = stoppedMidway.content.find((part) => part.type === "text");
+    const midway = midwayText?.type === "text" ? JSON.parse(midwayText.text) : {};
+    expect(midway).toMatchObject({ reason: "stopped" });
+    expect(midway).not.toHaveProperty("next");
     // A tab stopped before the key went out sent nothing.
     const stopped = yield* server.callTool({ name: "goat_preview_press", arguments: { key: "a" } });
     expect(stopped.isError).toBe(true);
@@ -239,6 +294,10 @@ it.effect("preview click and evaluate expose safety after MCP result encoding", 
       reason: "stopped",
       safety: { possibleCommit: false },
     });
+    // Stop is final: no hint invites another attempt.
+    expect(stoppedText?.type === "text" ? JSON.parse(stoppedText.text) : {}).not.toHaveProperty(
+      "next",
+    );
     const filled = yield* server.callTool({
       name: "goat_preview_fill_secret",
       arguments: { secretRef: "secret-ref" },

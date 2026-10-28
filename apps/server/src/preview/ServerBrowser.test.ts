@@ -478,7 +478,8 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
       const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
-      const element = { boundingBox: box, waitForElementState: box, dispose: box };
+      const no = async () => null;
+      const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
       const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
       page.locator.mockImplementationOnce(
         () => ({ ...locator, elementHandle: async () => element }) as never,
@@ -1406,8 +1407,7 @@ it.live.each([false, true])(
           tabId,
           downloadId: offered.id,
         });
-        expect(Option.isSome(file) && file.value.fileName).toBe("report.csv");
-        expect(yield* fs.readFileString(Option.getOrThrow(file).path)).toBe("a,b");
+        expect(Option.getOrThrow(file).path).toMatch(/artifacts.browser-download-.+report\.csv$/);
         if ((yield* HostProcess.Platform) !== "win32") {
           expect((yield* fs.stat(Option.getOrThrow(file).path)).mode & 0o777).toBe(0o600);
         }
@@ -1447,6 +1447,9 @@ it.live.each([false, true])(
           while (again._tag !== "download") again = yield* Queue.take(viewer.output);
           expect((yield* fs.stat(folder)).mode & 0o777).toBe(0o700);
         }
+        yield* viewer.input({ type: "releaseControl" });
+        yield* broker.invoke({ scope, tabId, operation: "close", input: {} });
+        expect(yield* fs.readFileString(Option.getOrThrow(file).path)).toBe("a,b");
       }),
     ).pipe(Effect.provide(layer)),
 );

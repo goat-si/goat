@@ -170,6 +170,7 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { artifactSiteSlug } from "../preview/browserArtifacts.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   HttpServerRequest.toURL(request).pipe(
@@ -363,22 +364,6 @@ export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreen
   }
 }
 
-const MAX_SCREENSHOT_SITE_SLUG_LENGTH = 40;
-
-const screenshotSiteSlug = (rawUrl: string): string => {
-  try {
-    const slug = new URL(rawUrl).hostname
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, MAX_SCREENSHOT_SITE_SLUG_LENGTH)
-      .replace(/-+$/g, "");
-    return slug || "site";
-  } catch {
-    return "site";
-  }
-};
-
 const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
   pageUrl: string,
   data: Uint8Array,
@@ -389,7 +374,7 @@ const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
   const millis = yield* Clock.currentTimeMillis;
   const crypto = yield* Crypto.Crypto;
   const unique = (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8);
-  const fileName = `browser-screenshot-${screenshotSiteSlug(pageUrl)}-${millis.toString(36)}-${unique}.png`;
+  const fileName = `browser-screenshot-${artifactSiteSlug(pageUrl)}-${millis.toString(36)}-${unique}.png`;
   const screenshotPath = path.join(config.browserArtifactsDir, fileName);
   yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true }).pipe(
     Effect.andThen(fileSystem.writeFile(screenshotPath, data)),
