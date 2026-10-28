@@ -236,7 +236,7 @@ describe("thread settings sheet state", () => {
       environmentLabel: null,
       projectCwd: null,
       serverConfig: null,
-      connectionState: "disconnected",
+      connectionState: "offline",
       canOperateThread: true,
       canSwitchProvider: true,
       hasCompactableConversation: false,
