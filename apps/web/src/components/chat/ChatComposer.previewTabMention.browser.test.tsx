@@ -1,8 +1,7 @@
-// The fixture's atom registry mock must load before any state module imports the registry.
+// The fixture registers its module mocks, so it loads before anything those modules feed.
 import { id, local, setupSshComposer, state, store } from "~/test/sshComposerFixture";
 import { SERVER_BROWSER_AUTOMATION_CLIENT_ID, ThreadId } from "@goat/contracts";
 import type { OrchestrationMessageContext } from "@goat/contracts";
-import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
@@ -11,16 +10,17 @@ import { environmentServerConfigsAtom } from "~/state/server";
 import { act } from "../../../test/render";
 
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
-vi.mock("./ChatComposer", async (original) => {
-  const actual = await original<typeof import("./ChatComposer")>();
-  return {
-    ...actual,
-    ChatComposer: (props: ComponentProps<typeof actual.ChatComposer>) => {
-      state.composer = props;
-      return <actual.ChatComposer {...props} />;
-    },
-  };
-});
+import { ChatComposer } from "./ChatComposer";
+const renderComposer = ChatComposer.type;
+// Records the real composer's props; the fixture restores this spy after each test.
+async function setupComposer() {
+  const fixture = await setupSshComposer(true);
+  vi.spyOn(ChatComposer, "type").mockImplementation((props) => {
+    state.composer = props;
+    return renderComposer(props);
+  });
+  return fixture;
+}
 
 type SentMessage = { readonly text: string; readonly context?: OrchestrationMessageContext };
 const sentMessage = () =>
@@ -29,7 +29,7 @@ const sentMessage = () =>
     .find((message) => message !== undefined);
 
 it("sends a server browser tab picked from the @ list as one exact preview-tab record", async () => {
-  await using fixture = await setupSshComposer(true);
+  await using fixture = await setupComposer();
   const { mount, container, primary } = fixture;
   const config = primary.serverConfig!;
   config.providers = config.providers.map((provider) => ({ ...provider, installed: true }));

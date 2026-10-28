@@ -24,44 +24,20 @@ const state = vi.hoisted(() => ({
   >,
   launches: null as unknown as Atom.Writable<unknown>,
 }));
-vi.mock("@tanstack/react-router", async (original) => ({
-  ...(await original<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => vi.fn(),
-}));
+vi.mock(import("@tanstack/react-router"), { spy: true });
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("../../connection/onboarding", () => ({ connectSshEnvironment: state.connect }));
-vi.mock("../../state/entities", async (original) => ({
-  ...(await original<typeof import("../../state/entities")>()),
-  useThreadShells: () => [],
-}));
-vi.mock("../../state/environments", async (original) => ({
-  ...(await original<typeof import("../../state/environments")>()),
-  useEnvironments: () => ({
-    environments: [
-      {
-        environmentId: "dispatcher",
-        label: "Fixture dispatcher",
-        connection: { phase: "connected" },
-        serverConfig: null,
-      },
-    ],
-  }),
-}));
-vi.mock("../../state/presentation", async (original) => ({
-  ...(await original<typeof import("../../state/presentation")>()),
-  environmentPresentations: {
-    get presentationsAtom() {
-      return state.presentations;
-    },
-  },
-}));
-vi.mock("../../state/server", async (original) => ({
-  ...(await original<typeof import("../../state/server")>()),
-  serverEnvironment: { remoteLaunches: () => state.launches },
-}));
+vi.mock(import("../../state/entities"), { spy: true });
+vi.mock(import("../../state/environments"), { spy: true });
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
+import { useNavigate } from "@tanstack/react-router";
+import { useThreadShells } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
+import { environmentPresentations } from "../../state/presentation";
+import { serverEnvironment } from "../../state/server";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 
+const realPresentationsAtom = environmentPresentations.presentationsAtom;
 const dispatcher = EnvironmentId.make("dispatcher");
 const launch: RemoteLaunch = {
   host: "fixture-vps",
@@ -106,6 +82,20 @@ beforeEach(() => {
   state.launches = Atom.make<unknown>(
     AsyncResult.success({ launches: [launch], truncated: false }),
   );
+  vi.mocked(useNavigate).mockReturnValue(vi.fn());
+  vi.mocked(useThreadShells).mockReturnValue([]);
+  vi.mocked(useEnvironments).mockReturnValue({
+    environments: [
+      {
+        environmentId: dispatcher,
+        label: "Fixture dispatcher",
+        connection: { phase: "connected" },
+        serverConfig: null,
+      },
+    ],
+  } as never);
+  Object.assign(environmentPresentations, { presentationsAtom: state.presentations });
+  vi.spyOn(serverEnvironment, "remoteLaunches").mockReturnValue(state.launches as never);
   registry = AtomRegistry.make();
   container = document.createElement("div");
   document.body.append(container);
@@ -117,6 +107,8 @@ afterEach(async () => {
   registry.dispose();
   container.remove();
   delete (window as { desktopBridge?: unknown }).desktopBridge;
+  Object.assign(environmentPresentations, { presentationsAtom: realPresentationsAtom });
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 function mountAndConnect() {

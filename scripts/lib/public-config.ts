@@ -7,6 +7,7 @@ import * as NodeUtil from "node:util";
 import { withLegacyEnvAliases } from "@goat/contracts/legacyT3Names";
 
 export interface GoatPublicConfig {
+  readonly hostedAppUrl: string | undefined;
   readonly clerkPublishableKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
@@ -43,6 +44,13 @@ export function loadRepoEnv({
     ...rootEnv,
     ...localEnv,
     ...processEnv,
+    ...(config.hostedAppUrl
+      ? {
+          GOAT_HOSTED_APP_URL: config.hostedAppUrl,
+          VITE_HOSTED_APP_URL: config.hostedAppUrl,
+          EXPO_PUBLIC_HOSTED_APP_URL: config.hostedAppUrl,
+        }
+      : {}),
     ...(config.clerkPublishableKey
       ? {
           GOAT_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
@@ -110,6 +118,12 @@ export function loadRepoEnv({
 
 export function resolvePublicConfig(...sources: readonly Environment[]): GoatPublicConfig {
   return {
+    hostedAppUrl: firstNonEmpty(
+      sources,
+      "GOAT_HOSTED_APP_URL",
+      "VITE_HOSTED_APP_URL",
+      "EXPO_PUBLIC_HOSTED_APP_URL",
+    ),
     clerkPublishableKey: firstNonEmpty(
       sources,
       "GOAT_CLERK_PUBLISHABLE_KEY",

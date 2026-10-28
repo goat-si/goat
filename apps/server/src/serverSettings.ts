@@ -33,6 +33,8 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
+import { supervise } from "./backgroundSupervision.ts";
+import { fileWatchResync } from "./fileWatchResync.ts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -1990,16 +1992,15 @@ const make = Effect.gen(function* () {
     const directory = pathService.dirname(filePath);
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
-    return fs
-      .watch(directory)
-      .pipe(
-        Stream.filter(
-          (event) =>
-            event.path === fileName ||
-            event.path === filePath ||
-            pathService.resolve(directory, event.path) === resolvedFilePath,
-        ),
-      );
+    return fileWatchResync(directory).pipe(
+      Stream.filter(
+        (event) =>
+          event === undefined ||
+          event.path === fileName ||
+          event.path === filePath ||
+          pathService.resolve(directory, event.path) === resolvedFilePath,
+      ),
+    );
   };
 
   const startWatcher = Effect.gen(function* () {
@@ -2016,8 +2017,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
-
     // Watch symlink targets' directories for rewrites; re-resolve link changes to follow repointing.
     const watchLinkTarget = Effect.gen(function* () {
       const linkTargetPath = yield* resolveSymlinkTarget(settingsPath).pipe(
@@ -2027,36 +2026,30 @@ const make = Effect.gen(function* () {
       if (linkTargetPath === pathService.resolve(settingsPath)) {
         return Option.none<string>();
       }
-      yield* fs
-        .makeDirectory(pathService.dirname(linkTargetPath), { recursive: true })
-        .pipe(Effect.ignore({ log: true }));
+      yield* fs.makeDirectory(pathService.dirname(linkTargetPath), { recursive: true });
       return Option.some(linkTargetPath);
-    }).pipe(Effect.orElseSucceed(() => Option.none<string>()));
-
-    const initialLinkTarget = yield* watchLinkTarget;
-    const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
-      Stream.concat(watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget))),
-      Stream.changes,
-      Stream.switchMap(
-        Option.match({
-          onNone: () => Stream.empty,
-          onSome: (linkTargetPath) =>
-            watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true })),
-        }),
-      ),
-    );
-
-    // Saves emit multiple events; fs.watch may fire before content is flushed.
-    const debouncedSettingsEvents = Stream.merge(
-      watchFileChanges(settingsPath),
-      linkTargetEvents,
-    ).pipe(Stream.debounce(Duration.millis(100)));
-
-    yield* Stream.runForEach(debouncedSettingsEvents, () => revalidateAndEmitSafely).pipe(
-      Effect.ignoreCause({ log: true }),
-      Effect.forkIn(watcherScope),
-      Effect.asVoid,
-    );
+    });
+    yield* supervise("ServerSettings.watch", () =>
+      Effect.gen(function* () {
+        const initialLinkTarget = yield* watchLinkTarget;
+        const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
+          Stream.concat(
+            watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget)),
+          ),
+          Stream.changes,
+          Stream.switchMap(
+            Option.match({
+              onNone: () => Stream.empty,
+              onSome: (linkTargetPath) => watchFileChanges(linkTargetPath),
+            }),
+          ),
+        );
+        yield* Stream.merge(watchFileChanges(settingsPath), linkTargetEvents).pipe(
+          Stream.debounce(Duration.millis(100)),
+          Stream.runForEach(() => revalidateAndEmit),
+        );
+      }),
+    ).pipe(Effect.forkIn(watcherScope), Effect.asVoid);
   });
 
   const start = Effect.gen(function* () {

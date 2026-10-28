@@ -22,7 +22,6 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-
 import {
   AVAILABLE_CONNECTION_STATE,
   ConnectionTransientError,
@@ -513,6 +512,7 @@ function session(client: WsRpcProtocolClient): RpcSession {
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
 }

@@ -39,6 +39,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
+import { supervise } from "../backgroundSupervision.ts";
+import { fileWatchResync } from "../fileWatchResync.ts";
 import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
 import { bodySummary } from "./noteSummary.ts";
@@ -933,12 +935,15 @@ const make = Effect.gen(function* () {
       }
     }),
   );
-  yield* fs
-    .watch(root, { recursive: true, onReady: () => Deferred.doneUnsafe(ready, Effect.void) })
-    .pipe(
-      Stream.map((event) =>
+  yield* supervise("NotesService.watch", () =>
+    fileWatchResync(root, {
+      recursive: true,
+      onReady: () => Deferred.doneUnsafe(ready, Effect.void),
+    }).pipe(
+      Stream.map((event) => event?.path ?? root),
+      Stream.map((name) =>
         path
-          .relative(root, path.isAbsolute(event.path) ? event.path : path.join(root, event.path))
+          .relative(root, path.isAbsolute(name) ? name : path.join(root, name))
           .split(path.sep)
           .join("/"),
       ),
@@ -950,20 +955,15 @@ const make = Effect.gen(function* () {
       ),
       Stream.debounce("100 millis"),
       Stream.runForEach(() => {
-        const fullScan = [...dirty].some((name) => !isPath(name));
-        if (fullScan) {
+        if ([...dirty].some((name) => !isPath(name))) {
           dirty.clear();
-          return refresh.pipe(Effect.ignore({ log: true }));
+          return refresh;
         }
-        return refreshDirty.pipe(Effect.ignore({ log: true }));
+        return refreshDirty;
       }),
-      Effect.catch(() =>
-        Deferred.succeed(ready, undefined).pipe(
-          Effect.andThen(Effect.logWarning("Notes filesystem watcher unavailable")),
-        ),
-      ),
-      Effect.forkScoped,
-    );
+      Effect.ensuring(Deferred.succeed(ready, undefined)),
+    ),
+  ).pipe(Effect.forkScoped);
   yield* Deferred.await(ready);
   yield* git.changed;
   return NotesService.of({

@@ -119,7 +119,36 @@ const harness = Effect.fn("agentThreadSteeringHarness")(function* (
           // The turn is accepted but reports running only when the test says so.
           startTurn: (turn) => Effect.sync(() => void started.push(turn)),
           steerTurn: (turn) => Effect.sync(() => void steered.push(turn)),
-          interruptTurn: (turn) => Effect.sync(() => void interrupted.push(turn)),
+          interruptTurn: (turn) =>
+            Effect.gen(function* () {
+              interrupted.push(turn);
+              const accepted = started.find(
+                (candidate) =>
+                  ProviderTurnId.make("provider-turn:" + candidate.attemptId) ===
+                  turn.providerTurnId,
+              );
+              if (accepted === undefined)
+                return yield* Effect.die("Interrupt has no accepted turn");
+              const now = yield* DateTime.now;
+              const providerTurn = {
+                ...providerTurnFor(accepted, now),
+                status: "interrupted" as const,
+                completedAt: now,
+              };
+              yield* Queue.offerAll(events, [
+                { type: "provider_turn.updated", driver, providerTurn },
+                {
+                  type: "turn.terminal",
+                  driver,
+                  providerThreadId: providerTurn.providerThreadId,
+                  providerTurnId: providerTurn.id,
+                  runOrdinal: accepted.runOrdinal,
+                  status: "interrupted",
+                  failure: null,
+                  threadDisposition: "reusable",
+                },
+              ]);
+            }),
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => Effect.die("unused"),
           rollbackThread: () => Effect.die("unused"),
@@ -435,6 +464,7 @@ it.effect("an agent's message restarts the turn on a provider that steers by res
         yield* worker.drain();
         assert.equal(sent.delivery, "steered");
         assert.deepEqual(steered, []);
+        assert.equal(started.length, 2);
         assert.deepEqual(
           interrupted.map((turn) => turn.providerTurnId),
           [ProviderTurnId.make("provider-turn:" + started[0]!.attemptId)],
@@ -689,6 +719,7 @@ it.effect("another thread's restart still restarts on the saved selection", () =
         yield* worker.drain();
         assert.equal(sent.delivery, "restarted");
         assert.equal(interrupted.length, 1);
+        assert.equal(started.length, 2);
         assert.deepEqual(sent.run.modelSelection, nextTurn);
       }).pipe(Effect.provide(layer));
     }),
@@ -795,6 +826,46 @@ it.effect("an unattended message queued behind a slow start keeps its own turn",
           projection.messages.find((message) => message.id === agentMessageId)?.runId,
           started[0]!.runId,
         );
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("a person's promotion steers an unattended message into their running turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, events, started, steered, layer } = yield* harness("person-promotes", {
+        supportsActiveSteering: true,
+        computerUse: true,
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        yield* reportRunning(events, started[0]!);
+        yield* worker.drain();
+        // A channel worker's message waits behind the person's turn instead of steering it.
+        const sent = yield* send(
+          "steer_when_ready",
+          "use the screen",
+          ThreadId.make("channel-worker:person-promotes"),
+        );
+        yield* worker.drain();
+        assert.equal(sent.delivery, "queued");
+
+        // Promoting it is the person's own decision, whoever wrote the message.
+        yield* threads.dispatch({
+          type: "queued-message.promote-to-steer",
+          commandId: CommandId.make("person-promotes"),
+          threadId,
+          queuedRunId: sent.run.id,
+          targetRunId: started[0]!.runId,
+        });
+        yield* worker.drain();
+        assert.equal(steered.length, 1);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(projection.runs.find((run) => run.id === sent.run.id)?.status, "cancelled");
       }).pipe(Effect.provide(layer));
     }),
   ),

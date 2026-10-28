@@ -17,6 +17,8 @@ import {
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
+import { capabilityRecordApp } from "./appContextId.ts";
+
 /**
  * Canonical inline reference: `[label](goat-context://v1/<kind>/<contextId>)`, or the image
  * form `![label](...)`. The link carries position and identity only; the payload lives in the
@@ -326,10 +328,12 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
         `urlAtMention: ${record.url}`,
         "This tab reference identifies one observed browser tab; the server must check its live identity and current permission before using it.",
       ].join("\n");
-    case "capability":
-      return record.app === undefined
+    case "capability": {
+      const app = capabilityRecordApp(record);
+      return app === undefined
         ? turnCapabilityProviderNote(record.capability)
-        : appCapabilityProviderNote(record.app);
+        : appCapabilityProviderNote(app);
+    }
   }
 }
 

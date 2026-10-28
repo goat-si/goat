@@ -13,14 +13,33 @@ import {
   type PreviewAutomationSelectInput,
   type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
+  type PreviewAutomationSnapshotInput,
   type PreviewAutomationTypeInput,
   type PreviewAutomationWaitForInput,
 } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
+import { pointerInterception } from "./pointerInterception.ts";
+import { withRefAnnotations } from "./annotateRefs.ts";
+import { resolvePageScope, scopeHidden } from "./pageScope.ts";
+import {
+  narrowTree,
+  resetSnapshotDiff,
+  snapshotOptionsResult,
+  snapshotPageMetadata,
+} from "./snapshotOptions.ts";
 import { readLayersHeader } from "./blockingLayers.ts";
-import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
+import {
+  frameUrls,
+  maskSecrets,
+  maskSnapshotRecords,
+  maskTree,
+  redactValue,
+  tabCookies,
+  openReaders,
+  dottedPattern,
+} from "./pageSecrets.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
@@ -33,16 +52,8 @@ const MAX_FULL_PAGE_BYTES = 8 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
-export class ServerBrowserOperationError extends Error {
-  readonly tag: string;
-  readonly detail: unknown;
-
-  constructor(tag: string, message: string, detail?: unknown) {
-    super(message);
-    this.tag = tag;
-    this.detail = detail;
-  }
-}
+export { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 export const toOperationError = (
   cause: unknown,
@@ -52,17 +63,16 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.reason,
+      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);
   const firstLine = message.split("\n")[0] ?? message;
   if (cause instanceof Error && cause.name === "TimeoutError") {
-    return new ServerBrowserOperationError(
-      "PreviewAutomationTimeoutError",
-      firstLine,
-      timeoutMs === undefined ? undefined : { timeoutMs },
-    );
+    return new ServerBrowserOperationError("PreviewAutomationTimeoutError", firstLine, {
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(pointerInterception(message) ? { interceptedBy: pointerInterception(message) } : {}),
+    });
   }
   if (
     /while parsing selector|Unknown engine|Unexpected token|strict mode violation/i.test(message)
@@ -128,7 +138,8 @@ let snapshotSequence = 0;
 const nextRefGeneration = () => `${refNamespace}-${(++snapshotSequence).toString(36)}`;
 
 /** A takeover revokes previously issued refs even when the document stays unchanged. */
-export const invalidateRefs = (page: Page) => {
+export const invalidateRefs = (page: Page, preserveDiff = false) => {
+  if (!preserveDiff) resetSnapshotDiff(page);
   const state = pageRefs.get(page);
   if (state) {
     state.generation = nextRefGeneration();
@@ -179,14 +190,7 @@ export type PointerReporter = (
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
 
-/**
- * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
- * action waited. Every wait for the target runs before it and sends no input (Playwright's trial
- * runs move the mouse, and a drag trial even releases a button); after it, the action gets only
- * DISPATCH_TIMEOUT_MS. If control is cut after the gate, the tab ignores input until that action
- * ends (SessionControl.onDispatchCut). `linger` keeps covering input that outlives its action,
- * such as a click answered early because it opened a dialog.
- */
+/** A gate rechecks authority after target waits; linger covers input still draining after return. */
 export interface DispatchGate {
   (): void;
   readonly linger?: (work: Promise<unknown>) => void;
@@ -238,16 +242,6 @@ const targetPoint = async (
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
 };
 
-const SNAPSHOT_SCRIPT = `(() => {
-  return {
-    url: location.href,
-    title: document.title,
-    loading: document.readyState !== "complete",
-    visibleText: document.body?.innerText || "",
-    interactiveElements: [],
-  };
-})()`;
-
 /**
  * A `data:` URL carries its content, which can be a whole file, and URLs and diagnostics
  * reach tool results and provider logs. Keeps only the media type: the payload can hold any
@@ -293,29 +287,6 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-// How long a frame in another process gets to answer; one that crashed never does.
-
-const FRAME_ANSWER_MS = 1_000;
-
-// Include password and CSS-masked text in open shadow roots, normalized like accessible text.
-const DOTTED_SCRIPT = `(() => {
-  const values = [];
-  const visit = (root) => {
-    for (const element of root.querySelectorAll("*")) {
-      if (element.shadowRoot) visit(element.shadowRoot);
-      const field = element.localName === "input" || element.localName === "textarea";
-      if (!field && !element.isContentEditable) continue;
-      const dots = getComputedStyle(element).getPropertyValue("-webkit-text-security");
-      if (element.type !== "password" && (dots === "none" || dots === "")) continue;
-      // Raw as page text shows it, and normalized as the tree does.
-      for (const value of field ? [element.value, element.defaultValue] : [element.textContent ?? ""])
-        values.push(value, value.replace(/[\\u200b\\u00ad]/g, "").trim().replace(/\\s+/g, " "));
-    }
-  };
-  visit(document);
-  return [...new Set(values.filter((value) => value.trim()))];
-})()`;
-
 const pageChanged = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationExecutionError",
@@ -333,150 +304,6 @@ const FULL_PAGE_TOO_LARGE =
   "The full-page screenshot exceeds the 3840 × 16384 pixel or 8 MiB limit, even at reduced scale. Use a viewport snapshot instead.";
 // A second capture would fail the same way; this one already tried every scale.
 const NOT_RETRIED = new Set([VALUE_TOO_LONG, FULL_PAGE_TOO_LARGE]);
-
-/** Reuse one CDP session per out-of-process frame across snapshots. */
-const frameSessions = new WeakMap<Frame, Promise<CDPSession>>();
-
-/** Returns undefined on failure or frame timeout. */
-const answered = <A>(promise: Promise<A>) => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), FRAME_ANSWER_MS);
-  });
-  return Promise.race([promise.catch(() => undefined), late]).finally(() => clearTimeout(timer));
-};
-
-/** Isolated worlds prevent spoofing; desktop out-of-process frames use page worlds. Missing own-frame reads or changed frames fail; other missing reads return undefined. */
-const openReaders = async (page: Page, cdp: CDPSession) => {
-  const frames = page.frames();
-  const owners = new Map<Frame, CDPSession | null | undefined>(
-    await Promise.all(
-      frames.map(async (frame) => {
-        if (frame === page.mainFrame()) return [frame, cdp] as const;
-        const session = frameSessions.get(frame) ?? page.context().newCDPSession(frame);
-        frameSessions.set(frame, session);
-        try {
-          return [frame, await session] as const;
-        } catch (cause) {
-          frameSessions.delete(frame);
-          // CdpRelay supports only the page; other refusals fall back to the parent session, failing if the frame is absent.
-          const desktop = String(cause).includes("Only this preview tab's page can be attached");
-          return [frame, desktop ? null : undefined] as const;
-        }
-      }),
-    ),
-  );
-  const ownerOf = (frame: Frame): CDPSession | null => {
-    const owner = owners.get(frame);
-    if (owner !== undefined) return owner;
-    const parent = frame.parentFrame();
-    return parent ? ownerOf(parent) : null;
-  };
-  const sessionReader = (frame: Frame, session: CDPSession) => {
-    const owned = frames.filter((each) => ownerOf(each) === session);
-    const open = async () => {
-      const { frameTree } = await session.send("Page.getFrameTree");
-      const ids = (node: typeof frameTree): Array<string> => [
-        node.frame.id,
-        ...(node.childFrames ?? []).flatMap(ids),
-      ];
-      // A frame Playwright knows but this session doesn't would go unread.
-      if (ids(frameTree).length !== owned.length) throw pageChanged();
-      return Promise.all(
-        ids(frameTree).map(async (frameId) => {
-          const world = await session.send("Page.createIsolatedWorld", {
-            frameId,
-            worldName: "goat-preview",
-          });
-          return world.executionContextId;
-        }),
-      );
-    };
-    let contexts: ReturnType<typeof open> | undefined;
-    const read = async () => {
-      const values = (contexts ??= open()).then((ids) =>
-        Promise.all(
-          ids.map(async (contextId) => {
-            const { result, exceptionDetails } = await session.send("Runtime.evaluate", {
-              contextId,
-              expression: DOTTED_SCRIPT,
-              returnByValue: true,
-            });
-            if (exceptionDetails) throw pageChanged();
-            return result.value as Array<string>;
-          }),
-        ),
-      );
-      try {
-        return (await values).flat();
-      } catch (cause) {
-        // The frame may have moved to another process; the next snapshot opens a new session.
-        if (session !== cdp) {
-          frameSessions.delete(frame);
-          void session.detach().catch(constVoid);
-        }
-        throw cause;
-      }
-    };
-    return { frames: owned, read };
-  };
-  const readers = [
-    sessionReader(page.mainFrame(), cdp),
-    ...frames.flatMap((frame) => {
-      const owner = owners.get(frame);
-      if (owner) return owner === cdp ? [] : [sessionReader(frame, owner)];
-      const own = () => frame.evaluate(DOTTED_SCRIPT) as Promise<Array<string>>;
-      return ownerOf(frame) === null ? [{ frames: [frame], read: own }] : [];
-    }),
-  ];
-  return {
-    readers,
-    read: async (before?: ReadonlyArray<unknown>) => {
-      const now = page.frames();
-      if (now.length !== frames.length || now.some((frame, i) => frame !== frames[i])) {
-        throw pageChanged();
-      }
-      return Promise.all(
-        readers.map((reader, i) => {
-          if (i === 0) return reader.read().catch(() => Promise.reject(pageChanged()));
-          return before && !before[i] ? undefined : answered(reader.read());
-        }),
-      );
-    },
-  };
-};
-
-/** Short values need word boundaries to avoid masking unrelated text. */
-const dottedPattern = (values: ReadonlyArray<string>) => {
-  const sources = values
-    .flatMap((value) => {
-      const json = JSON.stringify(value).slice(1, -1);
-      // Playwright writes control characters like JSON does, with \xNN for the unnamed ones.
-      const quoted = value.replace(/[\\"\p{Cc}]/gu, (char) =>
-        '\\"\b\f\n\r\t'.includes(char)
-          ? JSON.stringify(char).slice(1, -1)
-          : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-      );
-      const forms = [value, json, quoted].flatMap((form) => [form, form.replaceAll("'", "''")]);
-      return [...new Set(forms)].map((form) => ({ form, word: value.length < 4 }));
-    })
-    // Longest first, so a form inside another never leaves the rest showing.
-    .toSorted((a, b) => b.form.length - a.form.length)
-    .map(({ form, word }) => {
-      const literal = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return word ? `(?<![\\p{L}\\p{N}_])${literal}(?![\\p{L}\\p{N}_])` : literal;
-    });
-  if (sources.length === 0) return undefined;
-  const pattern = new RegExp(sources.join("|"), "gu");
-  try {
-    // Force regex compilation for one-byte and two-byte strings now; size errors name every value.
-    pattern.test("");
-    pattern.test("\u2022");
-  } catch {
-    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", VALUE_TOO_LONG);
-  }
-  return pattern;
-};
 
 /** Chromium sizes the capture, so the reported size is read from the PNG header. */
 const pngSize = (base64: string) => {
@@ -621,7 +448,8 @@ const captureFullPage = async (cdp: CDPSession) => {
   throw new ServerBrowserOperationError("PreviewAutomationExecutionError", FULL_PAGE_TOO_LARGE);
 };
 
-type SnapshotInput = {
+type SnapshotInput = PreviewAutomationSnapshotInput & {
+  readonly agentSessionId?: string | undefined;
   readonly page: Page;
   readonly cdp: CDPSession;
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
@@ -632,6 +460,8 @@ type SnapshotInput = {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** The tab's filled-secret mask, run before the text limits cut a value into a start. */
+  readonly diagnostics?: { readonly mask: (text: string, limit?: number) => string };
   /** What remains of the request's deadline, the one its timeout error names. */
   readonly timeoutMs: number;
 };
@@ -662,11 +492,12 @@ const capture = async (
   if (Date.now() >= deadline) throw tooBusy();
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
-  invalidateRefs(input.page);
+  const scoped = input.scope ? await resolvePageScope(input.page, input.scope) : undefined;
+  invalidateRefs(input.page, true);
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
   const before = await read();
-  const capture =
+  const captureImage = (): Promise<PreviewAutomationSnapshot["screenshot"]> =>
     input.captureImage === false
       ? Promise.resolve(undefined)
       : input.fullPage
@@ -681,27 +512,37 @@ const capture = async (
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
-      Pick<
-        PreviewAutomationSnapshot,
-        "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-      >
-    >,
+    snapshotPageMetadata(input.page, scoped),
     readLayersHeader(input.page),
-    capture,
+    input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
+  let screenshot: PreviewAutomationSnapshot["screenshot"];
   let unread: ReadonlyArray<Frame> = [];
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
-    tree = await input.page.ariaSnapshot({
+    tree = await (scoped ?? input.page).ariaSnapshot({
       mode: "ai",
       boxes: true,
       timeout: Math.max(1, deadline - Date.now() - 2_000),
     });
+    const image =
+      input.annotate && input.captureImage !== false
+        ? withRefAnnotations(
+            input.page,
+            screenTree(tree, {
+              limit: MAX_VISIBLE_TEXT_LENGTH,
+              unread: [],
+              generation,
+              refs: new Map(),
+            }).accessibilityTree,
+            captureImage,
+          )
+        : Promise.resolve(undefined);
+    screenshot = await image;
     const after = await read(before);
     // A value that changed meanwhile may be in the tree under neither reading.
     if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
@@ -722,30 +563,51 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [page, layersLine, screenshot, cookies] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies] = await pageAndScreenshot;
+  // Checked after the reads: an embedding frame element can be hidden while they run.
+  const hidden = scoped ? await scopeHidden(scoped) : false;
+  const page = hidden ? { ...captured, visibleText: "" } : captured;
+  if (hidden) tree = "";
+  screenshot ??= capturedImage;
   if (state.generation !== generation) throw pageChanged();
-  const mask = maskSecrets(dotted, cookies);
+  const filled = input.diagnostics?.mask ?? ((text: string) => text);
+  const secrets = maskSecrets(dotted, cookies);
+  const mask = (text: string, limit?: number) => filled(secrets(text), limit).slice(0, limit);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
-  const { accessibilityTree, ...treeFields } = screenTree(
-    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
-    { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
+  const narrowed = narrowTree(
+    // An interactive-only tree keeps lines from past the cut, so it is masked in full.
+    filled(
+      maskTree(redacted, dotted, cookies),
+      input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH,
+    ),
+    input.interactiveOnly,
   );
-  const masked = <A>(value: A) => redactValue(value, mask) as A;
-  return {
-    ...page,
-    url: mask(page.url),
-    title: mask(page.title),
-    // Mask text before truncating so a value crossing the cut cannot leak its prefix.
-    visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
-    accessibilityTree,
-    ...treeFields,
-    consoleEntries: masked([...input.consoleEntries]),
-    networkEntries: masked([...input.networkEntries]),
-    actionTimeline: masked([...input.actionTimeline]),
-    ...(screenshot === undefined ? {} : { screenshot }),
-  };
+  const { accessibilityTree, ...treeFields } = screenTree(`${mask(layersLine)}\n${narrowed}`, {
+    limit: MAX_VISIBLE_TEXT_LENGTH,
+    unread,
+    generation,
+    refs: state.refs,
+  });
+  return snapshotOptionsResult(
+    input.page,
+    {
+      ...page,
+      url: mask(page.url),
+      title: mask(page.title),
+      // Mask text before truncating so a value crossing the cut cannot leak its prefix.
+      visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
+      accessibilityTree,
+      ...treeFields,
+      ...maskSnapshotRecords(mask, input),
+      ...(screenshot === undefined ? {} : { screenshot }),
+    },
+    input,
+    page.visibleText.length,
+    unread.length,
+    narrowed.length + layersLine.length + 1,
+  );
 };
 
 /** Snapshots begun per page; observers' snapshots aren't queued, so two can overlap. */
@@ -1086,10 +948,10 @@ export const evaluate = async (
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));
   if (result.exceptionDetails) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationExecutionError",
-      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-    );
+    const { exception, text } = result.exceptionDetails;
+    // The page writes its own exception's message, so it is masked like a result.
+    const message = await redactEvaluation(page, cdp, exception?.description ?? text, before);
+    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", String(message));
   }
   const value =
     "value" in result.result ? result.result.value : (result.result.description ?? null);

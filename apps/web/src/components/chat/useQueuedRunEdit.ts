@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { makeQueuedRunEditStore, makeQueuedRunsAtom } from "@goat/client-runtime/queued-run-edit";
+import {
+  makeQueuedRunEditStore,
+  makeQueuedRunsAtom,
+  queuedRunEditBlockedReason,
+} from "@goat/client-runtime/queued-run-edit";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -188,6 +192,9 @@ export function useQueuedRunEdit(input: {
     composerRef,
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
+  const pendingRequests = useAtomValue(
+    environmentThreadDetails.pendingRequestsAtom(routeThreadRef),
+  );
   const editKey = scopedThreadKey(routeThreadRef);
   const storedEdit = useAtomValue(queuedRunEdits.atom)[editKey] ?? null;
   const editing = activeThreadId === null ? null : storedEdit;
@@ -220,6 +227,11 @@ export function useQueuedRunEdit(input: {
 
   const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
     if (activeThreadId === null) return;
+    const pending = appAtomRegistry.get(
+      environmentThreadDetails.pendingRequestsAtom(routeThreadRef),
+    );
+    if (queuedRunEditBlockedReason({ openQuestionCount: pending?.userInputs.length ?? 0 }) !== null)
+      return;
     if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
     const target = queuedEditDraftTarget(routeThreadRef, request.runId);
     const store = useComposerDraftStore.getState();
@@ -344,6 +356,9 @@ export function useQueuedRunEdit(input: {
     draftTarget,
     editingAttachments,
     beginEdit,
+    editBlockedReason: queuedRunEditBlockedReason({
+      openQuestionCount: pendingRequests?.userInputs.length ?? 0,
+    }),
     cancelEdit,
     removeEditingAttachment,
     saveEdit,

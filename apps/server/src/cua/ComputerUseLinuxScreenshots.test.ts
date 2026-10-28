@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import {
   linuxScreenshotPolicy,
   proxyCaptureRoute,
-  SCREENSHOT_FILE_REFUSED,
   UNVERIFIED_IMAGE,
 } from "./ComputerUseLinuxScreenshots.ts";
 import { CROPPED_CAPTURE, type CaptureRoute } from "./linuxHelper/windowCapture.ts";
@@ -267,36 +266,6 @@ describe("Linux agent screenshots (#1677)", () => {
       assert.equal(out.result.content[1]?.mimeType, "image/png");
     }),
   );
-
-  it("calls that would write the driver's capture to a file are refused on every route", () => {
-    for (const route of [
-      own({ refused: STILL_DRAWING, transient: true }).route,
-      { route: "driver" } as const,
-      { route: "refused", reason: CROPPED_CAPTURE } as const,
-    ]) {
-      const policy = linuxScreenshotPolicy(route);
-      for (const name of ["screenshot_out_file", "image_path", "file_path"])
-        assert.equal(
-          policy.refuseArguments({ window_id: 9, [name]: "/tmp/shot.png" }),
-          SCREENSHOT_FILE_REFUSED,
-        );
-      // run_steps passes an observe step's arguments through; a script names them in its text.
-      assert.equal(
-        policy.refuseArguments({
-          steps: [{ action: "click" }],
-          observe: { window_id: 9, screenshot_out_file: "/tmp/shot.png" },
-        }),
-        SCREENSHOT_FILE_REFUSED,
-      );
-      assert.equal(
-        policy.refuseArguments({
-          script: 'get_window_state(window_id=9, image_path="/tmp/s.png")',
-        }),
-        SCREENSHOT_FILE_REFUSED,
-      );
-      assert.isUndefined(policy.refuseArguments({ window_id: 9, observe: { window_id: 9 } }));
-    }
-  });
 
   it("a Wayland backend the driver reads as off, or an X display GOAT did not place, is not trusted", () => {
     const hyprland = {

@@ -139,6 +139,7 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
       }
     }),
     view: () => ({ enabled, visible: enabled && state.shown?.op === "show" }),
+    placed: () => state.shown?.op === "show" && state.shown.point !== undefined,
     setEnabled: Effect.fn("ComputerUseLeaseProxy.setCursorEnabled")(function* (next: boolean) {
       if (next === enabled) return;
       enabled = next;

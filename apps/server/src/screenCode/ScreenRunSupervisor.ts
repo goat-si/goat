@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off preferSchemaOverJson:off - This module owns one exact child process and its watchdog.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off preferSchemaOverJson:off - This module owns one exact child process and its watchdog.
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
@@ -68,6 +68,7 @@ interface Session {
   readonly key: string;
   readonly runId: string;
   readonly turnId: string;
+  readonly turnWasmBytes: number;
   active: string | undefined;
   abortActive: ((code: typeof SupervisorCode.Type) => void) | undefined;
   closed: boolean;
@@ -75,6 +76,8 @@ interface Session {
 
 const key = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
 const MAX_FRAME_BYTES = 256 * 1024;
+// The child ends a cell at the same deadline; this only catches a child that stopped answering.
+const BACKSTOP_GRACE_MS = 2_000;
 const ChildResultFrame = Schema.Struct({
   t: Schema.Literal("result"),
   cellId: Schema.String,
@@ -104,7 +107,7 @@ export function createScreenRunSupervisor(deps: {
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }) {
   const sessions = new Map<string, Session>();
-  const spawnSession = (runId: string, turnId: string) => {
+  const spawnSession = (runId: string, turnId: string, turnWasmBytes: number) => {
     if (sessions.size >= deps.limits.activeChildren) throw failure("live_children_limit");
     const { command, args } = screenChildInvocation(deps.invocation);
     const isElectron =
@@ -125,6 +128,7 @@ export function createScreenRunSupervisor(deps: {
       key: key(runId, turnId),
       runId,
       turnId,
+      turnWasmBytes,
       closed: false,
       active: undefined,
       abortActive: undefined,
@@ -141,7 +145,7 @@ export function createScreenRunSupervisor(deps: {
       t: "boot",
       runId,
       turnId,
-      limits: deps.limits,
+      limits: { ...deps.limits, turnWasmBytes },
       wasmPath: deps.asset.path,
       wasmSha256: deps.asset.sha256,
     };
@@ -157,6 +161,10 @@ export function createScreenRunSupervisor(deps: {
     if (session.child.exitCode === null) session.child.kill("SIGKILL");
     session.lines.close();
   };
+  const abortCellNow = (runId: string, turnId: string, cellId: string) => {
+    const session = sessions.get(key(runId, turnId));
+    if (session?.active === cellId) session.abortActive?.("stopped");
+  };
   return {
     runCell: Effect.fn("ScreenRunSupervisor.runCell")(function* (
       identity: ScreenRunIdentity,
@@ -165,7 +173,9 @@ export function createScreenRunSupervisor(deps: {
     ) {
       const id = key(identity.runId, identity.turnId);
       const session = yield* Effect.try({
-        try: () => sessions.get(id) ?? spawnSession(identity.runId, identity.turnId),
+        try: () =>
+          sessions.get(id) ??
+          spawnSession(identity.runId, identity.turnId, identity.context.limits.turnWasmBytes),
         catch: (cause) =>
           isScreenSupervisorFailure(cause) ? cause : failure("runtime_unavailable"),
       });
@@ -176,9 +186,9 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
-            // Set once the child's result arrives: a later Stop, wall timer or exit finishes the
-            // cell with that result, because the bridge's journal may already be taken.
-            let finishAfterResult: ((code: typeof SupervisorCode.Type) => void) | undefined;
+            // Set once the child's result arrives: a later Stop or exit finishes the cell with that
+            // result, because the bridge's journal is already taken.
+            let finishAfterResult: (() => void) | undefined;
             const hostErrors = new Map<number, ScreenRunError>();
             const callAbort = new AbortController();
             const cleanup = () => {
@@ -190,7 +200,7 @@ export function createScreenRunSupervisor(deps: {
             };
             const failRun = (code: typeof SupervisorCode.Type) => {
               if (settled) return;
-              if (finishAfterResult) return finishAfterResult(code);
+              if (finishAfterResult) return finishAfterResult();
               settled = true;
               cleanup();
               deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
@@ -275,7 +285,6 @@ export function createScreenRunSupervisor(deps: {
                 : isScreenGuestError(result.error)
                   ? result.error
                   : undefined;
-              let collected: ReturnType<ScreenHostBridge["takeCellImagesNow"]> | undefined;
               const finish = (
                 taken: ReturnType<ScreenHostBridge["takeCellImagesNow"]>,
                 availability: ScreenRunResult["availability"],
@@ -301,60 +310,55 @@ export function createScreenRunSupervisor(deps: {
                   availability,
                 });
               };
-              finishAfterResult = (code) => {
-                if (settled) return;
-                callAbort.abort();
-                // A per-cell Stop leaves an idle child with its values; an exit or failure does not.
-                if (code !== "stopped") close(session);
-                finish(
-                  collected ??
-                    deps.hostBridge.takeCellImagesNow(identity.runId, identity.turnId, cellId),
-                  UNREAD_AVAILABILITY,
-                );
-              };
-              const collect = Effect.gen(function* () {
-                if (result.status === "failed")
-                  yield* deps.hostBridge.cutCell(
-                    identity.runId,
-                    identity.turnId,
-                    cellId,
-                    "unawaited",
-                  );
-                if (result.unawaitedCallIds?.length)
-                  yield* deps.hostBridge.markUnawaited(
-                    identity.runId,
-                    identity.turnId,
-                    cellId,
-                    result.unawaitedCallIds,
-                  );
-                if (result.unawaitedCallIds?.length) callAbort.abort();
-                collected = yield* deps.hostBridge.takeCellImages(
+              // Collected in this callback, so no queued call can dispatch between the result
+              // and its journal; unawaited calls are stopped only after that.
+              if (result.status === "failed")
+                deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId, "unawaited");
+              if (result.unawaitedCallIds?.length)
+                deps.hostBridge.markUnawaitedNow(
                   identity.runId,
                   identity.turnId,
                   cellId,
+                  result.unawaitedCallIds,
                 );
-                const available = yield* deps.hostBridge
-                  .availability(identity.context)
-                  .pipe(Effect.timeoutOption("1 second"));
-                return {
-                  taken: collected,
-                  availability: Option.getOrElse(available, () => UNREAD_AVAILABILITY),
-                };
-              });
-              void deps.runCallback(collect).then(
-                ({ taken, availability }) => finish(taken, availability),
-                () => failRun("runtime_unavailable"),
+              const collected = deps.hostBridge.takeCellImagesNow(
+                identity.runId,
+                identity.turnId,
+                cellId,
               );
+              // The child that sent this result stays until it exits: its exit handler closes it.
+              finishAfterResult = () => {
+                if (settled) return;
+                callAbort.abort();
+                finish(collected, UNREAD_AVAILABILITY);
+              };
+              if (result.unawaitedCallIds?.length) callAbort.abort();
+              void deps
+                .runCallback(
+                  deps.hostBridge
+                    .availability(identity.context)
+                    .pipe(Effect.timeoutOption("1 second")),
+                )
+                .then(
+                  (available) =>
+                    finish(
+                      collected,
+                      Option.getOrElse(available, () => UNREAD_AVAILABILITY),
+                    ),
+                  // An unread surface does not undo the result or the live child.
+                  () => finish(collected, UNREAD_AVAILABILITY),
+                );
             };
+            const deadlineMillis = Date.now() + identity.context.limits.cellWallMs;
             const cancelDeadline = deps.scheduleDeadline
               ? deps.scheduleDeadline(
                   () => failRun("wall_limit"),
-                  identity.context.limits.cellWallMs + 250,
+                  identity.context.limits.cellWallMs + BACKSTOP_GRACE_MS,
                 )
               : (() => {
                   const timer = setTimeout(
                     () => failRun("wall_limit"),
-                    identity.context.limits.cellWallMs + 250,
+                    identity.context.limits.cellWallMs + BACKSTOP_GRACE_MS,
                   );
                   return () => clearTimeout(timer);
                 })();
@@ -363,7 +367,7 @@ export function createScreenRunSupervisor(deps: {
             session.lines.on("line", onLine);
             if (signal.aborted) return onAbort();
             session.child.stdin.write(
-              `${JSON.stringify({ t: "cell", cellId, source, resetValues, limits: identity.context.limits })}\n`,
+              `${JSON.stringify({ t: "cell", cellId, source, resetValues, limits: identity.context.limits, deadlineMillis })}\n`,
             );
           }),
         catch: (cause) =>
@@ -384,9 +388,10 @@ export function createScreenRunSupervisor(deps: {
       reason: string,
     ) {
       yield* deps.hostBridge.cutCell(runId, turnId, cellId, reason);
-      const session = sessions.get(key(runId, turnId));
-      if (session?.active === cellId) session.abortActive?.("stopped");
+      abortCellNow(runId, turnId, cellId);
     }),
+    /** Ends the cell before the child can turn a cut reply it caught into a completed result. */
+    cutCellNow: abortCellNow,
     finishTurn: Effect.fn("ScreenRunSupervisor.finishTurn")(function* (
       runId: string,
       turnId: string,
@@ -403,6 +408,8 @@ export function createScreenRunSupervisor(deps: {
       close(session);
     }),
     activeCount: () => sessions.size,
+    turnWasmBytes: (runId: string, turnId: string) =>
+      sessions.get(key(runId, turnId))?.turnWasmBytes,
   };
 }
 export type ScreenRunSupervisor = ReturnType<typeof createScreenRunSupervisor>;

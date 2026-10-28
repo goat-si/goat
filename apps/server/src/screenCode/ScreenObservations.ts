@@ -8,6 +8,9 @@ import type {
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
 
+// Playwright single-quotes a tree line whose name contains ": ".
+const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
+
 export interface ScreenObservationDraft {
   readonly targetRef: ScreenTargetRef;
   readonly targetGeneration: number;
@@ -16,6 +19,8 @@ export interface ScreenObservationDraft {
   readonly complete: boolean;
   readonly truncated: boolean;
   readonly loading: boolean;
+  readonly title?: string;
+  readonly url?: string;
   readonly lineage?: string;
   readonly elements: readonly {
     readonly role: string;
@@ -148,6 +153,8 @@ class ObservationIndex {
 
 export class ScreenObservations {
   readonly index = new ObservationIndex();
+  private nextTabGeneration = 0;
+  private readonly tabGenerations = new Map<string, { key: string; generation: number }>();
   private readonly previous = new Map<
     string,
     { observation: ScreenObservation; draft: ScreenObservationDraft }
@@ -156,6 +163,7 @@ export class ScreenObservations {
   evictTarget(targetId: string): void {
     this.index.invalidateTarget(targetId);
     this.previous.delete(targetId);
+    this.tabGenerations.delete(targetId);
   }
 
   normalizeAppTree(input: ScreenObservationDraft): ScreenObservationDraft {
@@ -176,21 +184,33 @@ export class ScreenObservations {
     for (const line of lines) {
       const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
       if (!ref) continue;
-      const role = line.trim().match(/^-?\s*([\w-]+)/)?.[1] ?? "element";
+      const role = line.trim().match(TREE_ROLE)?.[1] ?? "element";
       const name = line.replace(/\[ref=[^\]]+\]/g, "").trim();
       elements.push({ role, name, driverToken: `aria-ref=${ref}` });
     }
-    const surfaceGeneration = Number(snapshot.refGeneration);
-    const validGeneration = Number.isSafeInteger(surfaceGeneration) && surfaceGeneration >= 0;
+    const validGeneration =
+      typeof snapshot.refGeneration === "string" && snapshot.refGeneration.length > 0;
+    const key = JSON.stringify([
+      input.connectionId,
+      input.controlGeneration,
+      snapshot.refGeneration,
+    ]);
+    let generation = this.tabGenerations.get(input.targetRef.id);
+    if (!generation || generation.key !== key) {
+      generation = { key, generation: ++this.nextTabGeneration };
+      this.tabGenerations.set(input.targetRef.id, generation);
+    }
     return {
       targetRef: input.targetRef,
       targetGeneration: input.targetGeneration,
-      surfaceGeneration: validGeneration ? surfaceGeneration : 0,
+      surfaceGeneration: generation.generation,
       lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${snapshot.url}`,
       indexedText: tree,
       complete: snapshot.treeComplete === true && validGeneration,
       truncated: snapshot.treeComplete !== true || !validGeneration,
       loading: snapshot.loading,
+      title: snapshot.title.slice(0, 1024),
+      url: snapshot.url.slice(0, 8192),
       elements: snapshot.treeComplete === true && validGeneration ? elements : [],
     };
   }
@@ -200,12 +220,16 @@ export class ScreenObservations {
     mode: "full" | "diff" | "query";
     baseObservationId?: string;
     query?: { role?: string; name?: string; text?: string };
+    /** The draft is already a diff against baseObservationId, made by the driver. */
+    prediffed?: boolean;
+    /** Why a read the caller asked to diff came back full. */
+    resetReason?: string;
     limits: { readonly treeBytes: number };
   }): ScreenObservation {
     const { draft } = input;
     const old = this.previous.get(draft.targetRef.id);
     let mode: ScreenObservation["mode"] = input.mode;
-    let resetReason: string | undefined;
+    let resetReason = input.resetReason;
     const currentLines = draft.indexedText.split("\n");
     let selected = draft.elements;
     let renderedText = draft.indexedText;
@@ -231,8 +255,8 @@ export class ScreenObservations {
       };
       for (let index = 0; index < lines.length; index++) {
         const line = lines[index] ?? "";
-        const content = line.trim().replace(/^-\s*/, "");
-        const role = content.match(/^([\w-]+)/)?.[1] ?? "";
+        const content = line.trim().replace(/^-\s*'?/, "");
+        const role = content.match(TREE_ROLE)?.[1] ?? "";
         const name = content
           .slice(role.length)
           .replace(/\[(?:ref=[^\]]+|active|focused)\]/g, "")
@@ -250,7 +274,7 @@ export class ScreenObservations {
       selected = draft.elements.filter((element) => matchingRefs.has(element.driverToken));
       renderedText = lines.filter((_, index) => included.has(index)).join("\n");
     }
-    if (mode === "diff") {
+    if (mode === "diff" && !input.prediffed) {
       const valid =
         old &&
         old.observation.observationId === input.baseObservationId &&
@@ -329,6 +353,8 @@ export class ScreenObservations {
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,
       loading: draft.loading,
+      ...(draft.title === undefined ? {} : { title: draft.title }),
+      ...(draft.url === undefined ? {} : { url: draft.url }),
       truncated,
       indexedText: text,
       elements,

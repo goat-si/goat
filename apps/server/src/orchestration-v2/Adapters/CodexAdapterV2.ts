@@ -96,6 +96,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
+import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -188,6 +189,7 @@ import {
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
+import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -1358,16 +1360,6 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("goat/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
-// One app-server hosts many threads, so its process must never carry a thread credential.
-const codexThreadMcpEnvironment = (
-  session: McpProviderSession.McpProviderSessionConfig | undefined,
-) =>
-  Object.fromEntries(
-    Object.entries(McpProviderSession.withThreadMcpEnvironment({}, session)).map(
-      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
-    ),
-  );
-
 /**
  * Codex waits this long for MCP servers before the first model request and
  *   leaves out any server still starting (default 1 s, too short for cold
@@ -1379,8 +1371,7 @@ export const CODEX_THREAD_CONFIG = {
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
 
-// GOAT wait tools can block for up to an hour. Keep Codex's MCP timeout above
-// that limit so the server's own wait timeout ends a long call.
+// Keep Codex MCP calls longer than GOAT's hour-long wait tools.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
 export { codexNativeSubagentConfig };
@@ -1859,18 +1850,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               )
             : [];
-        const client = yield* clientFactory.open({
-          instanceId: adapterOptions.instanceId,
-          threadId: input.threadId,
-          providerSessionId: input.providerSessionId,
-          runtimePolicy: input.runtimePolicy,
-          settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: McpProviderSession.withThreadMcpEnvironment(
-            routeInput.execution.environment,
-            undefined,
-          ),
-          routeArgs,
-        });
+        const client = yield* clientFactory
+          .open({
+            instanceId: adapterOptions.instanceId,
+            threadId: input.threadId,
+            providerSessionId: input.providerSessionId,
+            runtimePolicy: input.runtimePolicy,
+            settings: resolvedRuntime?.config ?? adapterOptions.settings,
+            environment: McpProviderSession.withThreadMcpEnvironment(
+              routeInput.execution.environment,
+              undefined,
+            ),
+            routeArgs,
+          })
+          .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const memoryByThread = new Map<
           string,
           {
@@ -2057,8 +2050,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const initialized = yield* Ref.make(false);
         let codexVersion: string | undefined;
         let reportedSubagentGap = false;
-        // Threads share this app-server, and Codex rejects a second
-        // `initialize`.
+        // A shared app-server accepts initialize only once.
         const initializePermit = yield* Semaphore.make(1);
         const verifySessionRoute = (cwd = routeInput.execution.cwd) =>
           Effect.gen(function* () {
@@ -2089,7 +2081,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* verifySessionRoute();
               return;
             }
-
             const initializeResponse = yield* client
               .request("initialize", {
                 clientInfo: buildCodexInitializeParams().clientInfo,
@@ -2153,6 +2144,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             userCuaDriverByCwd.set(key, configured);
             return configured;
           });
+        const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
+          ensureInitialized.pipe(
+            Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+          ),
+        );
         /** Thread config plus the managed driver it carries. */
         const threadRuntimeParams = (input: {
           readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -2181,7 +2177,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               params: mergeCodexHomeThreadParams(
                 launchSettings,
                 codexThreadRuntimeParams({
-                  mcpSession: input.mcpSession,
+                  mcpSession: yield* withoutConfiguredBrowser(
+                    input.mcpSession,
+                    input.runtimePolicy?.cwd,
+                  ),
                   ...(input.modelSelection === undefined
                     ? {}
                     : { modelSelection: input.modelSelection }),
@@ -2395,8 +2394,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             return emitGoalUpdate(nativeThreadId);
           });
 
-        // Only new model output proves recovery; local item/completed can arrive during upstream retries.
-        const completeProviderRetry = Effect.fn("CodexAdapterV2.completeProviderRetry")(function* (
+        // Only model output proves recovery (item/completed arrives mid-retry). Untraced: per delta.
+        const completeProviderRetry = Effect.fnUntraced(function* (
           context: ActiveCodexTurnContext,
           updatedAt: DateTime.Utc,
           recordOutput = true,

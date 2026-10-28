@@ -3,6 +3,7 @@ import {
   type DesktopCuaFrame,
   type DesktopCuaFrames,
   type DesktopCuaReadinessReport,
+  EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -101,6 +102,7 @@ const fixture = Effect.fnUntraced(function* (
   const desktopCaptures = yield* Ref.make(options.desktopCaptures === true);
   const safety = yield* PubSub.unbounded<DesktopCuaReadinessReport>();
   const state = yield* Ref.make<ComputerUseLeases.ComputerUseControlState>(active);
+  const record = yield* Ref.make(control);
   const signals = yield* PubSub.unbounded<void>();
   const requests = yield* Queue.unbounded<DesktopCuaFrames["targets"]>();
   const fromDesktop = yield* PubSub.unbounded<DesktopCuaFrame>();
@@ -121,6 +123,7 @@ const fixture = Effect.fnUntraced(function* (
     control: () => unused,
     attached: () => Effect.die("unused"),
     everyAppControl: () => unused,
+    nameApps: () => unused,
     serializeAdmission: (effect) => effect,
     currentControl: () => Effect.die("unused"),
     controlState: () => unused,
@@ -143,15 +146,17 @@ const fixture = Effect.fnUntraced(function* (
     pause: () => unused,
     detection: Effect.succeed(detects),
     resume: unused,
+    hold: () => unused,
     // A held read returns the state it saw before it was held, like a read awaiting the database.
     sessions: Effect.gen(function* () {
       const current = yield* Ref.get(state);
+      const recorded = yield* Ref.get(record);
       const held = yield* Ref.getAndSet(hold, Option.none());
       if (Option.isSome(held)) {
         yield* Deferred.succeed(held.value.reading, undefined);
         yield* Deferred.await(held.value.release);
       }
-      return [{ control, state: current }];
+      return [{ control: recorded, state: current }];
     }),
     subscribe: PubSub.subscribe(signals),
     changed: PubSub.publish(signals, undefined).pipe(Effect.asVoid),
@@ -229,6 +234,9 @@ const fixture = Effect.fnUntraced(function* (
       ),
     set: (next: ComputerUseLeases.ComputerUseControlState) =>
       Ref.set(state, next).pipe(Effect.andThen(leases.changed)),
+    /** The control's record changes, as a proxy's cursor report changes it. */
+    record: (next: ComputerUseLeases.ComputerUseControl) =>
+      Ref.set(record, next).pipe(Effect.andThen(leases.changed)),
     /** A change nothing signals, such as a control reaching its expiry. */
     quietly: (next: ComputerUseLeases.ComputerUseControlState) => Ref.set(state, next),
     failNextWrite: Ref.set(failNext, true),
@@ -424,6 +432,80 @@ describe("DesktopFrames", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "pairs a frame only with a cursor that changed before its capture, and says how old it is",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const next = yield* watch(f.service);
+        yield* f.requested;
+        const report = (sequence: number, fx: number) =>
+          ({
+            identity: {
+              environmentId: EnvironmentId.make("env"),
+              runId: "run",
+              turnId: "turn",
+              targetId: "target",
+              generation: 1,
+              sequence,
+            },
+            cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "moving" },
+            phase: "moving",
+          }) as const;
+        const pointAt = (sequence: number, fx: number, cursorAt: number) => ({
+          ...control,
+          cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "acting" } as const,
+          cursorReport: report(sequence, fx),
+          cursorAt,
+        });
+        const captured = (data: string, capturedAt?: number) =>
+          Effect.flatMap(f.seq, (seq) =>
+            f.send({ ...frame(seq, data), ...(capturedAt === undefined ? {} : { capturedAt }) }),
+          );
+        yield* TestClock.adjust("1 second");
+        yield* f.record(pointAt(1, 0.25, 900));
+        yield* captured("QUJD", 950);
+        assert.deepInclude(yield* next, {
+          type: "frame",
+          capturedAt: 950,
+          ageMs: 50,
+          cursor: { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" },
+          cursorState: { identity: report(1, 0.25).identity, phase: "moving" },
+        });
+        // Captured at 1300, before the cursor moved at 1400, and arriving after: no cursor at all.
+        yield* TestClock.adjust("500 millis");
+        yield* f.record(pointAt(2, 0.75, 1_400));
+        yield* captured("TkVX", 1_300);
+        const before = yield* next;
+        assert.deepInclude(before, { type: "frame", capturedAt: 1_300, ageMs: 200 });
+        assert.notProperty(before, "cursor");
+        assert.notProperty(before, "cursorState");
+        // The same millisecond cannot say which came first.
+        yield* TestClock.adjust("500 millis");
+        yield* captured("T0xE", 1_400);
+        assert.notProperty(yield* next, "cursor");
+        yield* TestClock.adjust("500 millis");
+        yield* captured("TkVX", 2_400);
+        assert.deepInclude((yield* next) as object, { cursor: pointAt(2, 0.75, 1_400).cursor });
+        // A helper that stamps nothing: its arrival says nothing about the pixels, so no cursor.
+        yield* TestClock.adjust("500 millis");
+        yield* captured("R09ORQ==");
+        const unstamped = yield* next;
+        assert.deepInclude(unstamped, { type: "frame", capturedAt: 3_000 });
+        assert.notProperty(unstamped, "cursor");
+        assert.notProperty(unstamped, "ageMs");
+        yield* TestClock.adjust("500 millis");
+        // Stamped later than the server's own clock: the clock stepped back while it was captured,
+        // so the stamp orders nothing.
+        yield* f.record(pointAt(3, 0.5, 2_900));
+        yield* captured("RlVU", 9_000);
+        const jumped = yield* next;
+        assert.deepInclude(jumped, { type: "frame", capturedAt: 3_500 });
+        assert.notProperty(jumped, "cursor");
+        assert.notProperty(jumped, "ageMs");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("shows at most one frame per interval however fast the desktop sends them", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -509,6 +591,8 @@ describe("DesktopFrames", () => {
 
   it("drops a frame from before a stop or for another window, and refuses an oversized one", () => {
     const current = { seq: 4, targets: [target] };
+    const admit = (message: DesktopCuaFrame, at: typeof current, gate: FrameGate | undefined) =>
+      admitFrame(message, at, gate, 0);
     const open = {
       _tag: "open",
       pid: 7,
@@ -516,19 +600,19 @@ describe("DesktopFrames", () => {
       apps: ["com.apple.calculator"],
       wakeAt: 60_000,
     } as const;
-    assert.isDefined(admitFrame(frame(4), current, open));
-    assert.isUndefined(admitFrame(frame(3), current, open));
-    assert.isUndefined(admitFrame(frame(4), current, { _tag: "closed", reason: "paused" }));
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, windowId: 9 }));
-    assert.isUndefined(admitFrame({ ...frame(4), key: "desktop:other" }, current, open));
+    assert.isDefined(admit(frame(4), current, open));
+    assert.isUndefined(admit(frame(3), current, open));
+    assert.isUndefined(admit(frame(4), current, { _tag: "closed", reason: "paused" }));
+    assert.isUndefined(admit(frame(4), current, { ...open, windowId: 9 }));
+    assert.isUndefined(admit({ ...frame(4), key: "desktop:other" }, current, open));
     // Grants narrowed since the capture was asked for: the helper checked against the old apps.
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: [] }));
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: undefined }));
-    assert.deepEqual(admitFrame(frame(4, "A".repeat(400_000)), current, open), {
+    assert.isUndefined(admit(frame(4), current, { ...open, apps: [] }));
+    assert.isUndefined(admit(frame(4), current, { ...open, apps: undefined }));
+    assert.deepEqual(admit(frame(4, "A".repeat(400_000)), current, open), {
       type: "unavailable",
       reason: "captureFailed",
     });
-    assert.deepEqual(admitFrame({ ...frame(4), width: 1_000 }, current, open), {
+    assert.deepEqual(admit({ ...frame(4), width: 1_000 }, current, open), {
       type: "unavailable",
       reason: "captureFailed",
     });

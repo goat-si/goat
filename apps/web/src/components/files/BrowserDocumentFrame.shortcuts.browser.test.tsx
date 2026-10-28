@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { htmlRenderTheme } from "@goat/shared/htmlRender";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -6,34 +8,17 @@ import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({ threadFind: vi.fn() }));
 
-vi.mock(import("@effect/atom-react"), async (original) => ({
-  ...(await original()),
-  useAtomValue: ((atom: unknown) =>
-    atom === "keybindings" ? DEFAULT_RESOLVED_KEYBINDINGS : undefined) as never,
-}));
-vi.mock(import("~/state/server"), async (original) => {
-  const actual = await original();
-  return {
-    ...actual,
-    primaryServerKeybindingsAtom: "keybindings" as never,
-    serverEnvironment: {
-      ...actual.serverEnvironment,
-      configValueAtom: (() => "environment") as never,
-    },
-  };
-});
-vi.mock("~/hooks/useHtmlRenderTheme", async () => {
-  const { htmlRenderTheme } = await import("@goat/shared/htmlRender");
-  const { getStandardThemeColors } = await import("~/themePalette");
-  const theme = htmlRenderTheme(getStandardThemeColors("dark"), "dark");
-  return { useHtmlRenderTheme: () => theme };
-});
+vi.mock(import("@effect/atom-react"), { spy: true });
+vi.mock(import("~/hooks/useHtmlRenderTheme"), { spy: true });
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("~/lib/openPullRequestLink", () => ({ useOpenChangeRequestLink: () => vi.fn() }));
 
 import { useChatShortcuts } from "~/components/chat/useChatShortcuts";
+import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { isEditableFocused } from "~/lib/editableFocus";
 import { isPreviewFocused } from "~/lib/previewFocus";
+import { primaryServerKeybindingsAtom } from "~/state/server";
+import { getStandardThemeColors } from "~/themePalette";
 
 import { BrowserDocumentFrame } from "./BrowserDocumentFrame";
 
@@ -68,6 +53,12 @@ function ChatStandIn() {
 describe("HTML render shortcuts", () => {
   it("passes Cmd/Ctrl+F from a chat HTML render to thread find", async () => {
     state.threadFind.mockClear();
+    // A stable theme keeps the frame from re-posting it on every render.
+    vi.mocked(useHtmlRenderTheme).mockReturnValue(
+      htmlRenderTheme(getStandardThemeColors("dark"), "dark"),
+    );
+    vi.mocked(useAtomValue).mockImplementation(((atom: unknown) =>
+      atom === primaryServerKeybindingsAtom ? DEFAULT_RESOLVED_KEYBINDINGS : undefined) as never);
     await using screen = await render(
       <>
         <ChatStandIn />

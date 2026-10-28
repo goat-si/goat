@@ -155,6 +155,8 @@ A completed response may still need more input or report a repository-access blo
 Follow-up messages continue the same cloud session. Stop waits for Devin to confirm cancellation.
 If GOAT loses tracking, the thread keeps its session link and blocks further messages while the
 prompt outcome is unknown. Reconnecting does not resend the original message.
+If Devin asks you to sign in again during a session, run `devin auth login`, then send the
+message again. GOAT does not resend it for you, and the thread stays usable.
 
 If Devin Cloud is not ready, run `goat provider diagnose --driver devinCloud` on the environment's
 machine. It lists what blocks it and the next step for each.

@@ -1,3 +1,5 @@
+import * as AuxiliarySqlite from "./AuxiliarySqlite.ts";
+import { vi } from "vite-plus/test";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -127,6 +129,7 @@ describe("local GOAT server discovery", () => {
         yield* check.pipe(
           Effect.provide(
             LocalGoatServers.layer.pipe(
+              Layer.provide(AuxiliarySqlite.layer),
               // This platform never lists processes, so only the known homes are read.
               Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
             ),
@@ -173,7 +176,9 @@ describe("local GOAT server discovery", () => {
       const found = yield* Effect.gen(function* () {
         return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
       }).pipe(
-        Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+        Effect.provide(
+          LocalGoatServers.layer.pipe(Layer.provide(AuxiliarySqlite.layer), Layer.provide(runner)),
+        ),
         Effect.provideService(HostProcess.HomeDirectory, home),
         Effect.provideService(HostProcess.Platform, "darwin"),
         Effect.provideService(HostProcess.UserId, 501),
@@ -245,7 +250,12 @@ describe("local GOAT server discovery", () => {
         const found = yield* Effect.gen(function* () {
           return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
         }).pipe(
-          Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+          Effect.provide(
+            LocalGoatServers.layer.pipe(
+              Layer.provide(AuxiliarySqlite.layer),
+              Layer.provide(runner),
+            ),
+          ),
           Effect.provideService(HostProcess.HomeDirectory, home),
           Effect.provideService(HostProcess.Platform, platform),
           Effect.provideService(HostProcess.UserId, 501),
@@ -314,7 +324,12 @@ describe("local GOAT server discovery", () => {
         const found = yield* Effect.gen(function* () {
           return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
         }).pipe(
-          Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+          Effect.provide(
+            LocalGoatServers.layer.pipe(
+              Layer.provide(AuxiliarySqlite.layer),
+              Layer.provide(runner),
+            ),
+          ),
           Effect.provideService(HostProcess.HomeDirectory, home),
           Effect.provideService(HostProcess.Platform, platform),
           Effect.provideService(HostProcess.UserId, 501),
@@ -329,3 +344,46 @@ describe("local GOAT server discovery", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
+
+it.effect("reads foreign server bindings without parent-thread native statements", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "goat-aux-" }));
+    const foreign = path.join(home, ".goat", "desktop-nightly", "userdata", "statev2.sqlite");
+    const checkout = path.join(home, "checkouts", "kept");
+    yield* fs.makeDirectory(path.dirname(foreign), { recursive: true });
+    const seed = new NodeSqlite.DatabaseSync(foreign);
+    try {
+      seed.exec(
+        "CREATE TABLE orchestration_v2_projection_threads (payload_json TEXT); CREATE TABLE projection_projects (workspace_root TEXT, deleted_at TEXT)",
+      );
+      seed
+        .prepare("INSERT INTO orchestration_v2_projection_threads VALUES (?)")
+        .run(JSON.stringify({ worktreePath: checkout }));
+      seed.prepare("INSERT INTO projection_projects VALUES (?, NULL)").run(home);
+    } finally {
+      seed.close();
+    }
+    using prepare = vi.spyOn(NodeSqlite.DatabaseSync.prototype, "prepare");
+    const found = yield* Effect.gen(function* () {
+      return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(
+        path.join(home, "own.sqlite"),
+      );
+    }).pipe(
+      Effect.provide(
+        LocalGoatServers.layer.pipe(
+          Layer.provide(AuxiliarySqlite.layer),
+          Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+        ),
+      ),
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, {}),
+    );
+    expect(found.worktreePaths).toEqual([checkout]);
+    expect(found.projectRoots).toEqual([home]);
+    expect(found.unverified).toHaveLength(1);
+    expect(prepare.mock.calls).toHaveLength(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

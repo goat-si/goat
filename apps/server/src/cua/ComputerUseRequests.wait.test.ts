@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
@@ -27,7 +28,11 @@ interface Waiting {
 }
 
 /** The request path over a running turn, with a hook for each card it creates. */
-const withWaiting = <E, R>(body: (input: Waiting) => Effect.Effect<void, E, R>) =>
+const withWaiting = <E, R>(
+  body: (input: Waiting) => Effect.Effect<void, E, R>,
+  setCuaWatch?: Parameters<typeof withRequests>[9],
+  from: Parameters<typeof withRequests>[8] = "person",
+) =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
       const cards: Array<Deferred.Deferred<TurnItemId>> = [];
@@ -61,6 +66,8 @@ const withWaiting = <E, R>(body: (input: Waiting) => Effect.Effect<void, E, R>) 
                 yield* Deferred.succeed(yield* slot(index), command.handoff.handoffId);
               })
             : Effect.void,
+        from,
+        setCuaWatch,
       );
     }),
   );
@@ -105,6 +112,27 @@ it.effect("an approved foreground request lets this turn's control take the fore
       assert.lengthOf(state._tag === "active" ? (state.foreground ?? []) : [], 1);
     }),
   ),
+);
+
+it.effect.each(["remote", "schedule"] as const)(
+  "D16: a full access turn from %s takes the foreground without asking",
+  (from) =>
+    withWaiting(
+      ({ request, leases, orchestrator, runId }) =>
+        Effect.gen(function* () {
+          // The every-app control the attachment gives this origin in full access.
+          assert.isTrue(
+            Option.isSome(yield* leases.everyAppControl(threadId, from === "schedule", { runId })),
+          );
+          // No wait budget: the answer comes without a card or a person.
+          assert.equal((yield* request({ foreground: true }, Duration.zero)).kind, "available");
+          assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+        }),
+      undefined,
+      from,
+    ),
 );
 
 it.effect.each(["declined", "cancelled"] as const)(
@@ -222,7 +250,7 @@ it.effect(
   () =>
     withWaiting(({ request, leases, orchestrator, runId }) =>
       Effect.gen(function* () {
-        yield* leases.everyAppControl(threadId, false, { person: true, runId });
+        yield* leases.everyAppControl(threadId, false, { runId });
         assert.equal((yield* request({ apps: [APP] }, WAIT)).kind, "available");
         assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
         assert.deepInclude(yield* request({ foreground: true, apps: [APP] }, WAIT), {
@@ -233,6 +261,51 @@ it.effect(
         assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
       }),
     ),
+);
+
+it.effect(
+  "a full access request naming an app opened after computer use started asks the desktop to admit it",
+  () =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+      const devBuild = "com.t3tools.t3code.dev.worktree";
+      yield* withWaiting(
+        ({ request, leases, runId }) =>
+          Effect.gen(function* () {
+            yield* leases.everyAppControl(threadId, false, { runId });
+            assert.deepEqual(yield* Queue.take(watched), []);
+            assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+          }),
+        (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
+      );
+    }),
+);
+
+it.effect(
+  "a whole-screen approval naming an app opened after computer use started asks the desktop to admit it",
+  () =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+      const devBuild = "com.t3tools.t3code.dev.worktree";
+      yield* withWaiting(
+        ({ request, handoffs, leases, runId, created }) =>
+          Effect.gen(function* () {
+            yield* leases.control(threadId, Option.none(), runId);
+            assert.deepEqual(yield* Queue.take(watched), []);
+            const screen = yield* request({}, WAIT).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* answer(handoffs, yield* created(), "completed");
+            assert.equal((yield* Fiber.join(screen)).kind, "available");
+            const named = yield* request({ apps: [devBuild] }, WAIT);
+            assert.equal(named.kind, "available");
+            assert.include(named.message, "bounded_resource_outside_manifest");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+          }),
+        (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
+      );
+    }),
 );
 
 it.effect("a request is judged by the running turn, not a scheduled one queued behind it", () =>

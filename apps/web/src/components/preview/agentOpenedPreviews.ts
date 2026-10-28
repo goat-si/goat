@@ -1,8 +1,8 @@
 import { scopedThreadKey } from "@goat/client-runtime/environment";
-import type { PreviewSessionSnapshot, ScopedThreadRef } from "@goat/contracts";
+import type { EnvironmentId, PreviewSessionSnapshot, ScopedThreadRef } from "@goat/contracts";
 
 import { getClientSettings } from "../../hooks/useSettings";
-import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
+import { usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
 import {
   previewStateAtom,
   previewThreadRefsAtom,
@@ -11,10 +11,15 @@ import {
 import { useRightPanelStore } from "../../rightPanelStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readEnvironmentSupportsServerBrowser } from "../../state/entities";
+import { environmentSummaries } from "../../state/presentation";
+import { watchEnvironmentDevices } from "./agentOpenedDevices";
+import { floatBrowserTab } from "./floatPreview";
 
 /**
- * Shows browsers an agent or another client revealed for a thread: floating
- * over chat, or focusing an existing panel tab when the reveal is forced.
+ * Shows browsers an agent or another client revealed for a thread, for every thread at once: an
+ * agent's tab as its thread's card and anything else floating over chat (floatBrowserTab), or
+ * focusing an existing panel tab when the reveal is forced. This is the only place a revealed
+ * server tab opens, so a tab never shows twice.
  */
 export function revealServerTabs(
   threadRef: ScopedThreadRef,
@@ -33,7 +38,7 @@ export function revealServerTabs(
     if (surface && force) {
       useRightPanelStore.getState().activateSurface(threadRef, surface.id);
     } else if (!surface) {
-      usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(session.tabId));
+      floatBrowserTab(threadRef, session.tabId, { by: "agent", force });
     }
   }
 }
@@ -99,7 +104,7 @@ function followThread(threadKey: string, threadRef: ScopedThreadRef): () => void
   });
 }
 
-/** Follows every thread's browser previews for the life of the page, not just the open thread's. */
+/** Follows browser previews and device sessions across threads and connected environments. */
 export function startAgentOpenedPreviews(): () => void {
   const followed = new Map<string, () => void>();
   const followNewThreads = (refs: ReadonlyMap<string, ScopedThreadRef>) => {
@@ -110,8 +115,28 @@ export function startAgentOpenedPreviews(): () => void {
   const stopIndex = appAtomRegistry.subscribe(previewThreadRefsAtom, followNewThreads, {
     immediate: true,
   });
+  const watchedEnvironments = new Map<EnvironmentId, () => void>();
+  const watchConnectedEnvironments = (environmentIds: ReadonlyArray<EnvironmentId>) => {
+    for (const [environmentId, stop] of watchedEnvironments) {
+      if (environmentIds.includes(environmentId)) continue;
+      stop();
+      watchedEnvironments.delete(environmentId);
+    }
+    for (const environmentId of environmentIds) {
+      if (!watchedEnvironments.has(environmentId)) {
+        watchedEnvironments.set(environmentId, watchEnvironmentDevices(environmentId));
+      }
+    }
+  };
+  const stopEnvironments = appAtomRegistry.subscribe(
+    environmentSummaries.connectedEnvironmentIdsAtom,
+    watchConnectedEnvironments,
+    { immediate: true },
+  );
   return () => {
     stopIndex();
+    stopEnvironments();
     for (const stop of followed.values()) stop();
+    for (const stop of watchedEnvironments.values()) stop();
   };
 }

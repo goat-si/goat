@@ -1,4 +1,4 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 
 import { resolveProviderCatalog, type ModelManifestData } from "./ModelManifest.ts";
@@ -69,6 +69,32 @@ const catalogFromManifest = (data: ModelManifestData) =>
   resolveClaudeModelCatalog(resolveProviderCatalog(data, CLAUDE) ?? undefined);
 
 describe("Claude model catalog", () => {
+  it.each(["missing", "invalid"] as const)(
+    "expires bundled badges offline when the supplied catalog is %s",
+    (source) => {
+      using now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-07T00:00:00Z"));
+      const catalog = resolveProviderCatalog(manifest(), CLAUDE)!;
+      const input =
+        source === "missing"
+          ? undefined
+          : {
+              ...catalog,
+              models: catalog.models.map((model) => ({
+                ...model,
+                adapter: { claudeCode: { minVersion: "invalid" } },
+              })),
+            };
+      const haiku = () =>
+        resolveClaudeModelCatalog(input).models.find(
+          (entry) => entry.model.slug === "claude-haiku-5-5",
+        )?.model;
+      assert.strictEqual(haiku()?.badge, "new");
+      now.mockReturnValue(Date.parse("2026-10-14T00:00:00Z"));
+      assert.strictEqual(haiku()?.badge, undefined);
+      assert.strictEqual(haiku()?.slug, "claude-haiku-5-5");
+    },
+  );
+
   it("resolves capacity from selected options and fixed catalog windows without guessing custom models", () => {
     const source = manifest();
     const profile = source.providers!.claudeAgent!.profiles.synthetic!;

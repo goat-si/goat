@@ -1,6 +1,7 @@
 import type {
   HostCompatibility,
   HostStatusEntry,
+  HostStatusMetrics,
   HostStatusProvider,
   HostStatusQuota,
   HostThreadCounts,
@@ -74,6 +75,178 @@ export function isUnsupportedHostStatusMessage(message: string): boolean {
 
 export function clipHostStatusMessage(message: string): string {
   return Array.from(message).slice(0, 500).join("");
+}
+
+const OPTIONAL_METRIC_SECTIONS = [
+  "platform",
+  "providers",
+  "quotaPool",
+  "computerUse",
+  "opencodex",
+  "storage",
+  "strays",
+] as const satisfies ReadonlyArray<keyof HostStatusMetrics>;
+
+/** Top-level optional fields on a host entry that a newer or odd host can fill with non-JSON values. */
+const OPTIONAL_ENTRY_FIELDS = [
+  "protocol",
+  "compatibility",
+  "parity",
+  "opencodexUpdate",
+  "opencodexChild",
+  "goatclaw",
+] as const satisfies ReadonlyArray<keyof HostStatusEntry>;
+
+const isPlainObject = (value: object): boolean => {
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    prototype === null ||
+    prototype === Object.prototype ||
+    Object.getPrototypeOf(prototype) === null
+  );
+};
+
+/**
+ * First reason `value` is not a JSON value, or undefined when it is. Only the objects on the
+ * path from the root to the current value count as ancestors, so a value that is referenced
+ * twice is fine and only a real cycle is reported.
+ */
+function jsonProblem(value: unknown, path: string): string | undefined {
+  const ancestors = new Set<object>();
+  const visit = (current: unknown, at: string): string | undefined => {
+    if (current === null || typeof current === "string" || typeof current === "boolean") {
+      return undefined;
+    }
+    if (typeof current === "number") {
+      return Number.isFinite(current) ? undefined : `${at} is not a finite number`;
+    }
+    if (typeof current === "undefined") return `${at} is undefined`;
+    if (typeof current === "bigint") return `${at} is a bigint`;
+    if (typeof current !== "object") return `${at} is ${typeof current}`;
+    if (ancestors.has(current)) return `${at} is cyclic`;
+    if (!Array.isArray(current) && !isPlainObject(current)) return `${at} is not a plain object`;
+    ancestors.add(current);
+    try {
+      if (Array.isArray(current)) {
+        for (let index = 0; index < current.length; index += 1) {
+          const problem = visit(current[index], `${at}.${index}`);
+          if (problem !== undefined) return problem;
+        }
+        return undefined;
+      }
+      for (const key of Object.keys(current)) {
+        const problem = visit(
+          (current as Record<string, unknown>)[key],
+          at.length === 0 ? key : `${at}.${key}`,
+        );
+        if (problem !== undefined) return problem;
+      }
+      return undefined;
+    } finally {
+      ancestors.delete(current);
+    }
+  };
+  return visit(value, path);
+}
+
+/**
+ * Copy of `value` without own properties whose value is undefined. Returns the same reference
+ * when nothing changed. Arrays keep their elements, and cycles and odd objects are left for
+ * `jsonProblem` to report.
+ */
+function withoutUndefinedProperties(value: unknown, ancestors: Set<object> = new Set()): unknown {
+  if (typeof value !== "object" || value === null || ancestors.has(value)) return value;
+  const isArray = Array.isArray(value);
+  if (!isArray && !isPlainObject(value)) return value;
+  ancestors.add(value);
+  try {
+    if (isArray) {
+      let next: unknown[] | undefined;
+      value.forEach((item, index) => {
+        const cleaned = withoutUndefinedProperties(item, ancestors);
+        if (cleaned === item) return;
+        next ??= [...value];
+        next[index] = cleaned;
+      });
+      return next ?? value;
+    }
+    let next: Record<string, unknown> | undefined;
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) {
+        next ??= { ...value };
+        delete next[key];
+        continue;
+      }
+      const cleaned = withoutUndefinedProperties(item, ancestors);
+      if (cleaned === item) continue;
+      next ??= { ...value };
+      next[key] = cleaned;
+    }
+    return next ?? value;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+/**
+ * Keeps a host entry encodable. Optional top-level fields lose their undefined keys, and a
+ * field that is still not JSON is dropped. Metrics sections that are not JSON are dropped. Every
+ * drop is named on `omittedMetrics`, so one bad value must not make the tool refuse the host. A
+ * required metrics field that is still not JSON drops `metrics`.
+ */
+export function omitUnencodableMetrics(entry: HostStatusEntry): HostStatusEntry {
+  const dropped: Array<{ section: string; message: string }> = [];
+  const next: Record<string, unknown> = { ...entry };
+  let changed = false;
+  for (const field of OPTIONAL_ENTRY_FIELDS) {
+    if (!Object.hasOwn(entry, field)) continue;
+    const original = entry[field];
+    if (original === undefined) {
+      delete next[field];
+      changed = true;
+      continue;
+    }
+    const cleaned = withoutUndefinedProperties(original);
+    const problem = jsonProblem(cleaned, field);
+    if (problem !== undefined) {
+      delete next[field];
+      dropped.push({ section: field, message: clipHostStatusMessage(problem) });
+      changed = true;
+    } else if (cleaned !== original) {
+      next[field] = cleaned;
+      changed = true;
+    }
+  }
+  const metrics = entry.metrics;
+  let nextMetrics: Record<string, unknown> | undefined;
+  let metricsProblem: string | undefined;
+  let metricsChanged = false;
+  if (metrics !== undefined) {
+    nextMetrics = { ...metrics };
+    for (const section of OPTIONAL_METRIC_SECTIONS) {
+      if (!Object.hasOwn(metrics, section)) continue;
+      const problem = jsonProblem(metrics[section], section);
+      if (problem === undefined) continue;
+      delete nextMetrics[section];
+      dropped.push({ section, message: clipHostStatusMessage(problem) });
+      metricsChanged = true;
+      changed = true;
+    }
+    metricsProblem = jsonProblem(nextMetrics, "metrics");
+    if (metricsProblem !== undefined) {
+      dropped.push({ section: "metrics", message: clipHostStatusMessage(metricsProblem) });
+      delete next.metrics;
+      changed = true;
+    } else if (metricsChanged) {
+      next.metrics = nextMetrics;
+    }
+  }
+  if (!changed) return entry;
+  if (dropped.length === 0) return next as HostStatusEntry;
+  return {
+    ...(next as HostStatusEntry),
+    omittedMetrics: [...(entry.omittedMetrics ?? []), ...dropped],
+  };
 }
 
 const UNSUPPORTED_MESSAGE = (host: string) =>

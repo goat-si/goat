@@ -44,8 +44,14 @@ provider (Codex, Claude, ...)
   carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover. The
-  driver refuses its cursor tools there, so the proxy answers them from the helper's cursor: it
-  starts on, and turning it off hides only the on-screen cursor until the control ends.
+  driver refuses its cursor tools and a window-scoped `move_cursor` there, so the proxy answers
+  them from the helper's cursor: it starts on, and turning it off hides only the on-screen cursor
+  until the control ends. A desktop `move_cursor` moves the person's pointer and stays the
+  driver's, under the pointer policy.
+- Most macOS input answers `unverifiable`. When the agent has read that window's tree, the proxy
+  re-reads it as a `since: "latest"` diff with the same scope before answering, and a changed tree
+  upgrades the effect to `confirmed`. The re-read retires the agent's tokens, so the answer names
+  the new snapshot id.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
@@ -61,13 +67,18 @@ provider (Codex, Claude, ...)
   revoke do not stop an already-dispatched driver effect, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
+- Stop, stop all, lease end, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
   input that session holds, and sends a cleanup report over the control channel, which does not
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
+- A dropped lease stream between a live proxy and its server is not an end. The proxy
+  reconnects and keeps its driver, but until the server's next update it sends nothing that acts
+  on or shows the screen and cuts off such work in flight, because a Stop, pause or private field
+  cannot reach it meanwhile. Two minutes without the server end the control as `transport_lost`;
+  the proxy stays up and a fresh snapshot can start it again.
 - Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
   historical stop measurement is repeated through this topology before WS6 counts as
   done.
@@ -162,6 +173,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   back, so it reports `unverifiable` even when it landed. Some apps drop pid-posted mouse events
   entirely, KakaoTalk reportedly among them, so an unchanged window after such a click is an unknown
   outcome to observe, not a coordinate bug ([token first](../../apps/server/src/cua/ComputerUseTokenFirst.ts)).
+  Preview and native results share the optional
+  [action safety contract](../../packages/contracts/src/actionOutcomeSafety.ts): an unknown or
+  cancelled write may have committed and must never replay automatically. Missing safety from an
+  older peer is unclassified; it is not evidence that input was never sent.
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
 - Refusals name their cause. A person's Stop and a person's takeover have their own
@@ -198,7 +213,11 @@ A cell whose result has arrived returns it with its receipts even when a Stop la
 collected. When the agent did not ask for the reset itself, its next cell's result lists
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
-observe again before deciding what to do. The cell never replays that input. Every effect needs a
+observe again before deciding what to do. The cell never replays that input. The first call that
+fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
+their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+unverifiable write is a success whose receipt says it may have committed, because the macOS
+driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.
@@ -278,6 +297,16 @@ PreviewSession {
   `privateMode` refusals until it ends. The browser's
   `apps/server/src/preview/PreviewPrivateMode.ts` and desktop's
   `apps/server/src/cua/ComputerUseLeases.ts` lift the pause when the private step ends.
+- Desktop private mode is switched off for now (#1695): `privateModeOn` in
+  `apps/server/src/cua/ComputerUsePrivateMode.ts` and `HelperSafety.privateModeDisabled` in the
+  macOS helper. While it is off the server counts no host as detecting secret fields, whatever
+  its helper advertises, and a desktop secret field pauses no agent. Turning it back
+  on means flipping both switches and restoring the server's handling of private reports
+  (`privateHost` in `ComputerUseLeases.ts`). Only a focused secure field
+  may pause agents, because pausing on an unreadable focus stalled every agent on the host. Once
+  the switch is on, the macOS helper keeps an unreadable focus out of frames and pauses nothing
+  (`HelperSafety.pausingWindow`); the Windows (`Signals.cs`) and Linux (`linuxSignals.ts`)
+  helpers still report an unreadable focus as private and need the same rule first.
 - Browser tab claims belong to the current turn; a handoff keeps the person's tab open. Browser
   profile policy and login isolation remain separate work.
 - Frames stream only to a viewer that is open, at a bounded rate, dropping frames instead of
@@ -375,22 +404,46 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Safety
 
-- **Approvals.** Outside full access, a person approves apps per thread, or always, through a
-  handoff that needs `settings:write` in an authenticated client session. A run in full-access
+- **Approvals.** Outside full access, an agent asks with `computer_use.request` for the apps it
+  names, or for the whole screen, and for a span of 5 to 120 minutes, 30 by default
+  (`ComputerUseRequestInput` in `packages/contracts/src/cua.ts`). The request is an approval
+  handoff on the `computer_use.grant` path, answered by a person with `settings:write` in an
+  authenticated client session. A run in full-access
   runtime mode skips these approvals whoever or whatever started it
   ([ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), D16); everything else
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
-  The approval card names the app and machine, warns when the app is high risk, explains on first
-  use that screenshots of its windows reach the model, and offers "Allow this conversation",
-  "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
-  executable path) at approval time, and the action runs on that frozen target, so a request
-  cannot be approved for one app and executed against another. "Always" approvals are listed in
-  Settings, where a person removes them; outside full access, a removed app asks again.
+  It lists the apps open when the driver starts. When an approval, or a full access
+  `computer_use.request`, names an app it lacks, the desktop lists the open apps again and
+  rewrites it with the same exclusions, so every app opened since then joins, not only the one
+  named (`apps/desktop/src/cua/DesktopCuaManifest.ts`); a thread's app scope below is checked
+  separately. That is how an agent reaches a GOAT dev build it launched (its own per-worktree
+  bundle id) while the host GOAT it runs in stays out.
+  The card offers Approve and Decline (`apps/server/src/cua/ComputerUseRequests.ts`).
+  Approving admits that thread's turns to those apps, by the ids `list_apps` reports, until the
+  request's expiry, which counts from when the agent asked; it never approves each action. Under
+  an app list, the proxy ties each call on a window or app to its target pid and refuses one
+  outside the list; discovery calls stay unscoped, and a macOS launch must name an approved bundle
+  id (`apps/server/src/cua/ComputerUseScope.ts`). Foreground approval is shorter: pause, Stop,
+  takeover, control replacement or the end of the turn revokes it, and the next foreground input
+  needs a new approval. Every approval is time-bounded: there is no standing "always" approval
+  and no list of approved apps in Settings. A person ends one early with "End computer use" on
+  its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling unchanged.
+  ceiling outside full access. In full access every run uses every app and takes the foreground
+  without asking, whatever started it (`implyFocus` in `ComputerUseLeases.ts`; owner decision,
+  Jun, 2026-10-28). Unattended full access work still holds the screen one thread at a time,
+  because two such threads would mix their input. A thread launched from another environment, and
+  turns it launches or sends here (`launched_remotely`), work beside other threads like a
+  person's (`usesScreenLikePerson` in `ComputerUseOrigin.ts`). This host cannot read the turn
+  that launched it, so it stays unattended for steering a person's turn and outside full access.
+  Which run sent a message is not recorded, so steering is weighed by the sending thread's
+  latest run; recording it is roadmap 400 work. A user's own
+  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
+  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
+  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
@@ -402,8 +455,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - **Human input.** An agent with approved control keeps working while a person uses the same
   desktop: the person's keyboard and pointer input does not pause it (owner decision, Jun,
   2026-10-25, [#1550](https://github.com/goat-si/goat/pull/1550)). Stop, stop all, takeover and
-  hand-back, lease expiry and the private-field pause still apply. Unattended attachment requires
-  private-mode detection, not human-input detection. Human-input detection (#1426, #1477, #1504,
+  hand-back, lease expiry and the private-field pause still apply. No detection gates admission:
+  unattended work is admitted on a host that does not detect secret fields (owner decision, Jun,
+  2026-10-28). Human-input detection (#1426, #1477, #1504,
   #1512) tells a person's input from an agent's own for input arbitration and reports; it never
   gates admission or pauses work. On macOS each agent connection's helper reports
   every pointer event (moves, drags, scrolls, presses) to its lease proxy with its own time, from
@@ -441,8 +495,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   driver under the helper that reports the helper's bundle identity and service pid, reads a
   non-empty accessibility tree and captures a non-blank window. The desktop verify
   (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
-  permission guide should drag the helper bundle into System Settings;
-  `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
+  permission guide drags the app that holds the grants into System Settings: the helper bundle
+  when one runs, GOAT.app otherwise (`apps/desktop/src/ipc/methods/cua.ts`,
+  `apps/desktop/src/permissions/MacPermissionHelper.ts`). The desktop expects its channel's
+  helper id (`computerUseHelperBundleIdForChannel` in `packages/shared/src/cuaDriverRelease.ts`),
+  never one derived from a dev checkout's own app id, so every dev checkout runs the one
+  `si.goat.desktop.dev.computer-use` helper and macOS keeps one set of its grants (#1275).
 - **Guided macOS grant** (lead decision D14, Jun's highest priority). Onboarding walks two steps,
   Accessibility, then Screen & System Audio Recording. Each step opens the exact System Settings
   pane and places a small always-on-top guide panel next to it that shows the helper's real app
@@ -464,6 +522,15 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - **Usage strings.** The helper's `Info.plist` carries the Accessibility, Screen Recording and
   Apple Events usage descriptions. GOAT.app has the Screen Recording one today and lacks the
   other two (#1175).
+- **Automation.** A few driver routes, such as a background save or a Finder rename, send the
+  target app Apple Events, which macOS allows per app and asks about on first use. The driver
+  refuses with `automation_denied` when the person turned it off and `automation_timeout` when
+  the app did not answer, which is how an unanswered prompt shows; the lease proxy hands those to
+  the agent as `permissionsNotGranted` and `permissionsPending`, with a block whose `missing` is
+  `automation` and the app's bundle id when `list_apps` reports one; the proxy lists apps first
+  when it cannot yet name the call's app (`apps/server/src/cua/ComputerUseAutomationRefusal.ts`).
+  Readiness does not report Automation. Refusing a not yet consented app without a prompt in
+  unattended runs needs the driver's own preflight.
 - **Development builds.** Ad-hoc signatures change the code hash on every build, and TCC keys
   grants to it, so a rebuilt development helper asks again. Sign development helpers with a stable
   local certificate to avoid it; builds never run `tccutil reset`.
@@ -532,7 +599,7 @@ GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split 
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
 GOAT pins the fork's release archives by name, size and SHA-256
 (`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
-attestations. GOAT pins `0.38.0-goat.2`; `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
+attestations. GOAT pins `0.38.0-goat.3`; `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
 the server installer rejects (goat-si/cua-driver#16).
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
 embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps

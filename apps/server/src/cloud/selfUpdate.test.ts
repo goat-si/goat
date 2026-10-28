@@ -1,14 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { ServerSelfUpdateError, ThreadId } from "@goat/contracts";
+import {
+  ServerSelfUpdateError,
+  ServerSelfUpdateProgressEvent,
+  type ServerSelfUpdateResult,
+  ThreadId,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -24,6 +32,11 @@ import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import * as ServerSelfUpdate from "./selfUpdate.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
+
+const encodeUpdateError = Schema.encodeSync(ServerSelfUpdateError);
+const decodeUpdateError = Schema.decodeUnknownSync(ServerSelfUpdateError);
+const encodeProgressEvent = Schema.encodeSync(ServerSelfUpdateProgressEvent);
+const decodeProgressEvent = Schema.decodeUnknownSync(ServerSelfUpdateProgressEvent);
 
 interface HarnessOptions {
   readonly activity?: () => "idle" | "busy";
@@ -162,6 +175,124 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     journal: path.join(config.stateDir, "maintenance-audit.jsonl"),
   };
 });
+
+const makeProgressHarness = Effect.fn("test.make_update_progress_harness")(function* (
+  update: ServerSelfUpdate.ServerSelfUpdate["Service"]["update"],
+) {
+  const queue = yield* Queue.unbounded<
+    ServerSelfUpdateProgressEvent,
+    ServerSelfUpdateError | Cause.Done
+  >();
+  const selfUpdate = ServerSelfUpdate.ServerSelfUpdate.of({
+    capability: "boot-service",
+    isUpdating: Effect.succeed(false),
+    prepare: () => Effect.void,
+    update,
+    commitDesktopUpdate: () => Effect.never,
+  });
+  const run = Effect.suspend(() =>
+    ServerSelfUpdate.runUpdateProgressProducer(queue, selfUpdate, { targetVersion: "1.1.0" }),
+  );
+  return { queue, run };
+});
+
+const expectProgressFailure = Effect.fn("test.expect_update_progress_failure")(function* (
+  queue: Queue.Queue<ServerSelfUpdateProgressEvent, ServerSelfUpdateError | Cause.Done>,
+) {
+  expect(yield* Queue.offer(queue, { type: "progress", stage: "downloading" })).toBe(false);
+  const exit = yield* Queue.collect(queue).pipe(Effect.exit);
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isSuccess(exit)) return yield* Effect.die("Expected update progress failure");
+  expect(Cause.hasFails(exit.cause)).toBe(true);
+  expect(Cause.hasDies(exit.cause)).toBe(false);
+  expect(Cause.hasInterrupts(exit.cause)).toBe(false);
+  return yield* Effect.failCause(exit.cause).pipe(Effect.flip);
+});
+
+it.effect.each(["before progress", "after progress", "synchronous throw"] as const)(
+  "closes update progress with the existing error on a producer defect: %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      let starts = 0;
+      const h = yield* makeProgressHarness((_input, reportProgress = () => Effect.void) => {
+        starts += 1;
+        const defect = new Error("synthetic private path /fixture/secret and credential");
+        if (scenario === "synchronous throw") throw defect;
+        return (scenario === "after progress" ? reportProgress("downloading") : Effect.void).pipe(
+          Effect.andThen(Effect.die(defect)),
+        );
+      });
+      yield* h.run.pipe(Effect.exit);
+      expect(yield* Queue.offer(h.queue, { type: "progress", stage: "installing" })).toBe(false);
+      if (scenario === "after progress") {
+        expect(yield* Queue.take(h.queue)).toEqual({ type: "progress", stage: "downloading" });
+      }
+      const error = yield* expectProgressFailure(h.queue);
+      expect(error.reason).toBe(
+        "The update progress producer exited unexpectedly. Check update status before retrying.",
+      );
+      expect(error.cause).toBeUndefined();
+      const encoded = encodeUpdateError(error);
+      expect(decodeUpdateError(encoded).reason).toBe(error.reason);
+      expect(JSON.stringify(encoded)).not.toContain("/fixture/secret");
+      expect(starts).toBe(1);
+    }),
+);
+
+it.effect("closes update progress when the held producer is interrupted", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<ServerSelfUpdateResult>();
+    const h = yield* makeProgressHarness(() =>
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    );
+    const producer = yield* Effect.forkChild(h.run);
+    yield* Deferred.await(entered);
+    yield* Fiber.interrupt(producer);
+    const error = yield* expectProgressFailure(h.queue);
+    expect(error.reason).toBe(
+      "The update progress producer exited unexpectedly. Check update status before retrying.",
+    );
+    expect(error.cause).toBeUndefined();
+  }),
+);
+
+it.effect("closes update progress with the original typed error", () =>
+  Effect.gen(function* () {
+    const original = new ServerSelfUpdateError({ reason: "synthetic launcher rejection" });
+    const h = yield* makeProgressHarness(() => Effect.fail(original));
+    yield* h.run;
+    expect(yield* expectProgressFailure(h.queue)).toBe(original);
+  }),
+);
+
+it.effect.each([
+  { targetVersion: "1.1.0", method: "boot-service", updateId: "synthetic-update-id" },
+  { targetVersion: "1.1.0", method: "desktop-app", desktopUpdateToken: "synthetic-desktop-token" },
+] satisfies ServerSelfUpdateResult[])(
+  "closes update progress after exactly one complete event for $method",
+  (result) =>
+    Effect.gen(function* () {
+      const h = yield* makeProgressHarness((_input, reportProgress = () => Effect.void) =>
+        reportProgress("downloading").pipe(
+          Effect.andThen(reportProgress("installing")),
+          Effect.as(result),
+        ),
+      );
+      yield* h.run;
+      expect(yield* Queue.offer(h.queue, { type: "progress", stage: "downloading" })).toBe(false);
+      const events = yield* Queue.collect(h.queue);
+      expect(events).toEqual([
+        { type: "progress", stage: "downloading" },
+        { type: "progress", stage: "installing" },
+        { type: "complete", result },
+      ]);
+      for (const event of events) {
+        const encoded = encodeProgressEvent(event);
+        expect(decodeProgressEvent(encoded)).toEqual(event);
+      }
+    }),
+);
 
 it.layer(NodeServices.layer)("server self update", (it) => {
   it.effect(

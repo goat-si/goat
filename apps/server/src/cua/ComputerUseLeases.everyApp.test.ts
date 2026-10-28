@@ -245,7 +245,6 @@ it.effect(
         [
           directed,
           yield* leases.everyAppControl(directed, false, {
-            person: true,
             runId: RunId.make("run:directed"),
           }),
         ],
@@ -289,7 +288,6 @@ it.effect(
       yield* run("run:R", "running", 1);
       const control = Option.getOrThrow(
         yield* leases.everyAppControl(threadId, false, {
-          person: true,
           runId: RunId.make("run:R"),
         }),
       );
@@ -322,7 +320,7 @@ it.effect(
       yield* sql`INSERT INTO orchestration_v2_projection_runs
         (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
         VALUES ('run:R2', ${threadId}, 1, 'codex', 'running', '2026-01-01', '{}')`;
-      yield* leases.everyAppControl(threadId, false, { person: true, runId: RunId.make("run:R2") });
+      yield* leases.everyAppControl(threadId, false, { runId: RunId.make("run:R2") });
       assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
       yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run:R2'`;
       const signals = yield* leases.subscribe;

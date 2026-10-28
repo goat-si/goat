@@ -66,6 +66,7 @@ const capacity = {
   disk: { path: "/", availableBytes: 100_000_000_000, totalBytes: 500_000_000_000 },
 };
 const decode = Schema.decodeUnknownSync(GoatHostStatusResult);
+const encodeHostStatus = Schema.encodeUnknownEffect(GoatHostStatusResult);
 
 const limits = (checkedAt: string, reason?: "unsupported"): ServerProviderUsageLimits => ({
   checkedAt,
@@ -143,6 +144,7 @@ const run = <A, E>(
     readonly listFails?: boolean;
     readonly shell?: ReturnType<typeof liveThreadShell>;
     readonly children?: Readonly<Record<string, OpenCodexChildBootstrapStatus>>;
+    readonly opencodex?: OpenCodexInventorySnapshot;
     /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
     readonly optIns?: Readonly<Record<string, boolean>>;
     readonly hostCall?: (
@@ -187,7 +189,7 @@ const run = <A, E>(
     ),
     Layer.provide(
       Layer.mock(OpenCodexInventory.OpenCodexInventory)({
-        read: Effect.succeed(inventory),
+        read: Effect.succeed(options.opencodex ?? inventory),
       }),
     ),
     Layer.provide(
@@ -795,6 +797,65 @@ it.effect("keeps a slow host's connection going across polls and keeps its late 
       metrics: { sampledAt: 7 },
     });
     expect(calls).toHaveLength(2);
+  }),
+);
+
+it.effect("keeps the rest of a host and the other hosts when one metrics section is not JSON", () =>
+  Effect.gen(function* () {
+    const opencodex: OpenCodexInventorySnapshot = {
+      installed: true,
+      binaries: [],
+      ownership: "adopted",
+      service: { available: false },
+      runtime: { port: 10100, healthy: true, ready: true },
+      link: {
+        role: "home",
+        available: true,
+        links: [
+          {
+            id: "mini",
+            alias: "mini",
+            tunnelPort: 10100,
+            state: "connected",
+            lastApplyAt: undefined,
+          },
+        ],
+        childSettingsApplied: false,
+      },
+    };
+    const { value } = yield* run(
+      {
+        hosts: ["gone"],
+        opencodex,
+        hostCall: () => Effect.fail(sshError("ssh_failed", "ssh failed")),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const localOnly = yield* service.read(scope, { local: true });
+          const fanout = yield* service.read(scope, {});
+          return { localOnly, fanout };
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    for (const result of [value.success.localOnly, value.success.fanout]) {
+      yield* encodeHostStatus(result);
+      const local = result.hosts[0];
+      expect(local?.reachability).toBe("ok");
+      expect(local?.metrics?.opencodex).toBeUndefined();
+      expect(local?.metrics?.cpuCount).toBe(8);
+      expect(local?.omittedMetrics).toEqual([
+        {
+          section: "opencodex",
+          message: "opencodex.link.links.0.lastApplyAt is undefined",
+        },
+      ]);
+    }
+    expect(value.success.fanout.hosts[1]).toMatchObject({
+      host: "gone",
+      reachability: "unreachable",
+      message: "ssh failed",
+    });
   }),
 );
 

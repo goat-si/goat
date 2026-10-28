@@ -14,6 +14,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 export type LeaseEnd =
   | ComputerUseControlEnd
   | "lost"
+  | "transport_lost"
   | "helper_restarted"
   | "helper_refused"
   | "helper_unsupported"
@@ -21,7 +22,7 @@ export type LeaseEnd =
 
 const REQUEST = goatCallText("computer_use.request");
 
-export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps; the request waits for the person's answer in this turn. A full-access thread a person directs needs no request except after a pause or Stop in this turn; automatic foreground authority returns only next turn. Respect the pause or Stop.`;
+export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps; the request waits for the person's answer in this turn. A full-access thread needs no request except after a pause or Stop in this turn; automatic foreground authority returns only next turn. Respect the pause or Stop.`;
 
 export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
@@ -61,10 +62,12 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
     "A newer control of this thread took over computer use. Computer use is not available for this turn; a new approval or turn restores it.",
   disabled: "Computer use was turned off on this host.",
   unauthorized:
-    "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
+    "GOAT no longer accepts this agent session for computer use (the session ended, or GOAT restarted or updated), so computer use stopped. Do not retry; tell the person that Restart agent session brings it back.",
   stopped: "A person pressed Stop on this thread. Do not continue on the screen in this turn.",
   stopped_all: "A person stopped computer use for every thread on this host.",
-  lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
+  lost: "Computer use for this control ended because its connection to GOAT ended. A later turn or approval restores it.",
+  transport_lost:
+    "Computer use could not reach GOAT for two minutes, so this thread's control ended and this call did not run. It reconnects by itself; once GOAT answers, a later turn or approval restores control.",
   helper_restarted:
     "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
   // The helper exited 77: its parent check refused the process that started it.
@@ -100,6 +103,33 @@ export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = 
   takeover: pauseMessage("takeover"),
   private: pauseMessage("private"),
 };
+
+export const RECONNECTING =
+  "Computer use lost its connection to GOAT for a moment and is reconnecting, so this call did not run and nothing was sent. Try again in a few seconds, and observe the screen again before acting once it is back.";
+export const RECONNECT_CUT_OFF =
+  "Computer use lost its connection to GOAT, so work in progress was stopped. Observe again once it is back.";
+
+export const TURN_ENDED: Interruption = {
+  _tag: "other",
+  detail: "control_idle",
+  message: "This thread's turn has ended. Computer use is idle until its next turn.",
+};
+
+/**
+ * Reads allowed while the lease stream reconnects. None shows window content or pixels: a Stop,
+ * pause or private field that happened meanwhile cannot reach the proxy until it reconnects.
+ */
+export const TRANSPORT_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  "check_permissions",
+  "health_report",
+  "get_guide",
+  "get_config",
+  "get_screen_size",
+  "get_cursor_position",
+  "get_agent_cursor_state",
+  "get_session",
+  "list_sessions",
+]);
 
 /**
  * Tools that only read. One the driver already had when a pause or Stop cut it off changed

@@ -48,7 +48,7 @@ it.effect(
         yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`,
         before,
       );
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [85, "MemoryUsageCounters"],
         [86, "MemoryRevertResults"],
         [87, "HandoffLookupIndex"],
@@ -75,9 +75,10 @@ it.effect(
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       yield* assertUsageCounters;
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
       yield* assertUsageCounters;
       yield* sql`DELETE FROM memory_compact_receipts`;
       yield* assertUsageCounters;

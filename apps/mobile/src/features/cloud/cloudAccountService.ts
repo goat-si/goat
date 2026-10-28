@@ -1,6 +1,9 @@
 import type { getClerkInstance } from "@clerk/expo";
 import {
   createCloudAccountService,
+  invalidateManagedRelaySessionToken,
+  managedRelaySessionAtom,
+  readmitConnectKey,
   ManagedRelay,
   setManagedRelaySession,
 } from "@goat/client-runtime/relay";
@@ -106,3 +109,29 @@ export const cloudAccountService = createCloudAccountService<ClerkInstance>({
     if (isAccountTransition) requestConnectOnboarding(accountId);
   },
 });
+
+export async function restoreConnectKeyAccess(): Promise<void> {
+  const session = appAtomRegistry.get(managedRelaySessionAtom);
+  if (!session) throw new Error("Sign in with MFA before restoring Connect access.");
+  await readmitConnectKey({
+    accountId: session.accountId,
+    currentAccountId: () => appAtomRegistry.get(managedRelaySessionAtom)?.accountId ?? null,
+    invalidate: async () => {
+      invalidateManagedRelaySessionToken(appAtomRegistry);
+      await runtime.runPromise(
+        ManagedRelay.ManagedRelayClient.pipe(Effect.flatMap((client) => client.resetTokenCache)),
+      );
+    },
+    readmit: async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const clerkToken = yield* session.readClerkToken();
+          if (!clerkToken || appAtomRegistry.get(managedRelaySessionAtom) !== session)
+            throw new Error("Connect account changed. Sign in again.");
+          const client = yield* ManagedRelay.ManagedRelayClient;
+          yield* client.requestKeyReadmission({ accountId: session.accountId, clerkToken });
+        }),
+      );
+    },
+  });
+}

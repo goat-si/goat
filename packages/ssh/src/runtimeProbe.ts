@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { RuntimeSignals, shellSingleQuote } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
+import { WINDOWS_MANIFEST_SUPPORT_SCRIPT } from "./windowsRuntimeManifest.ts";
 
 export function buildRemoteRuntimeProbeScript(
   version: string,
@@ -20,6 +21,7 @@ state_key=${shellSingleQuote(stateKey ?? "")}
 state="$HOME/.goat/ssh-launch/$state_key"
 runtime_file="$HOME/.goat/userdata/server-runtime.json"
 ${REMOTE_PROTOCOL_TOKEN_SCRIPT}
+${WINDOWS_MANIFEST_SUPPORT_SCRIPT}
 prune_removed_facts
 ready_version() {
   valid_version "$1" && [ -x "$HOME/.goat/runtime/goat/versions/$1/goat" ] &&
@@ -41,7 +43,33 @@ signals_json() {
 }
 binary_json() {
   v="$1"; exe="$HOME/.goat/runtime/goat/versions/$v/goat"
-  if ! ready_version "$v" || [ "$(exec_fact version "$exe" --version 2>/dev/null || true)" != "goat v$v" ]; then return 1; fi
+  ready_version "$v" || return 1
+  if signals="$(windows_cached_own "$v" "$exe" 2>/dev/null)"; then printf '%s' "$signals"; return; fi
+  if manifest_key="$(windows_manifest_key "$v" "$exe" 2>/dev/null)"; then
+    exec_fact_key "$exe" || true
+    manifest_fact_key="$FACT_KEY"; manifest_fact_name="$FACT_NAME"
+    if ! manifest="$("$exe" __ssh-helper runtime-manifest --shell 2>/dev/null)" ||
+       [ "$(windows_manifest_key "$v" "$exe" 2>/dev/null || true)" != "$manifest_key" ]; then
+      printf '{"serverVersion":"%s","invalid":true}' "$v"; return
+    fi
+    set -f; set -- $manifest
+    if [ "$#" != 5 ] || [ "$1" != "$v" ] ||
+       ! valid_version "$1" || ! valid_positive "$2" || ! valid_positive "$3" ||
+       ! valid_uint "$4"; then
+      printf '{"serverVersion":"%s","invalid":true}' "$v"; return
+    fi
+    case "$5" in has|lacks) ;; *)
+      printf '{"serverVersion":"%s","invalid":true}' "$v"; return ;;
+    esac
+    if [ -n "$manifest_fact_key" ] && exec_fact_key "$exe" && [ "$FACT_KEY" = "$manifest_fact_key" ]; then
+      fact_put "version.$manifest_fact_name" "$manifest_fact_key" "goat v$v"
+      fact_put "own.$manifest_fact_name" "$manifest_fact_key" "$1 $2 $3 0 0"
+    fi
+    if signals="$(signals_json "$1" "$2" "$3")"; then printf '%s' "$signals";
+    else printf '{"serverVersion":"%s","invalid":true}' "$v"; fi
+    return
+  fi
+  if [ "$(exec_fact version "$exe" --version 2>/dev/null || true)" != "goat v$v" ]; then return 1; fi
   if own="$(exec_fact own "$exe" __ssh-helper protocol --shell 2>/dev/null)"; then
     set -f; set -- $own
     if ! valid_own_tokens "$@" || [ "$1" != "$v" ]; then printf '{"serverVersion":"%s","invalid":true}' "$v"; return; fi

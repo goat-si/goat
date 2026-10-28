@@ -65,7 +65,7 @@ describe("V2 preview upgrade", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* seedPreview;
       const imports = yield* sql`SELECT * FROM orchestration_v2_legacy_imports`;
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
@@ -123,7 +123,9 @@ describe("V2 preview upgrade", () => {
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
+      assert.deepStrictEqual(yield* runMigrations(), [[112, "ConnectLinkTrust"]]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
@@ -198,7 +200,7 @@ describe("V2 preview upgrade", () => {
       );
       assert.strictEqual((yield* sql`SELECT * FROM orchestration_v2_legacy_imports`).length, 1);
       yield* sql`DROP TRIGGER fail_preview_upgrade`;
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
@@ -256,7 +258,9 @@ describe("V2 preview upgrade", () => {
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
+      assert.deepStrictEqual(yield* runMigrations(), [[112, "ConnectLinkTrust"]]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 

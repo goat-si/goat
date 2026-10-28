@@ -67,6 +67,7 @@ const make = Effect.gen(function* () {
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const wake = yield* ChannelWake.ChannelWake;
   const childWork = yield* ChannelChildWork.ChannelChildWork;
   const sql = yield* SqlClient.SqlClient;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
@@ -163,8 +164,9 @@ const make = Effect.gen(function* () {
     started += yield* reports.reconcile(owner);
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
-    started += yield* delivery.deliverDue(owner);
-    return started;
+    const delivered = yield* delivery.deliverDue(owner);
+    if (delivered > 0) yield* wake.wake;
+    return started + delivered;
   });
 
   const awaitReceptions = Effect.gen(function* () {

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import {
-  withThreadMcpEnvironment,
+  withThreadAgentEnvironment,
   carriesScreenCodeSkill,
   type McpProviderSessionConfig,
 } from "@goat/provider-core/server/mcpSession";
@@ -14,6 +14,7 @@ import {
   GOAT_CUA_MCP_ENV,
   GOAT_CUA_GATE_ENV,
   GOAT_SCREEN_CODE_SKILL_ENV,
+  GOAT_BROWSER_TOOLS_ENV,
   GOAT_SCREEN_CODE_SKILL_GATE_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
@@ -292,7 +293,7 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = withThreadMcpEnvironment(
+  const environment = withThreadAgentEnvironment(
     input.environment,
     hasGoatMcp ? input.mcpSession : undefined,
   );
@@ -305,6 +306,7 @@ export function buildPiRpcLaunch(input: {
   delete environment[GOAT_CUA_MCP_ENV];
   delete environment[GOAT_CUA_GATE_ENV];
   delete environment[GOAT_SCREEN_CODE_SKILL_ENV];
+  delete environment[GOAT_BROWSER_TOOLS_ENV];
   delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
   // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
   const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
@@ -331,6 +333,7 @@ export function buildPiRpcLaunch(input: {
                 input.mcpSession.authorizationHeader,
               ),
               [GOAT_SCREEN_CODE_SKILL_ENV]: carriesScreenCodeSkill(input.mcpSession) ? "on" : "off",
+              [GOAT_BROWSER_TOOLS_ENV]: input.mcpSession.browserToolsAvailable ? "on" : "off",
               ...(input.screenSkillGatePath === undefined
                 ? {}
                 : { [GOAT_SCREEN_CODE_SKILL_GATE_ENV]: input.screenSkillGatePath }),

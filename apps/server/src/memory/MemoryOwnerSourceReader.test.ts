@@ -11,6 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 import * as TestClock from "effect/testing/TestClock";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Repository from "../project/RepositoryIdentityResolver.ts";
@@ -417,6 +418,36 @@ it.effect.each([
       const result = yield* Effect.result(reader.reader.readCommitted(locator, Effect.void));
       assert.strictEqual(result._tag, "Failure");
       if (result._tag === "Failure") assert.strictEqual(result.failure._tag, "MemoryStoreConflict");
+    }).pipe(Effect.provide(fixture(policy)));
+  }),
+);
+
+it.effect("reads committed source without a per-message correlated scan of the thread stream", () =>
+  Effect.gen(function* () {
+    const policy = yield* Ref.make(committed);
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      const statements: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const observe: Statement.Transformer = (statement) => {
+        const compiled = statement.compile();
+        if (compiled[0].includes("orchestration_events")) statements.push(compiled);
+        return Effect.succeed(statement);
+      };
+      const reader = yield* Owner.MemoryOwnerSourceReader;
+      const outcome = yield* reader.reader
+        .readCommitted(locator, Effect.void)
+        .pipe(Effect.provideService(Statement.CurrentTransformer, observe));
+      assert.strictEqual(outcome.kind, "available");
+      assert.isAbove(statements.length, 0);
+      // A correlated subquery reruns per candidate row, so a long thread costs rows x stream.
+      for (const [query, params] of statements) {
+        const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, params);
+        assert.isFalse(
+          plan.some((row) => row.detail.includes("CORRELATED")),
+          `${query}\n${plan.map((row) => row.detail).join("\n")}`,
+        );
+      }
     }).pipe(Effect.provide(fixture(policy)));
   }),
 );

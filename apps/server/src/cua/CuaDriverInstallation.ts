@@ -11,9 +11,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as NodeBuffer from "node:buffer";
 import * as NodeCrypto from "node:crypto";
 
 import { openZipArchive } from "../zipArchive.ts";
+
+const TAR_TIMEOUT = "60 seconds";
+const TAR_FORCE_KILL_AFTER = "1 second";
+const TAR_OUTPUT_MAX_BYTES = 1024 * 1024;
 
 export class CuaDriverInstallError extends Schema.TaggedError<CuaDriverInstallError>()(
   "CuaDriverInstallError",
@@ -104,8 +109,35 @@ export const makeCuaDriverInstallation = Effect.fn("CuaDriverInstallation.make")
 
     const extractTar = Effect.fn("CuaDriverInstallation.extractTar")(
       function* (archivePath: string, destination: string) {
-        const run = (args: ReadonlyArray<string>) =>
-          spawner.string(ChildProcess.make("tar", args, { stdin: "ignore", stderr: "ignore" }));
+        const run = Effect.fn("CuaDriverInstallation.runTar")(
+          function* (args: ReadonlyArray<string>) {
+            const child = yield* spawner.spawn(
+              ChildProcess.make("tar", args, {
+                stdin: "ignore",
+                stderr: "ignore",
+                forceKillAfter: TAR_FORCE_KILL_AFTER,
+              }),
+            );
+            const chunks: Uint8Array[] = [];
+            let bytes = 0;
+            const drain = child.stdout.pipe(
+              Stream.runForEach((chunk) => {
+                if (bytes + chunk.byteLength > TAR_OUTPUT_MAX_BYTES)
+                  return Effect.fail(new CuaDriverInstallError({ stage: "extract" }));
+                bytes += chunk.byteLength;
+                chunks.push(chunk.slice());
+                return Effect.void;
+              }),
+            );
+            const [, code] = yield* Effect.all([drain, child.exitCode], {
+              concurrency: "unbounded",
+            });
+            if (Number(code) !== 0) return yield* new CuaDriverInstallError({ stage: "extract" });
+            return NodeBuffer.Buffer.concat(chunks, bytes).toString("utf8");
+          },
+          Effect.timeout(TAR_TIMEOUT),
+          Effect.scoped,
+        );
         const names = (yield* run(["-tzf", archivePath])).trimEnd().split(/\r?\n/u);
         const types = (yield* run(["-tvzf", archivePath])).trimEnd().split(/\r?\n/u);
         if (

@@ -21,14 +21,14 @@
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Guest links](./user/guest-links.md)
-- [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)
+- [GOAT Connect troubleshooting](./user/goat-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Fleet goals](./user/fleet-goals.md)
 - [Hub](./user/hub.md)
 - [Slack](./user/slack.md)
 - [Running in the background](./user/background-service.md)
 - [Updating GOAT](./user/updating.md)
-- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md)
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md)
 
 ---
 

@@ -12,6 +12,7 @@ import {
 import * as SshConfig from "@goat/ssh/config";
 import { SshCommandError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
+import { desktopAppServerStateDirWords } from "@goat/shared/desktopAppServer";
 import * as Effect from "effect/Effect";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
@@ -207,7 +208,8 @@ it.effect(
           timeoutMs: 15_000,
         },
       ]);
-      expect(scripts[0]!.script).not.toContain(".t3");
+      // It may look for a desktop dev app server left on the legacy home, never an upstream ~/.t3 home.
+      expect(scripts[0]!.script.replaceAll(desktopAppServerStateDirWords, "")).not.toContain(".t3");
     }),
 );
 

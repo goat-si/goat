@@ -41,9 +41,10 @@ it.effect(
       VALUES ('launcher', 'local:lane', 'progress', 'Halfway.', NULL, '2026-10-25T00:00:00.000Z')`;
       const before = yield* columns("scheduled_tasks");
       assert.notInclude(before, "webhook_secret_ref");
+      // Later migrations also run here; pin only the steps this test owns.
       assert.deepStrictEqual(
-        (yield* runMigrations()).map(([id]) => id),
-        [104, 105, 106, 107, 108, 109],
+        (yield* runMigrations()).map(([id]) => id).slice(0, 3),
+        [104, 105, 106],
       );
       const inbox = yield* sql<{ readonly text: string }>`SELECT text FROM remote_report_inbox`;
       assert.deepStrictEqual(

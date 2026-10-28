@@ -2,13 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { OperationRef } from "./operation.ts";
 
-/**
- * One result shape for goat_call and the CLI's --json output (docs/internals/agent-surface.md,
- * "Result envelope"). Legacy tool names keep their own shapes; this classifies them after the
- * fact from the JSON a tool already returned, using a table keyed by each domain's declared
- * literals. Tags are never matched by pattern, so a new failure is caught by the exhaustive
- * test instead of being classified by accident.
- */
+// Failure classes use declared literals; exhaustive checks reject unclassified domain failures.
 export const AgentSurfaceErrorCode = Schema.Literals([
   "invalid_request",
   "unauthenticated",
@@ -265,9 +259,9 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   disabled: before("failed_precondition"),
   held: before("conflict"),
   not_unattended: before("failed_precondition"),
-  // The host cannot tell when a person types a secret or uses the desktop (#1235).
+  // The host cannot detect private fields or human input.
   detection_unsupported: before("failed_precondition"),
-  // macOS has not granted what computer use needs; a person allows it in System Settings (#1399).
+  // Required desktop permissions are missing.
   not_granted: before("failed_precondition"),
   unknown_app: before("invalid_request"),
   // A newer, different request from the same thread replaced this one before anyone answered.
@@ -289,6 +283,13 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PreviewAutomationTabNotFoundError: before("not_found"),
   PreviewAutomationTimeoutError: c("timeout"),
   PreviewAutomationExecutionError: c("internal"),
+  scope_not_found: before("not_found"),
+  scope_ambiguous: before("invalid_request"),
+  stale_ref: before("failed_precondition"),
+  revision_required: before("invalid_request"),
+  pageChanged: before("conflict"),
+  output_limit: before("resource_exhausted"),
+  render_cut: before("resource_exhausted"),
   PreviewAutomationInvalidSelectorError: before("invalid_request"),
   PreviewAutomationTargetNotEditableError: before("invalid_request"),
   PreviewAutomationResultTooLargeError: c("resource_exhausted"),
@@ -355,13 +356,7 @@ const retryableFor = (failure: FailureClass, context: CallContext) =>
   TRANSIENT.has(failure.code) &&
   (context.effect === "read" || context.deduplicated === true || failure.nothingRan === true);
 
-/**
- * What a keyed write's result means for its reservation. A transient refusal that ran nothing
- * frees the key, so the same request can run once the condition clears. A failure that may
- * have left effects holds the key as unknown. Anything else is kept and replayed, errors
- * included: a permission refusal can follow a partial effect, so it never frees the key.
- * `declared` is the failure's own literal when the server still holds the error.
- */
+// Only transient refusals that ran nothing release a key; possible effects keep its reservation.
 export const settlementOf = (
   result: AgentSurfaceResult,
   declared?: { readonly _tag: string; readonly code?: string },

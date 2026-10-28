@@ -16,8 +16,9 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   COMPUTER_USE_HELPER_NAME,
-  computerUseHelperBundleId,
+  computerUseHelperBundleIdForChannel,
   cuaDriverRelease,
+  type DesktopChannel,
 } from "@goat/shared/cuaDriverRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -36,13 +37,7 @@ import {
 } from "./lib/release-verify.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 
-export type HelperChannel = "stable" | "nightly" | "dev";
-
-const CHANNEL_APP_IDS: Record<HelperChannel, string> = {
-  stable: "si.goat.desktop",
-  nightly: "si.goat.desktop.nightly",
-  dev: "si.goat.desktop.dev",
-};
+export type HelperChannel = DesktopChannel;
 
 /** The packaged GOAT executable a release helper accepts as its parent (resolveDesktopProductName). */
 const CHANNEL_PARENTS: Record<HelperChannel, string> = {
@@ -89,7 +84,7 @@ export function renderWindowsBuildInfo(input: {
     "namespace Goat.ComputerUse {",
     "  internal static class BuildInfo {",
     "    public const string HelperId = " +
-      csharpString(computerUseHelperBundleId(CHANNEL_APP_IDS[input.channel])) +
+      csharpString(computerUseHelperBundleIdForChannel(input.channel)) +
       ";",
     "    public const string Version = " + csharpString(input.version) + ";",
     // A dev helper serves an unpackaged Electron or a terminal; release helpers check their parent.

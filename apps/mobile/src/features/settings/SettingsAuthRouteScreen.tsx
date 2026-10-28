@@ -26,7 +26,7 @@ export function SettingsAuthRouteScreen() {
 }
 
 function ConfiguredSettingsAuthRouteScreen() {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const navigation = useNavigation();
   const handleHostBack = () => navigation.goBack();
   // Once signed in, stay on the profile view so signing out pops back instead of

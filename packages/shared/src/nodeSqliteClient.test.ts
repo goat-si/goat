@@ -338,40 +338,30 @@ it.effect("fails a read-only transaction whose reader stops, then starts a new r
 
       assert.equal(error._tag, "SqlError");
       assert.include(String(error.reason.cause), "Database reader exited");
+      yield* TestClock.adjust("250 millis");
       assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
       assert.equal(startedWorkers.length, startedBefore + 2);
     }),
   ),
 );
 
-const withFileClient = <A, E>(
-  setup: (
-    sql: SqlClient.SqlClient,
-    filename: string,
-  ) => Effect.Effect<A, E, SqlClient.SqlClient | FileSystem.FileSystem>,
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sqlite-reader-off-" });
-    const filename = path.join(directory, "state.sqlite");
-    return yield* Effect.gen(function* () {
-      return yield* setup(yield* SqlClient.SqlClient, filename);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
-
-it.effect("uses the writer when the reader cannot open the database", () =>
-  withFileClient((sql, filename) =>
+it.effect("fails reader startup without falling back and recovers on a later acquire", () =>
+  withReaderClient((sql) =>
     Effect.gen(function* () {
-      yield* sql`PRAGMA journal_mode = WAL`;
-      yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
-      yield* sql`INSERT INTO entries VALUES ('kept')`;
-      yield* (yield* FileSystem.FileSystem).remove(filename);
-      const startedBefore = startedWorkers.length;
-
-      assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
-      assert.equal(yield* sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly), 1);
-      assert.equal(startedWorkers.length, startedBefore + 1);
+      failingWorkers.message = "temporary worker startup failure";
+      yield* Effect.gen(function* () {
+        const error = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.flip);
+        assert.equal(error._tag, "SqlError");
+        failingWorkers.message = undefined;
+        yield* TestClock.adjust("250 millis");
+        assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            failingWorkers.message = undefined;
+          }),
+        ),
+      );
     }),
   ),
 );
@@ -664,6 +654,8 @@ it.effect("releases reader requests and connection permits when recovery is inte
         );
         yield* Fiber.interrupt(waiter);
         yield* Fiber.interrupt(values);
+        workerRecovery.config = undefined;
+        yield* TestClock.adjust("250 millis");
         assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ recovery_value: 42 }]);
         assert.deepEqual(yield* sql.withTransaction(select).pipe(SqliteClient.readOnly), [
           { recovery_value: 42 },
@@ -701,25 +693,25 @@ it.effect("keeps concurrent reader acquires on one startup through WAL recovery"
   ).pipe(Effect.provide(logs));
 });
 
-it.effect("falls back to the writer only after reader startup recovery is exhausted", () => {
-  const { warnings, layer: logs } = captureWarnings();
+it.effect("fails after reader startup recovery is exhausted without using the writer", () => {
+  const { layer: logs } = captureWarnings();
   return withWorkerRecovery(
     { point: "initialize", codes: [261], repeat: true },
     (failures, attempted) =>
       withReaderClient((sql) =>
         Effect.gen(function* () {
-          const first = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.forkChild);
+          const first = yield* countEntries(sql).pipe(
+            SqliteClient.readOnly,
+            Effect.result,
+            Effect.forkChild,
+          );
           for (let i = 0; i < 500; i++) {
             yield* attempted(i);
             yield* TestClock.adjust("10 millis");
           }
-          assert.equal(yield* Fiber.join(first), 1);
+          assert.isTrue((yield* Fiber.join(first))._tag === "Failure");
           assert.lengthOf(failures, 501);
-          assert.lengthOf(warnings, 1);
-          const before = startedWorkers.length;
-          yield* sql`INSERT INTO entries VALUES ('fallback')`.pipe(SqliteClient.readOnly);
-          assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 2);
-          assert.equal(startedWorkers.length, before);
+          assert.equal(yield* countEntries(sql), 1);
         }),
       ),
   ).pipe(Effect.provide(logs));
@@ -1101,7 +1093,7 @@ it.effect("recovers checkpoint worker startup before handing checkpoints off", (
   ).pipe(Effect.provide(logs));
 });
 
-it.effect("hands checkpoints back after worker startup recovery is exhausted", () => {
+it.effect("keeps checkpoints off the writer after worker startup recovery is exhausted", () => {
   const { warnings, layer: logs } = captureWarnings();
   return withWorkerRecovery(
     { point: "initialize", codes: [261], repeat: true },
@@ -1114,7 +1106,7 @@ it.effect("hands checkpoints back after worker startup recovery is exhausted", (
               yield* Effect.promise(() => new Promise((resolve) => worker.once("exit", resolve)));
             }
             const rows = yield* sql`PRAGMA wal_autocheckpoint`;
-            assert.equal(rows[0]?.wal_autocheckpoint, 1000);
+            assert.equal(rows[0]?.wal_autocheckpoint, 0);
           }),
         ).pipe(Effect.forkChild);
         for (let i = 0; i < 500; i++) {
@@ -1137,7 +1129,6 @@ it.effect("stops worker startup recovery when the error changes", () =>
           Effect.gen(function* () {
             const use = (sql: SqlClient.SqlClient) =>
               Effect.gen(function* () {
-                // Reader fallback is writable; checkpoint fallback restores SQLite's default.
                 if (checkpoint) {
                   const worker = startedWorkers.at(-1)!;
                   if (worker.threadId !== -1) {
@@ -1146,9 +1137,10 @@ it.effect("stops worker startup recovery when the error changes", () =>
                     );
                   }
                   const rows = yield* sql`PRAGMA wal_autocheckpoint`;
-                  assert.equal(rows[0]?.wal_autocheckpoint, 1000);
+                  assert.equal(rows[0]?.wal_autocheckpoint, 0);
                 } else {
-                  yield* sql`INSERT INTO entries VALUES ('fallback')`.pipe(SqliteClient.readOnly);
+                  const error = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.flip);
+                  assert.equal(error._tag, "SqlError");
                 }
               });
             const client = yield* (

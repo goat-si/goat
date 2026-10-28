@@ -11,7 +11,6 @@ import {
   type OriginReads,
   type OriginRun,
   type OriginThread,
-  personStarted,
 } from "./ComputerUseOrigin.ts";
 
 const at = (minute: number) => DateTime.makeUnsafe(minute * 60_000);
@@ -145,9 +144,21 @@ describe("computerUseOrigin", () => {
               environmentId: "other-host",
             },
           },
+          remoteChild: {
+            createdAt: at(2),
+            launchedBy: { kind: "launch", threadId: ThreadId.make("remote"), environmentId: null },
+          },
         },
-        runs: { mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)] },
-        messages: { m1: typed(1), m2: { createdAt: at(10), scheduledTaskId: "task-1" } },
+        runs: {
+          mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)],
+          remoteChild: [run("launch", "m3", 2)],
+        },
+        messages: {
+          m1: typed(1),
+          m2: { createdAt: at(10), scheduledTaskId: "task-1" },
+          // thread.launch sends the child's first message as the launching thread.
+          m3: { createdAt: at(2), senderThreadId: ThreadId.make("remote") },
+        },
       };
       const launched = { _tag: "unattended", reason: "launched_by_unattended" } as const;
       assert.deepEqual(yield* classify(world, "botChild"), launched);
@@ -157,10 +168,10 @@ describe("computerUseOrigin", () => {
       assert.deepEqual(yield* classify(world, "fromTyped"), { _tag: "interactive" });
       // A person promoting a delegated task takes it over.
       assert.deepEqual(yield* classify(world, "promoted"), { _tag: "interactive" });
-      assert.deepEqual(yield* classify(world, "remote"), {
-        _tag: "unattended",
-        reason: "launched_remotely",
-      });
+      // Threads a remote launch starts here keep its reason, which full access admits like a person's.
+      const remote = { _tag: "unattended", reason: "launched_remotely" } as const;
+      assert.deepEqual(yield* classify(world, "remote"), remote);
+      assert.deepEqual(yield* classify(world, "remoteChild"), remote);
     }),
   );
 
@@ -234,13 +245,43 @@ describe("channel workers before the ledger binds them", () => {
 describe("gateUnattendedSteering", () => {
   const world: World = {
     bot: ["bot"],
-    threads: { bot: {}, mine: {}, peer: {}, "channel-worker:9c": {} },
+    threads: {
+      bot: {},
+      mine: {},
+      peer: {},
+      "channel-worker:9c": {},
+      remote: {
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
+      remoteRun: {
+        runtimeMode: "full-access",
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
+      remoteAsking: {
+        runtimeMode: "approval-required",
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
+    },
     runs: {
       mine: [run("typed", "m1", 1)],
       peer: [run("p1", "pm", 0)],
       "channel-worker:9c": [run("w1", "wm", 0)],
+      remoteRun: [run("r1", "rm", 0)],
+      remoteAsking: [run("a1", "am", 0)],
     },
-    messages: { m1: typed(1), pm: typed(0), wm: typed(0) },
+    messages: { m1: typed(1), pm: typed(0), wm: typed(0), rm: typed(0), am: typed(0) },
   };
   const steer = (thread: string, runId: string) =>
     ({ type: "steer_active", targetRunId: RunId.make(runId) }) as const;
@@ -273,6 +314,31 @@ describe("gateUnattendedSteering", () => {
         queued,
       );
       assert.deepEqual(yield* gate("mine", "typed", { scheduledTaskId: "task-1" }), queued);
+      // Full access opens the screen to a remote launch, not a person's running turn.
+      assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "remote" }), queued);
+    }),
+  );
+
+  it.effect("queues a message with less of the screen behind a remote full access turn", () =>
+    Effect.gen(function* () {
+      const queued = {
+        mode: { type: "queue_after_active", behindRunId: RunId.make("r1") },
+        queued: true,
+      } as const;
+      // Neither may borrow the screen the remote turn got from full access.
+      assert.deepEqual(yield* gate("remoteRun", "r1", { senderThreadId: "bot" }), queued);
+      assert.deepEqual(yield* gate("remoteRun", "r1", { scheduledTaskId: "task-1" }), queued);
+      // Another remote launch has the same reach there, and a person's thread more.
+      for (const sender of ["remote", "peer"])
+        assert.deepEqual(yield* gate("remoteRun", "r1", { senderThreadId: sender }), {
+          mode: steer("remoteRun", "r1"),
+          queued: false,
+        });
+      // Outside full access the remote turn uses only what was approved, like the bot's.
+      assert.deepEqual(yield* gate("remoteAsking", "a1", { senderThreadId: "bot" }), {
+        mode: steer("remoteAsking", "a1"),
+        queued: false,
+      });
     }),
   );
 
@@ -292,149 +358,6 @@ describe("gateUnattendedSteering", () => {
         yield* gate("channel-worker:9c", "w1", { senderThreadId: "bot" }),
         kept("channel-worker:9c", "w1"),
       );
-    }),
-  );
-});
-
-describe("personStarted", () => {
-  const person = (minute: number): OriginMessage => ({
-    createdAt: at(minute),
-    createdBy: "user",
-    creationSource: "web",
-  });
-  const wake = (minute: number): OriginMessage => ({
-    createdAt: at(minute),
-    createdBy: "agent",
-    creationSource: "server",
-  });
-  const wakeId = (handoff: string) => "message:handoff-wake:" + handoff + ":completed";
-  const decide = (
-    world: World,
-    grants: Record<string, { readonly thread: string; readonly run: string }>,
-    runId: string,
-  ) =>
-    personStarted(
-      {
-        ...reads(world),
-        grantRun: (threadId, handoffId) =>
-          Effect.succeed(
-            grants[handoffId]?.thread === threadId ? RunId.make(grants[handoffId].run) : undefined,
-          ),
-      },
-      { threadId: ThreadId.make("mine"), runId: RunId.make(runId) },
-    );
-
-  it.effect("counts only messages a person's client sent, never server re-dispatches", () =>
-    Effect.gen(function* () {
-      const world: World = {
-        threads: { mine: {} },
-        runs: { mine: [run("typed", "m1", 1, 2), run("recovered", "m2", 3)] },
-        messages: {
-          m1: person(1),
-          // Usage-limit recovery and fleet fallback write createdBy "user" from the server.
-          m2: { createdAt: at(3), createdBy: "user", creationSource: "server" },
-        },
-      };
-      assert.isTrue(yield* decide(world, {}, "typed"));
-      assert.isFalse(yield* decide(world, {}, "recovered"));
-    }),
-  );
-
-  it.effect("follows an approval wake to the run that asked, not to the run before it", () =>
-    Effect.gen(function* () {
-      const scheduledAsked: World = {
-        threads: { mine: {} },
-        runs: {
-          mine: [
-            run("cron", "m1", 1, 2),
-            run("typed", "m2", 3, 4),
-            run("woken", wakeId("handoff:cron"), 5),
-          ],
-        },
-        messages: {
-          m1: { createdAt: at(1), scheduledTaskId: "task-1" },
-          m2: person(3),
-          [wakeId("handoff:cron")]: wake(5),
-        },
-      };
-      assert.isFalse(
-        yield* decide(scheduledAsked, { "handoff:cron": { thread: "mine", run: "cron" } }, "woken"),
-      );
-      const personAsked: World = {
-        threads: { mine: {} },
-        runs: {
-          mine: [
-            run("typed", "m1", 1, 2),
-            run("cron", "m2", 3, 4),
-            run("woken", wakeId("handoff:typed"), 5),
-          ],
-        },
-        messages: {
-          m1: person(1),
-          m2: { createdAt: at(3), scheduledTaskId: "task-1" },
-          [wakeId("handoff:typed")]: wake(5),
-        },
-      };
-      assert.isTrue(
-        yield* decide(personAsked, { "handoff:typed": { thread: "mine", run: "typed" } }, "woken"),
-      );
-    }),
-  );
-
-  it.effect("ignores wake-shaped ids a client or an agent chose, and other threads' grants", () =>
-    Effect.gen(function* () {
-      const grants = { "handoff:typed": { thread: "mine", run: "typed" } };
-      const forged: World = {
-        threads: { mine: {} },
-        runs: {
-          mine: [
-            run("typed", "m1", 1, 2),
-            run("client", wakeId("handoff:typed"), 3, 4),
-            run("mcp", wakeId("handoff:typed") + ":x", 5),
-          ],
-        },
-        messages: {
-          m1: person(1),
-          // A client's message is judged as a client message: here a server-sourced one.
-          [wakeId("handoff:typed")]: {
-            createdAt: at(3),
-            createdBy: "user",
-            creationSource: "server",
-          },
-          [wakeId("handoff:typed") + ":x"]: {
-            createdAt: at(5),
-            createdBy: "agent",
-            creationSource: "mcp",
-          },
-        },
-      };
-      assert.isFalse(yield* decide(forged, grants, "client"));
-      assert.isFalse(yield* decide(forged, grants, "mcp"));
-      const elsewhere: World = {
-        threads: { mine: {} },
-        runs: { mine: [run("woken", wakeId("handoff:other"), 1)] },
-        messages: { [wakeId("handoff:other")]: wake(1) },
-      };
-      assert.isFalse(
-        yield* decide(elsewhere, { "handoff:other": { thread: "theirs", run: "r" } }, "woken"),
-      );
-    }),
-  );
-
-  it.effect("gives up on a chain of approval wakes longer than lineage allows", () =>
-    Effect.gen(function* () {
-      const runs: Array<OriginRun> = [run("r0", "m0", 0, 1)];
-      const messages: Record<string, OriginMessage> = { m0: person(0) };
-      const grants: Record<string, { readonly thread: string; readonly run: string }> = {};
-      for (let index = 1; index <= 10; index++) {
-        const id = wakeId("handoff:" + (index - 1));
-        runs.push(run("r" + index, id, index * 2, index * 2 + 1));
-        messages[id] = wake(index * 2);
-        grants["handoff:" + (index - 1)] = { thread: "mine", run: "r" + (index - 1) };
-      }
-      const world: World = { threads: { mine: {} }, runs: { mine: runs }, messages };
-      assert.isTrue(yield* decide(world, grants, "r3"));
-      assert.isFalse(yield* decide(world, grants, "r10"));
     }),
   );
 });

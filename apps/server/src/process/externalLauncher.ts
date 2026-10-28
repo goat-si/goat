@@ -365,7 +365,7 @@ function resolveWslFileManagerPath(target: string, distroName: string): string {
   return `\\\\wsl.localhost\\${distroName}${relativePath.length > 0 ? `\\${relativePath}` : ""}`;
 }
 
-function buildBrowserLaunch(
+export function buildBrowserLaunch(
   target: string,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv = {},

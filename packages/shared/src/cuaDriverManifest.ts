@@ -10,6 +10,8 @@ import * as NodeChildProcess from "node:child_process";
 
 import {
   CUA_DRIVER_PROBED_SESSION_NAMES,
+  DESKTOP_CHANNEL_APP_IDS,
+  computerUseHelperBundleId,
   cuaDriverListingEnvironment,
 } from "./cuaDriverRelease.ts";
 
@@ -39,6 +41,7 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "invoke_menu",
   "bring_to_front",
   "launch_app",
+  "kill_app",
   "set_window_frame",
   "run_steps",
   "run_script",
@@ -76,7 +79,6 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
   clipboard_read:
     "returns whatever the person last copied, such as passwords, from outside the admitted apps",
   clipboard_write: "replaces the person's clipboard and can load local files into it",
-  kill_app: "force-quits apps and loses unsaved work; the manifest grants no terminate scope",
   browser_prepare:
     "browser tools need per-origin grants a launch-time manifest cannot know, and logged-in profiles are never granted; agents drive browsers as ordinary apps or use GOAT's browser",
   browser_navigate: "browser tools need per-origin grants",
@@ -92,11 +94,14 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
 
 /**
  * Apps the driver never touches whatever the request: GOAT itself, where a person approves
- * computer use, the driver's own app, and credential stores. Matched against the bundle id
+ * computer use, in every released channel (a dev checkout's own app id stays controllable for
+ * testing it), the driver's own app, and credential stores. Matched against the bundle id
  * (case-insensitive) and the app name.
  */
 const EXCLUDED_BUNDLE_IDS = new Set([
   "com.trycua.driver",
+  // Every released GOAT channel and its helper: any of them can show this host's approval cards.
+  ...Object.values(DESKTOP_CHANNEL_APP_IDS).flatMap((id) => [id, computerUseHelperBundleId(id)]),
   "com.apple.keychainaccess",
   "com.apple.passwords",
   "com.1password.1password",
@@ -125,6 +130,13 @@ export interface CuaDriverListedApp {
    * (the driver gives none).
    */
   readonly executable?: string | null;
+  /** The app bundle's path on macOS, as the driver's list_apps reports it. */
+  readonly launch_path?: string | null;
+  /**
+   * The binary inside a macOS app bundle, which is what the driver attests for kill_app (ps
+   * comm). Added by GOAT from the bundle's Info.plist; the driver gives none.
+   */
+  readonly bundle_executable?: string | null;
   readonly pid?: number | null;
   readonly windows?: ReadonlyArray<unknown> | null;
 }
@@ -148,14 +160,16 @@ export type CuaDriverAdmittedApp = string | CuaDriverExecutableApp;
  * bundle id; its executable path stands in, which the driver matches against the executable it
  * attests for the window (#1368). On Linux an app with no desktop entry gets an executable grant
  * instead (#1513): the driver only compares Windows paths given as bundle ids. Apps with neither
- * stay out. Desktop hosts refresh this list when an approval names a missing app; standalone
- * servers still list only at host start.
+ * stay out. A macOS app also gets an executable grant for its bundle's binary: the driver judges
+ * kill_app only against executable grants (session_manifest.rs process_control), never bundle
+ * ids. Desktop hosts refresh this list when an approval names a missing app; standalone servers
+ * still list only at host start.
  */
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<CuaDriverAdmittedApp> {
-  const host = new Set(hostBundleIds.map(identityKey));
+  const host = new Set(hostBundleIds.map(cuaAppKey));
   const admitted = new Set<string>();
   const executables = new Map<string, Set<string>>();
   for (const app of apps) {
@@ -163,6 +177,9 @@ export function admittedCuaApplications(
     const id = bundle || (app.executable?.trim() ?? "");
     if (!id) continue;
     if (excludedCuaApplication(app, id, host)) continue;
+    const binary = bundle ? app.bundle_executable?.trim() : undefined;
+    if (binary?.startsWith("/") === true && !executables.has(binary))
+      executables.set(binary, new Set());
     if (!bundle && id.startsWith("/")) {
       const names = executables.get(id) ?? new Set<string>();
       const name = app.name?.trim();
@@ -184,7 +201,7 @@ function excludedCuaApplication(
   host: ReadonlySet<string>,
 ): boolean {
   return (
-    host.has(identityKey(id)) ||
+    host.has(cuaAppKey(id)) ||
     EXCLUDED_BUNDLE_IDS.has(id.toLowerCase()) ||
     EXCLUDED_NAME.test(app.name ?? "") ||
     EXCLUDED_NAME.test(id) ||
@@ -209,7 +226,7 @@ export function cuaRequestableApps(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const host = new Set(hostBundleIds.map(identityKey));
+  const host = new Set(hostBundleIds.map(cuaAppKey));
   const requestable = new Set<string>();
   for (const app of apps) {
     const bundle = app.bundle_id?.trim() ?? "";
@@ -257,15 +274,17 @@ async function withLinuxExecutables(
 }
 
 /**
- * One spelling per identity for comparing ids: a Windows path the way the driver compares it
- * (session_manifest.rs normalize_windows_executable_path: \\?\ and \\?\UNC\ prefixes off, / as
- * \, repeated separators collapsed, case folded); anything else lowercased. GOAT can run from a
- * path spelled with a prefix while the helper lists the plain form, and must still be excluded.
+ * One spelling per app identity, for every comparison of ids and approvals: a Windows path the
+ * way the driver compares it (session_manifest.rs normalize_windows_executable_path: \\?\ and
+ * \\?\UNC\ prefixes off, / as \, repeated separators collapsed, case folded); any other absolute
+ * path exactly, since Linux paths differ by case; a bundle id or name lowercased.
  */
-function identityKey(id: string): string {
-  let path = id.trim().replaceAll("/", "\\");
+export function cuaAppKey(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return trimmed;
+  let path = trimmed.replaceAll("/", "\\");
   const windowsPath = /^[A-Za-z]:\\/u.test(path) || path.startsWith("\\\\");
-  if (!windowsPath) return id.trim().toLowerCase();
+  if (!windowsPath) return trimmed.toLowerCase();
   if (path.toLowerCase().startsWith("\\\\?\\unc\\")) path = "\\\\" + path.slice(8);
   else if (path.startsWith("\\\\?\\")) path = path.slice(4);
   const unc = path.startsWith("\\\\");
@@ -310,21 +329,29 @@ export function missingCuaDriverApplications(
   approved: ReadonlyArray<string>,
   admitted: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const present = new Set(admitted.map(identityKey));
-  return approved.filter((id) => !present.has(identityKey(id)));
+  const present = new Set(admitted.map(cuaAppKey));
+  return approved.filter((id) => !present.has(cuaAppKey(id)));
 }
 
-/** v3 manifest text. JSON strings are valid YAML scalars, so every value is JSON-quoted. */
+/**
+ * v3 manifest text; JSON strings are valid YAML scalars, so every value is JSON-quoted. With
+ * kill_app, apps can be force-quit only in a process launch_app started in the same driver
+ * session (session_manifest.rs TerminationGrant::DriverLaunched); standard mode refuses any other
+ * process before the manifest is read (tool.rs foreign_process_termination_denied).
+ */
 export function cuaDriverCapabilityManifest(input: {
   readonly applications: ReadonlyArray<CuaDriverAdmittedApp>;
   readonly tools?: ReadonlyArray<string>;
 }): string {
   const q = (value: string) => JSON.stringify(value);
-  const tools = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
-  const app = (entry: CuaDriverAdmittedApp) =>
+  const tools: ReadonlyArray<string> = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
+  const terminate = tools.includes("kill_app") ? ['      terminate: "driver_launched"'] : [];
+  const app = (entry: CuaDriverAdmittedApp) => [
     typeof entry === "string"
       ? "    - bundle_id: " + q(entry)
-      : "    - executable: " + q(entry.executable) + " # names: " + JSON.stringify(entry.names);
+      : "    - executable: " + q(entry.executable) + " # names: " + JSON.stringify(entry.names),
+    ...terminate,
+  ];
   return [
     "# Written by GOAT at each driver start. See ADR-0022.",
     "version: 3",
@@ -333,7 +360,7 @@ export function cuaDriverCapabilityManifest(input: {
     "    display: true",
     ...(input.applications.length === 0
       ? ["  apps: []"]
-      : ["  apps:", ...input.applications.map(app)]),
+      : ["  apps:", ...input.applications.flatMap(app)]),
     "allow:",
     "  tools:",
     ...tools.map((tool) => "    - " + q(tool)),
@@ -485,10 +512,66 @@ async function listForHost(input: CuaDriverListingInput) {
 export async function prepareCuaDriverCapabilityManifest(
   input: CuaDriverListingInput & { readonly path: string },
 ): Promise<string> {
-  const { apps, host } = await listForHost(input);
+  const listed = await listForHost(input);
+  const apps = input.platform === "darwin" ? await withBundleExecutables(listed.apps) : listed.apps;
   return writeCuaDriverCapabilityManifest(
     input.path,
-    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, host) }),
+    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, listed.host) }),
+  );
+}
+
+const PLIST_EXECUTABLE = /<key>CFBundleExecutable<\/key>\s*<string>([^<]*)<\/string>/u;
+const XML_ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+};
+
+/**
+ * Adds the binary of each listed macOS app bundle, named by its Info.plist and resolved the way
+ * the driver canonicalizes a manifest path. An app whose binary cannot be read keeps only its
+ * bundle id grant, so kill_app stays refused for it; nothing here can fail the listing.
+ */
+async function withBundleExecutables(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+): Promise<ReadonlyArray<CuaDriverListedApp>> {
+  const { readFile, realpath, stat } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const executableName = async (plist: string) => {
+    const bytes = await readFile(plist);
+    if (bytes.subarray(0, 6).toString("latin1") === "bplist") {
+      const output = await new Promise<string>((resolve, reject) =>
+        NodeChildProcess.execFile(
+          "/usr/bin/plutil",
+          ["-extract", "CFBundleExecutable", "raw", "-o", "-", plist],
+          { timeout: 5_000 },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        ),
+      );
+      return output.trim();
+    }
+    const raw = PLIST_EXECUTABLE.exec(bytes.toString("utf8"))?.[1] ?? "";
+    return raw
+      .replaceAll(/&(amp|lt|gt|quot|apos);/gu, (_, entity: string) => XML_ENTITIES[entity] ?? "")
+      .trim();
+  };
+  return Promise.all(
+    apps.map(async (app) => {
+      const bundle = app.launch_path?.trim() ?? "";
+      if (!app.bundle_id?.trim() || !bundle.startsWith("/") || !bundle.endsWith(".app")) return app;
+      const name = await executableName(join(bundle, "Contents", "Info.plist")).catch(() => "");
+      if (name === "" || name === "." || name === ".." || name.includes("/")) return app;
+      const binary = await realpath(join(bundle, "Contents", "MacOS", name)).catch(() => "");
+      const file =
+        binary !== "" &&
+        (await stat(binary).then(
+          (s) => s.isFile(),
+          () => false,
+        ));
+      return file ? { ...app, bundle_executable: binary } : app;
+    }),
   );
 }
 

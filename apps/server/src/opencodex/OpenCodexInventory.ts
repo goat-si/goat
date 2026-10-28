@@ -402,6 +402,15 @@ const make = Effect.gen(function* () {
               },
             }
           : undefined);
+      const settingsDigest = settings ? yield* digest(settings) : undefined;
+      // Model order is not routing drift; duplicate ids still change the digest.
+      const catalogDigest = models
+        ? yield* digest(
+            models.data
+              .map(canonical)
+              .sort((a, b) => compareText(JSON.stringify(a), JSON.stringify(b))),
+          )
+        : undefined;
       parityEvidence = {
         observedAt,
         ...(health ? { healthRole: health.role ?? "standalone" } : {}),
@@ -412,21 +421,12 @@ const make = Effect.gen(function* () {
         ...(health?.pid !== undefined ? { processId: health.pid } : {}),
         ...(childLinkId ? { childLinkId } : {}),
         ...(record ? { settingsLinkId: record.linkId } : {}),
-        ...(settings ? { settingsDigest: yield* digest(settings) } : {}),
+        ...(settingsDigest ? { settingsDigest } : {}),
         ...(status?.appliedCodexSettingsDigest
           ? { appliedSettingsDigest: status.appliedCodexSettingsDigest }
           : {}),
         ...(modelsResponse ? { modelsStatus: modelsResponse.status } : {}),
-        // Model order is not routing drift; duplicate ids still change the digest.
-        ...(models
-          ? {
-              catalogDigest: yield* digest(
-                models.data
-                  .map(canonical)
-                  .sort((a, b) => compareText(JSON.stringify(a), JSON.stringify(b))),
-              ),
-            }
-          : {}),
+        ...(catalogDigest ? { catalogDigest } : {}),
         ...(modelsResponse?.servedBy ? { servedBy: modelsResponse.servedBy } : {}),
         // P4 for a Hub client: the hub URL it already uses, against this Home's advertised origin.
         ...(connect?.apiKeyId && linkRole !== "child" && connectServer

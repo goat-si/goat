@@ -26,6 +26,8 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
+import * as SourceScan from "./memorySourceScan.ts";
+import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -66,7 +68,6 @@ const decodeSelection = Schema.decodeUnknownEffect(M.MemoryModelSelection);
 const encodeSelection = Schema.encodeSync(Schema.fromJsonString(M.MemoryModelSelection));
 const decodeInput = Schema.decodeUnknownEffect(M.GenerateMemorySummaryInput);
 const decodePayload = Schema.decodeEffect(M.MemoryPayload);
-const encodeIds = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(M.MessageId)));
 const encodeGenerationMessage = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -77,9 +78,10 @@ const encodeGenerationMessage = Schema.encodeEffect(
   ),
 );
 const strict = { onExcessProperty: "error" } as const;
-const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
 export const memoryRetryDelay = (attempt: number) =>
   [5000, 30000, 120000][Math.max(0, attempt - 1)] ?? 600000;
+/** A rejected output repeats on retry; past this the work fails until the thread's next run. */
+export const MEMORY_GENERATION_MAX_ATTEMPTS = 5;
 // Internal ownership deadline for local work rows; this is not the hub resolution lease.
 const workClaimMs = 600000;
 /**
@@ -175,21 +177,17 @@ const make = Effect.gen(function* () {
               : [],
           );
           // Filter eligibility before the bound; historical updates and skipped messages cannot fill a chunk.
-          const rows = yield* query(sql<{
-            payload_json: string;
-            sequence: number;
-            event_id: string;
-          }>`
-            SELECT e.payload_json,e.sequence,e.event_id FROM orchestration_events e
-            WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.stream_id=${meta.sourceThread.threadId}
-            AND e.event_type='message.updated' AND e.sequence>${meta.fromSequence ?? 0} AND e.sequence<=${meta.sourceWatermark.throughSequence}
-            AND coalesce(json_extract(e.payload_json,'$.streaming'),0)=0 AND trim(json_extract(e.payload_json,'$.text'))!=''
-            AND json_extract(e.payload_json,'$.role') IN ('user','assistant')
-            AND json_extract(e.payload_json,'$.id') NOT IN (SELECT value FROM json_each(${yield* query(encodeIds(exclusions))}))
-            AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='message.updated' AND json_extract(n.payload_json,'$.id')=json_extract(e.payload_json,'$.id') AND n.sequence>e.sequence AND n.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence})
-            AND (CASE WHEN json_extract(e.payload_json,'$.runId') IS NULL THEN '' ELSE coalesce((SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence} ORDER BY r.sequence DESC LIMIT 1),'') END)!='rolled_back'
-            AND (json_extract(e.payload_json,'$.role')='user' OR (SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence} ORDER BY r.sequence DESC LIMIT 1)='completed')
-            ORDER BY e.sequence LIMIT 102`);
+          const rows = yield* query(
+            SourceScan.readEligibleSourceRows(sql, {
+              threadId: meta.sourceThread.threadId,
+              afterSequence: meta.fromSequence ?? 0,
+              throughSequence: meta.sourceWatermark.throughSequence,
+              observedSequence:
+                meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence,
+              excluded: exclusions,
+              limit: 102,
+            }),
+          );
           const messages: M.GenerateMemorySummaryInput["messages"][number][] = [];
           let bytes = 0;
           let last = rows[0];
@@ -254,6 +252,8 @@ const make = Effect.gen(function* () {
       ),
       meta.memoryId,
     );
+    // One pass over the source serves every evidence entry.
+    let scan: SourceScan.SourceScan | undefined;
     for (const evidence of payload.evidence) {
       if (evidence.origin === "model") continue;
       if (
@@ -274,17 +274,12 @@ const make = Effect.gen(function* () {
         )
       )
         return false;
-      const eligible = yield* query(sql<{ count: number }>`
-        SELECT count(*) AS count FROM orchestration_events e
-        WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.stream_id=${meta.sourceThread.threadId}
-        AND e.event_type='message.updated' AND e.sequence<=${evidence.watermark.throughSequence}
-        AND json_extract(e.payload_json,'$.id') IN (SELECT value FROM json_each(${yield* query(encodeIds(ids))}))
-        AND coalesce(json_extract(e.payload_json,'$.streaming'),0)=0 AND trim(json_extract(e.payload_json,'$.text'))!=''
-        AND json_extract(e.payload_json,'$.role') IN ('user','assistant')
-        AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='message.updated' AND json_extract(n.payload_json,'$.id')=json_extract(e.payload_json,'$.id') AND n.sequence>e.sequence)
-        AND (CASE WHEN json_extract(e.payload_json,'$.runId') IS NULL THEN '' ELSE coalesce((SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') ORDER BY r.sequence DESC LIMIT 1),'') END)!='rolled_back'
-        AND (json_extract(e.payload_json,'$.role')='user' OR (SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') ORDER BY r.sequence DESC LIMIT 1)='completed')`);
-      if (eligible[0]?.count !== ids.length) return false;
+      scan ??= yield* query(SourceScan.scanWholeSource(sql, meta.sourceThread.threadId));
+      const through = evidence.watermark.throughSequence;
+      const eligible = SourceScan.eligibleSourceMessages(scan, { ids: new Set(ids) }).filter(
+        (message) => message.sequence <= through,
+      );
+      if (eligible.length !== ids.length) return false;
     }
     return payload.evidence.some((e) => e.origin !== "model" && e.messageIds.length > 0);
   });
@@ -807,14 +802,16 @@ const make = Effect.gen(function* () {
                 environmentId,
                 failureCode: code,
                 now,
-                retryAt: [
-                  "generation_failed",
-                  "unavailable",
-                  "route_unavailable",
-                  "storage_failed",
-                ].includes(code)
-                  ? now + memoryRetryDelay(work.attempt)
-                  : null,
+                retryAt:
+                  [
+                    "generation_failed",
+                    "unavailable",
+                    "route_unavailable",
+                    "storage_failed",
+                  ].includes(code) &&
+                  !(code === "generation_failed" && work.attempt >= MEMORY_GENERATION_MAX_ATTEMPTS)
+                    ? now + memoryRetryDelay(work.attempt)
+                    : null,
               });
               // A lapsed claim cannot record a report, but while no one reclaimed the row it
               // still gets a backoff instead of being picked up again immediately.
@@ -995,9 +992,9 @@ const make = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Ref.set(started, false).pipe(Effect.andThen(Ref.set(queue, undefined))),
     );
-    const wakes = yield* store.subscribeWake;
-    yield* Stream.runForEach(wakes, () => wake).pipe(Effect.forkScoped);
+    yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
     yield* events.stream({ afterSequence: yield* store.readThreadHookWatermark() }).pipe(
+      catchUpWakes,
       Stream.runForEach(() => wake),
       Effect.catch(() => Effect.void),
       Effect.forkScoped,

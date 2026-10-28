@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   ForwardCompatibleUnion,
   ForwardCompatibleUnionArray,
   isUnknownUnionMember,
@@ -96,5 +97,28 @@ describe("ForwardCompatibleUnionArray", () => {
 
   it("fails when a known member is broken, so real bugs stay visible", () => {
     expect(() => decode([{ kind: "square", side: "wide" }])).toThrow();
+  });
+});
+
+const Row = Schema.Struct({ id: Schema.String, at: ForwardCompatibleOptional(Schema.Number) });
+const isJson = Schema.is(Schema.Json);
+const encodeRow = Schema.encodeUnknownSync(Schema.toCodecJson(Row));
+
+describe("ForwardCompatibleOptional", () => {
+  it("omits a null or unreadable value, so the decoded row is still JSON", () => {
+    for (const at of [null, "soon"]) {
+      const decoded = fromWire(Row)({ id: "a", at });
+      expect(Object.hasOwn(decoded, "at")).toBe(false);
+      expect(isJson(decoded)).toBe(true);
+    }
+  });
+
+  it("keeps a readable value and leaves a missing key missing", () => {
+    expect(fromWire(Row)({ id: "a", at: 1 })).toEqual({ id: "a", at: 1 });
+    expect(Object.hasOwn(fromWire(Row)({ id: "a" }), "at")).toBe(false);
+  });
+
+  it("encodes an explicit undefined as an absent key", () => {
+    expect(Object.hasOwn(encodeRow({ id: "a", at: undefined }) as object, "at")).toBe(false);
   });
 });

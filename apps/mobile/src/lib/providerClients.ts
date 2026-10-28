@@ -4,6 +4,7 @@ import { makeProviderClientRegistry } from "@goat/provider-core/client";
 import { cursorClient, cursorCloudClient } from "@goat/provider-cursor/client";
 import { devinCloudClient } from "@goat/provider-devin-cloud/client";
 import { claudeCloudClient } from "@goat/provider-claude-cloud/client";
+import { fxClient } from "@goat/provider-fx/client";
 import { grokClient } from "@goat/provider-grok/client";
 import { museClient } from "@goat/provider-muse/client";
 import { openCodeClient } from "@goat/provider-opencode/client";
@@ -14,6 +15,7 @@ const providerClients = makeProviderClientRegistry([
   cursorCloudClient,
   claudeCloudClient,
   grokClient,
+  fxClient,
   museClient,
   openCodeClient,
   piClient,

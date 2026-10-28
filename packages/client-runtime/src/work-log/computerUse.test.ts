@@ -285,6 +285,37 @@ describe("computerUseDisplayInput", () => {
     expect(JSON.stringify(shown)).not.toContain("hunter2");
   });
 
+  it("shows only lengths for text typed inside run_steps and for a run_script source", () => {
+    const steps = {
+      steps: [
+        { tool: "type_text", args: { text: "hunter2" } },
+        {
+          set_value: { name: "Password", value: { redactedCharacters: 7 } },
+          expect: [{ value: "hunter2" }],
+        },
+        { click: { name: "Sign in" } },
+      ],
+    };
+    expect(computerUseDisplayInput("cua-driver.run_steps", steps)).toEqual({
+      steps: [
+        { tool: "type_text", args: { text: "7 characters" } },
+        {
+          set_value: { name: "Password", value: "7 characters" },
+          expect: [{ value: "7 characters" }],
+        },
+        { click: { name: "Sign in" } },
+      ],
+    });
+    const script = { script: 'await type_text({ text: "hunter2" })' };
+    expect(computerUseDisplayInput("cua-driver.run_script", script)).toEqual({
+      script: "36 characters",
+    });
+    for (const input of [steps, script]) {
+      const item = call(input === steps ? "cua-driver.run_steps" : "cua-driver.run_script", input);
+      expect(JSON.stringify(toolItemForDisplay(item))).not.toContain("hunter2");
+    }
+  });
+
   it("masks an ACP child's enveloped call and reads the server's redacted input", () => {
     const envelope = { server: "cua-driver", tool: "type_text", arguments: { text: "hunter2" } };
     const child = call("cua-driver.type_text", envelope);

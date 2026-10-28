@@ -8,7 +8,7 @@ import type { ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type { ComputerUseLease } from "./ComputerUseLeases.ts";
-import { approvedApps } from "./ComputerUseScope.ts";
+import { appKey, approvedApps } from "./ComputerUseScope.ts";
 
 /** The apps a thread's live grants admit together; absent when one of them admits every app. */
 export const appsOf = (
@@ -34,8 +34,18 @@ const overlap = (
   if (held === undefined) return {};
   const names = approvedApps(wanted);
   if (names === undefined) return { apps: held };
-  const apps = held.filter((app) => names.has(app.toLowerCase()));
+  const apps = held.filter((app) => names.has(appKey(app)));
   return apps.length === 0 ? undefined : { apps };
+};
+
+/** Whether an admission's apps (undefined: the whole screen) cover every app wanted. */
+export const coversApps = (
+  granted: ReadonlyArray<string> | undefined,
+  wanted: ReadonlyArray<string>,
+) => {
+  if (granted === undefined) return true;
+  const names = new Set(granted.map(appKey));
+  return wanted.every((app) => names.has(appKey(app)));
 };
 
 /** A thread whose admission overlaps one asked for, by grant or by unattended full access. */

@@ -522,18 +522,14 @@ final class PrivateModeWatch {
   let queue = DispatchQueue(label: "si.goat.computer-use.private-mode")
   var watchId: String?
   var timer: DispatchSourceTimer?
-  /// The secure field's window last reported active under watchId. An unreadable focus is
-  /// reported active with no window (pid 0), so the host pauses until focus reads clean.
+  /// The secure field's window last reported active under watchId. An unreadable focus is not
+  /// reported (HelperSafety.pausingWindow).
   var active: (pid: Int, windowId: Int)?
 
   /// The window a focus answer holds private, or nil when nothing does.
   private func privateTarget(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
     if HelperSafety.privateModeDisabled { return nil }
-    switch focus {
-    case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
-    case .unknown: return (pid: 0, windowId: 0)
-    case .none: return nil
-    }
+    return HelperSafety.pausingWindow(focus)
   }
 
   func watch(_ params: [String: Any]) throws -> [String: Any] {
@@ -614,7 +610,7 @@ final class PrivateModeWatch {
 
 /// Whether a secure text field has focus, and in which window. A focus that cannot be read
 /// (a missing or stale Accessibility grant, an app that does not answer) is `.unknown`, which
-/// private mode treats as private (HelperSafety.isPrivate).
+/// keeps windows out of frames (HelperSafety.isPrivate) but pauses no agent.
 func focusedSecureField() -> FocusedSecureField {
   let system = AXUIElementCreateSystemWide()
   var focused: CFTypeRef?

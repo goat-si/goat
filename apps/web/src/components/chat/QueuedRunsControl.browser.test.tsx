@@ -1,6 +1,6 @@
 import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
-import type { ComponentProps } from "react";
+import { createRef, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -31,7 +31,7 @@ vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
 }));
 
 import { render as renderUi } from "../../../test/render";
-import { QueuedRunsControl } from "./QueuedRunsControl";
+import { QueuedRunsControl, type QueuedRunsControlHandle } from "./QueuedRunsControl";
 
 function setup() {
   state.projection = null;
@@ -43,6 +43,7 @@ const baseProps = {
   optimisticMessages: [],
   threadId: "thread:test" as never,
   editingRunId: null,
+  editBlockedReason: null,
   onEditQueuedRun: () => undefined,
   onCancelEdit: () => undefined,
 } satisfies ComponentProps<typeof QueuedRunsControl>;
@@ -96,4 +97,40 @@ it("previews assistant quotes as readable text and preserves the citation when e
   expect(onEditQueuedRun).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: quoteAndText }),
   );
+});
+
+it("blocks button and keyboard edits while a question owns the composer and unlocks afterward", async () => {
+  setup();
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Queued",
+        attachments: [],
+      },
+    ],
+    canReorder: true,
+    canPromoteToSteer: false,
+  };
+  const ref = createRef<QueuedRunsControlHandle>();
+  const onEditQueuedRun = vi.fn();
+  const props = { ...baseProps, ref, onEditQueuedRun };
+  await using screen = await renderUi(
+    <QueuedRunsControl
+      {...props}
+      editBlockedReason="Answer the question to edit queued messages"
+    />,
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Edit queued message", exact: true }))
+    .toBeDisabled();
+  expect(ref.current?.editLatest(false)).toBe(false);
+  expect(onEditQueuedRun).not.toHaveBeenCalled();
+  await screen.rerender(<QueuedRunsControl {...props} editBlockedReason={null} />);
+  await expect
+    .element(page.getByRole("button", { name: "Edit queued message", exact: true }))
+    .toBeEnabled();
+  expect(ref.current?.editLatest(false)).toBe(true);
+  expect(onEditQueuedRun).toHaveBeenCalledOnce();
 });

@@ -88,6 +88,9 @@ const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRec
 export class AuthPairingLinkRepository extends Context.Service<
   AuthPairingLinkRepository,
   {
+    readonly setCloudTrust: (
+      userId: string | null,
+    ) => Effect.Effect<void, AuthPairingLinkRepositoryError>;
     readonly create: (
       input: CreateAuthPairingLinkInput,
     ) => Effect.Effect<void, AuthPairingLinkRepositoryError>;
@@ -140,7 +143,9 @@ export const make = Effect.gen(function* () {
           created_at,
           expires_at,
           consumed_at,
-          revoked_at
+          revoked_at,
+          connect_policy_version,
+          connect_link_generation
         )
         VALUES (
           ${input.id},
@@ -153,7 +158,11 @@ export const make = Effect.gen(function* () {
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
-          NULL
+          NULL,
+          CASE WHEN ${input.subject} = 'cloud-connect' THEN
+            (SELECT policy_version FROM connect_link_trust WHERE singleton = 1) END,
+          CASE WHEN ${input.subject} = 'cloud-connect' THEN
+            (SELECT generation FROM connect_link_trust WHERE singleton = 1 AND policy_version = 1) END
         )
       `,
   });
@@ -167,6 +176,13 @@ export const make = Effect.gen(function* () {
         SET consumed_at = ${consumedAt}
         WHERE credential = ${credential}
           AND revoked_at IS NULL
+          AND (subject <> 'cloud-connect' OR EXISTS (
+            SELECT 1 FROM connect_link_trust AS trust
+            WHERE trust.singleton = 1 AND trust.user_id IS NOT NULL
+              AND trust.policy_version = 1
+              AND auth_pairing_links.connect_policy_version = trust.policy_version
+              AND auth_pairing_links.connect_link_generation = trust.generation
+          ))
           AND consumed_at IS NULL
           AND expires_at > ${now}
           AND (
@@ -357,6 +373,16 @@ export const make = Effect.gen(function* () {
     );
 
   return {
+    setCloudTrust: Effect.fn("AuthPairingLinks.setCloudTrust")((userId) =>
+      sql`UPDATE connect_link_trust SET generation = generation + 1,
+        policy_version = ${userId === null ? null : 1}, user_id = ${userId}
+        WHERE singleton = 1`.pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) => new PersistenceSqlError({ operation: "set-cloud-trust", cause }),
+        ),
+      ),
+    ),
     create,
     consumeAvailable,
     listActive,

@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 
+import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
+
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 
 const threadId = ThreadId.make("thread-claude-allowed-tools");
@@ -61,3 +63,23 @@ it("includes goat_screen_run in Claude's guide when screen code is attached", ()
   assert.include(JSON.stringify(options.systemPrompt), "goat_screen_run");
   assert.isDefined(options.mcpServers?.goat);
 });
+
+it.each([undefined, false, true])(
+  "gates browser routing in the system prompt, browser=%s",
+  (browserToolsAvailable) => {
+    const session =
+      browserToolsAvailable === undefined ? undefined : { ...mcpSession, browserToolsAvailable };
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: { instanceId: mcpSession.providerInstanceId, model: "test-model" },
+      nativeThreadId: "browser-guidance",
+      resume: false,
+      cwd: "/workspace",
+      ...ClaudeRuntimeSkills.skillOptions(session),
+      ...ClaudeAdapterV2.claudeMcpQueryOverrides({ mcpSession: session, readOnlySandbox: false }),
+    });
+    assert.equal(
+      JSON.stringify(options.systemPrompt).includes("## GOAT browser"),
+      browserToolsAvailable === true,
+    );
+  },
+);

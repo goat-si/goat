@@ -32,6 +32,30 @@ const status = (overrides: object) => ({
 });
 
 describe("composer capability entries", () => {
+  it("offers fx computer use while preserving plan, disabled-host and unattended availability", () => {
+    const fx = { ...ready, providerDrivers: ["fx"] };
+    expect(matchComposerCapabilityItems("computer", fx)[0]?.availability).toEqual({
+      state: "available",
+      note: null,
+    });
+    expect(
+      turnCapabilityAvailability("computer-use", { ...fx, interactionMode: "plan" }),
+    ).toMatchObject({
+      state: "unavailable",
+      setup: false,
+    });
+    expect(
+      turnCapabilityAvailability("computer-use", {
+        ...fx,
+        computerUse: { enabled: false, status: { platform: "darwin", running: false } },
+      }),
+    ).toMatchObject({ state: "unavailable", setup: true });
+    expect(turnCapabilityAvailability("computer-use", { ...fx, mayRunUnattended: true })).toEqual({
+      state: "available",
+      note: "This thread can run unattended, so a person approves computer use first.",
+    });
+  });
+
   it("offers Computer and Browser on a bare @ and filters by what was typed", () => {
     expect(matchComposerCapabilityItems("", ready).map((item) => item.label)).toEqual([
       "Computer",
@@ -166,5 +190,14 @@ describe("composer app entries", () => {
       name: `App ${String(index).padStart(2, "0")}`,
     }));
     expect(matchComposerAppItems("", ready, many)).toHaveLength(COMPOSER_APP_ITEM_LIMIT);
+  });
+
+  it("shows an app whose id is too long for a chip as unavailable, saying why", () => {
+    const id = "C:\\Users\\someone\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe";
+    const [editor] = matchComposerAppItems("code", ready, [{ id, name: "Code" }]);
+    expect(editor?.availability).toMatchObject({ state: "unavailable", setup: false });
+    expect(editor && composerCapabilityDetail(editor)).toBe(
+      "This app's id is too long to mention. Use @computer and name the app instead.",
+    );
   });
 });

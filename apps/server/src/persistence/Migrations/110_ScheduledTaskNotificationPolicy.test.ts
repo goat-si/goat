@@ -16,7 +16,10 @@ it.effect("upgrades policy and notification metadata without losing receipts", (
       VALUES ('historical-completion','thread','thread',0,'run.updated','2026-10-15','server','{"completedAt":"2026-10-15T01:00:00.000Z"}','{}',2)`;
     yield* sql`INSERT INTO thread_run_results(thread_id,run_id,report_json,reported_at) VALUES ('thread','run','{"outcome":"succeeded"}','2026-10-15')`;
     const reports = yield* sql`SELECT * FROM thread_run_results`;
-    assert.deepStrictEqual(yield* runMigrations(), [[110, "ScheduledTaskNotificationPolicy"]]);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
+      [110, "ScheduledTaskNotificationPolicy"],
+      [111, "NotificationCursorRepair"],
+    ]);
     assert.deepStrictEqual(yield* sql`SELECT notification_policy FROM scheduled_tasks`, [
       { notification_policy: "all_runs" },
     ]);
@@ -38,6 +41,6 @@ it.effect("upgrades policy and notification metadata without losing receipts", (
       [{ cursor: "2026-10-16T01:00:00.000Z" }],
     );
     assert.deepStrictEqual(yield* sql`SELECT * FROM thread_run_results`, reports);
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

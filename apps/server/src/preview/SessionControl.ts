@@ -1,15 +1,25 @@
 import type { PreviewAutomationControlReason } from "@goat/contracts";
 
+import { PREVIEW_ADMISSION_REASONS } from "./actionOutcomeSafety.ts";
+
 export class BrowserControlInterrupted extends Error {
   readonly reason: PreviewAutomationControlReason;
+  /** GOAT refused before any input left; a cut of work under way leaves this false. */
+  readonly beforeInput: boolean;
   constructor(
     message = "Browser control changed. Refresh the snapshot before trying again.",
     reason: PreviewAutomationControlReason = "interrupted",
+    beforeInput = PREVIEW_ADMISSION_REASONS.has(reason),
   ) {
     super(message);
     this.reason = reason;
+    this.beforeInput = beforeInput;
   }
 }
+
+/** A refusal raised while admitting a request or at its dispatch gate. */
+const refused = (message?: string, reason?: PreviewAutomationControlReason) =>
+  new BrowserControlInterrupted(message, reason, true);
 
 const settle = (work: Promise<unknown>) =>
   work.then(
@@ -20,6 +30,20 @@ const settle = (work: Promise<unknown>) =>
 const PRIVATE_MESSAGE =
   "A password, one-time code or passkey prompt has focus, so this tab is private until a person leaves it.";
 const STOPPED_MESSAGE = "A person stopped agent control of this browser tab.";
+const HUMAN_MESSAGE = "A human controls this tab.";
+const HANDOFF_MESSAGE =
+  "This tab waits for the person you asked to finish a step; act again once they hand it back.";
+
+/** How a person ended an agent's request on the tab: handed back, stopped, or closed. */
+export type HandoffEnd = "handedBack" | "stopped" | "ended";
+
+/** What a secret fill may do from inside its queued turn. */
+export interface SecretFence {
+  /** Throws once a person took control or stopped agents since the fill was requested. */
+  readonly assertMayDispatch: () => void;
+  /** Keeps the tab private, for observers and recordings, until the fill ends. */
+  readonly hold: () => void;
+}
 
 /** Reserves control immediately, but drains running work before the new owner can act. */
 export class SessionControl {
@@ -33,9 +57,19 @@ export class SessionControl {
   private epoch = 0;
   private closed = false;
   private privateMode = false;
+  /** Private mode is on while the page reports a secret field or a secret fill holds it. */
+  private watcherPrivate = false;
+  private privateHolds = 0;
+  /** Counts takeovers, Stops and closing; a secret fill's permit ends at the next one. */
+  private authority = 0;
   /** Counts private periods, so a read that overlapped one is withheld even after it ended. */
   private privateEpoch = 0;
   private agentStopped = false;
+  /** The step an agent asked a person to finish here, until they hand the tab back. */
+  private requested: string | null = null;
+  /** Which request the hold belongs to, so a late end never settles a newer one. */
+  private requestId = "";
+  private readonly handoffListeners = new Set<(end: HandoffEnd, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
@@ -73,6 +107,11 @@ export class SessionControl {
     return this.agentStopped;
   }
 
+  /** What the agent asked a person to do here, while the tab waits for them. */
+  get handoffReason() {
+    return this.requested;
+  }
+
   /** Calls back after any change of owner, privacy or stop, for status readers. */
   onChange(listener: () => void) {
     this.listeners.add(listener);
@@ -83,8 +122,54 @@ export class SessionControl {
     for (const listener of this.listeners) listener();
   }
 
+  /** Calls back once when a person ends the agent's request: Hand back, Stop or closing. */
+  onHandoffEnd(listener: (end: HandoffEnd, requestId: string) => void) {
+    this.handoffListeners.add(listener);
+    return () => void this.handoffListeners.delete(listener);
+  }
+
+  /** The agent hands the tab to a person: its actions stop, as at a takeover, until hand back. */
+  requestHandoff(reason: string, requestId = "") {
+    if (this.closed || this.agentStopped) return false;
+    if (this.requested === null) {
+      this.authority++;
+      this.epoch++;
+      this.requested = reason;
+      this.requestId = requestId;
+      this.onGenerationChange();
+      this.cut(new BrowserControlInterrupted(HANDOFF_MESSAGE, "humanControl"));
+      this.changed();
+    }
+    return true;
+  }
+
+  /**
+   * Ends the request. A person's end tells the listeners; the request's own record ending
+   * (answered in the thread, or expired) does not. Refs taken during it expire either way.
+   */
+  endHandoff(end: HandoffEnd | null) {
+    if (!this.clearRequest(end)) return;
+    this.epoch++;
+    this.onGenerationChange();
+    this.changed();
+  }
+
+  /** Clears the request without moving the generation, for callers that move it themselves. */
+  private clearRequest(end: HandoffEnd | null) {
+    if (this.requested === null) return false;
+    this.requested = null;
+    if (end !== null) for (const listener of this.handoffListeners) listener(end, this.requestId);
+    return true;
+  }
+
   /** Entering private mode ends whatever an agent is doing and expires every ref it holds. */
   setPrivate(on: boolean) {
+    this.watcherPrivate = on;
+    this.applyPrivate();
+  }
+
+  private applyPrivate() {
+    const on = this.watcherPrivate || this.privateHolds > 0;
     if (this.closed || on === this.privateMode) return;
     this.privateMode = on;
     if (on) this.privateEpoch++;
@@ -97,9 +182,11 @@ export class SessionControl {
   stopAgents() {
     if (this.closed || this.agentStopped) return;
     this.agentStopped = true;
+    this.authority++;
     this.epoch++;
     this.onGenerationChange();
     this.cut(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
+    this.clearRequest("stopped");
     this.changed();
   }
 
@@ -119,6 +206,8 @@ export class SessionControl {
   }
 
   resumeAgents() {
+    // Hand back from the card, when the person never took the stream's control.
+    this.endHandoff("handedBack");
     if (!this.agentStopped) return;
     this.agentStopped = false;
     this.changed();
@@ -132,8 +221,7 @@ export class SessionControl {
     this.assertOpen();
     const blocked = this.agentBlocked();
     if (blocked) throw blocked;
-    if (this.owner !== null)
-      throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+    if (this.owner !== null) throw refused("A human controls this tab.", "humanControl");
   }
 
   /**
@@ -142,11 +230,24 @@ export class SessionControl {
    */
   dispatchGate(expectedGeneration?: number) {
     const epoch = this.epoch;
-    const gate = () => {
+    // Clicks and scroll collection reuse one gate; once input went out, a later refusal is not
+    // "before input" for the action as a whole.
+    let passed = false;
+    const check = () => {
       this.assertAgentMayDispatch();
       if (expectedGeneration !== undefined && this.epoch !== expectedGeneration)
-        throw new BrowserControlInterrupted("Browser control changed; refresh the tab snapshot.");
-      if (this.epoch !== epoch) throw new BrowserControlInterrupted();
+        throw refused("Browser control changed; refresh the tab snapshot.");
+      if (this.epoch !== epoch) throw refused();
+    };
+    const gate = () => {
+      try {
+        check();
+      } catch (cause) {
+        if (passed && cause instanceof BrowserControlInterrupted && cause.beforeInput)
+          throw new BrowserControlInterrupted(cause.message, cause.reason, false);
+        throw cause;
+      }
+      passed = true;
       this.activeAgentDispatching = true;
     };
     const linger = (work: Promise<unknown>) => {
@@ -164,8 +265,9 @@ export class SessionControl {
   }
 
   private agentBlocked() {
-    if (this.privateMode) return new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
-    if (this.agentStopped) return new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
+    if (this.privateMode) return refused(PRIVATE_MESSAGE, "privateMode");
+    if (this.agentStopped) return refused(STOPPED_MESSAGE, "stopped");
+    if (this.requested !== null) return refused(HANDOFF_MESSAGE, "humanControl");
     return undefined;
   }
 
@@ -192,11 +294,12 @@ export class SessionControl {
   }
 
   private assertOpen() {
-    if (this.closed) throw new BrowserControlInterrupted("This browser tab is closed.", "closed");
+    if (this.closed) throw refused("This browser tab is closed.", "closed");
   }
 
   private changeOwner(owner: string | null) {
     this.owner = owner;
+    this.authority++;
     this.epoch++;
     this.onGenerationChange();
     this.activeAgentAction?.abort(
@@ -210,11 +313,11 @@ export class SessionControl {
 
   private async action<A>(allowed: () => boolean, run: () => Promise<A>, deadlineMs?: number) {
     this.assertOpen();
-    if (!allowed()) throw new BrowserControlInterrupted("You do not control this browser tab.");
+    if (!allowed()) throw refused("You do not control this browser tab.");
     const epoch = this.epoch;
     return this.enqueue(async () => {
       this.assertOpen();
-      if (epoch !== this.epoch || !allowed()) throw new BrowserControlInterrupted();
+      if (epoch !== this.epoch || !allowed()) throw refused();
       if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
         throw new DOMException(
           "This browser request expired before it could start.",
@@ -239,9 +342,7 @@ export class SessionControl {
         new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
       );
     if (this.owner !== null)
-      return Promise.reject(
-        new BrowserControlInterrupted("A human controls this tab.", "humanControl"),
-      );
+      return Promise.reject(refused("A human controls this tab.", "humanControl"));
     const blocked = this.agentBlocked();
     if (blocked) return Promise.reject(blocked);
     return this.action(
@@ -277,6 +378,71 @@ export class SessionControl {
 
   agentCanActNow(agentId: string) {
     return this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked();
+  }
+
+  /** Narrows a request whose agent session the broker should always have supplied. */
+  static requireAgentSession<R extends { readonly agentSessionId?: string | undefined }>(
+    request: R,
+  ): asserts request is R & { readonly agentSessionId: string } {
+    if (!request.agentSessionId)
+      throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
+  }
+
+  /** Agent work outside the queue (a dialog answer, closing): not while a person has the tab. */
+  assertNoHumanControl() {
+    if (this.owner !== null) throw refused(HUMAN_MESSAGE, "humanControl");
+    if (this.requested !== null) throw refused(HANDOFF_MESSAGE, "humanControl");
+  }
+
+  /**
+   * Host work that types a secret the agent never sees. Unlike `agent`, it may run while the tab
+   * is private, because a focused password field is what it fills; a person's control or Stop
+   * still refuses it, and a cut from private mode does not end it.
+   */
+  secret<A>(agentId: string, run: (fence: SecretFence) => Promise<A>, deadlineMs?: number) {
+    if (!this.agentMayAct(agentId))
+      return Promise.reject(
+        new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
+      );
+    if (this.owner !== null) return Promise.reject(refused(HUMAN_MESSAGE, "humanControl"));
+    if (this.agentStopped) return Promise.reject(refused(STOPPED_MESSAGE, "stopped"));
+    if (this.requested !== null) return Promise.reject(refused(HANDOFF_MESSAGE, "humanControl"));
+    const authority = this.authority;
+    const assertMayDispatch = () => {
+      this.assertOpen();
+      if (this.agentStopped) throw new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
+      if (this.owner !== null || this.authority !== authority)
+        throw new BrowserControlInterrupted(
+          "A person took control of this tab, so nothing was filled.",
+          "humanControl",
+        );
+    };
+    return this.action(
+      () =>
+        this.agentMayAct(agentId) &&
+        this.owner === null &&
+        !this.agentStopped &&
+        this.requested === null,
+      async () => {
+        let held = false;
+        const hold = () => {
+          if (held) return;
+          held = true;
+          this.privateHolds++;
+          this.applyPrivate();
+        };
+        try {
+          assertMayDispatch();
+          return await run({ assertMayDispatch, hold });
+        } finally {
+          if (held) {
+            this.privateHolds--;
+            this.applyPrivate();
+          }
+        }
+      },
+      deadlineMs,
+    );
   }
 
   /**
@@ -318,13 +484,25 @@ export class SessionControl {
     return this.human(viewerId, async () => {});
   }
 
+  /** A person's Hand back: it also completes an agent's request for them. */
   async release(viewerId: string, afterDrain: () => Promise<void> = async () => {}) {
+    await this.releaseOwner(viewerId, afterDrain, true);
+  }
+
+  private async releaseOwner(
+    viewerId: string,
+    afterDrain: () => Promise<void>,
+    handedBack: boolean,
+  ) {
     this.assertOpen();
     if (this.owner !== viewerId) {
       throw new BrowserControlInterrupted(
         "Only the controlling viewer can release this browser tab.",
       );
     }
+    // The request stays held until its record takes the hand back, which then ends it here.
+    if (handedBack && this.requested !== null)
+      for (const listener of this.handoffListeners) listener("handedBack", this.requestId);
     this.changeOwner(null);
     await this.enqueue(async () => {
       await Promise.all(this.handoff);
@@ -333,12 +511,15 @@ export class SessionControl {
   }
 
   async disconnect(viewerId: string, afterDrain?: () => Promise<void>) {
-    if (!this.closed && this.owner === viewerId) await this.release(viewerId, afterDrain);
+    // A dropped connection gives control back but has not finished the person's step.
+    if (!this.closed && this.owner === viewerId)
+      await this.releaseOwner(viewerId, afterDrain ?? (async () => {}), false);
   }
 
   async close() {
     if (!this.closed) {
       this.closed = true;
+      this.clearRequest("ended");
       this.changeOwner(null);
     }
     await this.tail;

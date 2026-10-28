@@ -15,13 +15,14 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { cancelledRequestKey } from "./ComputerUseDriverReply.ts";
-import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
-import { type LeaseEnd, LEASE_END_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import { type Envelope, decodeProviderIngress, parse } from "./ComputerUseLeaseProtocol.ts";
+import { type LeaseEnd, LEASE_END_MESSAGES, RECONNECTING } from "./ComputerUseLeaseMessages.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
+import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
@@ -31,7 +32,8 @@ type ThreadProxyOptions<EU, ED> = Omit<
   LeaseProxyOptions<EU, ED>,
   "controlId" | "expiresAt" | "leaseUpdates" | keyof Reports<EU, ED>
 > & {
-  readonly leaseUpdates: Stream.Stream<ComputerUseLeaseThreadUpdate, EU>;
+  /** The server's updates and the follower's transport state; its end ends the proxy. */
+  readonly leaseUpdates: Stream.Stream<ComputerUseLeaseThreadUpdate | LeaseTransportUpdate, EU>;
   /** Captured once, so even delayed reports belong to the control that produced them. */
   readonly reports: (controlId: string) => Reports<EU, ED>;
   readonly onControlDriverStarted?: (
@@ -43,11 +45,14 @@ type ThreadProxyOptions<EU, ED> = Omit<
     current: { readonly connectionId: string; readonly generation: number },
   ) => Effect.Effect<void>;
   /** Runs after the supervisor has routed an update, without waiting for native teardown. */
-  readonly onThreadUpdate?: (update: ComputerUseLeaseThreadUpdate) => Effect.Effect<void>;
+  readonly onThreadUpdate?: (
+    update: ComputerUseLeaseThreadUpdate | LeaseTransportUpdate,
+  ) => Effect.Effect<void>;
 };
 
 const OWN_ID = "goat-thread-proxy:";
 const WAITING = "Computer use is not available for this turn.";
+type ControlStop = ComputerUseControlEnd | "lost" | "transport_lost";
 
 interface Context {
   readonly controlId: string;
@@ -61,6 +66,8 @@ interface Context {
   readonly wake: Queue.Queue<void>;
   deadline: number;
   ended?: LeaseEnd;
+  /** Cuts off the driver's screen work when the lease stream drops; set once the proxy runs. */
+  dropTransport?: () => void;
 }
 
 export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(function* <EU, ED>(
@@ -71,8 +78,15 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   let predecessor: Context | undefined;
   let terminal: LeaseEnd | undefined;
   let waiting: LeaseEnd = "stopped";
+  /**
+   * Between a dropped lease stream and the server's next update no Stop or pause can arrive, so
+   * screen calls are held; "lost" once the reconnect window passed.
+   */
+  let transport: "connected" | "reconnecting" | "lost" = "connected";
   let sequence = 0;
   const seen = new Set<string>();
+  /** The newest driver generation per control, so a control started again never reuses one. */
+  const generations = new Map<string, number>();
   const handshake: Array<string> = [];
   const ended = yield* Deferred.make<LeaseEnd>();
   const owners = new Map<
@@ -91,19 +105,26 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
   });
-  const answerStopped = (id: JsonRpcId, method: string | undefined, reason = terminal ?? waiting) =>
-    options.output(
+  const answerReconnecting = (id: JsonRpcId, method: string | undefined) =>
+    options.output(refusal(id, method, "reconnecting", RECONNECTING));
+  const answerStopped = (id: JsonRpcId, method: string | undefined, given?: LeaseEnd) => {
+    if (given === undefined && terminal === undefined && transport === "reconnecting")
+      return answerReconnecting(id, method);
+    const reason =
+      given ?? terminal ?? (transport === "lost" ? ("transport_lost" as const) : waiting);
+    return options.output(
       refusal(
         id,
         method,
         reason,
-        terminal !== undefined
+        terminal !== undefined || reason === "transport_lost"
           ? LEASE_END_MESSAGES[reason]
           : reason === "disabled"
             ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
             : WAITING,
       ),
     );
+  };
 
   const output = (context: Context, line: string, reply?: { readonly tool?: string | undefined }) =>
     Effect.suspend(() => {
@@ -151,7 +172,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     else context.receive(update);
   };
   // Receipt and routing must change in one synchronous step, before any Effect can yield.
-  const stop = (context: Context, reason: ComputerUseControlEnd | "lost") => {
+  const stop = (context: Context, reason: ControlStop) => {
     if (context.ended !== undefined) return;
     context.ended = reason;
     context.ready = false;
@@ -160,7 +181,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     waiting = reason;
     for (const [key, owner] of clientRequests)
       if (owner.context === context) clientRequests.delete(key);
-    receive(context, reason === "lost" ? undefined : { state: "ended", reason });
+    if (reason !== "lost" && reason !== "transport_lost")
+      return receive(context, { state: "ended", reason });
+    receive(context, undefined);
+    // No server end will close this control's input; a successor for the same id waits on it.
+    Queue.endUnsafe(context.input);
   };
   const finishNow = (reason: ComputerUseControlEnd | "lost") => {
     if (terminal !== undefined) return;
@@ -225,10 +250,20 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         connectionId,
         controlId: context.controlId,
         expiresAt: expiresAt.value,
+        firstGeneration: (generations.get(context.controlId) ?? -1) + 1,
+        transportHeld: () => transport !== "connected",
+        onTransportDropReceiver: (drop) => {
+          context.dropTransport = drop;
+        },
         input: Stream.fromQueue(context.input),
         primitiveRequests: Stream.fromQueue(context.primitiveInput),
-        onDriverStarted: (driver) =>
-          options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void,
+        onDriverStarted: (driver) => {
+          generations.set(
+            context.controlId,
+            Math.max(generations.get(context.controlId) ?? -1, driver.generation),
+          );
+          return options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void;
+        },
         onDriverCutoff: (driver) =>
           options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void,
         output: (line, reply) => output(context, line, reply),
@@ -298,8 +333,24 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   });
 
   const take = Effect.fn("ComputerUseLeaseProxyThread.takeUpdate")(
-    (update: ComputerUseLeaseThreadUpdate) =>
+    (update: ComputerUseLeaseThreadUpdate | LeaseTransportUpdate) =>
       Effect.suspend(() => {
+        if (update.state === "reconnecting" || update.state === "transport_lost") {
+          if (terminal === undefined) {
+            transport = update.state === "reconnecting" ? "reconnecting" : "lost";
+            if (update.state === "reconnecting") current?.dropTransport?.();
+            // The driver and its sessions stay up while reconnecting. Past the window the control
+            // ends here, and a fresh server snapshot of the same id may start it again: unlike a
+            // delayed snapshot on a live stream, a new connection reports the current state.
+            if (update.state === "transport_lost" && current !== undefined) {
+              seen.delete(current.controlId);
+              stop(current, "transport_lost");
+            }
+          }
+          return options.onThreadUpdate?.(update) ?? Effect.void;
+        }
+        // Any server update is the current state again; it applies before the next call routes.
+        transport = "connected";
         if (update.state === "primitive-request" || update.state === "primitive-cancel")
           return Effect.void;
         if (terminal === undefined) {
@@ -355,8 +406,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     );
 
   const handle = Effect.fn("ComputerUseLeaseProxyThread.routeMessage")(function* (line: string) {
-    const message = parse(line);
-    if (message?.method === "$/cancelRequest") {
+    const decoded = decodeProviderIngress(line);
+    if (decoded.kind === "invalid") return yield* options.output(decoded.response);
+    const message = decoded.message;
+    if (message.method === "$/cancelRequest") {
       const params = message.params as { readonly id?: unknown } | undefined;
       if (typeof params?.id === "string" || typeof params?.id === "number")
         line = JSON.stringify({

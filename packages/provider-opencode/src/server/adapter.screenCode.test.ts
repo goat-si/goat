@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 
 it("puts goat_screen_run in OpenCode's guide when its GOAT MCP session carries screen code", () => {
@@ -21,4 +22,9 @@ it("puts goat_screen_run in OpenCode's guide when its GOAT MCP session carries s
     }),
     "goat_screen_run",
   );
+});
+
+it.each([false, true])("gates browser routing in session instructions, browser=%s", (browser) => {
+  assert.equal(goatOrchestrationSystemPrompt(true, browser).includes("## GOAT browser"), browser);
+  assert.notInclude(goatOrchestrationSystemPrompt(false, browser), "## GOAT browser");
 });

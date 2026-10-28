@@ -1,3 +1,4 @@
+import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -554,7 +555,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     }
     return report !== null;
   };
-
   const composerMenu = useComposerCommandMenu({
     draftMessage: draftMessage,
     ownerKey: composerDraftKey,
@@ -581,6 +581,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
+    environmentId: props.selectedThread.environmentId,
+    providerInstanceId: currentModelSelection.instanceId,
+    cwd: props.selectedThread.worktreePath ?? props.projectCwd ?? null,
+    threadId: props.isDraft ? null : props.selectedThread.id,
     label: props.selectedThread.title || "Untitled thread",
     readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
     subscribeToDraftChanges: (onChange) => appAtomRegistry.subscribe(composerDraftsAtom, onChange),
@@ -626,9 +630,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     !isSubmissionLocked &&
     sendBlockedReason === null &&
     !modelUnavailable;
-
   useEffect(() => () => setComposerEditing(false), [setComposerEditing]);
-
   const onPressPreview = (source: FilePreviewSource) => {
     wasExpandedBeforePreviewRef.current = isFocused;
     setPreviewVideo(null);
@@ -640,7 +642,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         },
     );
   };
-
   const closePreview = () => {
     setPreviewFile(null);
     setPreviewVideo(null);
@@ -732,9 +733,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     capabilities: currentModelOption?.capabilities,
     selections: currentModelSelection.options,
   });
-  const settingsOwnerId = composerOwnerKey;
   const settingsRouteSession = {
-    ownerId: settingsOwnerId,
+    ownerId: composerOwnerKey,
     environmentId: props.environmentId,
     projectId: props.selectedThread.projectId,
     providerInstanceId: currentModelSelection.instanceId,
@@ -742,7 +742,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     providerGroups: threadProviderGroups,
     selectedModel: currentModelSelection,
     prompt: draftMessage,
-    onPromptChange: (text) => setComposerDraftText(composerDraftKey, text),
+    onPromptChange: (text) => setActiveComposerDraftText(composerOwnerKey, composerDraftKey, text),
     reportedModelSelection: props.reportedModelSelection,
     onSelectModel: (option) =>
       props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
@@ -787,7 +787,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
 
     settingsRoutePresentedRef.current = false;
     settingsSheetPresentation.onDismissed();
-    settingsRoutePresentation.clear(settingsOwnerId);
+    settingsRoutePresentation.clear(composerOwnerKey);
   });
 
   useEffect(

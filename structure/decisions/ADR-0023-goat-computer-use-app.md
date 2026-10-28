@@ -16,6 +16,16 @@
   pointer input no longer pauses an agent with approved control, unattended attachment requires
   private-mode detection but not human-input detection, and human-input detection remains for
   input arbitration and reports only. The Safety bullet below states the amended decision.
+- Amended 2026-10-28, D7 and D16 (owner decision, Jun, 2026-10-28): no detection signal gates
+  admission, so unattended work no longer needs private-mode detection, and in full access a
+  thread launched from another environment, and turns it launches or sends here, use every app like a
+  person's threads instead of holding the screen alone. They stay unattended for steering and
+  outside full access. The Safety bullet and D16 below state the amended decision.
+- Amended 2026-10-28, D16 (owner decision, Jun, 2026-10-28): every full-access run takes the
+  foreground without asking, whoever or whatever started it, and unattended work still holds the
+  screen one thread at a time, since two such threads would mix their input. Tracking which run
+  sent a message and gating steering by that reach move to roadmap 400. The Readiness and
+  approvals bullet below states the decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
@@ -141,16 +151,20 @@
     not approved, a blocked URL, an incompatible client, or a named policy.
   - **Readiness and approvals.** Readiness is four answers shown separately: OS grant, an
     authenticated helper, a real capture and tree, and tools available to the model. Apps are
-    approved for a conversation or always from a card, the approved target is frozen before the
-    action runs, and always-allowed apps can be removed in Settings.
+    approved from a card for a span the agent asks for, 5 to 120 minutes, and each call on an
+    app's windows is checked against the approved apps before it runs. No approval is standing: a person ends one
+    early from its card, and after it expires the thread asks again (owner decision, Jun,
+    2026-10-27; an "Always allow" choice with a Settings list was considered and not built).
     A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
     a schedule, a webhook, Slack or another channel started it, because choosing full access for a
     thread already gives that trust (D16). The "Full access without approval" switch is gone from
     Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
     the settings contract so older clients and settings files still decode, and the server ignores
-    it. What differs by origin stays: only a person's run takes the foreground without asking,
-    while unattended work asks for it, holds the screen one thread at a time and still needs
-    private-mode detection (D7). The password-manager exclusions, pause, Stop and stop all, each
+    it. Every full-access run also takes the foreground without asking (amended 2026-10-28).
+    What differs by origin stays: unattended work holds the screen one thread at a time, except a
+    full access turn launched from another environment, which works beside other threads
+    (amended 2026-10-28). The
+    password-manager exclusions, pause, Stop and stop all, each
     call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
     the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the
     approval flow. Owner decision (Jun, 2026-10-25), implemented in #1649 after #1617; it replaces
@@ -196,9 +210,8 @@
     Stop and the global kill switch end the transport at once. An agent with approved control
     keeps working while a person uses the same desktop; the person's keyboard and pointer input
     is not a pause condition. Stop, stop all, takeover and hand-back, lease expiry and the
-    private-field pause still stop or pause it. Unattended attachment requires private-mode
-    detection and does not require human-input detection, which opens the macOS unattended path
-    that #1426 had closed by turning off the human-input advertisement. Human-input detection
+    private-field pause still stop or pause it. No detection signal gates attachment, for
+    unattended work either (2026-10-28). Human-input detection
     (#1426, #1477, #1504, #1512) remains for input arbitration and reports; it is neither an
     admission gate nor a pause condition. Owner decision (Jun, 2026-10-25), #1550.
   - **Screen code mode (D17).** One agent tool runs a short JavaScript cell in a QuickJS

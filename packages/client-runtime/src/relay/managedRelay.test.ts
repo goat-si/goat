@@ -460,3 +460,62 @@ describe("ManagedRelayClient", () => {
     }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
   });
 });
+
+it.effect(
+  "readmission uses the retained signer only for the intended account and cannot leak into a later request",
+  () => {
+    const bodies: URLSearchParams[] = [];
+    const fetchFn = (async (input, init) => {
+      const request = new Request(input, init);
+      if (!request.url.endsWith("/v1/client/dpop-token")) {
+        return Response.json({
+          environmentId: "env-1",
+          endpoint: {
+            httpBaseUrl: "https://desktop.example.test/",
+            wsBaseUrl: "wss://desktop.example.test/ws",
+            providerKind: "cloudflare_tunnel",
+          },
+          status: "online",
+          checkedAt: "2026-09-04T00:00:00.000Z",
+        });
+      }
+      bodies.push(new URLSearchParams(await request.text()));
+      return Promise.resolve(
+        Response.json({
+          access_token: "readmitted",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 1800,
+          scope: "environment:status",
+        }),
+      );
+    }) satisfies typeof globalThis.fetch;
+    return Effect.gen(function* () {
+      const client = yield* ManagedRelay.ManagedRelayClient;
+      expect(
+        (yield* client
+          .requestKeyReadmission({
+            accountId: "original",
+            clerkToken: clerkToken("other", "fresh"),
+          })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(bodies).toEqual([]);
+      yield* client.resetTokenCache;
+      yield* client.requestKeyReadmission({
+        accountId: "original",
+        clerkToken: clerkToken("original", "fresh-mfa"),
+      });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.get("readmitClientKey")).toBe("true");
+      expect(bodies[0]?.get("subject_token")).toBe(clerkToken("original", "fresh-mfa"));
+      yield* client.resetTokenCache;
+      yield* client.getEnvironmentStatus({
+        clerkToken: clerkToken("original", "later"),
+        scopes: [RelayEnvironmentStatusScope],
+        environmentId: EnvironmentId.make("env-1"),
+      });
+      expect(bodies[1]?.get("readmitClientKey")).toBe("false");
+    }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
+  },
+);

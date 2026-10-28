@@ -3,20 +3,14 @@
  *
  * Unattended turns come from GOAT Bot, channel tasks, scheduled and webhook tasks, messages
  * another unattended thread sent, and threads such a turn launched or delegated to. They get the
- * driver only through an approved lease (ComputerUseLeases). Every read that fails or runs out of
- * lineage counts as unattended, so a lookup error never hands out the screen.
+ * driver only through an approved lease or full access (ComputerUseLeases). Threads launched from
+ * another environment, and turns they launch or send here, are `launched_remotely`: in full
+ * access they use the screen like a person's (usesScreenLikePerson). Every read that fails or
+ * runs out of lineage counts as unattended.
  *
  * @module ComputerUseOrigin
  */
-import {
-  COMPUTER_USE_GRANT_HANDOFF_PATH,
-  type Handoff,
-  type MessageId,
-  type OrchestrationV2Actor,
-  type OrchestrationV2CreationSource,
-  type RunId,
-  type ThreadId,
-} from "@goat/contracts";
+import type { MessageId, RunId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -48,6 +42,8 @@ export type ComputerUseOrigin =
 
 export interface OriginThread {
   readonly createdAt: DateTime.Utc;
+  /** Read only to weigh steering against what full access gave the running turn. */
+  readonly runtimeMode?: string | undefined;
   readonly lineage: {
     readonly parentThreadId: ThreadId | null;
     readonly relationshipToParent: "fork" | "subagent" | null;
@@ -73,8 +69,6 @@ export interface OriginMessage {
   readonly scheduledTaskId?: string | undefined;
   readonly senderThreadId?: ThreadId | undefined;
   readonly channel?: unknown;
-  readonly createdBy?: OrchestrationV2Actor | undefined;
-  readonly creationSource?: OrchestrationV2CreationSource | undefined;
 }
 
 /** Reads a classification needs; each failure or absence fails closed. */
@@ -94,19 +88,34 @@ export interface OriginReads {
   ) => Effect.Effect<OriginMessage | undefined, ComputerUseOriginError>;
 }
 
-/** Classification reads plus the run that asked for an approved computer use grant. */
-export interface PersonStartReads extends OriginReads {
-  readonly grantRun: (
-    threadId: ThreadId,
-    handoffId: string,
-  ) => Effect.Effect<RunId | undefined, ComputerUseOriginError>;
-}
-
 const INTERACTIVE: ComputerUseOrigin = { _tag: "interactive" };
 const unattended = (reason: UnattendedReason): ComputerUseOrigin => ({
   _tag: "unattended",
   reason,
 });
+/** A remote launch stays one through every send and launch it makes on this host. */
+const unattendedVia = (from: ComputerUseOrigin, reason: UnattendedReason) =>
+  unattended(
+    from._tag === "unattended" && from.reason === "launched_remotely"
+      ? "launched_remotely"
+      : reason,
+  );
+
+/**
+ * Whether this turn uses the screen like a person's thread. A remote launcher cannot be read
+ * here; in full access its threads do too (owner decision, Jun, 2026-10-28). Steering and other
+ * modes still see them as unattended.
+ */
+export const usesScreenLikePerson = (
+  origin: ComputerUseOrigin,
+  runtimeMode: string | undefined,
+): boolean =>
+  origin._tag === "interactive" ||
+  (origin.reason === "launched_remotely" && runtimeMode === "full-access");
+
+/** How much of the screen a turn of this origin gets without asking, for comparing two. */
+const reach = (origin: ComputerUseOrigin, runtimeMode: string | undefined) =>
+  origin._tag === "interactive" ? 2 : usesScreenLikePerson(origin, runtimeMode) ? 1 : 0;
 // Lineage longer than this is not a person's thread tree; stop and treat it as unattended.
 const MAX_DEPTH = 8;
 
@@ -152,7 +161,7 @@ const classify: (
         (runs) => runAt(runs, message.createdAt),
         depth + 1,
       );
-      if (sender._tag === "unattended") return unattended("sent_by_unattended");
+      if (sender._tag === "unattended") return unattendedVia(sender, "sent_by_unattended");
     }
   }
 
@@ -172,7 +181,7 @@ const classify: (
       (runs) => runAt(runs, thread.createdAt),
       depth + 1,
     );
-    if (parent._tag === "unattended") return unattended("launched_by_unattended");
+    if (parent._tag === "unattended") return unattendedVia(parent, "launched_by_unattended");
   }
   return INTERACTIVE;
 });
@@ -198,85 +207,24 @@ export const computerUseOrigin = (
     Effect.withSpan("ComputerUse.origin"),
   );
 
-/** What a person's client writes on a message it sends; server and MCP paths write others. */
-const fromPersonClient = (message: OriginMessage) =>
-  message.createdBy === "user" &&
-  (message.creationSource === "web" || message.creationSource === "mobile");
-
-/** The wake HandoffWakeReactor sends when a person approves a computer use request. */
-const APPROVAL_WAKE = /^message:handoff-wake:(.+):completed$/;
-
-/**
- * Whether a person caused this run: a person's client sent its message, or it is the wake for a
- * computer use approval that such a run asked for. Full access gives these runs every app and
- * foreground input without asking. Classification can call other runs interactive too (a task's
- * completion wake), which keep the approvals they had. Any failed read, or a chain longer than
- * lineage allows, is false.
- */
-export const personStarted = Effect.fn("ComputerUse.personStarted")(
-  function* (
-    reads: PersonStartReads,
-    input: { readonly threadId: ThreadId; readonly runId: RunId },
-  ) {
-    let runId = input.runId;
-    for (let depth = 0; depth <= MAX_DEPTH; depth++) {
-      const origin = yield* computerUseOrigin(reads, { threadId: input.threadId, runId });
-      if (origin._tag !== "interactive") return false;
-      const run = (yield* reads.runs(input.threadId)).find((candidate) => candidate.id === runId);
-      if (run === undefined) return false;
-      const message = yield* reads.message(input.threadId, run.userMessageId);
-      if (
-        message === undefined ||
-        message.scheduledTaskId !== undefined ||
-        message.channel !== undefined ||
-        message.senderThreadId !== undefined
-      )
-        return false;
-      if (fromPersonClient(message)) return true;
-      // Only the wake reactor writes agent messages from the server under these ids.
-      const wake =
-        message.createdBy === "agent" && message.creationSource === "server"
-          ? APPROVAL_WAKE.exec(run.userMessageId)
-          : null;
-      const asking =
-        wake?.[1] === undefined ? undefined : yield* reads.grantRun(input.threadId, wake[1]);
-      if (asking === undefined) return false;
-      runId = asking;
-    }
-    return false;
-  },
-  Effect.catchCause(() => Effect.succeed(false)),
-);
-
-interface OriginTurnItem {
-  readonly id: string;
-  readonly runId: RunId | null;
-  readonly handoff?: Pick<Handoff, "state" | "target" | "requestedBy"> | undefined;
-}
-
 /** The projection reads both callers have, as classification reads. */
 export const projectionOriginReads = <E1, E2>(deps: {
   readonly getThreadRecords: (
     threadId: ThreadId,
-    fields: ReadonlyArray<"runs" | "messages" | "turnItems">,
-    filter?: {
-      readonly messageIds?: ReadonlyArray<MessageId>;
-      readonly turnItemTypes?: ReadonlyArray<"human_handoff">;
-      readonly turnItemStatuses?: ReadonlyArray<"completed">;
-    },
+    fields: ReadonlyArray<"runs" | "messages">,
+    filter?: { readonly messageIds?: ReadonlyArray<MessageId> },
   ) => Effect.Effect<
     {
       readonly thread: OriginThread;
       readonly runs?: ReadonlyArray<OriginRun>;
       readonly messages?: ReadonlyArray<OriginMessage & { readonly id: MessageId }>;
-      readonly turnItems?: ReadonlyArray<OriginTurnItem>;
     },
     E1
   >;
   readonly channelOrigin: (
     threadId: ThreadId,
   ) => Effect.Effect<"goat_bot" | "channel_task" | undefined, E2>;
-}): PersonStartReads => ({
+}): OriginReads => ({
   channelOrigin: (id) => originRead(deps.channelOrigin(id)),
   thread: (id) =>
     originRead(deps.getThreadRecords(id, []).pipe(Effect.map((records) => records.thread))),
@@ -292,25 +240,6 @@ export const projectionOriginReads = <E1, E2>(deps: {
           Effect.map((records) => records.messages?.find((message) => message.id === messageId)),
         ),
     ),
-  grantRun: (id, handoffId) =>
-    originRead(
-      deps
-        .getThreadRecords(id, ["turnItems"], {
-          turnItemTypes: ["human_handoff"],
-          turnItemStatuses: ["completed"],
-        })
-        .pipe(
-          Effect.map((records) => {
-            const item = records.turnItems?.find((candidate) => candidate.id === handoffId);
-            const handoff = item?.handoff;
-            return handoff?.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-              handoff.state === "completed" &&
-              handoff.requestedBy.threadId === id
-              ? (item?.runId ?? undefined)
-              : undefined;
-          }),
-        ),
-    ),
 });
 
 type SteeringMode =
@@ -318,12 +247,11 @@ type SteeringMode =
   | { readonly type: "restart_active"; readonly targetRunId: RunId };
 
 /**
- * A message from an unattended origin (a scheduled task, or a thread that classifies as
- * unattended) must not join a turn a person is running: that turn may hold the direct driver,
- * and steering keeps the turn's starting message, so the attachment decision would never see
- * the new instruction. It waits as that thread's next turn instead, which this message starts
- * and which gets computer use only through a lease. Steering into an unattended turn stays,
- * since that turn has no direct driver.
+ * A message must not join a running turn that got more of the screen than the message's own
+ * origin would: steering keeps the turn's starting message, so the attachment decision would
+ * never see the new instruction. A scheduled or unattended message into a person's turn, or into
+ * a remote launch's full access turn, waits as that thread's next turn instead, which this
+ * message starts and which is admitted on its own. Steering between equals stays.
  */
 export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteering")(function* (
   reads: OriginReads,
@@ -336,18 +264,24 @@ export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteer
 ) {
   if (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
     return { mode, queued: false } as const;
-  const provenance =
-    input.senderThreadId === undefined
+  const sender =
+    input.senderThreadId === undefined || input.scheduledTaskId !== undefined
       ? unattended("scheduled_task")
-      : input.scheduledTaskId !== undefined
-        ? unattended("scheduled_task")
-        : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
-  if (provenance._tag === "interactive") return { mode, queued: false } as const;
+      : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
+  // The origin the message's own turn would have in this thread.
+  const message =
+    sender._tag === "interactive" || input.scheduledTaskId !== undefined
+      ? sender
+      : unattendedVia(sender, "sent_by_unattended");
+  if (message._tag === "interactive") return { mode, queued: false } as const;
   const target = yield* computerUseOrigin(reads, {
     threadId: input.threadId,
     runId: mode.targetRunId,
   });
-  if (target._tag === "unattended") return { mode, queued: false } as const;
+  const thread = yield* reads.thread(input.threadId).pipe(Effect.orElseSucceed(() => undefined));
+  const runtimeMode = thread?.runtimeMode;
+  if (reach(message, runtimeMode) >= reach(target, runtimeMode))
+    return { mode, queued: false } as const;
   return {
     mode: { type: "queue_after_active", behindRunId: mode.targetRunId },
     queued: true,

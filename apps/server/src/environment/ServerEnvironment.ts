@@ -224,6 +224,7 @@ export const make = Effect.gen(function* () {
   const appServerLive = yield* makeAppServerLive();
 
   const descriptor: ExecutionEnvironmentDescriptor = {
+    connectAuthPolicyVersion: 1,
     environmentId,
     label,
     platform: {

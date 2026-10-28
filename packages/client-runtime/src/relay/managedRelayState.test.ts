@@ -15,6 +15,7 @@ import * as ManagedRelay from "./managedRelay.ts";
 import {
   createManagedRelayQueryManager,
   createManagedRelaySession,
+  invalidateManagedRelaySessionToken,
   deregisterManagedRelayEnvironment,
   ManagedRelaySessionError,
   managedRelaySessionAtom,
@@ -78,6 +79,7 @@ function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Servi
     unregisterDevice: () => Effect.die("unused"),
     registerLiveActivity: () => Effect.die("unused"),
     getAgentActivitySnapshot: () => Effect.die("unused"),
+    requestKeyReadmission: () => Effect.void,
     resetTokenCache: Effect.void,
     ...overrides,
   });
@@ -237,3 +239,32 @@ describe("createManagedRelayQueryManager", () => {
     }),
   );
 });
+
+it.effect("an in-flight token read cannot repopulate the cache after explicit reverification", () =>
+  Effect.gen(function* () {
+    const old = Promise.withResolvers<string | null>();
+    const started = Promise.withResolvers<void>();
+    let reads = 0;
+    const fresh = clerkToken(9999999999);
+    const session = createManagedRelaySession({
+      accountId: "account-step-up",
+      readClerkToken: () => {
+        reads += 1;
+        if (reads === 1) {
+          started.resolve();
+          return old.promise;
+        }
+        return Promise.resolve(fresh);
+      },
+    });
+    registry.set(managedRelaySessionAtom, session);
+    const pending = yield* session.readClerkToken().pipe(Effect.forkChild);
+    yield* Effect.promise(() => started.promise);
+    invalidateManagedRelaySessionToken(registry);
+    expect(yield* session.readClerkToken()).toBe(fresh);
+    old.resolve(clerkToken(8888888888));
+    yield* Fiber.join(pending);
+    expect(yield* session.readClerkToken()).toBe(fresh);
+    expect(reads).toBe(2);
+  }),
+);

@@ -1,3 +1,4 @@
+import { RestoreConnectAccessButton } from "./RestoreConnectAccessButton";
 import { findErrorTraceId } from "@goat/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -127,6 +128,7 @@ export function GoatConnectProfilePage() {
         />
       }
     >
+      <RestoreConnectAccessButton />
       <ClerkSectionHeader>Registered servers</ClerkSectionHeader>
 
       {environmentsState.error ? (

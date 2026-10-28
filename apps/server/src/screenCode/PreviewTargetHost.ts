@@ -1,10 +1,9 @@
+import { classifyBrowserActionOutcome } from "../preview/actionOutcomeSafety.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Target and image IDs are host-owned opaque values.
 import * as NodeCrypto from "node:crypto";
 import type {
   ScreenBindingHints,
   ScreenHostCall,
-  ScreenImage,
-  ScreenImageMetadata,
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
@@ -23,6 +22,8 @@ import {
   type ScreenHostContext,
   type ScreenHostDispatcher,
 } from "./ScreenHostBridge.ts";
+import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
+import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
 
@@ -52,6 +53,7 @@ interface BoundTarget {
   readonly ref: ScreenTargetRef;
   readonly tab: BoundPreviewTab;
   readonly origin: string | null;
+  readonly observationId?: string;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -111,6 +113,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const current = status.success;
       if (current.tabId !== tab.tabId && (yield* gone)) return;
+      // Handed to a person for a step: it outlives the turn, as a tab kept for handoff does.
+      if (current.tabId === tab.tabId && current.control?.waitingForPerson === true)
+        return "kept" as const;
       if (
         current.tabId !== tab.tabId ||
         current.control === undefined ||
@@ -192,6 +197,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const status = Effect.fn("PreviewTargetHost.status")(function* (
     bound: BoundTarget,
     context: ScreenHostContext,
+    readOnly: boolean,
   ) {
     const current = yield* broker
       .invoke<PreviewAutomationStatus>({
@@ -205,10 +211,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     if (
       current.tabId !== bound.tab.tabId ||
       !current.control ||
-      current.control.generation !== bound.tab.controlGeneration ||
-      originOf(current.url) !== bound.origin
+      current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
+    if (originOf(current.url) !== bound.origin) {
+      observations.evictTarget(bound.ref.id);
+      if (!readOnly)
+        return yield* Effect.fail(
+          fail("stale_reference", "Observe the current tab before sending more input."),
+        );
+    }
     return current;
   });
   const invoke = (
@@ -218,14 +230,27 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     input: unknown,
   ) =>
     broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
-      Effect.mapError(() =>
-        operation === "snapshot"
-          ? fail("downstream_failure", "Refresh the tab status before retrying.")
-          : {
-              ...fail("unknown_outcome", "Inspect the tab before any later action."),
-              effectStarted: true,
-            },
-      ),
+      Effect.mapError((error) => {
+        const safety = classifyBrowserActionOutcome({
+          operation,
+          status: "failed",
+          errorTag: error._tag,
+          ...(error._tag === "PreviewAutomationControlInterruptedError"
+            ? { controlReason: error.reason }
+            : {}),
+          ...("dispatched" in error && error.dispatched !== undefined
+            ? { dispatched: error.dispatched }
+            : {}),
+        });
+        return {
+          ...previewTargetFailure(error, operation),
+          code: safety.possibleCommit
+            ? ("unknown_outcome" as const)
+            : ("downstream_failure" as const),
+          effectStarted: safety.possibleCommit,
+          safety,
+        };
+      }),
     );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
@@ -336,7 +361,40 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const bound = lookup(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));
-      const current = yield* status(bound, context);
+      if (call.method === "tab_status") {
+        const rawArg =
+          Array.isArray(call.args) && call.args.length === 1 ? call.args[0] : undefined;
+        if (
+          !rawArg ||
+          typeof rawArg !== "object" ||
+          Array.isArray(rawArg) ||
+          Object.keys(rawArg).some((key) => key !== "targetRef")
+        )
+          return yield* Effect.fail(fail("invalid_argument", "Tab status accepts no options."));
+      }
+      const current = yield* status(
+        bound,
+        context,
+        call.method === "observe" || call.method === "tab_status" || call.method === "read_page",
+      );
+      if (call.method === "tab_status")
+        return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
+      if (call.method === "read_page") {
+        const scope = cellScope(arg.scope, observations);
+        const read = cellReadInput(arg, observationReplyBudget(call, context.limits));
+        if (scope && "code" in scope) return yield* Effect.fail(scope);
+        if ("error" in read) return yield* Effect.fail(read.error);
+        const page = yield* broker
+          .invoke({
+            scope: context.invocation,
+            operation: "read",
+            input: { ...read.input, ...(scope ? { scope } : {}) },
+            exact: exact(bound.tab, false),
+            updateCurrentTab: false,
+          })
+          .pipe(Effect.mapError((error) => previewTargetFailure(error, "read")));
+        return { value: page, category: "confirmed", evidence: ["Rendered page text read"] };
+      }
       const claimIdentity = identity(bound, context);
       if (call.method === "claim_tab") {
         const claim = yield* claims
@@ -364,101 +422,32 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       if (call.method === "observe") {
-        const snapshot = yield* invoke(bound, context, "snapshot", {
+        const scope = cellScope(arg.scope, observations);
+        if (scope && "code" in scope) return yield* Effect.fail(scope);
+        const reading = {
+          ...bound,
+          tab: { ...bound.tab, url: current.url },
+          origin: originOf(current.url),
+        };
+        observations.index.invalidateTarget(bound.ref.id);
+        const snapshot = yield* invoke(reading, context, "snapshot", {
           captureImage: arg.screenshot === true,
           fullPage: arg.fullPage === true,
+          ...(arg.interactiveOnly === true ? { interactiveOnly: true } : {}),
+          ...(scope ? { scope } : {}),
         }) as Effect.Effect<PreviewAutomationSnapshot, ScreenRunError>;
-        const draft = observations.normalizeTabSnapshot({
+        const result = yield* observePreviewTarget({
+          call,
+          context,
           targetRef: bound.ref,
-          targetGeneration: bound.ref.generation,
           connectionId: bound.tab.connectionId,
           controlGeneration: bound.tab.controlGeneration,
           snapshot,
+          observations,
+          arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
-        const mode = arg.mode === "diff" || arg.mode === "query" ? arg.mode : "full";
-        const query =
-          arg.query && typeof arg.query === "object"
-            ? (arg.query as { role?: string; name?: string; text?: string })
-            : undefined;
-        const baseObservationId = stringField(arg, "baseObservationId");
-        const screenshot = snapshot.screenshot;
-        const shot =
-          screenshot && screenshot.region && screenshot.scale && screenshot.data
-            ? {
-                ...screenshot,
-                region: screenshot.region,
-                scale: screenshot.scale,
-                data: screenshot.data,
-              }
-            : undefined;
-        const imageRef = NodeCrypto.randomUUID();
-        const regionId = NodeCrypto.randomUUID();
-        const imageMetadata = (observationId: string): ScreenImageMetadata | undefined =>
-          shot && {
-            imageRef,
-            callId: call.callId,
-            targetId: bound.ref.id,
-            observationId,
-            regionId,
-            region: shot.region,
-            pixelWidth: shot.width,
-            pixelHeight: shot.height,
-            scale: shot.scale,
-            mimeType: shot.mimeType,
-          };
-        // The reply carries the image metadata beside the tree, so the tree leaves room for its
-        // largest form. Observation ids are UUIDs, so a fresh one measures the same.
-        const reserved = imageMetadata(NodeCrypto.randomUUID());
-        const imageReserve = reserved
-          ? // @effect-diagnostics-next-line preferSchemaOverJson:off -- measures the bytes the reply will carry.
-            Buffer.byteLength(JSON.stringify({ image: { ...reserved, omitted: true } }))
-          : 0;
-        const observation = yield* Effect.try({
-          try: () =>
-            observations.renderObservation({
-              draft,
-              mode,
-              ...(baseObservationId ? { baseObservationId } : {}),
-              ...(query ? { query } : {}),
-              limits: { treeBytes: observationReplyBudget(call, context.limits, imageReserve) },
-            }),
-          catch: (cause) =>
-            fail(
-              cause instanceof Error &&
-                cause.message === "Screen observation metadata exceeds tree budget"
-                ? "tree_limit"
-                : "downstream_failure",
-              "Observe a smaller tab region and retry.",
-            ),
-        });
-        const metadata = imageMetadata(observation.observationId);
-        if (!shot || !metadata) {
-          return {
-            value: observation,
-            category: "confirmed",
-            evidence: ["Current tab tree observed"],
-          };
-        }
-        observations.index.putRegion(bound.ref.id, observation.observationId, metadata.regionId, {
-          ...metadata.region,
-          pixelWidth: metadata.pixelWidth,
-          pixelHeight: metadata.pixelHeight,
-          scale: metadata.scale,
-        });
-        if (Buffer.from(shot.data, "base64").byteLength > context.limits.imageBytes)
-          return {
-            value: { ...observation, image: { ...metadata, omitted: true } },
-            category: "partial",
-            evidence: ["Image exceeded the cell limit"],
-          };
-        const image: ScreenImage = { ...metadata, bytes: shot.data };
-        return {
-          value: { ...observation, image: metadata },
-          image,
-          imageMetadata: metadata,
-          category: "confirmed",
-          evidence: ["Current tab tree and image observed"],
-        };
+        targets.set(bound.ref.id, { ...reading, observationId: result.value.observationId });
+        return result;
       }
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
         click: "click",
@@ -640,6 +629,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const ownClose =
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
+      observations.index.invalidateTarget(bound.ref.id);
       const result = yield* invoke(bound, context, operation, input).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -650,12 +640,17 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         ),
       );
-      observations.evictTarget(bound.ref.id);
       if (call.method === "close_tab") {
+        observations.evictTarget(bound.ref.id);
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
-      return { value: result, category: "confirmed", evidence: ["Preview operation completed"] };
+      return {
+        value: result,
+        category: "unverifiable",
+        evidence: ["dispatched; observe to confirm"],
+        safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
+      };
     },
   );
   const availability: ScreenHostDispatcher["availability"] = Effect.fn(

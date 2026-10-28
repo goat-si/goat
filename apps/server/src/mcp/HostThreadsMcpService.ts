@@ -67,6 +67,7 @@ import {
 } from "./hostThreadsResults.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostToolAuthorization from "./HostToolAuthorization.ts";
+import { remoteSenderFor } from "./remoteSender.ts";
 import {
   assertLiveCaller,
   readCaller,
@@ -357,6 +358,7 @@ const make = Effect.gen(function* () {
       readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
       /** Only goat_thread_send relays through the origin. */
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
+      readonly optionalArguments?: Readonly<Record<string, unknown>>;
     },
   ) =>
     dispatch
@@ -366,6 +368,9 @@ const make = Effect.gen(function* () {
           environmentId: input.environmentId ?? null,
           tool: input.tool,
           arguments: input.arguments,
+          ...(input.optionalArguments === undefined
+            ? {}
+            : { optionalArguments: input.optionalArguments }),
           writes: input.writes,
           timeoutMs: input.timeoutMs ?? REMOTE_TIMEOUT_MS,
           ...(input.requireReady === true ? { requireReady: true } : {}),
@@ -400,6 +405,7 @@ const make = Effect.gen(function* () {
       readonly approvals?: boolean;
       readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
+      readonly optionalArguments?: Readonly<Record<string, unknown>>;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) =>
@@ -850,12 +856,17 @@ const make = Effect.gen(function* () {
                       ),
                     ),
                 ),
-                Effect.andThen(() =>
+                Effect.andThen(() => remoteSenderFor(scope, threads)),
+                Effect.flatMap((remoteSender) =>
                   onHost(
                     scope,
                     {
                       host,
                       tool: "goat_thread_send",
+                      // Sent only to a host whose goat_thread_send declares it.
+                      ...(remoteSender === undefined
+                        ? {}
+                        : { optionalArguments: { remoteSender } }),
                       // The remote sees an outside client; a thread's queue or steer still means "like
                       // steering" there, which its auto now does.
                       arguments:

@@ -1132,6 +1132,7 @@ export const make = Effect.gen(function* () {
     remember: rememberPrLookupGitState,
     forget: forgetPrLookupGitState,
     validate: validatePrLookupGitState,
+    verifyTerminal: verifyTerminalPrLookup,
   } = yield* makePrLookupGitState({
     normalizeCwd: normalizeStatusCacheKey,
     capacity: PR_LOOKUP_CACHE_CAPACITY,
@@ -2589,10 +2590,9 @@ export const make = Effect.gen(function* () {
       freshGitState,
     });
     if (pullRequest === null || pullRequest.state === "open" || freshGitState) return pullRequest;
-    return yield* lookupBranchPullRequest(cacheCwd, branch, {
-      refresh: false,
-      freshGitState: true,
-    });
+    const recheck = { refresh: false, freshGitState: true };
+    const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
+    return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
   });
   const invalidateLocalStatus: GitManager["Service"]["invalidateLocalStatus"] = Effect.fn(
     "invalidateLocalStatus",

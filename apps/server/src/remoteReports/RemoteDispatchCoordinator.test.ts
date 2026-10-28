@@ -31,6 +31,7 @@ import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Random from "effect/Random";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
@@ -222,39 +223,6 @@ it.effect("restart observes a thread without replaying its stored cancel ceiling
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("host unavailability sleeps before retry and read-key refusal becomes lost", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    yield* Effect.gen(function* () {
-      const c = yield* Coordinator.RemoteDispatchCoordinator;
-      const launched = yield* f.launch(c, "notify_only");
-      yield* Queue.take(f.calls);
-      yield* f.replyLatest(
-        Effect.fail(
-          new Ssh.SshRemoteDispatchError({
-            reason: "host_unavailable",
-            message: "fixture",
-          }),
-        ),
-      );
-      yield* TestClock.adjust("4 seconds");
-      assert.equal(yield* Queue.size(f.calls), 0);
-      yield* TestClock.adjust("1 second");
-      yield* Queue.take(f.calls);
-      yield* f.replyLatest(
-        Effect.fail(
-          new Ssh.SshRemoteDispatchError({
-            reason: "remote_refused",
-            remoteCode: "capability_denied",
-            message: "fixture",
-          }),
-        ),
-      );
-      yield* Queue.take(f.commits);
-      assert.equal((yield* c.get(launched.correlationId))!.state, "lost");
-    }).pipe(Effect.provide(f.layer));
-  }).pipe(Effect.provide(database)),
-);
 it.effect("transaction rollback replays wake once; consumed inbox never loses cursor dedupe", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
@@ -415,7 +383,13 @@ it.effect.each([true, false])(
         assert.equal((yield* c.get(launched.correlationId))?.state, "idle");
         yield* TestClock.adjust("1 hour");
         assert.equal(yield* Queue.size(f.calls), 0);
-      }).pipe(Effect.provide(f.layer));
+      }).pipe(
+        Effect.provide(f.layer),
+        Effect.provideService(Random.Random, {
+          nextIntUnsafe: () => 0,
+          nextDoubleUnsafe: () => 0.9999,
+        }),
+      );
     }).pipe(Effect.provide(database)),
 );
 

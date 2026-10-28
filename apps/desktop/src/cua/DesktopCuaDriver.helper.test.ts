@@ -18,6 +18,38 @@ import {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
+  it.effect(
+    "a dev checkout with its own app id expects the dev helper the build stamps (#1275)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // electron-launcher.mjs gives each checkout its own app id; the helper build has one
+          // dev id, so macOS keeps one set of grants for every checkout.
+          const test = yield* fixture({
+            platform: "darwin",
+            isPackaged: false,
+            development: { appUserModelId: "com.t3tools.t3code.dev.myworktree" },
+            denyPermissions: true,
+            helper: { granted: true },
+          });
+          yield* test.request("agent");
+          const report = yield* test.next;
+          assert.equal(report.status, "ready");
+          assert.deepEqual(test.helperProbes, [
+            { bundleId: "si.goat.desktop.dev.computer-use", prompt: true },
+          ]);
+          assert.deepEqual(
+            test.helperLaunches.map(({ bundleId }) => bundleId),
+            ["si.goat.desktop.dev.computer-use"],
+          );
+          assert.include(
+            test.launches[0]?.hostBundleIds ?? [],
+            "com.t3tools.t3code.dev.myworktree",
+          );
+        }),
+      ),
+  );
+
   it.effect("asks the helper for grants and lets it own the driver agents cannot target", () =>
     Effect.scoped(
       Effect.gen(function* () {

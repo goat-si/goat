@@ -143,15 +143,16 @@ it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<s
 );
 
 it.effect(
-  "work that runs on its own requires private-field detection but not human-input detection",
+  "work that runs on its own asks for approval whether or not the host detects secret fields",
   () =>
     withHarness(({ orchestrator }) =>
       Effect.gen(function* () {
         for (const signals of [
           undefined,
           { humanInput: "unsupported", privateMode: "unsupported" },
-          { humanInput: "unsupported", privateMode: "unsupported" },
           { humanInput: "supported", privateMode: "unsupported" },
+          { humanInput: "unsupported", privateMode: "supported" },
+          supported,
         ] satisfies ReadonlyArray<Signals | undefined>) {
           const result = yield* withRequests(
             orchestrator,
@@ -162,24 +163,9 @@ it.effect(
             undefined,
             Option.none(),
             undefined,
-            true,
+            "schedule",
           );
-          assert.equal(result.kind, "refused", JSON.stringify(signals));
-          if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
-        }
-        for (const humanInput of ["supported", "unsupported"] as const) {
-          const allowed = yield* withRequests(
-            orchestrator,
-            { humanInput, privateMode: "supported" },
-            ({ request }) => request(),
-            undefined,
-            undefined,
-            undefined,
-            Option.none(),
-            undefined,
-            true,
-          );
-          assert.equal(allowed.kind, "needs_human");
+          assert.equal(result.kind, "needs_human", JSON.stringify(signals));
         }
       }),
     ),

@@ -41,7 +41,7 @@
     published for both halves. ADR-0023 (D15) moves the archives from upstream's official release
     to artifacts GOAT builds from its fork, `goat-si/cua-driver`, at the same 0.37.0 protocol,
     through the same pin and verification; the pin names the fork's
-    `cua-driver-rs-v0.38.0-goat.2` archives from that release's `SHA256SUMS`, while the SDK stays
+    `cua-driver-rs-v0.38.0-goat.3` archives from that release's `SHA256SUMS`, while the SDK stays
     on npm 0.37.0. Updates happen only through GOAT releases. The
     driver's own update check and `update --apply` are never used.
   - **MIT parts only.** GOAT ships the `cua-driver` executable and the `@trycua/cua-driver` SDK
@@ -111,9 +111,8 @@
 `computerUseAttachment` returns `none` (with a reason) or `proxied`. It attaches only when
 `enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
 Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
-thread holds a lease and the host's helper reports secret fields as a supported signal in its
-readiness (`cuaReadiness`, also shown as `CuaHostStatus.readiness`;
-otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
+thread holds a lease or runs in full access (ADR-0023 D16); whether the host's helper detects
+secret fields does not gate it. Every attachment carries GOAT's proxy
 instead of `cua-driver mcp` under the thread's control (see "Safety") with
 `cuaDriverOverridesUserConfig`: a `cua-driver` the person configured would skip Stop, pauses and app
 approvals. Without the proxy subcommand nothing could stop the driver, so there is no attachment.
@@ -147,12 +146,19 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
 - **Driver ceiling.** Both hosts start the daemon in `standard` mode with
   `--capability-manifest <file> --approve-capability-manifest`, written at each start by
   `packages/shared/src/cuaDriverManifest.ts` (v3 schema).
-  - Tools: observation, input, `run_steps`, `run_script`, sessions and cursor. Excluded with
+  - Tools: observation, input, `kill_app`, `run_steps`, `run_script`, sessions and cursor. Excluded with
     reasons in `CUA_DRIVER_EXCLUDED_TOOLS`: installs, driver configuration, update checks,
     trajectory replay, the perception extension, deprecated capture tools, recording (writes
-    files), both clipboard tools (the person's copied secrets; file loading), `kill_app` (unsaved
-    work; no terminate scope is granted) and every browser tool (they need per-origin grants a
-    launch-time file cannot know, and logged-in profiles are never granted).
+    files), both clipboard tools (the person's copied secrets; file loading) and every browser
+    tool (they need per-origin grants a launch-time file cannot know, and logged-in profiles are
+    never granted).
+  - `kill_app` sends SIGKILL, so every app grant carries `terminate: driver_launched`: only a
+    process `launch_app` started in the same driver session, re-attested by start time and
+    executable before the signal. Standard mode refuses any other process first
+    (`foreign_process_termination_denied`). The driver judges termination against
+    `executable` grants only, so on macOS each admitted app also gets one for its bundle's
+    binary; Windows grants name executables as bundle ids and Linux desktop-entry apps have
+    none, so `kill_app` stays refused there until the driver matches bundle ids too.
   - Resources: `desktop.display` plus one `apps[].bundle_id` per app the driver's own
     `list_apps` reports at start, from a short-lived `cua-driver mcp` (`--direct` on macOS). No
     file paths, processes, origins or existing browser profiles. Excluded apps: the GOAT host
@@ -238,8 +244,8 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   until it loses focus. The control counts these pauses, so a proxy that only sees the state after a
   pause has already ended still ends the call it overlapped. Narrowing a thread's approved apps ends
   the call in flight. Interactive
-  turns run where the helper cannot report these yet, with the gap shown as unsupported; unattended
-  turns require private-mode detection but not human-input detection. Controls and pauses are
+  and unattended turns run where the helper cannot report these yet, with the gap shown as
+  unsupported. Controls and pauses are
   in memory, ended by a restart like the provider processes they serve.
 - **Proxy.** Every attached provider runs `goat cua-lease-proxy --control` in place of
   `cua-driver mcp`. It holds the thread's own MCP credential and reads

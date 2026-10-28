@@ -1,4 +1,5 @@
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
+import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { Dispatch } from "react";
 import type { ComposerThreadTarget } from "../../composerDraftStore";
@@ -51,6 +52,8 @@ import { threadEnvironment } from "../../state/threads";
 import { vcsEnvironment } from "../../state/vcs";
 import { useChildThreadInputs, readThreadShell, waitForThreadShell } from "../../state/entities";
 import { environmentShell } from "../../state/shell";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
 import { ThreadStatusLine } from "./ThreadStatusLine";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
@@ -418,14 +421,20 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   };
   const handleStopBackgroundWorkStable = useStableCallback(handleStopBackgroundWork);
   const openRelatedThreadGenerationRef = useRef(0);
-  const onOpenRelatedThread = async (threadId: ThreadId) => {
+  const onOpenRelatedThread = async (threadId: ThreadId, options?: OpenThreadOptions) => {
     const generation = ++openRelatedThreadGenerationRef.current;
-    const threadRef = scopeThreadRef(environmentId, threadId);
+    const threadRef = scopeThreadRef(options?.environmentId ?? environmentId, threadId);
     const isEnvironmentLive = () =>
-      appAtomRegistry.get(environmentShell.stateValueAtom(environmentId)).status === "live";
+      appAtomRegistry.get(environmentShell.stateValueAtom(threadRef.environmentId)).status ===
+      "live";
     // The shell can leave idle subagent children out, so absence is not deletion there: the
     // route decides from the thread's own detail.
-    const shellOmitsChildren = serverConfig?.shellThreadFamilies === true;
+    const shellOmitsChildren = targetShellOmitsChildren({
+      targetEnvironmentId: threadRef.environmentId,
+      currentEnvironmentId: environmentId,
+      currentConfig: serverConfig,
+      configs: appAtomRegistry.get(environmentServerConfigsAtom),
+    });
     // A just-launched child can reach this timeline before its shell syncs.
     if (!shellOmitsChildren && isEnvironmentLive() && readThreadShell(threadRef) === null) {
       const location = router.latestLocation;
@@ -446,6 +455,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
+      ...(options?.sentFrom ? { state: { sentFrom: options.sentFrom } } : {}),
     });
   };
   const onOpenRelatedThreadStable = useStableCallback(onOpenRelatedThread);

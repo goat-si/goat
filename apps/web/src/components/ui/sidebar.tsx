@@ -365,11 +365,12 @@ function Sidebar({
         <div
           className={cn(
             "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) md:flex",
-            "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            "group-data-[collapsible=offcanvas]:invisible [[data-panel-animations=true]_&]:transition-[left,right,width,visibility,clip-path] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
             side === "left"
               ? variant === "framed"
-                ? // Slides exactly its own width, ending under the rail.
-                  "left-(--destination-rail-width) group-data-[collapsible=offcanvas]:left-[calc(var(--destination-rail-width)-var(--sidebar-width))]"
+                ? // Slides exactly its own width toward the rail and is clipped at the rail's edge in
+                  // step, so it never paints under a rail that glass makes see-through.
+                  "left-(--destination-rail-width) group-data-[collapsible=offcanvas]:left-[calc(var(--destination-rail-width)-var(--sidebar-width))] [clip-path:inset(0_-100vw_0_0)] group-data-[collapsible=offcanvas]:[clip-path:inset(0_-100vw_0_var(--sidebar-width))]"
                 : "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
             variant === "floating" || variant === "inset"

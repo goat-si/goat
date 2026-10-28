@@ -393,17 +393,17 @@ describe("goat pre-push workflow guard", () => {
     [
       "extra job",
       JSON.stringify({ on: { push: null }, jobs: { ci: baseJob, extra: baseJob } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished, connect-auth-postgres",
     ],
     [
       "missing jobs",
       JSON.stringify({ on: { push: null } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished, connect-auth-postgres",
     ],
     [
       "jobs array",
       JSON.stringify({ on: { push: null }, jobs: [] }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished, connect-auth-postgres",
     ],
     ["nonmapping ci", workflow(null), "jobs.ci must be a mapping"],
     [

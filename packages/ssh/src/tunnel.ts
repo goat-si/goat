@@ -101,6 +101,7 @@ import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
 import * as NativeWindows from "./runtimeWindows.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
 import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
+import { makePreparationRetries } from "./preparationRetry.ts";
 import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
 import {
   makeRemoteSessions,
@@ -2605,6 +2606,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   };
   let retryStarted = false;
   let closed = false;
+  const retries = makePreparationRetries({
+    scope: managerScope,
+    wanted: (key, gen) => !forgotten.has(key) && !tunnels.has(key) && generations.get(key) === gen,
+    attempt: (target: DesktopSshEnvironmentTarget) => ensureEnvironment(target, { keyOnly: true }),
+  });
   const pendingResult = (
     target: DesktopSshEnvironmentTarget,
     pending: SshRuntimePendingReplacement,
@@ -2623,7 +2629,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     withTargetLock,
     notReady,
     withIdleTargetLock,
-  } = makeTargetAdmission(targetLocks);
+  } = makeTargetAdmission(targetLocks, retries.refusal);
 
   const closeTunnelEntry = Effect.fn("ssh/tunnel.closeTunnelEntry")(function* (
     entry: SshTunnelEntry,
@@ -3945,7 +3951,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         Effect.suspend(() => {
           if (closed || (generations.get(key) ?? 0) !== admittedGeneration) return Effect.void;
           invalidateReconnectSelection(key);
-          return publishFailure(key, resolvedTarget, runner, error);
+          return publishFailure(key, resolvedTarget, runner, error).pipe(
+            Effect.andThen(retries.failed(key, generations.get(key), error, target)),
+          );
         }).pipe(Effect.provide(context)),
       prepare: (report) =>
         withTargetLock(
@@ -4094,6 +4102,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     generations.set(key, (generations.get(key) ?? 0) + 1);
     invalidateReconnectSelection(key);
     yield* flights.retire(key, false);
+    yield* retries.cancel(key);
     pendingReplacements.delete(key);
     statuses.delete(key);
     acquisitionFailures.delete(key);
@@ -4166,17 +4175,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const knownKey = targetConnectionKey(knownTarget);
     const active = statuses.get(knownKey);
     if (forgotten.has(knownKey) && active !== undefined) return active;
-    if (
-      active?.status?.setup?.stage === "complete" &&
-      active.status.state === "failed" &&
-      [
-        "diagnosis_failed",
-        "approval_expired",
-        "authorization_revoked",
-        "operation_failed",
-      ].includes(active.status.failure?.reason ?? "")
-    )
-      return active;
+    if (active !== undefined && setupTerminalFailure(knownKey)) return active;
     if (active?.status?.state === "preparing" || active?.status?.state === "update_waiting")
       if (active.status.state === "update_waiting" || flights.isActive(knownKey)) return active;
     const runner =
@@ -4511,7 +4510,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       (snapshot?.state !== "ready" && snapshot?.state !== "providers_not_ready") ||
       !(yield* entry.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
     )
-      return yield* notReady(target);
+      return yield* notReady(target, key);
     yield* validateManagedPin(entry.target);
     return entry;
   });
@@ -4877,6 +4876,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     generations.set(key, generation);
     invalidateReconnectSelection(key);
     yield* flights.retire(key, false);
+    yield* retries.cancel(key);
     pendingReplacements.delete(key);
     acquisitionFailures.delete(key);
     setupOperations.delete(key);

@@ -1,5 +1,10 @@
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
-import { type EnvironmentId, type PreviewSessionSnapshot, ThreadId } from "@goat/contracts";
+import {
+  type DeviceServiceState,
+  type EnvironmentId,
+  type PreviewSessionSnapshot,
+  ThreadId,
+} from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
@@ -18,6 +23,12 @@ import {
   revealServerTabs,
   startAgentOpenedPreviews,
 } from "./agentOpenedPreviews";
+import {
+  applyDeviceSnapshot,
+  floatDeviceSurface,
+  resetDeviceSessionBaselinesForTests,
+} from "./agentOpenedDevices";
+import { selectAgentCardsShown, usePreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 vi.mock("../../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => true,
@@ -26,13 +37,203 @@ vi.mock("../../state/entities", () => ({
 const ref = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-1"));
 const threadKey = scopedThreadKey(ref);
 
+const device = {
+  hostId: "local",
+  id: "pixel",
+  platform: "android",
+  name: "Pixel 8",
+  version: "15",
+  booted: true,
+  physical: false,
+} as const;
+
+const session = {
+  threadId: ref.threadId,
+  hostId: "local",
+  deviceId: "pixel",
+  platform: "android",
+  openedAt: "2026-01-01T00:00:00.000Z",
+} as const;
+
+const deviceState = (input: {
+  readonly sessions?: ReadonlyArray<DeviceServiceState["sessions"][number]>;
+  readonly devices?: ReadonlyArray<typeof device>;
+}): DeviceServiceState => ({
+  hosts: [],
+  hostStatus: "ready",
+  hostStatuses: {},
+  devices: input.devices ?? [device],
+  sessions: input.sessions ?? [],
+  onboardingCompleted: true,
+  agentAccessEnabled: true,
+  hubBasePath: "/api/device-hub",
+  revision: 0,
+});
+
+const panel = { sheetLayout: false };
+
 function setup() {
+  resetDeviceSessionBaselinesForTests();
   resetPreviewStateForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   useRightPanelStore.setState({ byThreadKey: {} });
+  usePreviewSessionStack.setState({
+    hidden: true,
+    expanded: new Map(),
+    revealedThreads: new Set(),
+    focus: null,
+    hiddenLive: new Map(),
+  });
 }
 
 const miniPlayerSource = () => usePreviewMiniPlayerStore.getState().byThreadKey[threadKey]?.source;
+const largeCard = (thread = "thread-1") =>
+  usePreviewSessionStack.getState().expanded.get(`env-1|${thread}`) ?? null;
+const focusedTab = () => usePreviewSessionStack.getState().focus?.tabId ?? null;
+const shownIn = (thread: string) =>
+  selectAgentCardsShown(`env-1|${thread}`)(usePreviewSessionStack.getState());
+
+const deviceTabs = (threadRef: typeof ref) =>
+  useRightPanelStore
+    .getState()
+    .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.filter(
+      (surface) => surface.kind === "device",
+    );
+
+describe("applyDeviceSnapshot", () => {
+  it("keeps baselines and ended-session cleanup isolated by environment", () => {
+    setup();
+    const otherRef = scopeThreadRef("env-2" as EnvironmentId, ref.threadId);
+    const source = {
+      kind: "device",
+      hostId: "local",
+      deviceId: "pixel",
+      platform: "android",
+      name: "Pixel 8",
+    } as const;
+    usePreviewMiniPlayerStore.getState().open(otherRef, source);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(otherRef.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(otherRef)).toBeUndefined();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    expect(
+      usePreviewMiniPlayerStore.getState().byThreadKey[scopedThreadKey(otherRef)]?.source,
+    ).toEqual(source);
+  });
+
+  it("treats the first snapshot as a baseline and opens sessions that start later", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [] }), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+  });
+
+  it("opens a session once its device summary arrives", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(
+      ref.environmentId,
+      deviceState({ sessions: [session], devices: [] }),
+      panel,
+    );
+    expect(deviceTabs(ref)).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(deviceTabs(ref)?.[0]?.target?.name).toBe("Pixel 8");
+  });
+
+  it("opens one background panel tab, and nothing in sheet layouts", () => {
+    setup();
+    const options = { sheetLayout: false };
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), { ...options, sheetLayout: true });
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), {
+      ...options,
+      sheetLayout: true,
+    });
+    expect(useRightPanelStore.getState().byThreadKey[threadKey]).toBeUndefined();
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({}), panel);
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    const devices = useRightPanelStore
+      .getState()
+      .byThreadKey[threadKey]?.surfaces.filter((surface) => surface.kind === "device");
+    expect(devices).toHaveLength(1);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("closes a floating device when its session ends, even before a baseline", () => {
+    setup();
+    usePreviewMiniPlayerStore.getState().open(ref, {
+      kind: "device",
+      hostId: "local",
+      deviceId: "pixel",
+      platform: "android",
+      name: "Pixel 8",
+    });
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(miniPlayerSource()).toMatchObject({ kind: "device" });
+
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [] }), panel);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("opens a session that ended and reopened between two snapshots", () => {
+    setup();
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    expect(miniPlayerSource()).toBeUndefined();
+
+    const reopened = { ...session, openedAt: "2026-01-01T00:05:00.000Z" };
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [reopened] }), panel);
+    expect(deviceTabs(ref)).toHaveLength(1);
+  });
+
+  it("opens a device for a thread that had no sessions when the baseline was taken", () => {
+    setup();
+    const otherRef = scopeThreadRef(ref.environmentId, ThreadId.make("thread-2"));
+    applyDeviceSnapshot(ref.environmentId, deviceState({ sessions: [session] }), panel);
+    applyDeviceSnapshot(
+      ref.environmentId,
+      deviceState({ sessions: [session, { ...session, threadId: otherRef.threadId }] }),
+      panel,
+    );
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(deviceTabs(otherRef)).toHaveLength(1);
+    expect(deviceTabs(ref)).toBeUndefined();
+  });
+});
+
+describe("floatDeviceSurface", () => {
+  const source = {
+    kind: "device",
+    hostId: "local",
+    deviceId: "pixel",
+    platform: "android",
+    name: "Pixel 8",
+  } as const;
+
+  it("floats a device with a live session, or before device state loads", () => {
+    setup();
+    floatDeviceSurface(ref, source, deviceState({ sessions: [session] }));
+    expect(miniPlayerSource()).toMatchObject({ kind: "device", deviceId: "pixel" });
+
+    setup();
+    floatDeviceSurface(ref, source, null);
+    expect(miniPlayerSource()).toMatchObject({ kind: "device", deviceId: "pixel" });
+  });
+
+  it("does not float a device whose session ended", () => {
+    setup();
+    floatDeviceSurface(ref, source, deviceState({ sessions: [] }));
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+});
 
 describe("revealServerTabs", () => {
   const tab = (tabId: string, force?: boolean): PreviewSessionSnapshot => ({
@@ -74,6 +275,34 @@ describe("revealServerTabs", () => {
       browserSurfaceId,
     );
     expect(floatingTabId()).toBeNull();
+  });
+
+  // Browser use starts like computer use: as the thread's small card, never the mini player.
+  it("opens an agent's tab as its thread's small card, only forced ones when floating is off", () => {
+    setup();
+    const agentTab = (tabId: string, force?: boolean) => ({
+      ...tab(tabId, force),
+      automationOwner: "agent-session",
+    });
+    applyPreviewServerSnapshot(ref, agentTab("tab_quiet"));
+    revealServerTabs(ref, [agentTab("tab_quiet")], { autoShowFloatingPreview: false });
+    expect(focusedTab()).toBeNull();
+
+    applyPreviewServerSnapshot(ref, agentTab("tab_agent"));
+    revealServerTabs(ref, [agentTab("tab_agent")], { autoShowFloatingPreview: true });
+    expect(floatingTabId()).toBeNull();
+    expect(focusedTab()).toBe("tab_agent");
+    expect(largeCard()).toBeNull();
+    // On its own it leaves the window's hidden cards alone; a forced reveal shows them, but only
+    // in its own thread.
+    expect(shownIn("thread-1")).toBe(false);
+    applyPreviewServerSnapshot(ref, agentTab("tab_forced", true));
+    revealServerTabs(ref, [agentTab("tab_forced", true)], { autoShowFloatingPreview: false });
+    expect(floatingTabId()).toBeNull();
+    expect(focusedTab()).toBe("tab_forced");
+    expect(largeCard()).toBeNull();
+    expect(shownIn("thread-1")).toBe(true);
+    expect(shownIn("thread-2")).toBe(false);
   });
 });
 
@@ -178,6 +407,29 @@ describe("startAgentOpenedPreviews", () => {
       revision: 2,
     });
     expect(floatingTabId()).toBe("tab_agent");
+  });
+
+  it("starts an agent's new tab in any thread as that thread's small card, with no mini player", () => {
+    using _following = following();
+    const other = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2"));
+    reconcilePreviewServerSessions(other, { sessions: [], serverEpoch, revision: 1 });
+    const opened = serverTab({ threadId: "thread-2", tabId: "tab_b", automationOwner: "agent" });
+    applyPreviewServerEvent(other, {
+      type: "opened",
+      threadId: "thread-2",
+      tabId: opened.tabId,
+      createdAt: opened.updatedAt,
+      snapshot: opened,
+      serverEpoch,
+      revision: 2,
+    });
+    expect(usePreviewMiniPlayerStore.getState().byThreadKey).toEqual({});
+    expect(usePreviewSessionStack.getState().focus).toEqual({
+      kind: "browser",
+      threadId: "thread-2",
+      tabId: "tab_b",
+    });
+    expect(largeCard("thread-2")).toBeNull();
   });
 
   it("reveals an existing tab only for a new reveal request", () => {

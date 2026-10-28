@@ -8,6 +8,7 @@ import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -22,6 +23,7 @@ import {
 } from "./appServer.ts";
 import {
   ARCHIVE,
+  makeRunningProcess,
   makeSuccessfulProcess,
   remoteShell,
   testHttpClient,
@@ -98,11 +100,13 @@ const attachableDescriptor = {
 const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   readonly pid: number;
   readonly port: number;
+  /** Home-relative state directory. Defaults to the packaged stable layout. */
+  readonly stateDir?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const real = yield* ChildProcessSpawner.ChildProcessSpawner;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-app-server-" });
-  const userdata = `${home}/.goat/desktop/userdata`;
+  const userdata = `${home}/${record.stateDir ?? ".goat/desktop/userdata"}`;
   yield* fs.makeDirectory(userdata, { recursive: true });
   yield* fs.writeFileString(
     `${userdata}/server-runtime.json`,
@@ -112,6 +116,10 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   const scripts: Array<string> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
+      // The forward stays up: a real ssh -N to this fake host exits within milliseconds, and
+      // whether a forward check saw it first decided these tests.
+      if (command._tag === "StandardCommand" && command.args.includes("-N"))
+        return makeRunningProcess(() => undefined);
       if (command._tag !== "StandardCommand" || !command.command.endsWith("ssh"))
         return yield* real.spawn(command);
       const stdin = command.options.stdin;
@@ -282,6 +290,145 @@ describe("GOAT app server attachment", () => {
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${host.home}/.goat/ssh-launch`)).toBe(false);
         expect(yield* fs.exists(`${host.home}/.goat/runtime`)).toBe(false);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live(
+    "attaches to the one running app server in nightly, stable, or dev state, and does not start another",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const attach = function* (stateDir: string) {
+          const app = yield* startAppServer(attachableDescriptor);
+          const host = yield* makeHost({ pid: process.pid, port: app.port, stateDir });
+          const launch = yield* launchOrReuseRemoteServer(uploadTarget, {}, RUNNER).pipe(
+            Effect.provide(host.spawner),
+          );
+          expect(launch.status).toBe("ready");
+          if (launch.status !== "ready") return;
+          expect(launch.remoteServerKind).toBe("app");
+          expect(launch.remotePort).toBe(app.port);
+          expect(yield* fs.exists(`${host.home}/.goat/ssh-launch`)).toBe(false);
+          expect(yield* fs.exists(`${host.home}/.goat/runtime`)).toBe(false);
+        };
+        yield* attach(".goat/desktop-nightly/userdata");
+        yield* attach(".goat/dev");
+        yield* attach(".t3/dev");
+
+        const exited = yield* ChildProcessSpawner.ChildProcessSpawner.pipe(
+          Effect.flatMap((spawner) => spawner.spawn(ChildProcess.make("true", []))),
+        );
+        yield* exited.exitCode;
+        const stable = yield* startAppServer(attachableDescriptor);
+        const nightly = yield* startAppServer(attachableDescriptor);
+        const hidden = yield* makeHost({
+          pid: Number(exited.pid),
+          port: 1,
+          stateDir: ".goat/desktop-nightly/userdata",
+        });
+        const stableDir = `${hidden.home}/.goat/desktop/userdata`;
+        yield* fs.makeDirectory(stableDir, { recursive: true });
+        yield* fs.writeFileString(`${stableDir}/runtime-control.token`, `${TOKEN}\n`);
+        yield* fs.writeFileString(
+          `${stableDir}/server-runtime.json`,
+          JSON.stringify({
+            version: 1,
+            pid: process.pid,
+            port: stable.port,
+            origin: `http://127.0.0.1:${stable.port}`,
+          }),
+        );
+        const recovered = yield* launchOrReuseRemoteServer(uploadTarget, {}, RUNNER).pipe(
+          Effect.provide(hidden.spawner),
+        );
+        expect(recovered.status).toBe("ready");
+        if (recovered.status !== "ready") return;
+        expect(recovered.remotePort).toBe(stable.port);
+        expect(yield* fs.exists(`${hidden.home}/.goat/ssh-launch`)).toBe(false);
+
+        const both = yield* makeHost({
+          pid: process.pid,
+          port: nightly.port,
+          stateDir: ".goat/desktop-nightly/userdata",
+        });
+        const beside = `${both.home}/.goat/desktop/userdata`;
+        yield* fs.makeDirectory(beside, { recursive: true });
+        yield* fs.writeFileString(`${beside}/runtime-control.token`, `${TOKEN}\n`);
+        yield* fs.writeFileString(
+          `${beside}/server-runtime.json`,
+          JSON.stringify({
+            version: 1,
+            pid: process.pid,
+            port: stable.port,
+            origin: `http://127.0.0.1:${stable.port}`,
+          }),
+        );
+        const preferred = yield* launchOrReuseRemoteServer(uploadTarget, {}, RUNNER).pipe(
+          Effect.provide(both.spawner),
+        );
+        expect(preferred.status).toBe("ready");
+        if (preferred.status !== "ready") return;
+        expect(preferred.remoteServerKind).toBe("app");
+        expect(preferred.remotePort).toBe(nightly.port);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live(
+    "a nightly record that is live but unreachable, or has no token, falls through to the stable app server",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stable = yield* startAppServer(attachableDescriptor);
+        const attachesToStable = function* (
+          prepare: (
+            nightlyDir: string,
+          ) => Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem>,
+        ) {
+          // The nightly record names this live process, but nothing answers on its port.
+          const host = yield* makeHost({
+            pid: process.pid,
+            port: 1,
+            stateDir: ".goat/desktop-nightly/userdata",
+          });
+          yield* prepare(`${host.home}/.goat/desktop-nightly/userdata`);
+          const stableDir = `${host.home}/.goat/desktop/userdata`;
+          yield* fs.makeDirectory(stableDir, { recursive: true });
+          yield* fs.writeFileString(`${stableDir}/runtime-control.token`, `${TOKEN}\n`);
+          yield* fs.writeFileString(
+            `${stableDir}/server-runtime.json`,
+            JSON.stringify({
+              version: 1,
+              pid: process.pid,
+              port: stable.port,
+              origin: `http://127.0.0.1:${stable.port}`,
+            }),
+          );
+          const launch = yield* launchOrReuseRemoteServer(uploadTarget, {}, RUNNER).pipe(
+            Effect.provide(host.spawner),
+          );
+          expect(launch.status).toBe("ready");
+          if (launch.status !== "ready") return;
+          expect(launch.remoteServerKind).toBe("app");
+          expect(launch.remotePort).toBe(stable.port);
+          expect(yield* fs.exists(`${host.home}/.goat/ssh-launch`)).toBe(false);
+        };
+        yield* attachesToStable(() => Effect.void);
+        // A live nightly server whose control token is missing cannot be attached either.
+        const live = yield* startAppServer(attachableDescriptor);
+        yield* attachesToStable((nightlyDir) =>
+          Effect.gen(function* () {
+            yield* fs.writeFileString(
+              `${nightlyDir}/server-runtime.json`,
+              JSON.stringify({
+                version: 1,
+                pid: process.pid,
+                port: live.port,
+                origin: `http://127.0.0.1:${live.port}`,
+              }),
+            );
+            yield* fs.remove(`${nightlyDir}/runtime-control.token`);
+          }),
+        );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
@@ -495,6 +642,18 @@ describe("manager on a host running the app server", () => {
           JSON.stringify({ pid: Number(exited.pid), port: app.port }),
         );
         expect(yield* identify(null)).toBe("managed-env");
+
+        const nightly = `${host.home}/.goat/desktop-nightly/userdata`;
+        yield* fs.makeDirectory(nightly, { recursive: true });
+        yield* fs.writeFileString(`${nightly}/environment-id`, "nightly-env");
+        yield* fs.writeFileString(`${nightly}/runtime-control.token`, `${TOKEN}\n`);
+        yield* fs.writeFileString(
+          `${nightly}/server-runtime.json`,
+          JSON.stringify({ pid: process.pid, port: app.port }),
+        );
+        expect(yield* identify(null)).toBe("nightly-env");
+        expect(yield* identify("app")).toBe("nightly-env");
+        expect(yield* identify("managed")).toBe("managed-env");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

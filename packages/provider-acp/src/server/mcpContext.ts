@@ -14,6 +14,7 @@ export interface AcpMcpContext {
   readonly computerUseKey?: string;
   /** The thread's turns carry the computer use skill (`carriesComputerUseSkill`). */
   readonly computerUseSkill?: boolean;
+  readonly browser?: boolean;
   readonly screenCodeSkill?: boolean;
   readonly screenCodeSkillPath?: string;
 }
@@ -56,12 +57,13 @@ export function acpMcpContext(
     computerUse: cua.length > 0,
     computerUseKey: McpProviderSession.cuaDriverKey(session.cuaDriver),
     computerUseSkill: McpProviderSession.carriesComputerUseSkill(session),
+    browser: session.browserToolsAvailable,
     screenCodeSkill: McpProviderSession.carriesScreenCodeSkill(session),
     ...(session.screenCodeSkillPath === undefined
       ? {}
       : { screenCodeSkillPath: session.screenCodeSkillPath }),
     // Agent instructions and terminal fallbacks written for older builds read the legacy names.
-    processEnvironment: McpProviderSession.withThreadMcpEnvironment(
+    processEnvironment: McpProviderSession.withThreadOverlayEnvironment(
       {
         GOAT_ACP_MCP_NODE: self.command,
         ...(self.entrypoint === undefined ? {} : { GOAT_ACP_MCP_ENTRYPOINT: self.entrypoint }),

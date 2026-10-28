@@ -61,6 +61,8 @@ const methods = [
   "forward_tab",
   "close_tab",
   "observe",
+  "tab_status",
+  "read_page",
   "select",
   "select_text",
   "wait_for",
@@ -91,7 +93,10 @@ export async function runScreenChild(
   const Wasm = Reflect.get(globalThis, "WebAssembly") as {
     Memory: new (input: { initial: number; maximum: number }) => { readonly buffer: ArrayBuffer };
   };
-  const wasmMemory = new Wasm.Memory({ initial: 256, maximum: 1024 });
+  const wasmMemory = new Wasm.Memory({
+    initial: 256,
+    maximum: Math.floor(limits.turnWasmBytes / (64 * 1024)),
+  });
   const module = await newQuickJSWASMModuleFromVariant(
     newVariant(BellardSync as unknown as Parameters<typeof newVariant>[0], {
       wasmMemory: wasmMemory as Parameters<typeof newVariant>[1]["wasmMemory"],
@@ -206,6 +211,8 @@ export async function runScreenChild(
         };
         return Object.freeze(ref.kind === 'tab' ? {
           ...common,
+          status: () => call('tab_status'),
+          read: (arg = {}) => call('read_page', arg),
           claim: () => call('claim_tab'),
           keep: (reason = 'deliverable') => call('keep_tab', { reason }),
           navigate: (url) => call('navigate_tab', { url }),
@@ -223,7 +230,7 @@ export async function runScreenChild(
           endForeground: () => call('end_foreground'),
         });
       };
-      globalThis.screen = Object.freeze({ values: __values,
+      globalThis.screen = Object.freeze({ values: __values, state: {},
         discover: async () => {
           const result = { apps: [], windows: [], tabs: [], unavailable: {} };
           try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }
@@ -235,6 +242,7 @@ export async function runScreenChild(
         app: async (query = {}) => __target(await __call('bind_app', query)),
         tab: async (query = {}) => __target(await __call('select_tab', query)),
         openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
+        listTabs: () => __call('list_tabs', {}),
         ${methods
           .map(
             (method) =>
@@ -308,20 +316,28 @@ export async function runScreenChild(
       consoleBytes = 0;
       linesOut = [];
       truncated = [];
-      deadline = Date.now() + currentLimits.cellWallMs;
+      deadline = cell.deadlineMillis;
+      // Starting the child can use up a short cell's wall time; such a cell never runs.
+      if (Date.now() >= deadline) {
+        finish({ t: "result", cellId, status: "deadline", console: linesOut, truncated });
+        continue;
+      }
       admitted = true;
       runtime.setInterruptHandler(() => Date.now() >= deadline);
-      deadlineTimer = setTimeout(() => {
-        if (cellId === cell.cellId)
-          finish({
-            t: "result",
-            cellId,
-            status: "deadline",
-            console: linesOut,
-            truncated,
-            unawaitedCallIds: [...pending.keys()],
-          });
-      }, currentLimits.cellWallMs);
+      deadlineTimer = setTimeout(
+        () => {
+          if (cellId === cell.cellId)
+            finish({
+              t: "result",
+              cellId,
+              status: "deadline",
+              console: linesOut,
+              truncated,
+              unawaitedCallIds: [...pending.keys()],
+            });
+        },
+        Math.max(0, deadline - Date.now()),
+      );
       try {
         const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
         const handle = vm.unwrapResult(evaluation);

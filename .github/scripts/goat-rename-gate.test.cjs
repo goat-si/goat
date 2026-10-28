@@ -30,12 +30,18 @@ it("runs the source-name gate before affected-file selection, on the install-fre
   assert.match(scope, /run-install: false/);
   assert.ok(scope.indexOf("Check upstream name recurrence") < scope.indexOf("Select tasks"));
   const result = workflow.split("\n  result:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-  assert.match(result, /needs: \[scope, ci, screenshot-gate\]/);
+  assert.match(result, /needs: \[scope, ci, screenshot-gate, connect-auth-postgres\]/);
   const script = result.split("        run: |\n")[1].replace(/^          /gm, "");
   for (const status of ["success", "failure", "skipped", "cancelled"]) {
     const run = spawnSync(bash, ["-c", script], {
       encoding: "utf8",
-      env: { ...process.env, SCOPE: status, CI: "success", SCREENSHOT_GATE: "skipped" },
+      env: {
+        ...process.env,
+        SCOPE: status,
+        CI: "success",
+        CONNECT_AUTH_POSTGRES: "success",
+        SCREENSHOT_GATE: "skipped",
+      },
     });
     assert.equal(run.status, status === "success" ? 0 : 1, run.stdout + run.stderr);
   }

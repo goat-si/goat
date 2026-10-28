@@ -2,6 +2,9 @@ import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
+
+import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 
 const id = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(200));
 const text = (max: number) => Schema.String.check(Schema.isMaxLength(max));
@@ -10,6 +13,17 @@ const natural = Schema.Int.check(
 );
 const positive = (max: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: max }));
 const finite = Schema.Number.check(Schema.makeFilter(Number.isFinite));
+
+/**
+ * A driver refusal's typed account, as the lease proxy names it (ComputerUseRefusalReason; detail
+ * is a ComputerUseRefusalDetail, kept a string here because cua.ts already imports this module).
+ */
+const refusalFields = {
+  refused: Schema.optionalKey(ComputerUseRefusalReason),
+  detail: Schema.optionalKey(text(80)),
+  /** The bundle id or app the refusal names, when the proxy knew it. */
+  app: Schema.optionalKey(id),
+};
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 const utf8Text = (max: number) =>
   Schema.String.check(
@@ -60,6 +74,8 @@ export const ScreenMethod = Schema.Literals([
   "forward_tab",
   "close_tab",
   "observe",
+  "tab_status",
+  "read_page",
   "select",
   "select_text",
   "wait_for",
@@ -118,6 +134,8 @@ export const ScreenRunCell = Schema.Struct({
   source: utf8Text(64 * 1024),
   resetValues: Schema.Boolean,
   limits: ScreenRunLimits,
+  /** The parent's epoch-ms wall deadline, so time spent starting the child counts on both sides. */
+  deadlineMillis: natural,
 });
 export type ScreenRunCell = typeof ScreenRunCell.Type;
 
@@ -194,6 +212,8 @@ export const ScreenObservation = Schema.Struct({
   complete: Schema.Boolean,
   truncated: Schema.Boolean,
   loading: Schema.Boolean,
+  title: Schema.optionalKey(text(1024)),
+  url: Schema.optionalKey(text(8192)),
   indexedText: utf8Text(128 * 1024),
   elements: Schema.Array(
     Schema.Struct({
@@ -211,6 +231,7 @@ export const ScreenObservation = Schema.Struct({
 export type ScreenObservation = typeof ScreenObservation.Type;
 
 export const ScreenEffectReceipt = Schema.Struct({
+  safety: Schema.optionalKey(ActionOutcomeSafety),
   callId: natural,
   targetId: Schema.optionalKey(id),
   method: ScreenMethod,
@@ -225,10 +246,12 @@ export const ScreenEffectReceipt = Schema.Struct({
   ]),
   dispatched: Schema.Boolean,
   evidence: Schema.Array(text(200)).check(Schema.isMaxLength(16)),
+  ...refusalFields,
 });
 export type ScreenEffectReceipt = typeof ScreenEffectReceipt.Type;
 
 export const ScreenRunError = Schema.Struct({
+  safety: Schema.optionalKey(ActionOutcomeSafety),
   code: Schema.Literals([
     "invalid_argument",
     "unsupported",
@@ -259,8 +282,11 @@ export const ScreenRunError = Schema.Struct({
     "private",
     "cleanup_failed",
     "context_reset",
+    // An earlier call in the same cell failed, so this one was never dispatched.
+    "not_run",
   ]),
   reason: Schema.optionalKey(Schema.Literal("desktop_not_ready")),
+  ...refusalFields,
   callId: Schema.optionalKey(natural),
   targetId: Schema.optionalKey(id),
   effectStarted: Schema.Boolean,
@@ -268,12 +294,14 @@ export const ScreenRunError = Schema.Struct({
   limit: Schema.optionalKey(Schema.Struct({ name: text(80), maximum: natural })),
   receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt).check(Schema.isMaxLength(16))),
   nextStep: text(1024),
+  message: Schema.optionalKey(text(200)),
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 
 export const ScreenGuestError = Schema.Struct({
   name: text(80),
   message: utf8Text(1024),
+  safety: Schema.optionalKey(ActionOutcomeSafety),
 });
 export type ScreenGuestError = typeof ScreenGuestError.Type;
 

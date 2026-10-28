@@ -26,7 +26,7 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`,
       before,
     );
-    assert.deepStrictEqual(yield* runMigrations(), [
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
       [84, "MemoryReportLifecycle"],
       [85, "MemoryUsageCounters"],
       [86, "MemoryRevertResults"],
@@ -54,6 +54,7 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
       [108, "HubProvisionedLinks"],
       [109, "ScheduledTaskRuns"],
       [110, "ScheduledTaskNotificationPolicy"],
+      [111, "NotificationCursorRepair"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT automatic_attempts,report_kind,report_approved FROM memory_report_outbox`,
@@ -61,7 +62,7 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
     );
     const migrated =
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`;
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
     assert.deepStrictEqual(
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`,
       migrated,

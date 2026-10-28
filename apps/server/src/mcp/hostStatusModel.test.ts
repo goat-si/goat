@@ -8,12 +8,18 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
 } from "@goat/contracts";
-import { GoatHostStatusResult, type RuntimeProtocolRanges } from "@goat/contracts";
+import {
+  GoatHostStatusResult,
+  type HostStatusEntry,
+  type RuntimeProtocolRanges,
+} from "@goat/contracts";
 import { ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+
+const encodeHostStatus = Schema.encodeUnknownSync(GoatHostStatusResult);
 import {
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   clipHostStatusMessage,
@@ -22,6 +28,7 @@ import {
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
   markHostCompatibility,
+  omitUnencodableMetrics,
   quotaRefreshDue,
   tagRemoteHostStatus,
   unreachableHostStatus,
@@ -353,5 +360,161 @@ describe("older host-status payloads", () => {
       hosts: [{ host: "box", reachability: "ok", compatibility: "partially-compatible" }],
     }).hosts[0];
     expect(entry).toEqual({ host: "box", reachability: "ok" });
+  });
+});
+
+describe("omitUnencodableMetrics", () => {
+  const metrics = {
+    sampledAt: 1,
+    cpuUtilization: 0.1,
+    cpuCount: 8,
+    availableMemoryBytes: 1,
+    totalMemoryBytes: 2,
+    loadAvg: { oneMinute: 0, fiveMinutes: 0, fifteenMinutes: 0 },
+    disk: { path: "/", availableBytes: 1, totalBytes: 2 },
+    threads: { running: 0, waiting: 0, queued: 0 },
+    quotas: [],
+  };
+  const entry = {
+    host: null,
+    reachability: "ok" as const,
+    metrics,
+  } satisfies HostStatusEntry;
+
+  it("leaves an encodable host untouched", () => {
+    expect(omitUnencodableMetrics(entry)).toBe(entry);
+    encodeHostStatus({ hosts: [entry] });
+  });
+
+  it("drops the bad section, names it, and still encodes the host", () => {
+    const bad: HostStatusEntry = {
+      ...entry,
+      metrics: {
+        ...metrics,
+        platform: "darwin",
+        opencodex: {
+          installed: true,
+          binaries: [],
+          ownership: "none",
+          service: { available: false },
+          runtime: { port: 10100, healthy: true, ready: true },
+          link: {
+            role: "home",
+            available: true,
+            links: [
+              {
+                id: "mini",
+                alias: "mini",
+                tunnelPort: 10100,
+                state: "connected",
+                lastApplyAt: undefined,
+              },
+            ],
+            childSettingsApplied: false,
+          },
+        },
+      },
+    };
+    const clean = omitUnencodableMetrics(bad);
+    expect(clean.metrics?.platform).toBe("darwin");
+    expect(clean.metrics?.opencodex).toBeUndefined();
+    expect(clean.omittedMetrics).toEqual([
+      { section: "opencodex", message: "opencodex.link.links.0.lastApplyAt is undefined" },
+    ]);
+    encodeHostStatus({ hosts: [clean] });
+  });
+
+  it("does not call a value referenced twice cyclic, and still reports a real cycle", () => {
+    const empty: Array<never> = [];
+    const shared = { id: "shared" };
+    const sharedTwice: HostStatusEntry = {
+      ...entry,
+      metrics: {
+        ...metrics,
+        quotas: empty,
+        opencodex: {
+          installed: true,
+          binaries: empty,
+          ownership: "none",
+          service: { available: false },
+          runtime: { port: 10100, healthy: true, ready: true },
+          link: {
+            role: "home",
+            available: true,
+            links: [shared, shared] as never,
+            childSettingsApplied: false,
+          },
+        },
+      },
+    };
+    const kept = omitUnencodableMetrics(sharedTwice);
+    expect(kept).toBe(sharedTwice);
+    expect(kept.omittedMetrics).toBeUndefined();
+
+    const cyclic: Record<string, unknown> = { id: "loop" };
+    cyclic.self = cyclic;
+    const loop = omitUnencodableMetrics({
+      ...entry,
+      metrics: { ...metrics, platform: "darwin", storage: cyclic as never },
+    });
+    expect(loop.metrics?.platform).toBe("darwin");
+    expect(loop.metrics?.storage).toBeUndefined();
+    expect(loop.omittedMetrics).toEqual([
+      { section: "storage", message: "storage.self is cyclic" },
+    ]);
+  });
+
+  it("strips undefined keys from top-level optional fields and keeps the field", () => {
+    const withUndefined = {
+      ...entry,
+      parity: {
+        verdict: "ok",
+        checkedAt: 1,
+        failingCheckIds: [],
+        checks: [{ id: "P1", status: "ok", reason: "fine", extra: undefined }],
+        note: undefined,
+      },
+      goatclaw: { state: "applied", message: undefined },
+    } as unknown as HostStatusEntry;
+    const clean = omitUnencodableMetrics(withUndefined);
+    expect(clean.parity).toEqual({
+      verdict: "ok",
+      checkedAt: 1,
+      failingCheckIds: [],
+      checks: [{ id: "P1", status: "ok", reason: "fine" }],
+    });
+    expect(Object.hasOwn(clean.parity ?? {}, "note")).toBe(false);
+    expect(clean.goatclaw).toEqual({ state: "applied" });
+    expect(clean.omittedMetrics).toBeUndefined();
+    encodeHostStatus({ hosts: [clean] });
+  });
+
+  it("drops a top-level optional field that is still not JSON and names it", () => {
+    const bad = {
+      ...entry,
+      opencodexUpdate: { checkedAt: Number.NaN, decision: "none" },
+      compatibility: "compatible",
+    } as unknown as HostStatusEntry;
+    const clean = omitUnencodableMetrics(bad);
+    expect(clean.opencodexUpdate).toBeUndefined();
+    expect(clean.compatibility).toBe("compatible");
+    expect(clean.omittedMetrics).toEqual([
+      { section: "opencodexUpdate", message: "opencodexUpdate.checkedAt is not a finite number" },
+    ]);
+    expect(clean.metrics).toBe(metrics);
+    encodeHostStatus({ hosts: [clean] });
+  });
+
+  it("drops metrics entirely when a required field is not JSON", () => {
+    const bad: HostStatusEntry = {
+      ...entry,
+      metrics: { ...metrics, cpuUtilization: Number.NaN },
+    };
+    const clean = omitUnencodableMetrics(bad);
+    expect(clean.metrics).toBeUndefined();
+    expect(clean.reachability).toBe("ok");
+    expect(clean.omittedMetrics?.[0]?.section).toBe("metrics");
+    expect(clean.omittedMetrics?.[0]?.message).toContain("cpuUtilization");
+    encodeHostStatus({ hosts: [clean] });
   });
 });

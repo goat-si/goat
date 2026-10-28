@@ -2,7 +2,6 @@ import type {
   CloudRunCard as CloudRunCardModel,
   CloudRunStage,
 } from "@goat/client-runtime/state/cloud-task";
-import { formatDuration } from "@goat/shared/orchestrationTiming";
 import { ExternalLinkIcon, RotateCcwIcon } from "~/components/solar";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
@@ -13,22 +12,12 @@ import { Button } from "~/components/ui/button";
 import { MiddleTruncate } from "~/components/ui/middle-truncate";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { cn } from "~/lib/utils";
+import { ElapsedDuration } from "./ElapsedDuration";
 import { WorkLogRow } from "./WorkLog";
-import { ShimmerOverlay, StageIcon, stageRowClassName, useNowWhile } from "./WorktreeSetupCard";
+import { ShimmerOverlay, StageIcon, stageRowClassName } from "./WorktreeSetupCard";
 
-function elapsedMs(startedAt: string | null, endedAt: string | null, nowMs: number) {
-  if (startedAt === null) return null;
-  const start = Date.parse(startedAt);
-  const end = endedAt === null ? nowMs : Date.parse(endedAt);
-  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : null;
-}
-
-function StageRow({ stage, nowMs }: { stage: CloudRunStage; nowMs: number }) {
+function StageRow({ stage, card }: { stage: CloudRunStage; card: CloudRunCardModel }) {
   const running = stage.status === "running";
-  const elapsed =
-    stage.status === "pending" || stage.status === "skipped"
-      ? null
-      : elapsedMs(stage.startedAt, stage.endedAt, nowMs);
   return (
     <WorkLogRow
       data-cloud-run-stage={stage.id}
@@ -52,10 +41,13 @@ function StageRow({ stage, nowMs }: { stage: CloudRunStage; nowMs: number }) {
           {stage.detail ? (
             <span className="min-w-0 truncate text-xs text-muted-foreground">{stage.detail}</span>
           ) : null}
-          {elapsed !== null ? (
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-              {formatDuration(elapsed)}
-            </span>
+          {stage.status !== "pending" && stage.status !== "skipped" ? (
+            <ElapsedDuration
+              startedAt={stage.startedAt}
+              endedAt={stage.endedAt ?? card.endedAt}
+              live={card.phase === "running"}
+              className="shrink-0 text-xs text-muted-foreground tabular-nums"
+            />
           ) : null}
         </>
       }
@@ -123,9 +115,7 @@ export function CloudRunCard({
   onRetry: (() => void) | null;
 }) {
   const running = card.phase === "running";
-  const nowMs = useNowWhile(running);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const total = running ? null : elapsedMs(card.startedAt, card.endedAt, nowMs);
   const failed = card.phase === "failed" || card.phase === "unknown";
   // A finished run that needs nothing from the user folds to one line; a failure keeps
   // its stages so the user sees where it stopped.
@@ -144,11 +134,12 @@ export function CloudRunCard({
           }
           label={<span className="block truncate text-secondary-label">{card.title}</span>}
           trailing={
-            total !== null ? (
-              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {formatDuration(total)}
-              </span>
-            ) : null
+            <ElapsedDuration
+              startedAt={card.startedAt}
+              endedAt={card.endedAt}
+              live={false}
+              className="shrink-0 text-xs text-muted-foreground tabular-nums"
+            />
           }
         />
       ) : (
@@ -163,11 +154,12 @@ export function CloudRunCard({
                 )}
               >
                 <span className="min-w-0 truncate">{card.title}</span>
-                {total !== null ? (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {formatDuration(total)}
-                  </span>
-                ) : null}
+                <ElapsedDuration
+                  startedAt={card.startedAt}
+                  endedAt={card.endedAt}
+                  live={false}
+                  className="ml-auto shrink-0 text-xs text-muted-foreground"
+                />
               </div>
             </div>
           ) : null}
@@ -176,7 +168,7 @@ export function CloudRunCard({
               // Once finished, the header states the result.
               .filter((stage) => running || stage.id !== "result")
               .map((stage) => (
-                <StageRow key={stage.id} stage={stage} nowMs={nowMs} />
+                <StageRow key={stage.id} stage={stage} card={card} />
               ))}
           </div>
         </>

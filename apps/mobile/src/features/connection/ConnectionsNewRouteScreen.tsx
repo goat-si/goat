@@ -27,10 +27,7 @@ import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
-import {
-  setPendingConnectionError,
-  useRemoteConnections,
-} from "../../state/use-remote-environment-registry";
+import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
@@ -42,8 +39,8 @@ import {
   type ConnectHubIntent,
   finishHubPairing,
   resolveConnectHubIntent,
+  selectHubEnvironmentId,
 } from "./connectHubIntent";
-import { selectHubEnvironmentId } from "./hubEnvironment";
 import { useStoredHubEnvironment } from "./useStoredHubEnvironment";
 import { useConnectionsReady } from "../../state/workspace";
 import { PairingDiagnostics } from "./PairingDiagnostics";
@@ -67,7 +64,6 @@ export function ConnectionsNewRouteScreen({
     connectionPairingUrl,
     onChangeConnectionPairingUrl,
     onConnectPress,
-    pairingConnectionError,
   } = useRemoteConnections();
   const navigation = useNavigation();
   const routeName = useRoute().name;
@@ -108,6 +104,8 @@ export function ConnectionsNewRouteScreen({
   const [codeInput, setCodeInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const attemptRef = useRef(0);
+  const [pairingConnectionError, setPairingConnectionError] = useState<string | null>(null);
   const [advancedExpanded, setAdvancedExpanded] = useState(
     Boolean(params.routeFor || routePairingUrl),
   );
@@ -141,6 +139,16 @@ export function ConnectionsNewRouteScreen({
     }
   }, [intent, cameraPermission?.status, requestCameraPermission]);
 
+  // A replaced route or an unmounted form must not finish an earlier pairing attempt.
+  useEffect(
+    () => () => {
+      attemptRef.current += 1;
+      submittingRef.current = false;
+    },
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must invalidate pending pairing attempts.
+    [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId],
+  );
+
   useEffect(() => {
     if (!connectionPairingUrl) return;
     const { host, code } = parsePairingUrl(connectionPairingUrl);
@@ -150,44 +158,43 @@ export function ConnectionsNewRouteScreen({
   }, [connectionPairingUrl]);
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Route changes invalidate the previous pairing form submission.
+    setIsSubmitting(false);
+    setPairingConnectionError(null);
+    setDiagnosis(null);
+    setCompletionError(null);
     if (routePairingUrl.length === 0) {
       return;
     }
 
     const { host, code } = parsePairingUrl(routePairingUrl);
-    // oxlint-disable-next-line react/set-state-in-effect -- A pairing URL from the route reseeds the editable host and code fields.
     setHostInput(host);
     setCodeInput(code);
-  }, [routePairingUrl]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must reset the submission even when the pairing URL is unchanged.
+  }, [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId]);
 
-  useEffect(() => {
-    if (pairingConnectionError) {
-      // oxlint-disable-next-line react/set-state-in-effect -- A pairing failure reported by the connection runtime ends the submit.
-      setIsSubmitting(false);
-    }
-  }, [pairingConnectionError]);
+  const clearAttempt = () => {
+    attemptRef.current += 1;
+    submittingRef.current = false;
+    setIsSubmitting(false);
+    setPairingConnectionError(null);
+    setDiagnosis(null);
+    setCompletionError(null);
+  };
 
   const handleHostChange = (value: string) => {
     setHostInput(value);
-    setPendingConnectionError(null);
-    setDiagnosis(null);
-    setCompletionError(null);
+    clearAttempt();
   };
 
   const handleCodeChange = (value: string) => {
     setCodeInput(value);
-    setPendingConnectionError(null);
-    setDiagnosis(null);
-    setCompletionError(null);
+    clearAttempt();
   };
-
-  useEffect(() => () => setPendingConnectionError(null), []);
 
   const handleScanPress = async () => {
     if (submittingRef.current || !pairingReady) return;
-    setDiagnosis(null);
-    setCompletionError(null);
-    setPendingConnectionError(null);
+    clearAttempt();
     const permission = await requestCameraPermission();
     if (permission.granted) {
       setScanComplete(false);
@@ -234,18 +241,31 @@ export function ConnectionsNewRouteScreen({
 
   const connectAndClose = async (pairingUrl: string, manual = false) => {
     if (submittingRef.current || !pairingReady) return;
+    const attempt = ++attemptRef.current;
+    const isCurrentAttempt = () => attemptRef.current === attempt;
     submittingRef.current = true;
     setIsSubmitting(true);
+    setPairingConnectionError(null);
     setDiagnosis(null);
     setCompletionError(null);
     onChangeConnectionPairingUrl(pairingUrl);
     try {
       const result = await onConnectPress(pairingUrl, params.routeFor);
+      if (!isCurrentAttempt()) return;
       if (AsyncResult.isFailure(result)) {
         const error = Cause.squash(result.cause);
-        setPendingConnectionError(
-          error instanceof Error ? error.message : "Failed to pair with the environment.",
-        );
+        const message =
+          error instanceof Error ? error.message : "Failed to pair with the environment.";
+        if (
+          error !== null &&
+          typeof error === "object" &&
+          "reason" in error &&
+          error.reason === "unsupported"
+        ) {
+          Dialog.alert("Client not supported", message);
+          return;
+        }
+        setPairingConnectionError(message);
         setDiagnosis(
           diagnosePairingFailure({
             host: parsePairingUrl(pairingUrl).host,
@@ -258,15 +278,18 @@ export function ConnectionsNewRouteScreen({
         return;
       }
       if (!AsyncResult.isSuccess(result)) return;
+      onChangeConnectionPairingUrl("");
 
       // Persist before removing the old hub so other saved servers cannot become the hub.
       await savedHub.rememberHubEnvironment({ intent, pairedEnvironmentId: result.value });
+      if (!isCurrentAttempt()) return;
       const completion = await finishHubPairing({
         pairedEnvironmentId: result.value,
         intent,
         replaceEnvironmentId,
         removeEnvironment: controller.removeEnvironment,
       });
+      if (!isCurrentAttempt()) return;
       if (completion.removalFailed) {
         setCompletionError(
           `Connected to the new hub, but couldn't remove ${replacedHubLabel}. Remove it from Environments.`,
@@ -284,11 +307,14 @@ export function ConnectionsNewRouteScreen({
         leaveSettingsPage(navigation, workspaceHasColumns(), "SettingsEnvironments");
       }
     } catch (error) {
+      if (!isCurrentAttempt()) return;
       setCompletionError(error instanceof Error ? error.message : "Couldn't save the new hub.");
       if (manual) setAdvancedExpanded(true);
     } finally {
-      submittingRef.current = false;
-      setIsSubmitting(false);
+      if (isCurrentAttempt()) {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -539,7 +565,7 @@ function PairingScanCard(props: {
 }
 
 function GoatConnectSection() {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const navigation = useNavigation();
   const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =
     useRemoteConnections();

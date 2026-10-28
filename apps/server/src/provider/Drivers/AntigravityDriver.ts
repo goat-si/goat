@@ -1,4 +1,7 @@
-import { withAgentDeviceEnvironment } from "@goat/provider-core/server/mcpSession";
+import {
+  mergeThreadEnvironment,
+  withAgentDeviceEnvironment,
+} from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { AntigravitySettings, ProviderDriverKind, ProviderSetupError } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -247,10 +250,10 @@ export const AntigravityDriver: ProviderDriver<
           installation: executable,
           profile,
           cwd: input.cwd,
-          baseEnv: {
-            ...withAgentDeviceEnvironment(processEnvironment, input),
-            ...input.processEnvironment,
-          },
+          baseEnv: mergeThreadEnvironment(
+            withAgentDeviceEnvironment(processEnvironment, input),
+            input.processEnvironment,
+          ),
           auth,
           runtimeTempDirectory,
         }),

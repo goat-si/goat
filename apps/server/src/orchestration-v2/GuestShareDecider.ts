@@ -246,10 +246,58 @@ export function guestShareAfterCancelledSend(
 }
 
 /** Guest attribution comes only from `decideGuestMessageSend`; a client cannot claim it. */
-export function withoutGuestAttribution<
+function withoutGuestAttribution<
   C extends { readonly context?: OrchestrationMessageContext | undefined },
 >(command: C): C {
   if (command.context?.guest === undefined) return command;
   const { guest: _guest, ...context } = command.context;
   return { ...command, context };
+}
+
+/**
+ * Attribution only the server sets. Guest attribution comes only from `decideGuestMessageSend`,
+ * and a remote sender only from an agent-created send this server accepted, so a client claims
+ * neither. An edit (`stored` given) keeps the sender the message was sent with and gains none.
+ */
+export function withServerAttribution<
+  C extends {
+    readonly context?: OrchestrationMessageContext | undefined;
+    readonly createdBy?: string | undefined;
+  },
+>(next: C, stored?: { readonly context?: OrchestrationMessageContext | undefined }): C {
+  const cleaned = withoutGuestAttribution(next);
+  if (cleaned.context === undefined) return cleaned;
+  const { remoteSender: claimed, ...context } = cleaned.context;
+  const kept =
+    stored === undefined
+      ? next.createdBy === "agent"
+        ? claimed
+        : undefined
+      : stored.context?.remoteSender;
+  return { ...cleaned, context: kept === undefined ? context : { ...context, remoteSender: kept } };
+}
+
+/** A queued message after an edit: the edit's text, files and context, with the attribution it was sent with. */
+export function editedQueuedPayload<
+  S extends {
+    readonly text: string;
+    readonly context?: OrchestrationMessageContext | undefined;
+    readonly updatedAt: DateTime.Utc;
+  },
+>(
+  stored: S,
+  edit: { readonly text: string; readonly context?: OrchestrationMessageContext | undefined },
+  attachments: object,
+  updatedAt: DateTime.Utc,
+): S {
+  return withServerAttribution(
+    {
+      ...stored,
+      text: edit.text,
+      ...attachments,
+      ...(edit.context ? { context: edit.context } : {}),
+      updatedAt,
+    },
+    stored,
+  );
 }

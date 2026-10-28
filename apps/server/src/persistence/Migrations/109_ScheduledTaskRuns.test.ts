@@ -15,9 +15,10 @@ it.effect(
         yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count)
         VALUES (${status},'Synthetic','Synthetic',1,'{}','project','{}','{}','full-access','default','user','web','2026-10-15','2026-10-15',${status},3)`;
       }
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT DISTINCT last_firing_id FROM scheduled_tasks`, [
         { last_firing_id: null },
@@ -34,7 +35,7 @@ it.effect(
         yield* sql`SELECT * FROM scheduled_task_runs ORDER BY firing_id`,
         before,
       );
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
       const objects = yield* sql<{
         readonly name: string;
       }>`SELECT name FROM sqlite_master WHERE name LIKE 'scheduled_task_runs_%'`;

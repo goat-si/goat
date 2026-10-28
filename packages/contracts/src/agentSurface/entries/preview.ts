@@ -1,14 +1,31 @@
 import { entry } from "../entry.ts";
 
 export const previewEntries = {
+  "preview.read": entry({
+    resource: "preview",
+    verb: "read",
+    name: "goat_preview_read",
+    toolkit: "preview",
+    summary: "Read a web page's rendered text",
+    description:
+      "Read rendered page text as Markdown after the page settles, for articles, docs and script-rendered pages. Page with offset, revision and nextOffset. With network unknown, settled means DOM quiet only. To act, use preview.snapshot refs. Older hosts: use goat_preview_snapshot.",
+    guide:
+      "Requires the thread's preview capability. Reads allow observation of human-controlled tabs and other agents' tabs without taking control. Private periods withhold the result. Scope selects one subtree. Keep revision when continuing at nextOffset; changed restarts at zero. maxBytes bounds the entire encoded result. Narrow scope when metadata exceeds the budget.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read rendered browser text", idempotentHint: true, openWorldHint: true },
+  }),
   "preview.snapshot": entry({
     resource: "preview",
     verb: "snapshot",
     name: "preview_snapshot",
     toolkit: "preview",
-    summary: "Inspect browser page",
+    summary: "Read web page state in GOAT browser",
     description:
-      "Inspect a browser page and capture its state and screenshot. Refresh element refs after navigation, another snapshot, or control handoff. Snapshot text can be truncated; use goat_preview_evaluate for more. Save the capture to get a path for sharing; an inline image alone does not save it.",
+      "Read web page state and action refs in GOAT's browser. Start with interactiveOnly, expand to full context, wait and observe again, then inspect annotated or raw screenshots. Use goat_preview_read for page text; diff:true after actions. Refresh stale refs. Save the final screenshot as evidence.",
     guide:
       "Requires the thread's preview MCP capability. Inspect the page before interacting. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. Server snapshots provide visible text, interactive elements, an accessibility tree, console and network diagnostics, action history, and screenshot dimensions. Use locator=aria-ref=<ref> from the latest snapshot to target an exact element, including in frames. Text is bounded near 20,000 bytes and reports omissions. Set includeImage=true only when visual inspection is necessary because inline images remain in tool history. The default capture is the viewport; fullPage=true captures a bounded document image and reports clipping. Set save=true to write a PNG and receive screenshotPath; unless includeImage=true, saved results omit the page dump, retaining full-page dimensions and clipping metadata when applicable. A saved path can be embedded as ![alt](screenshotPath) in a reply. Server hosts allow observation of another agent's tab or any human-controlled tab, including the caller's own, but refuse a snapshot while a browser dialog is open.",
     effect: "read",
@@ -17,7 +34,7 @@ export const previewEntries = {
     dryRun: "unsupported",
     humanSteps: [],
     annotations: {
-      title: "Inspect browser page",
+      title: "Read web page state in GOAT browser",
       idempotentHint: false,
       openWorldHint: true,
     },
@@ -53,7 +70,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Get preview status",
     description:
-      "Report browser availability, tab control, and page status, and list server-hosted tabs and browser profiles.",
+      "Report GOAT browser availability, tab ownership, loading, dialogs, server tabs and profiles. No tab: goat_preview_open. A closed preview alone is no reason to switch browsers.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The selected tab reports its URL, title, loading state, visibility, control owner, pending dialog and file chooser, viewport mode, and measured CSS-pixel size. Server hosts list every live tab in the thread with its owner, including user-opened tabs, and profiles accepted by goat_preview_open. Status itself remains available during human control. Snapshot, logs, and wait can read another agent's tab or any human-driven tab, including the caller's own. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only.",
     effect: "read",
@@ -74,7 +91,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Open browser preview",
     description:
-      "Open or reuse a collaborative browser tab. Parallel subagents must each create a separate tab and pass its tabId on every call. A profile choice applies only to a new tab. Retry with the same clientRequestId to avoid opening another tab.",
+      "Open or reuse a GOAT browser tab. Use a supplied or discovered URL; do not guess URLs beyond well-known sites. Parallel agents each need a separate tabId. Profiles apply only to new tabs. Retry with the same clientRequestId to avoid duplicates.",
     guide:
       "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. profileId accepts an id or case-insensitive name from goat_preview_status. A reused tab keeps its original profile and ignores profileId. With a reported default profile, omission uses it; without one, a new headless agent tab uses an isolated context rather than inheriting saved logins. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
     effect: "destructive",
@@ -99,7 +116,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Navigate browser preview",
     description:
-      "Navigate a collaborative browser tab to a website or a dev server in its environment.",
+      "Navigate a GOAT browser tab to a supplied or discovered URL; do not guess URLs beyond well-known sites. Prefer the site's search and filters. For a dev server, use an environment-port target so localhost names the browser host.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Supply exactly one of url for a directly reachable website or target for an environment-relative destination. An environment-port target resolves to localhost on the browser host, with the supplied port, path, and protocol. For a local dev server, target={kind:'environment-port',port:5173} avoids referring to a different device's localhost.",
     effect: "write",
@@ -212,6 +229,30 @@ export const previewEntries = {
     humanSteps: [],
     annotations: {
       title: "Type into preview page",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "preview.fill_secret": entry({
+    resource: "preview",
+    verb: "fill_secret",
+    name: "goat_preview_fill_secret",
+    toolkit: "preview",
+    summary: "Fill a saved password into a sign-in page",
+    description:
+      "Type a password the person saved through request_secret into a password field on the page's origin, without the value reaching you.",
+    guide:
+      "Requires the thread's preview MCP capability and a server browser tab. First call request_secret with origin set to the sign-in page's origin; the card shows that site to the person. Then click the password field (or let the page focus it) and call this tool without a selector, or pass a CSS selector matching exactly one password input. It works while the tab is private because a password field has focus. Only an enabled input of type password in a document whose security origin equals the card's origin is filled; another origin is refused and the ref stays usable there. A person controlling or stopping the tab, an active or starting recording, or Playwright debug logging refuses it. The ref is used once; a refusal after it was used says so. While the filled field holds any value, goat_preview_evaluate, image snapshots and recordings in that tab are refused; navigate, submit or clear it first. Text snapshots stay available unless the field shows its value as plain text. GOAT masks text, not pixels: once the fence lifts, image snapshots and recordings show whatever the page draws, a password it prints included. privateMode=true means a secret field still has focus.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason: "Consumes a one-use secretRef; a retry needs a new request_secret answer.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Fill a saved password",
       idempotentHint: false,
       openWorldHint: true,
     },
@@ -370,7 +411,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Evaluate JavaScript in preview",
     description:
-      "Run JavaScript in a browser page; it may change page state, so it needs the same control as a click. To read a tab another agent or the user opened while they drive it, use goat_preview_snapshot.",
+      "Evaluate only read-only JavaScript with a known exact selector; never read cookies, tokens, storage or site-internal APIs. Prefer goat_preview_read for page text and goat_preview_snapshot for action refs. Evaluation still requires tab control, just like a click.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab. Otherwise the broker uses this session's current tab; without an assignment, server hosts prefer a tab owned by this session, then a visible or recently used tab in the thread. Explicitly targeting a tab can change the session's current tab. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Evaluation requires the same control as clicking even when the expression only reads. On server hosts the result must fit within 64,000 UTF-8 bytes after JSON serialization. The MCP result wraps the value as {value}; an absent value becomes null.",
     effect: "destructive",
@@ -504,6 +545,30 @@ export const previewEntries = {
       openWorldHint: true,
     },
   }),
+  "preview.request_handoff": entry({
+    resource: "preview",
+    verb: "request_handoff",
+    name: "goat_preview_request_handoff",
+    toolkit: "previewControls",
+    summary: "Ask a person to finish a step on this thread's browser tab or desktop.",
+    description:
+      "Ask a person to finish a step you cannot, such as a sign-in, second factor or CAPTCHA, on your browser tab (tabId) or, without tabId, the desktop your computer use control drives. Its card says waiting for you with your reason. Your input there is refused until they hand it back. End the turn; GOAT wakes this thread when they hand back, decline or it expires.",
+    guide:
+      "A browser request needs an agent tab of this thread from goat_preview_open or goat_screen_run; the tab stays open after the turn ends. A desktop request needs this thread's computer use control and pauses agents on that screen. The card shows the reason on web and desktop, and the thread shows the request on every client. A person can take control, finish the step and hand back, which completes it; Stop cancels it; they can also decline it, or answer it from the thread. Asking again for the same target while one is open returns that request. After the wake, observe again before acting: the page or window may have changed. Never ask a person to type a secret for you here; use goat_handoff_create.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Asks a person to act on the calling thread's own tab or control.",
+    idempotencyReason:
+      "A pending request for the same tab or control is returned instead of a new one.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: ["sign_in"],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "preview.back": entry({
     resource: "preview",
     verb: "back",
@@ -599,7 +664,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Fetch a URL inside a browser tab without navigating",
     description:
-      "Fetch an HTTP(S) URL inside a browser tab using its same-origin session and return bounded, credential-redacted Markdown or text without navigating the tab.",
+      "Fetch an HTTP(S) URL in a GOAT browser tab using its same-origin session, without navigating. Returns bounded, credential-redacted Markdown or text; binary responses return empty text. Use goat_preview_read to read the rendered web page.",
     guide:
       "Requires the thread's preview MCP capability. An explicit tabId selects that tab; otherwise the broker uses this session's current tab or a visible/recent tab in the thread. Sends cookies only to the same origin (credentials=same-origin) and follows redirects. HTML bodies are parsed with an inert DOMParser (dropping scripts, styles, templates, hidden elements, and form fields) and rendered as Markdown or plain text; non-text responses return format='raw' with empty text. Response headers other than content-type never leave the page, and browser cookies for the request, redirect target, or tab (including HttpOnly) plus echoed authorization headers and credential-like JSON keys are redacted before returning. Refuses when a browser dialog is open or while the tab is in private mode (or if a private period overlapped the fetch). Another agent's tab and any human-driven tab can be observed.",
     effect: "read",

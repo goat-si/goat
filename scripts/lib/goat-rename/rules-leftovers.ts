@@ -24,6 +24,30 @@ const rule = (
 
 export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
   rule(
+    "desktop-mac-payload-app",
+    at("scripts/build-desktop-artifact.test.ts", "scripts/desktop-artifact-mac.test.ts"),
+    /T3 Code\.app/g,
+    "GOAT.app",
+  ),
+  rule(
+    "files-viewed-example-repository",
+    at("apps/web/src/components/pullRequest/filesViewedStore.test.ts"),
+    /(?<=repository: ")t3\/code(?=")/g,
+    "sample/repo",
+  ),
+  rule(
+    "sea-injection-scratch",
+    at("scripts/lib/linux-arm64-sea.ts"),
+    /(?<=prefix: ")t3-sea-(?=")/g,
+    "goat-sea-",
+  ),
+  rule(
+    "sea-build-output",
+    at("apps/server/scripts/cli.ts", "apps/server/vite.config.ts"),
+    /(?<=dist-exe\/)t3\b/g,
+    "goat",
+  ),
+  rule(
     "native-upload-scratch",
     at("scripts/mobile-native-client.ts"),
     /t3-native-upload-/g,
@@ -262,7 +286,7 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
   ),
   rule(
     "desktop-missing-package-fixture",
-    at("scripts/build-desktop-artifact.test.ts"),
+    at("scripts/build-desktop-artifact.test.ts", "scripts/desktop-artifact-mac.test.ts"),
     /\bt3code-deliberately-missing-package\b/g,
     "goat-deliberately-missing-package",
   ),

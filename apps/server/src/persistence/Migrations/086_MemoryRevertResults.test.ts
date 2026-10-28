@@ -81,7 +81,7 @@ it.effect(
       assert.isEmpty(
         yield* sql`SELECT name FROM sqlite_master WHERE name='memory_report_memory_idx'`,
       );
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [86, "MemoryRevertResults"],
         [87, "HandoffLookupIndex"],
         [88, "MemoryLastReadySpace"],
@@ -107,6 +107,7 @@ it.effect(
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(
         yield* sql`SELECT resolution_id,revert_operation_id,json_extract(revert_result_json,'$.status') AS status FROM memory_resolutions ORDER BY resolution_id`,
@@ -140,7 +141,7 @@ it.effect(
         );
 
       yield* assertUsageCounters;
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
       const tooBig =
         yield* sql`UPDATE memory_resolutions SET revert_result_json=${`{"status":"${"한".repeat(700)}"}`} WHERE resolution_id=${id(10)}`.pipe(
           Effect.exit,

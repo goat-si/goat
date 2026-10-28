@@ -234,6 +234,7 @@ export const RuntimeProtocolRanges = Schema.Struct({
 export type RuntimeProtocolRanges = typeof RuntimeProtocolRanges.Type;
 
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,

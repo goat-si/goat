@@ -15,6 +15,7 @@ import * as Settings from "../serverSettings.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import { readOwnerSourceRows } from "./memoryOwnerSourceRows.ts";
 
 export interface MemoryOwnerSourceReadCommitted {
   readonly policy: M.MemoryOwnerSourceReadPolicy;
@@ -61,7 +62,6 @@ const decodeMessage = Schema.decodeUnknownEffect(
 );
 const decodeOutcome = Schema.decodeUnknownEffect(M.MemorySourceReadOutcome);
 const encodeOutcome = Schema.encodeEffect(Schema.fromJsonString(M.MemorySourceReadOutcome));
-const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.MessageId)));
 const encodeWatermark = Schema.encodeSync(Schema.fromJsonString(M.MemorySourceWatermark));
 
 export class MemoryOwnerSourceReader extends Context.Service<
@@ -193,19 +193,13 @@ const make = Effect.gen(function* () {
           )
         )
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
-        const rows = yield* query(sql<{ payload_json: string; bytes: number; sequence: number }>`
-        SELECT substr(e.payload_json,1,65537) AS payload_json,length(CAST(e.payload_json AS BLOB)) AS bytes,e.sequence
-        FROM orchestration_events e
-        WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.stream_id=${request.sourceThread.threadId}
-        AND e.event_type='message.updated' AND e.sequence<=${request.sourceWatermark.throughSequence}
-        AND json_extract(e.payload_json,'$.id') IN (SELECT value FROM json_each(${encodeIds(request.messageIds)}))
-        AND coalesce(json_extract(e.payload_json,'$.streaming'),0)=0
-        AND json_extract(e.payload_json,'$.role') IN ('user','assistant')
-        AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='message.updated' AND json_extract(n.payload_json,'$.id')=json_extract(e.payload_json,'$.id') AND n.sequence>e.sequence)
-        AND (json_extract(e.payload_json,'$.runId') IS NULL AND json_extract(e.payload_json,'$.role')='user' OR
-          (SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence<=${request.sourceWatermark.throughSequence} ORDER BY r.sequence DESC LIMIT 1)='completed')
-        AND NOT EXISTS (SELECT 1 FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence>${request.sourceWatermark.throughSequence})
-        ORDER BY e.sequence LIMIT 101`);
+        const rows = yield* query(
+          readOwnerSourceRows(sql, {
+            threadId: request.sourceThread.threadId,
+            throughSequence: request.sourceWatermark.throughSequence,
+            messageIds: request.messageIds,
+          }),
+        );
         if (
           rows.length !== request.messageIds.length ||
           rows.some((row) => row.bytes > M.MEMORY_SOURCE_READ_OUTCOME_MAX_BYTES)

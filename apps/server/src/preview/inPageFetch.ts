@@ -1,21 +1,10 @@
-/**
- * Reads a URL from inside a browser tab, with the tab's own same-origin session, and returns
- * its text or Markdown, so an agent can read a signed-in page without a navigation.
- *
- * It gives an agent nothing it could not already reach by evaluating script in the tab, and it
- * keeps the session out of the result. Response headers other than content-type never leave the
- * page, cookies go only to the same origin, and form fields (hidden CSRF tokens included),
- * scripts, templates and hidden subtrees are dropped in the page. Every result is then redacted
- * (see redactSecrets): no cookie the browser holds for the request or the tab appears as
- * name=value, no cookie value of three or more characters appears as a token, and no echoed
- * authorization or cookie header value, bearer token or credential-like JSON field survives.
- *
- * @module inPageFetch
- */
+/** Reads same-origin session content in the page; fields, hidden markup and credentials stay out. */
+import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
+import { tabCookies } from "./pageSecrets.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
@@ -123,11 +112,7 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
       "script", "style", "noscript", "template", "svg", "math", "canvas", "iframe", "object",
       "embed", "head", "input", "textarea", "select", "option", "button",
     ]);
-    const blocks = new Set([
-      "p", "div", "section", "article", "main", "header", "footer", "nav", "aside", "ul", "ol",
-      "table", "tr", "blockquote", "figure", "figcaption", "dl", "dt", "dd", "form", "fieldset",
-      "details", "summary", "address", "hr",
-    ]);
+    const formatNode = ${MARKDOWN_FORMAT};
     const hrefOf = (element) => {
       try {
         const target = new URL(element.getAttribute("href") || "", head.url);
@@ -152,19 +137,7 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
         return markdown ? "\\n\\n~~~\\n" + code + "\\n~~~\\n\\n" : "\\n\\n" + code + "\\n\\n";
       }
       const inner = [...node.childNodes].map(render).join("");
-      if (/^h[1-6]$/.test(tag)) {
-        const title = inner.trim();
-        if (!title) return "";
-        return "\\n\\n" + (markdown ? "#".repeat(Number(tag[1])) + " " : "") + title + "\\n\\n";
-      }
-      if (tag === "li") return "\\n" + (markdown ? "- " : "") + inner.trim() + "\\n";
-      if (tag === "td" || tag === "th") return inner.trim() + " ";
-      if (tag === "a" && markdown) {
-        const label = inner.trim().replace(/[[\\]]/g, "");
-        const href = hrefOf(node).replaceAll("(", "%28").replaceAll(")", "%29");
-        return label && href ? "[" + label + "](" + href + ")" : inner;
-      }
-      return blocks.has(tag) ? "\\n\\n" + inner + "\\n\\n" : inner;
+      return formatNode(node, inner, markdown, hrefOf);
     };
     const parsed = new DOMParser().parseFromString(body, "text/html");
     const title = (parsed.title || "").trim();
@@ -184,14 +157,7 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
 const SECRET_NAME =
   /token|secret|passw|session|cookie|credential|authoriz|^auth$|api[-_]?key|csrf|xsrf/i;
 
-/**
- * Replaces credentials in text bound for an agent. Each cookie is redacted wherever it appears as
- * name=value, which is how an echoed Cookie or Set-Cookie header looks. Its value is redacted
- * anywhere once it has six characters, and as a whole token from three; a one or two character
- * value such as lang=en stays in ordinary text, where redacting it would corrupt the page. Echoed
- * authorization or cookie header lines, bare Bearer/Basic tokens and string values under
- * credential-like JSON keys go too.
- */
+// Short cookie values match whole tokens so masking does not erase ordinary prose.
 export const redactSecrets = (
   text: string,
   cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>,
@@ -248,19 +214,7 @@ const redactQuery = (raw: string) => {
   }
 };
 
-/** Trims lines and blank runs; leaves code fences exactly as the page had them. */
-export const normalizeText = (text: string) => {
-  let fenced = false;
-  const lines: Array<string> = [];
-  for (const line of text.replaceAll("\r\n", "\n").split("\n")) {
-    if (line.trimStart().startsWith("~~~")) fenced = !fenced;
-    lines.push(fenced ? line.trimEnd() : line.trim());
-  }
-  return lines
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-};
+export { normalizeText } from "./markdownFormat.ts";
 
 export const truncateText = (text: string, maxChars: number) =>
   text.length > maxChars
@@ -296,6 +250,8 @@ const fetchInPage = async (
   // Page-side code is passed as source: the server compiles without DOM types.
   const outcome = (await page.evaluate(`(${FETCH_SCRIPT})(${args})`)) as PageOutcome;
   if ("error" in outcome) {
+    // A page's own fetch can fail with any message, the tab's cookie values included.
+    const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));
     throw outcome.timedOut
       ? new ServerBrowserOperationError(
           "PreviewAutomationTimeoutError",
@@ -303,19 +259,18 @@ const fetchInPage = async (
         )
       : new ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
-          `Fetching ${url} failed: ${outcome.error}`,
+          `Fetching ${url} failed: ${failed}`,
         );
   }
-  // Every cookie the browser would send to the request, its redirect target or the tab, HttpOnly
-  // ones included.
-  const origins = [url, page.url(), outcome.url].filter((candidate) => /^https?:/.test(candidate));
-  const cookies = await page.context().cookies(origins);
+  // Every cookie the browser would send to the request, its redirect target, the tab's frames or
+  // what the tab fetched before, HttpOnly ones included.
+  const cookies = await tabCookies(page, [url, outcome.url]);
   const redact = (text: string) => redactSecrets(text, cookies);
   const head = {
     url: redact(redactQuery(outcome.url)),
     status: outcome.status,
     ok: outcome.ok,
-    contentType: outcome.contentType,
+    contentType: redact(outcome.contentType),
   };
   if (outcome.kind === "raw") return { ...head, format: "raw", text: "", truncated: false };
   // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.

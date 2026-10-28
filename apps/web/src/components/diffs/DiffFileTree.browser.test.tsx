@@ -1,6 +1,6 @@
 import type { CodeViewScrollTarget } from "@pierre/diffs";
 import type { FileTree as FileTreeModel } from "@pierre/trees";
-import { type ComponentProps } from "react";
+import { type ComponentProps, useEffect } from "react";
 import { act, render } from "../../../test/render";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -34,10 +34,6 @@ function setup() {
   container.style.cssText = "display: flex; flex-direction: column; width: 320px; height: 480px";
   captured.model = null;
   const targets: CodeViewScrollTarget[] = [];
-  const viewer = {
-    getInstance: () => viewer,
-    scrollTo: (target: CodeViewScrollTarget) => targets.push(target),
-  };
 
   function Panel({
     files = entries,
@@ -50,7 +46,16 @@ function setup() {
     open?: boolean;
     revealRequestId?: number;
   }) {
-    const reveal = useCodeViewFileReveal(viewer, "working-tree");
+    const reveal = useCodeViewFileReveal("working-tree");
+    useEffect(() => {
+      const viewer = {
+        getInstance: () => viewer,
+        getItem: (id: string) => files.find((file) => `${file.path}\0${file.path}` === id),
+        scrollTo: (target: CodeViewScrollTarget) => targets.push(target),
+      };
+      reveal.attach(viewer);
+      return () => reveal.attach(null);
+    }, [files, reveal]);
     return (
       <DiffFileTree
         entries={files}
@@ -58,7 +63,7 @@ function setup() {
         ariaLabel="Working tree files"
         selectedPath={selectedPath}
         revealRequestId={revealRequestId}
-        onSelectFile={(path) => reveal(`${path}\0${path}`)}
+        onSelectFile={(path) => reveal.request(`${path}\0${path}`)}
       />
     );
   }
@@ -163,7 +168,7 @@ describe("diff tree file activation", () => {
     expect(visibleFiles()).toEqual(files.map((file) => file.path));
   });
 
-  it("keeps an excluded selected file and never reveals a diff just from filtering", async () => {
+  it("keeps an excluded selection, reveals repeated activations, and never reveals from filtering", async () => {
     await using fixture = setup();
     const { mount, targets, model, visibleFiles, filter, clearWithEscape, activate } = fixture;
 
@@ -175,6 +180,10 @@ describe("diff tree file activation", () => {
     await activate("01-tall.ts");
     await activate("01-tall.ts");
     expect(targets).toHaveLength(2);
+    expect(targets).toEqual([
+      { type: "item", id: "01-tall.ts\u000001-tall.ts", align: "start" },
+      { type: "item", id: "01-tall.ts\u000001-tall.ts", align: "start" },
+    ]);
     await clearWithEscape();
     expect(visibleFiles()).toEqual(entries.map((file) => file.path));
   });

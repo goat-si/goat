@@ -1,7 +1,7 @@
 # 20 — Cua Driver chase MOC
 
 > 축: upstream `trycua/cua` `libs/cua-driver` (태그 `cua-driver-rs-v*`) · 포크 [goat-si/cua-driver](https://github.com/goat-si/cua-driver)
-> reviewed-through: 포크 `upstream` `0c0ffa5bc32e` = trycua `2d2f99228d` (0.37.0) · GOAT pin: 포크 `0.37.0-goat.2` (#1591) · 열린 카드 001 · 갱신 2026-10-25
+> reviewed-through: 포크 `upstream` `04a4a3701e2f` = trycua `aeae5569473b` (main, 0.38.0 뒤) · GOAT pin: 포크 `0.38.0-goat.3` (#1839) · 열린 카드 001 · 갱신 2026-10-27
 
 - 어디까지 따라갔는가, GOAT pin이 어디 있는가: [20_cua_baseline](./20_cua_baseline.md)
 - 포크가 upstream과 다른 곳과 충돌 정책: [20_cua_fork_delta](./20_cua_fork_delta.md)
@@ -30,5 +30,6 @@
 
 ## \_fin
 
-| NNN | 카드 | 닫힘 |
-| --- | ---- | ---- |
+| NNN | 카드                                                                                              | 닫힘       |
+| --- | ------------------------------------------------------------------------------------------------- | ---------- |
+| 002 | [사이클 0.38.0: upstream main 동기화와 goat.1–goat.3](./_fin/20/20.002_cua_chase_cycle_0.38.0.md) | 2026-10-27 |

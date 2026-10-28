@@ -45,6 +45,7 @@ import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
+import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -58,6 +59,25 @@ const decodePrimitiveReply = Schema.decodeUnknownEffect(
 );
 const PRIMITIVE_REPLY_BODY_BYTES =
   Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
+
+/**
+ * A blank line while state is quiet, which every proxy skips: it keeps idle timeouts on the way
+ * (undici's five-minute body timeout among them) from closing a healthy stream, and lets a proxy
+ * that knows the interval tell a dead connection from a quiet one.
+ */
+const withHeartbeat = <E, R>(lines: Stream.Stream<string, E, R>) =>
+  Stream.merge(
+    lines,
+    Stream.tick(LEASE_HEARTBEAT_MS).pipe(
+      Stream.drop(1),
+      Stream.map(() => "\n"),
+    ),
+    { haltStrategy: "left" },
+  );
+const STREAM_HEADERS = {
+  "cache-control": "no-store",
+  [LEASE_HEARTBEAT_HEADER]: String(LEASE_HEARTBEAT_MS),
+};
 const decodeControlReady = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveControlReady),
 );
@@ -259,6 +279,7 @@ const streamLayer = HttpRouter.add(
           registration?.status === "registered" ? registration.requests : undefined,
         ).pipe(
           Stream.map((update) => encodeThreadUpdate(update) + "\n"),
+          withHeartbeat,
           Stream.encodeText,
           Stream.provideContext(context),
           Stream.ensuring(
@@ -270,7 +291,7 @@ const streamLayer = HttpRouter.add(
         {
           contentType: "application/x-ndjson",
           headers: {
-            "cache-control": "no-store",
+            ...STREAM_HEADERS,
             ...(registration?.status === "registered"
               ? { "x-goat-primitive-registration": registration.registrationId }
               : {}),
@@ -306,6 +327,7 @@ const streamLayer = HttpRouter.add(
         registration?.status === "registered" ? registration.requests : undefined,
       ).pipe(
         Stream.map((update) => encodeUpdate(update) + "\n"),
+        withHeartbeat,
         Stream.encodeText,
         Stream.provideContext(context),
         Stream.ensuring(
@@ -317,7 +339,7 @@ const streamLayer = HttpRouter.add(
       {
         contentType: "application/x-ndjson",
         headers: {
-          "cache-control": "no-store",
+          ...STREAM_HEADERS,
           ...(registration?.status === "registered"
             ? { "x-goat-primitive-registration": registration.registrationId }
             : {}),

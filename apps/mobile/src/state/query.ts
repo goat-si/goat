@@ -9,6 +9,7 @@ const EMPTY_ASYNC_RESULT_ATOM = Atom.make(AsyncResult.initial<never, never>(fals
 
 export interface EnvironmentQueryView<A> {
   readonly data: A | null;
+  readonly successResult: AsyncResult.Success<A, unknown> | null;
   readonly error: string | null;
   readonly cause: unknown;
   readonly isPending: boolean;
@@ -31,6 +32,8 @@ export function useEnvironmentQuery<A, E>(
   const refresh = useAtomRefresh(selectedAtom);
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
+    // Structurally shared data alone cannot identify a fresh directory listing.
+    successResult: result._tag === "Success" && !result.waiting ? result : null,
     cause: result._tag === "Failure" ? Cause.squash(result.cause) : null,
     error: result._tag === "Failure" ? formatError(result.cause) : null,
     isPending: atom !== null && result.waiting,

@@ -224,3 +224,41 @@ it.effect("closes a card nobody collects once its run ends", () =>
     }),
   ),
 );
+
+it.effect("records a full sign-in URL as the card's normalized site origin", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      expect(
+        yield* requestSecret(scope, {
+          ...input,
+          origin: "https://EXAMPLE.com:443/sign-in?next=/account#password",
+        }),
+      ).toMatchObject({ status: "pending", kind: "needs_human" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toMatchObject([{ siteOrigin: "https://example.com", secretStatus: "pending" }]);
+    }),
+  ),
+);
+
+it.effect("refuses non-http origins and origin-bound file delivery before recording any card", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      expect(
+        yield* requestSecret(scope, { ...input, origin: "file:///tmp/sign-in" }).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid_request" });
+      expect(
+        yield* requestSecret(scope, {
+          ...input,
+          origin: "https://example.com",
+          delivery: "file",
+        }).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid_request" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toEqual([]);
+    }),
+  ),
+);

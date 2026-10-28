@@ -1,13 +1,21 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { SidebarProjectGroupingMode } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { sortProjectsByGroupOrder } from "@goat/client-runtime/state/project-grouping";
 import { useMemo } from "react";
 import { Platform, ScrollView } from "react-native";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import { usePublishPullRequestFilterMenu } from "./PullRequestFilterMenuContext";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { environmentProjects } from "../../state/projects";
+import { environmentThreadShells } from "../../state/threads";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 import { buildHomeProjectScopes, sortHomeProjectScopes } from "../home/homeThreadList";
-import { DEFAULT_PR_LIST_CONTROLS, type PullRequestListControls } from "./pullRequestList";
+import {
+  DEFAULT_PR_LIST_CONTROLS,
+  pullRequestProjectOrderIsEqual,
+  type PullRequestListControls,
+} from "./pullRequestList";
 
 const STATES = { open: "Open", closed: "Closed", merged: "Merged", all: "All states" } as const;
 const INVOLVEMENT = { all: "All PRs", reviewing: "Your review", authored: "By you" } as const;
@@ -39,26 +47,27 @@ function choices(field: string, options: Readonly<Record<string, string>>, selec
   }));
 }
 
+// Thread shells change on every agent tick; only a changed project order should reach the filters.
+const sidebarProjectOrderFamily = Atom.family((mode: SidebarProjectGroupingMode) =>
+  Atom.make((get) =>
+    sortHomeProjectScopes({
+      scopes: buildHomeProjectScopes({
+        projects: get(environmentProjects.projectsAtom),
+        environmentId: null,
+        projectGroupingMode: mode,
+      }),
+      threads: get(environmentThreadShells.threadShellsAtom),
+      pendingTasks: [],
+      projectSortOrder: "updated_at",
+    }).map((scope) => ({ memberProjectRefs: scope.projectRefs })),
+  ).pipe(Atom.withEquality(pullRequestProjectOrderIsEqual)),
+);
+
 function useProjectsInSidebarOrder<Project extends { id: string; environmentId: string }>(
   projects: readonly Project[],
 ) {
-  const allProjects = useProjects();
-  const threads = useThreadShells();
   const { sidebarProjectGroupingMode } = useMobileProjectGroupingSettings();
-  const scopes = useMemo(
-    () =>
-      sortHomeProjectScopes({
-        scopes: buildHomeProjectScopes({
-          projects: allProjects,
-          environmentId: null,
-          projectGroupingMode: sidebarProjectGroupingMode,
-        }),
-        threads,
-        pendingTasks: [],
-        projectSortOrder: "updated_at",
-      }).map((scope) => ({ memberProjectRefs: scope.projectRefs })),
-    [allProjects, sidebarProjectGroupingMode, threads],
-  );
+  const scopes = useAtomValue(sidebarProjectOrderFamily(sidebarProjectGroupingMode));
   return useMemo(() => sortProjectsByGroupOrder(projects, scopes), [projects, scopes]);
 }
 

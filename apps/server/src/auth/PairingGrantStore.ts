@@ -219,6 +219,9 @@ export type BootstrapCredentialChange =
 export class PairingGrantStore extends Context.Service<
   PairingGrantStore,
   {
+    readonly setCloudTrust: (
+      userId: string | null,
+    ) => Effect.Effect<void, BootstrapCredentialInternalError>;
     readonly issueOneTimeToken: (input?: {
       readonly ttl?: Duration.Duration;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
@@ -612,6 +615,11 @@ const make = Effect.gen(function* () {
   );
 
   return PairingGrantStore.of({
+    setCloudTrust: Effect.fn("PairingGrantStore.setCloudTrust")((userId) =>
+      pairingLinks
+        .setCloudTrust(userId)
+        .pipe(Effect.mapError((cause) => new BootstrapCredentialConsumeError({ cause }))),
+    ),
     issueOneTimeToken,
     listActive,
     get streamChanges() {

@@ -22,6 +22,7 @@ import { ownRuntimeManifest, RUNTIME_MANIFEST_ARCHIVE_ENTRY } from "@goat/shared
 import { resolveBuildCommit, resolveBuildCommitTime } from "./lib/build-commit-time.ts";
 import { fromYaml } from "@goat/shared/schemaYaml";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { assertLinuxArm64PageCompatibility } from "./lib/linux-arm64-sea.ts";
 import rootPackageJson from "../package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -34,6 +35,7 @@ import {
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { stageScreenWasmAsset } from "./lib/screen-wasm-asset.ts";
 import { signWithJsign } from "./lib/windows-jsign.ts";
+import { stageManifestShell } from "./lib/stage-manifest-shell.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { isMachO } from "./lib/release-verify.ts";
@@ -594,8 +596,12 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
 
   yield* requireInput(
     builtExecutable,
-    `Run \`node apps/server/scripts/cli.ts build-exe --target ${targetKey}\` first.`,
+    `Run \`node apps/server/scripts/cli.ts build-exe${targetKey === hostKey ? "" : ` --target ${targetKey}`}\` first.`,
   );
+  if (input.platform === "linux" && input.arch === "arm64") {
+    const bytes = yield* fs.readFile(builtExecutable);
+    yield* Effect.try(() => assertLinuxArm64PageCompatibility(bytes));
+  }
   yield* requireInput(
     path.join(webClient, "index.html"),
     "Run `vp run --filter goat build` first.",
@@ -653,6 +659,9 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   if (input.platform !== "win") {
     yield* fs.chmod(executablePath, 0o755);
   }
+
+  if (input.platform === "win")
+    yield* stageManifestShell(contentDir, executablePath, input.version);
 
   yield* fs.makeDirectory(input.outputDir, { recursive: true });
   const archivePath = path.join(

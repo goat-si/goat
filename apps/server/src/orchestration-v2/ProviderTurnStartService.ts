@@ -1,3 +1,4 @@
+import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -141,7 +142,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+    const recreateMissingWorktree = yield* makeRecreateMissingWorktree;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
@@ -623,6 +624,39 @@ export const layer: Layer.Layer<
         return;
       }
       cloudSource = sourceResult.success;
+      const settleStartFailure = Effect.fn("ProviderTurnStartService.settleStartFailure")(
+        function* (failed: {
+          readonly signal: string;
+          readonly title: string;
+          readonly error: Error;
+          readonly message?: string;
+        }) {
+          const nestedCause = "cause" in failed.error ? failed.error.cause : undefined;
+          yield* settleRunBeforeStart({
+            signal: failed.signal,
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: failed.title,
+              failure: makeProviderFailure({
+                cause: failed.error,
+                message:
+                  failed.message ??
+                  knownProviderFailureMessage(failed.error) ??
+                  (nestedCause instanceof Error
+                    ? nestedCause.message
+                    : typeof nestedCause === "string"
+                      ? nestedCause
+                      : failed.error.message),
+                class: "provider_error",
+              }),
+            },
+          });
+        },
+      );
       const { worktreePath, branch } = projection.thread;
       if (!cloud && worktreePath !== null) {
         // Removal may hold this lease for minutes. Return to the outbox's
@@ -645,27 +679,14 @@ export const layer: Layer.Layer<
                   worktreePath,
                   branch,
                 });
-                yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
-                  Effect.andThen(
-                    gitWorkflow.createWorktree({
-                      cwd: project.workspaceRoot,
-                      refName: branch,
-                      path: worktreePath,
-                    }),
-                  ),
-                  Effect.catchCause((cause) =>
-                    Cause.hasInterruptsOnly(cause)
-                      ? Effect.interrupt
-                      : Effect.logWarning("provider turn start failed to recreate worktree", {
-                          threadId: projection.thread.id,
-                          worktreePath,
-                          cause: Cause.pretty(cause),
-                        }),
-                  ),
-                );
+                yield* recreateMissingWorktree({
+                  cwd: project.workspaceRoot,
+                  worktreePath,
+                  branch,
+                });
               }
             }
-          }),
+          }).pipe(Effect.result),
         );
         if (Option.isNone(prepared)) {
           const reason =
@@ -696,6 +717,16 @@ export const layer: Layer.Layer<
               title: "Workspace is busy",
               failure: makeProviderFailure({ message: reason, class: "validation_error" }),
             },
+          });
+          return;
+        }
+        if (prepared.value._tag === "Failure") {
+          if (input.willRetry === true) return yield* prepared.value.failure;
+          yield* settleStartFailure({
+            signal: "worktree-recreate-failure",
+            title: "Couldn't recreate thread workspace",
+            error: prepared.value.failure,
+            message: prepared.value.failure.message,
           });
           return;
         }
@@ -731,37 +762,6 @@ export const layer: Layer.Layer<
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
-      );
-      const settleStartFailure = Effect.fn("ProviderTurnStartService.settleStartFailure")(
-        function* (failed: {
-          readonly signal: string;
-          readonly title: string;
-          readonly error: Error;
-        }) {
-          const nestedCause = "cause" in failed.error ? failed.error.cause : undefined;
-          yield* settleRunBeforeStart({
-            signal: failed.signal,
-            status: "failed",
-            now: yield* DateTime.now,
-            providerInstanceId: run.providerInstanceId,
-            itemProviderThreadId: providerThread.id,
-            item: {
-              type: "error",
-              title: failed.title,
-              failure: makeProviderFailure({
-                cause: failed.error,
-                message:
-                  knownProviderFailureMessage(failed.error) ??
-                  (nestedCause instanceof Error
-                    ? nestedCause.message
-                    : typeof nestedCause === "string"
-                      ? nestedCause
-                      : failed.error.message),
-                class: "provider_error",
-              }),
-            },
-          });
-        },
       );
       const failedRuns = new Map(
         projection.runs

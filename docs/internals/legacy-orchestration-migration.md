@@ -75,7 +75,7 @@ only some GOAT migrations moves those rows and leaves the rest to the migrator a
 It runs before `assertV2MigrationsCanRun`, which would otherwise read the old GOAT ids as skipped
 upstream migrations.
 
-Going back to an older build is refused rather than repaired. The older build sees GOAT rows
+Going back to an older build after a renumbering is refused rather than repaired. The older build sees GOAT rows
 above its own ids next to an upstream name it does not know; its reconcile stops with
 `BadState`, startup reports the database as newer than the build, and nothing is written. Only
 the newer build or a copy taken before the upgrade opens it. Each GOAT server migrates only its
@@ -83,3 +83,8 @@ own database, so a remote host keeps its old ledger until its runtime updates, a
 runtime started later on that host is refused the same way. Cycle 261024 is an example: upstream
 `068_ShellStopRequestIndex` moved GOAT 068-101 to 069-102, and nightly 256 and earlier refuse a
 database a later build migrated. The cases are pinned in `reconcileGoatMigrationIds.test.ts`.
+
+A migration appended after the older build's last id does not trigger that refusal: the older build
+logs the newer row as unknown and runs. A data repair therefore holds only until an older build
+writes again, and returning to the newer build does not rerun it. `111_NotificationCursorRepair`
+is an example: nightly 282 and earlier can move unread cursors for idle compactions again.

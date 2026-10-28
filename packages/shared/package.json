@@ -7,6 +7,10 @@
       "types": "./src/opencodexRelease.ts",
       "import": "./src/opencodexRelease.ts"
     },
+    "./actionOutcomeSafety": {
+      "types": "./src/actionOutcomeSafety.ts",
+      "import": "./src/actionOutcomeSafety.ts"
+    },
     "./opencodexCompat": {
       "types": "./src/opencodexCompat.ts",
       "import": "./src/opencodexCompat.ts"
@@ -451,6 +455,10 @@
       "types": "./src/goatHome.ts",
       "import": "./src/goatHome.ts"
     },
+    "./desktopAppServer": {
+      "types": "./src/desktopAppServer.ts",
+      "import": "./src/desktopAppServer.ts"
+    },
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
@@ -550,6 +558,10 @@
     "./markdownGithubAlerts": {
       "types": "./src/markdownGithubAlerts.ts",
       "import": "./src/markdownGithubAlerts.ts"
+    },
+    "./markdownFrontmatter": {
+      "types": "./src/markdownFrontmatter.ts",
+      "import": "./src/markdownFrontmatter.ts"
     },
     "./markdownListIndentation": {
       "types": "./src/markdownListIndentation.ts",

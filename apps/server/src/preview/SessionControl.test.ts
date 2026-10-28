@@ -220,6 +220,29 @@ describe("SessionControl", () => {
     expect(changes).toEqual([true, false]);
   });
 
+  it("marks a refusal raised before input, and leaves a cut after the gate unmarked", async () => {
+    const control = new SessionControl("agent");
+    control.stopAgents();
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "stopped",
+      beforeInput: true,
+    });
+    control.resumeAgents();
+    const gate = control.dispatchGate();
+    await control.take("person");
+    await control.release("person");
+    expect(() => gate()).toThrow(expect.objectContaining({ beforeInput: true }));
+    const started = Promise.withResolvers<void>();
+    const acting = control.agent("agent", () => {
+      control.dispatchGate()();
+      started.resolve();
+      return new Promise<never>(() => {});
+    });
+    await started.promise;
+    control.stopAgents();
+    await expect(acting).rejects.toMatchObject({ reason: "stopped", beforeInput: false });
+  });
+
   it("answers a stopped action at once even when its work ignores the signal, and keeps later actions behind that work", async () => {
     const control = new SessionControl("agent");
     const work = Promise.withResolvers<string>();
@@ -295,5 +318,158 @@ describe("SessionControl", () => {
     read.resolve("frame that showed the password field");
     await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
     await expect(control.observe(async () => "next read")).resolves.toBe("next read");
+  });
+
+  it("runs secret work while private and does not cut it when privacy changes during the run", async () => {
+    const control = new SessionControl("agent");
+    control.setPrivate(true);
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const running = control.secret("agent", async ({ assertMayDispatch }) => {
+      expect(control.isPrivate).toBe(true);
+      started.resolve();
+      await finish.promise;
+      assertMayDispatch();
+      return "filled";
+    });
+    await started.promise;
+    control.setPrivate(false);
+    control.setPrivate(true);
+    finish.resolve();
+    await expect(running).resolves.toBe("filled");
+  });
+
+  it("holds privacy until secret work ends and withholds observations overlapping the hold after release", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    const held = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const running = control.secret("agent", async ({ hold }) => {
+      hold();
+      hold();
+      held.resolve();
+      await finish.promise;
+    });
+    await held.promise;
+    control.setPrivate(false);
+    expect(control.isPrivate).toBe(true);
+    await expect(control.observe(async () => "private frame")).rejects.toMatchObject({
+      reason: "privateMode",
+    });
+    finish.resolve();
+    await running;
+    expect(control.isPrivate).toBe(false);
+    read.resolve("frame from during the fill");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+    await expect(control.observe(async () => "fresh frame")).resolves.toBe("fresh frame");
+  });
+
+  it("keeps secret dispatch refused after a takeover is released during the run", async () => {
+    const control = new SessionControl("agent");
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const running = control.secret("agent", async ({ assertMayDispatch }) => {
+      assertMayDispatch();
+      started.resolve();
+      await finish.promise;
+      expect(control.controller).toBe(null);
+      expect(assertMayDispatch).toThrow(BrowserControlInterrupted);
+    });
+    await started.promise;
+    const takeover = expect(control.take("viewer")).rejects.toThrow(BrowserControlInterrupted);
+    const released = control.release("viewer");
+    finish.resolve();
+    await Promise.all([running, takeover, released]);
+    await expect(control.secret("agent", async () => "fresh fill")).resolves.toBe("fresh fill");
+  });
+
+  it("keeps secret dispatch refused after agents stop and resume during the run", async () => {
+    const control = new SessionControl("agent");
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const running = control.secret("agent", async ({ assertMayDispatch }) => {
+      assertMayDispatch();
+      started.resolve();
+      await finish.promise;
+      expect(control.isAgentStopped).toBe(false);
+      expect(assertMayDispatch).toThrow(BrowserControlInterrupted);
+    });
+    await started.promise;
+    control.stopAgents();
+    control.resumeAgents();
+    finish.resolve();
+    await running;
+    await expect(control.secret("agent", async () => "fresh fill")).resolves.toBe("fresh fill");
+  });
+
+  it("refuses secret work before dispatch under human control, Stop, or another agent", async () => {
+    const control = new SessionControl("agent");
+    const dispatched: string[] = [];
+    const run = async () => {
+      dispatched.push("filled");
+    };
+    await control.take("viewer");
+    await expect(control.secret("agent", run)).rejects.toMatchObject({ reason: "humanControl" });
+    await control.release("viewer");
+    control.stopAgents();
+    await expect(control.secret("agent", run)).rejects.toMatchObject({ reason: "stopped" });
+    control.resumeAgents();
+    await expect(control.secret("other-agent", run)).rejects.toMatchObject({
+      reason: "agentMismatch",
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  it("holds a tab an agent handed to a person until their hand back is recorded, not when their viewer drops", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    const before = control.generation;
+    expect(control.requestHandoff("Sign in with the code on your phone.")).toBe(true);
+    // Refs the agent took before asking expire, as at a takeover.
+    expect(control.generation).toBeGreaterThan(before);
+    await expect(control.agent("agent", async () => "typed")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await expect(control.secret("agent", async () => "filled")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await control.take("viewer");
+    await control.disconnect("viewer");
+    expect([control.handoffReason, ends]).toEqual(["Sign in with the code on your phone.", []]);
+    await control.take("viewer");
+    await control.release("viewer");
+    // Held until the hand back is recorded, which then ends it without reporting it again.
+    expect([control.handoffReason, ends]).toEqual([
+      "Sign in with the code on your phone.",
+      ["handedBack"],
+    ]);
+    expect(control.agentCanActNow("agent")).toBe(false);
+    control.endHandoff(null);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+    control.requestHandoff("Solve the CAPTCHA.");
+    control.stopAgents();
+    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "stopped"]]);
+  });
+
+  it("lets the request's own end free the tab without reporting a person's hand back", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    control.requestHandoff("Approve the sign-in.");
+    control.endHandoff(null);
+    expect(ends).toEqual([]);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+  });
+  it("refuses an agent's dialog answer or close on a tab it handed to a person", () => {
+    const control = new SessionControl("agent");
+    control.assertNoHumanControl();
+    control.requestHandoff("Decide whether to trust this device.", "handoff:dialog");
+    expect(() => control.assertNoHumanControl()).toThrow(
+      expect.objectContaining({ reason: "humanControl" }),
+    );
+    control.endHandoff(null);
+    control.assertNoHumanControl();
   });
 });

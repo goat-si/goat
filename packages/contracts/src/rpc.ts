@@ -862,7 +862,7 @@ const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscri
 const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
   payload: PreviewSessionControlInput,
   success: PreviewSessionControlResult,
-  error: EnvironmentAuthorizationError,
+  error: Schema.Union([EnvironmentAuthorizationError, HandoffError]),
 });
 
 /** A desktop session's live picture for one viewer, or why there is none (#1370). */

@@ -1,3 +1,4 @@
+import * as Option from "effect/Option";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
@@ -101,6 +102,24 @@ describe("ElectronWindow", () => {
     windowsForegroundPrepareMock.mockReset().mockResolvedValue(false);
     windowsForegroundCloseMock.mockReset();
   });
+
+  it.effect("does not use an auxiliary window as the main or focused fallback", () =>
+    Effect.gen(function* () {
+      const auxiliary = { id: 81, isDestroyed: () => false } as Electron.BrowserWindow;
+      browserWindowMock.mockImplementationOnce(function () {
+        return auxiliary;
+      });
+      const windows = yield* ElectronWindow.ElectronWindow;
+      yield* windows.create({}, { auxiliary: true });
+      getAllWindowsMock.mockReturnValue([auxiliary]);
+      getFocusedWindowMock.mockReturnValue(auxiliary);
+      assert.equal((yield* windows.currentMainOrFirst)._tag, "None");
+      assert.equal((yield* windows.focusedMainOrFirst)._tag, "None");
+      const main = { id: 82, isDestroyed: () => false } as Electron.BrowserWindow;
+      getAllWindowsMock.mockReturnValue([auxiliary, main]);
+      assert.strictEqual(Option.getOrNull(yield* windows.currentMainOrFirst), main);
+    }).pipe(Effect.provide(layerTest)),
+  );
 
   it.effect("cancels native focus when destroyed during the foreground query", () =>
     Effect.gen(function* () {

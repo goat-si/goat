@@ -48,6 +48,15 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
         hop: "relay",
         ...(error.dpopFailureReason === "time_window" ? { failureCause: "clock_skew" } : {}),
       });
+    case "RelayAuthenticationUnavailableError":
+      return new ConnectionTransientError({
+        reason: "endpoint-unavailable",
+        detail,
+        traceId,
+        hop: "relay",
+      });
+    case "RelayAuthenticationStrengthError":
+    case "RelayConnectUpgradeRequiredError":
     case "RelayEnvironmentLinkProofExpiredError":
     case "RelayAgentActivityPublishProofExpiredError":
     case "RelayAgentActivityPublishProofInvalidError":

@@ -1,16 +1,18 @@
 import { expect, it } from "@effect/vitest";
-import { OpenCodexInventorySnapshot } from "@goat/contracts";
+import { GoatHostStatusResult, OpenCodexInventorySnapshot } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -23,6 +25,12 @@ import parityFixture from "../hub/fixtures/parity.json" with { type: "json" };
 import fleet from "./fixtures/fleet.json" with { type: "json" };
 
 const decodeSnapshot = Schema.decodeUnknownEffect(OpenCodexInventorySnapshot);
+const encodeHostStatus = Schema.encodeUnknownEffect(GoatHostStatusResult);
+const isJson = Schema.is(Schema.Json);
+const failingCrypto = Crypto.make({
+  randomBytes: (size) => new Uint8Array(size),
+  digest: () => Effect.fail(PlatformError.badArgument({ module: "Crypto", method: "digest" })),
+});
 
 // Sanitized projections of the approved 2026-10-21 fleet observations (§1.2), in the
 // CLI shapes from OpenCodex src/link/status-projection.ts and src/cli/status.ts.
@@ -46,6 +54,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     managedPath?: string;
     managed?: boolean;
     hostname?: string;
+    crypto?: Crypto.Crypto;
   } = {},
 ) {
   const fixture = options.fixture;
@@ -137,7 +146,9 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
   };
   const context = yield* Layer.build(
     Inventory.layer.pipe(
-      Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        options.crypto ? Layer.succeed(Crypto.Crypto, options.crypto) : NodeCrypto.layer,
+      ),
       Layer.provide(Layer.succeed(FileSystem.FileSystem, fs)),
       Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
       Layer.provide(
@@ -579,15 +590,45 @@ it.effect.each(["missing Home", "invalid timestamp", "unknown document field"])(
     }),
 );
 
+it.effect("a digest that cannot be computed is omitted, so the snapshot stays JSON", () =>
+  Effect.gen(function* () {
+    const { inventory } = yield* setup({
+      fixture: fleet["mac-studio"],
+      crypto: failingCrypto,
+      files: {
+        "/fixture/.opencodex/link/home-codex-settings.json": JSON.stringify(
+          parityFixture.settingsRecord,
+        ),
+      },
+      response: (url) =>
+        new Response(
+          JSON.stringify(
+            url.endsWith("/v1/models")
+              ? { data: [{ id: "a" }] }
+              : url.endsWith("/healthz")
+                ? fleet["mac-studio"].health
+                : fleet["mac-studio"].ready,
+          ),
+        ),
+    });
+    const evidence = (yield* inventory.readParity).parityEvidence;
+    expect(evidence?.settingsLinkId).toBe(parityFixture.settingsRecord.linkId);
+    expect(evidence?.modelsStatus).toBe(200);
+    expect(Object.hasOwn(evidence ?? {}, "settingsDigest")).toBe(false);
+    expect(Object.hasOwn(evidence ?? {}, "catalogDigest")).toBe(false);
+    expect(isJson(evidence)).toBe(true);
+  }),
+);
+
 it.effect(
-  "unknown optional uptime and apply metadata skip freshness without erasing core health/link evidence",
+  "null lastApplyAt from a home link is omitted, so host status can encode the snapshot",
   () =>
     Effect.gen(function* () {
       const { inventory } = yield* setup({
         fixture: fleet.home,
         link: {
           ...fleet.home.link,
-          links: fleet.home.link.links.map((link) => ({ ...link, lastApplyAt: "unknown" })),
+          links: fleet.home.link.links.map((link) => ({ ...link, lastApplyAt: null })),
         },
         response: (url) =>
           new Response(
@@ -599,8 +640,28 @@ it.effect(
       const snapshot = yield* inventory.readParity;
       expect(snapshot.runtime.healthy).toBe(true);
       expect(snapshot.link.links).toHaveLength(5);
-      expect(snapshot.link.links.every(({ lastApplyAt }) => lastApplyAt === undefined)).toBe(true);
+      expect(snapshot.link.links.every((link) => !("lastApplyAt" in link))).toBe(true);
       expect(snapshot.parityEvidence?.startedAt).toBeUndefined();
+      yield* encodeHostStatus({
+        hosts: [
+          {
+            host: null,
+            reachability: "ok",
+            metrics: {
+              sampledAt: 1,
+              cpuUtilization: 0,
+              cpuCount: 1,
+              availableMemoryBytes: 1,
+              totalMemoryBytes: 1,
+              loadAvg: { oneMinute: 0, fiveMinutes: 0, fifteenMinutes: 0 },
+              disk: { path: "/", availableBytes: 1, totalBytes: 1 },
+              threads: { running: 0, waiting: 0, queued: 0 },
+              quotas: [],
+              opencodex: snapshot,
+            },
+          },
+        ],
+      });
     }),
 );
 

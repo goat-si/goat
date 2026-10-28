@@ -4,6 +4,7 @@ import * as Stream from "effect/Stream";
 
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import type { ComputerUseDetection } from "./ComputerUseLeases.ts";
+import { honoredSignals } from "./ComputerUsePrivateMode.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
@@ -24,7 +25,7 @@ export const makeLeaseSafety = Effect.fn("ComputerUseLeaseSafety.make")(function
         onNone: () => ({ humanInput: false, privateMode: false, frames: false }),
         onSome: ({ signals, frames }) => ({
           humanInput: signals.humanInput === "supported",
-          privateMode: signals.privateMode === "supported",
+          privateMode: honoredSignals(signals).privateMode === "supported",
           frames: frames === true,
         }),
       }),

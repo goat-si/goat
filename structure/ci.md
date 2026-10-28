@@ -21,7 +21,13 @@ runners persist between jobs and give jobs no sudo: each keeps its caches in its
 steps that install packages or unlock the runner account for the test sshd run on hosted runners
 only.
 
-The `ci` matrix takes runners labelled `epyc`. `goat-scope`, `goat-screenshot-gate` and
+Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`. The
+heavy tasks (`test`, `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build`
+and the server shards) take runners labelled `epyc`, for the cores, native headers, browsers and
+persistent caches. The short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck` and the
+small package suites) take `ubuntu-24.04` in every run: on EPYC a one-minute suite waited up to two
+hours behind half-hour server shards during bursts of full runs. They cost hosted concurrency, so
+keep long or native work off that list. `goat-scope`, `goat-screenshot-gate` and
 `goat-ci-result` take the same expression with the label `epyc-light`, which
 `goat-epyc-23` and `goat-epyc-24` carry instead of `epyc`. A matrix job never lands on them, so
 these short jobs start within seconds even while every matrix runner is busy; on the shared pool

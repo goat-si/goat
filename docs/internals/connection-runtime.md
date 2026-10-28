@@ -17,17 +17,18 @@ client that can never connect retries all day. Offline states and authentication
 failures wait for a wakeup instead of spending attempts on unchanged conditions.
 
 Foregrounding, an explicit retry, and an offline report probe the established
-session, and only a failed probe reconnects. Offline reports are often wrong, for
-example for a loopback server. A long suspension is the one exception: a long
-mobile background, or a desktop that slept (the main process forwards
-powerMonitor `resume`, since a closed lid may never change page visibility).
-It replaces the session at once, because the OS can kill a socket without
-reporting closure, and a probe would hold a dead socket in "Resuming" until it
-times out. That fresh attempt runs even while the network reports offline. On
-desktop an SSH forward can outlive its dead TCP connection for ssh's 45 s
-keepalive window, so a resume also closes forwards that stop answering.
-Foregrounding also wakes a pending retry immediately and leaves an ordinary
-in-flight attempt alone.
+session. A long mobile background or desktop sleep uses a short probe instead
+of discarding a live socket. With a probe-capable host, a fresh credential-free
+descriptor request can distinguish a silent socket from an unreachable host;
+inbound frames keep a slow but live socket open. Remote routes allow for packet
+loss before declaring silence, and ordinary web foreground probes retain their
+busy-host allowance. GOAT also retains its longer local-server silence budget.
+A confirmed dead socket is replaced even while the network reports offline.
+
+Foregrounding wakes a pending retry immediately. A long resume also replaces a
+stalled establishment attempt, retaining GOAT's attempt fencing and preparation
+budgets. Desktop resume still closes SSH forwards that stop answering during
+ssh's keepalive window; mobile foreground handoffs use the ordinary probe.
 
 SSH connections classify their failures before they reach this loop, so a
 sleeping host retries quietly and a rejected key waits for the user. See

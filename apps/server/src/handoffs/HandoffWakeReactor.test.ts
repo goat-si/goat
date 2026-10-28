@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  PREVIEW_HANDOFF_PATH,
   PROVIDER_SETTINGS_HANDOFF_PATH,
   STORAGE_CLEAN_HANDOFF_PATH,
   StorageMcpCleanInput,
@@ -498,4 +499,56 @@ it.effect("keeps handoff wakes pending while held and dispatches after release",
       }),
     ).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
   }),
+);
+
+it.effect(
+  "wakes an agent when a person hands back, declines or cancels its screen request, not after a Stop",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const handedBack = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: handedBack.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, handedBack.handoffId));
+        const declined = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: declined.handoffId, action: "declined" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, declined.handoffId, "declined"));
+        // A person's Cancel request on the card, as the mobile app sends it.
+        const cancelled = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: cancelled.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, cancelled.handoffId, "cancelled"));
+        // A Stop on the screen is recorded as the agent's own end, so the stopped agent stays so.
+        const stopped = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.orchestrator.dispatch({
+          type: "handoff.transition",
+          commandId: CommandId.make(`handoff:${stopped.handoffId}:cancelled`),
+          threadId,
+          handoffId: stopped.handoffId,
+          state: "cancelled",
+          actor: { type: "agent", threadId },
+        });
+        yield* world.reactor.reconcile;
+        const sent = yield* wakes(world);
+        const textOf = (handoffId: string, state: string) =>
+          sent.find((wake) => wake.id === `message:handoff-wake:${handoffId}:${state}`)?.text;
+        expect(textOf(handedBack.handoffId, "completed")).toContain(
+          "was handed back by a person. The screen is yours again.",
+        );
+        expect(textOf(declined.handoffId, "declined")).toContain("was declined by a person.");
+        expect(textOf(cancelled.handoffId, "cancelled")).toContain(
+          "Do not act on that tab or screen again unless they ask",
+        );
+        expect(textOf(stopped.handoffId, "cancelled")).toBeUndefined();
+        expect(sent).toHaveLength(3);
+      }),
+    ),
 );

@@ -19,7 +19,7 @@ function SettingsSidebar({ defaultOpen = true }: { defaultOpen?: boolean }) {
     <SidebarProvider defaultOpen={defaultOpen}>
       <Sidebar side="left" collapsible="offcanvas">
         <button type="button">Toggle sidebar</button>
-        <SettingsSidebarNav pathname="/settings/hub" />
+        <SettingsSidebarNav pathname="/settings/hub" placement="app-sidebar" />
       </Sidebar>
       <SettingsSearchShortcut />
       <main>Hub settings</main>
@@ -53,6 +53,18 @@ describe("Settings search shortcut", () => {
     await userEvent.keyboard("/");
 
     await expect.element(searchInput()).toHaveFocus();
+  });
+
+  it("closes the phone-width sidebar once a section is picked", async () => {
+    await page.viewport(390, 844);
+    await using screen = await render(<SettingsSidebar />, { router: "/settings/hub" });
+    await userEvent.keyboard("/");
+    await expect.element(searchInput()).toHaveFocus();
+
+    await userEvent.click(page.getByRole("button", { name: "Appearance" }));
+
+    await expect.element(searchInput()).not.toBeInTheDocument();
+    expect(screen.router?.state.location.pathname).toBe("/settings/appearance");
   });
 
   it("expands a collapsed desktop sidebar on Mod+F with search focused", async () => {

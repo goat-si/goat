@@ -82,6 +82,8 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
+import * as Voice from "./voice.ts";
+export * from "./voice.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -368,10 +370,7 @@ export class EnvironmentCloudEndpointUnavailableError extends Schema.TaggedError
     });
   }
 }
-const EnvironmentSessionCreationErrors = [
-  EnvironmentAuthInvalidError,
-  EnvironmentInternalError,
-] as const;
+const EnvironmentSessionCreationErrors = EnvironmentAuthenticationErrors;
 const EnvironmentTokenExchangeErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentAuthInvalidError,
@@ -390,14 +389,8 @@ const EnvironmentSessionRevokeErrors = [
   EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentProjectSnapshotErrors = [
-  EnvironmentScopeRequiredError,
-  EnvironmentInternalError,
-] as const;
-const EnvironmentOrchestrationSnapshotErrors = [
-  EnvironmentScopeRequiredError,
-  EnvironmentInternalError,
-] as const;
+const EnvironmentProjectSnapshotErrors = EnvironmentScopedOperationErrors;
+const EnvironmentOrchestrationSnapshotErrors = EnvironmentScopedOperationErrors;
 const EnvironmentOrchestrationThreadSnapshotErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentResourceNotFoundError,
@@ -491,7 +484,7 @@ export function formatConnectReachable(
 }
 
 /**
- * Sections of docs/user/t3-connect-troubleshooting.md. Each is the GitHub anchor of a
+ * Sections of docs/user/goat-connect-troubleshooting.md. Each is the GitHub anchor of a
  * heading there; the test fails when a heading is renamed without updating this list.
  */
 export const GOAT_CONNECT_TROUBLESHOOTING_SECTIONS = [
@@ -510,7 +503,7 @@ export type GoatConnectTroubleshootingSection =
 
 /** Clients, the CLI, and server logs link here as "More info". */
 export function goatConnectTroubleshootingUrl(section: GoatConnectTroubleshootingSection): string {
-  return `https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#${section}`;
+  return `https://goat-si.github.io/goat/connect-troubleshooting/#${section}`;
 }
 
 const REACHABILITY_SECTION = {
@@ -615,29 +608,16 @@ export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
 
 export * from "./runtimeSessionRequest.ts";
 
+const descriptorEndpoint = { success: ExecutionEnvironmentDescriptor } as const;
+const sshActivityEndpoint = {
+  success: SshServerActivity,
+  error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
+} as const;
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
-  .add(
-    HttpApiEndpoint.get("descriptor", GOAT_ENVIRONMENT_PATH, {
-      success: ExecutionEnvironmentDescriptor,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("sshActivity", GOAT_ACTIVITY_PATH, {
-      success: SshServerActivity,
-      error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("legacyDescriptor", LEGACY_ENVIRONMENT_PATH, {
-      success: ExecutionEnvironmentDescriptor,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("legacySshActivity", LEGACY_ACTIVITY_PATH, {
-      success: SshServerActivity,
-      error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
-    }),
-  ) {}
+  .add(HttpApiEndpoint.get("descriptor", GOAT_ENVIRONMENT_PATH, descriptorEndpoint))
+  .add(HttpApiEndpoint.get("sshActivity", GOAT_ACTIVITY_PATH, sshActivityEndpoint))
+  .add(HttpApiEndpoint.get("legacyDescriptor", LEGACY_ENVIRONMENT_PATH, descriptorEndpoint))
+  .add(HttpApiEndpoint.get("legacySshActivity", LEGACY_ACTIVITY_PATH, sshActivityEndpoint)) {}
 
 class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
   .add(
@@ -942,25 +922,43 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
-// Path tokens and optional body signatures authenticate webhooks; read raw bytes to verify signatures.
-const WebhookParams = Schema.Struct({
-  hookId: TrimmedNonEmptyString,
-  token: TrimmedNonEmptyString,
-});
-const WebhookAccepted = Schema.Struct({ deliveryId: TrimmedNonEmptyString }).pipe(
-  HttpApiSchema.status(202),
-);
-const webhookEndpoint = {
-  params: WebhookParams,
-  success: WebhookAccepted,
-} as const;
 const WEBHOOK_PATH = "/api/hooks/:hookId/:token";
-
+const webhookEndpoint = {
+  params: Schema.Struct({ hookId: TrimmedNonEmptyString, token: TrimmedNonEmptyString }),
+  success: Schema.Struct({ deliveryId: TrimmedNonEmptyString }).pipe(HttpApiSchema.status(202)),
+} as const;
 class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.post("webhookPost", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.put("webhookPut", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
+const EnvironmentVoiceHttpErrors = [
+  ...EnvironmentScopedOperationErrors,
+  EnvironmentHttpForbiddenError,
+  ...Voice.VoiceHttpErrors,
+] as const;
+const voiceEndpoint = <P extends Schema.Top, S extends Schema.Top>(payload: P, success: S) => ({
+  headers: OptionalBearerHeaders,
+  payload,
+  success,
+  error: EnvironmentVoiceHttpErrors,
+});
+class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
+  .add(
+    HttpApiEndpoint.post(
+      "transcribe",
+      Voice.VOICE_TRANSCRIBE_PATH,
+      voiceEndpoint(Voice.VoiceTranscriptionInput, Voice.VoiceTranscriptionResult),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "prewarm",
+      Voice.VOICE_PREWARM_PATH,
+      voiceEndpoint(Voice.VoicePrewarmInput, Voice.VoicePrewarmResult),
+    ),
+  )
+  .middleware(EnvironmentAuthenticatedAuth) {}
 
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
@@ -970,4 +968,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
-  .add(EnvironmentWebhooksHttpApi) {}
+  .add(EnvironmentWebhooksHttpApi)
+  .add(EnvironmentVoiceHttpApi) {}

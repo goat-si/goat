@@ -41,7 +41,7 @@ it.effect(
       yield* runMigrations({ toMigrationInclusive: 80 });
       yield* insertTask;
       yield* insertDispatches;
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [81, "MemoryTaskGrantCeiling"],
         [82, "MemoryImportLineage"],
         [83, "MemoryCheckpointAccounting"],
@@ -72,6 +72,7 @@ it.effect(
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
         [110, "ScheduledTaskNotificationPolicy"],
+        [111, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },
@@ -111,7 +112,7 @@ it.effect(
           ],
         );
       }
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "read_write" },
       ]);

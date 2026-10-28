@@ -590,6 +590,107 @@ it.live("desktop private authority notification cuts an active screen cell", () 
   }),
 );
 
+it.live("Stop during slow tab cleanup fails a cell that caught its dispatched input", () => {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("temporary"),
+    title: "Page",
+    url: "https://example.test/",
+    owner: "agent" as const,
+    ownedByCaller: true,
+    controlGeneration: 1,
+  };
+  let opened = false;
+  return Effect.gen(function* () {
+    const navigating = yield* Deferred.make<void>();
+    const navigateHeld = yield* Deferred.make<void>();
+    const closeHeld = yield* Deferred.make<void>();
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed(opened ? [tab] : []),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        request.operation === "navigate"
+          ? Deferred.succeed(navigating, undefined).pipe(
+              Effect.flatMap(() => Deferred.await(navigateHeld)),
+              Effect.as({ tabId: tab.tabId } as A),
+            )
+          : request.operation === "close"
+            ? Deferred.await(closeHeld).pipe(Effect.as({ tabId: tab.tabId } as A))
+            : Effect.sync(() => {
+                if (request.operation === "open") opened = true;
+                return (
+                  request.operation === "status"
+                    ? {
+                        tabId: tab.tabId,
+                        url: tab.url,
+                        control: { owner: "agent", ownedByCaller: true, generation: 1 },
+                      }
+                    : { tabId: tab.tabId }
+                ) as A;
+              }),
+    };
+    type AuthorityListener = Parameters<
+      NonNullable<ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0];
+    let notify: AuthorityListener | undefined;
+    const leases = {
+      onAuthorityChange: (listener: AuthorityListener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+    } as ComputerUseLeases["Service"];
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const running = yield* service
+        .runCell({
+          runId: "run",
+          turnId: "turn",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source: [
+            "const tab = await screen.openTab({url: 'https://example.test/'});",
+            "try { await tab.navigate('https://example.test/next'); } catch {}",
+            "return 'caught';",
+          ].join("\n"),
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(navigating);
+      notify?.({ kind: "stop", threadId: "thread" as ThreadId, controlId: "control" });
+      const outcome = yield* Fiber.join(running);
+      yield* Deferred.succeed(navigateHeld, undefined);
+      yield* Deferred.succeed(closeHeld, undefined);
+      expect(outcome._tag).toBe("Failure");
+      if (outcome._tag === "Failure") expect(outcome.failure.code).toBe("unknown_outcome");
+      yield* service.finishTurn({
+        runId: "run",
+        turnId: "turn",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "test",
+      });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          leases,
+          tabHost,
+          dispatcher: tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+});
+
 it.live("terminal run cleanup is exact and a queued user message invalidates old handles", () => {
   let runAStatus: "waiting" | "completed" = "waiting";
   let binding = 0;
@@ -604,6 +705,16 @@ it.live("terminal run cleanup is exact and a queued user message invalidates old
             ],
           }) as unknown as OrchestrationV2ThreadProjection,
       ),
+    getThreadRecords: (() =>
+      Effect.sync(
+        () =>
+          ({
+            runs: [
+              { id: "run-a", status: runAStatus },
+              { id: "run-b", status: "running" },
+            ],
+          }) as unknown as OrchestrationV2ThreadProjection,
+      )) as never,
   });
   const serviceLayer = ScreenRunService.layerWithRuntime({
     invocation: {
@@ -713,6 +824,10 @@ it.live.each(["new message", "turn end"] as const)(
           Effect.sync(
             () => ({ runs: [{ id: "run", status }] }) as unknown as OrchestrationV2ThreadProjection,
           ),
+        getThreadRecords: (() =>
+          Effect.sync(
+            () => ({ runs: [{ id: "run", status }] }) as unknown as OrchestrationV2ThreadProjection,
+          )) as never,
       });
       const serviceLayer = ScreenRunService.layerWithRuntime({
         invocation: {

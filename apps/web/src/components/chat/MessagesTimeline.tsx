@@ -1,4 +1,9 @@
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
+import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
+import { TimelineHistoryControl } from "./TimelineHistoryControl";
+import { timelineHeadingPins } from "./timelineHeadingPins";
+import { useSentCallReveal } from "./useSentCallReveal";
+import { TurnThreadCardsRow } from "./TurnThreadCards";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
@@ -166,7 +171,7 @@ function TimelineListFooter({
   );
 }
 
-const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_TIMELINE_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -233,7 +238,10 @@ interface MessagesTimelineProps {
   /** Off where another region already speaks the thread's status, like a subagent's bar. */
   announceTurnStatus?: boolean;
   onOpenTurnDiff?: OpenTurnDiff;
-  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onOpenThread: (
+    threadId: OrchestrationV2TurnItem["threadId"],
+    options?: OpenThreadOptions,
+  ) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   parentThreadLink?: {
@@ -265,7 +273,7 @@ interface MessagesTimelineProps {
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
-  skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  skills?: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
@@ -752,6 +760,26 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onCitationListLoad();
     setFindListReady(true);
   };
+  useSentCallReveal({
+    entries: timelineEntries,
+    rows,
+    listRef,
+    listReady: findListReady,
+    threadRef: citationThreadRef,
+    history: historyControls,
+    foldKeyOf: (entryId) =>
+      (
+        findFoldRunIds ??
+        timelineTurnFoldRunIdsByEntryId({
+          timelineEntries,
+          latestRun,
+          runningRunId,
+          isWorking,
+          runlessWorkActive,
+        })
+      ).get(entryId),
+    onNavigate: navigateTimeline,
+  });
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   // Every full-screen viewer reports false when it unmounts, so a row that leaves the list
   // while full screen releases its pin too.
@@ -760,6 +788,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const alwaysRenderIndices = restoringAlwaysRender?.indices ?? [];
   const alwaysRenderKeys = [
+    ...timelineHeadingPins(rows),
     ...(citationAlwaysRender?.keys ?? []),
     ...(fullscreenAppRowId === null ? [] : [fullscreenAppRowId]),
     ...new Set(
@@ -1350,38 +1379,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   );
 });
 
-function TimelineHistoryControl(props: MessagesTimelineHistoryControls) {
-  if (!props.hasMoreHistory && props.error === null) {
-    return null;
-  }
-  return (
-    <div className="messages-timeline-row-frame">
-      <div className="chat-content-lane flex flex-col gap-1.5 pb-2">
-        {props.hasMoreHistory ? (
-          <button
-            type="button"
-            disabled={props.loading}
-            aria-label="Load earlier turns"
-            onClick={() => props.onLoadEarlier()}
-            className="flex w-full cursor-pointer items-center gap-3 py-1.5 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default"
-          >
-            <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-            <span className="shrink-0">
-              {props.loading ? "Loading earlier turns…" : "Load earlier turns"}
-            </span>
-            <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
-          </button>
-        ) : null}
-        {props.error !== null ? (
-          <p role="status" className="text-center text-muted-foreground text-xs">
-            {props.error}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 function keyExtractor(item: MessagesTimelineRow) {
   return item.id;
 }
@@ -1418,6 +1415,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 row.kind === "worktree-setup" ||
                 row.kind === "cloud-run" ||
                 row.kind === "event" ||
+                row.kind === "thread-cards" ||
                 row.kind === "attempt-fold" ||
                 row.kind === "html-render" ||
                 row.kind === "mcp-app"
@@ -1474,6 +1472,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "cloud-run" ? <CloudRunTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+      {row.kind === "thread-cards" ? <TurnThreadCardsRow row={row} /> : null}
     </div>
   );
 });

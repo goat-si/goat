@@ -5,6 +5,12 @@ When a server is behind your web or desktop app, an update notice appears in the
 conversation and **Settings → Connections**. Update the machine named in that
 notice.
 
+If the desktop server repeatedly fails to start, GOAT opens a recovery window with
+its error output. It keeps retrying in the background. You can install an available
+update, download the last release that started successfully on this computer, or
+open GOAT's releases page. Copy details includes the server error for a bug report.
+The recovery window closes when the main window opens.
+
 ## Update everything at once
 
 The update button sits above Settings in the icon bar on the left edge of the

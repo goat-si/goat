@@ -7484,8 +7484,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         yield* Ref.get(awaitedBackgroundTasksByNativeThread),
                         nativeThreadId,
                       );
+                // A stopped turn that wrote to the transcript moved past the pinned head.
                 const clearConversationHead =
-                  input.status === "completed" &&
+                  (input.status === "completed" || input.context.nativeMessageCursor !== null) &&
                   input.context.input.providerThread.nativeConversationHeadRef !== null;
                 const goal =
                   nativeThreadId === null ? undefined : goalsByNativeThread.get(nativeThreadId);
@@ -10028,7 +10029,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              McpProviderSession.withThreadMcpEnvironment(
+              McpProviderSession.withThreadAgentEnvironment(
                 { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
                 mcpSession,
               ),

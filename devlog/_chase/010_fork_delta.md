@@ -103,17 +103,17 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/globalAgent*.ts`, `Sidebar.tsx`, `ChatView.tsx`, 헤더와 메뉴 컴포넌트
 - 정책: `globalAgent*` 파일은 GOAT 전용이다. 공유 컴포넌트는 upstream을 받고 글로벌 에이전트 분기를 다시 얹는다.
 
-### `goat-identity` GOAT 이름·도메인·인프라 (261026)
-
-- PR: #1758 #1759 #1763 #1764 #1769 #1771 #1775 #1776, 이 PR (추적 #1757)
-- 경로: `scripts/lib/goat-rename/rules-{samples,relay,mobile}.ts`, `infra/relay/`(마이그레이션 제외), `apps/mobile/modules/goat-*`, `packages/contracts/src/legacyT3Names.ts`
-- 정책: upstream 이름을 GOAT 이름으로 바꾸는 일은 모두 rename 규칙이다. 테스트 샘플의 사람 이름(julius, Theo)과 저장소 이름(`pingdotgg/t3code` → `goat-si/goat`, 둘을 구분하는 테스트의 `t3tools/t3code` → `sample-tools/goat`), GOAT Connect 스택과 relay wire 이름(헤더, JWT typ, client id, env, telemetry, worker·tunnel 이름), `t3.codes` 기본값(hosted app, Codex 반환 origin, `goat.json` schema), 모바일 네이티브 모듈, Linux deb 패키지 `goat`(`t3code`를 Replaces), upstream 전용 workflow·AUR·Vercel 설정과 upstream contribution triage(스킬, 예외·vouch 목록, 지원 playbook) drop. replay transcript는 rename 대상이 아니라서 `/home/replay-user/t3code` 경로는 transcript와 기대값 모두 그대로 둔다. 저장된 값은 legacy 이름을 그대로 읽는다: `t3-connect` 경로 종류, 모바일 relay 토큰 캐시의 client id, Android 알림 저장소·태그·`t3_kind`, 위젯 만료 저장소, 옛 `app.t3.codes` 공유 링크. troubleshooting 안내서 사본과 도움말 anchor는 GOAT가 사용자 문서를 호스팅할 때까지 유지한다.
-
 ### `goat-copy` 보이는 문구 GOAT
 
 - 커밋: `e0596e725`
 - 경로: UI·토스트·CLI 도움말 문자열 전반, `packages/provider-*/src/server`, `provider-core` 안내문, MCP 도구 설명, `docs/user`, `README.md`
 - 정책: upstream 문구 변경을 받고 앱을 가리키는 "T3 Code"/"T3"만 GOAT로 다시 쓴다. 주석과 아래 이름 규칙의 "그대로" 항목은 바꾸지 않는다. GOAT Connect 문구는 `rules-visible.ts`의 `isConnectCopySurface` 규칙이, GOAT Connect와 대조하는 문장은 `rules-relay.ts`의 `CONNECT_CONTRAST_RULES`가 다시 쓴다. 한 곳씩 바꾸는 GOAT 이름(provider 이름, 커밋 작성자, 비공개 빌드 이름, 브랜드 자산 파일)은 `rules-leftovers.ts`, 개발 컨테이너·이슈 양식·테스트 제목은 `rules-meta.ts`에 있다 (#1619, #1628, [10.014](./10.014_t3_chase_rename_leftovers.md)).
+
+### `goat-identity` GOAT 이름·도메인·인프라 (261026)
+
+- PR: #1758 #1759 #1763 #1764 #1769 #1771 #1775 #1776, 이 PR (추적 #1757)
+- 경로: `scripts/lib/goat-rename/rules-{samples,relay,mobile}.ts`, `infra/relay/`(마이그레이션 제외), `apps/mobile/modules/goat-*`, `packages/contracts/src/legacyT3Names.ts`
+- 정책: upstream 이름을 GOAT 이름으로 바꾸는 일은 모두 rename 규칙이다. 테스트 샘플의 사람 이름(julius, Theo)과 저장소 이름(`pingdotgg/t3code` → `goat-si/goat`, 둘을 구분하는 테스트의 `t3tools/t3code` → `sample-tools/goat`), GOAT Connect 스택과 relay wire 이름(헤더, JWT typ, client id, env, telemetry, worker·tunnel 이름), `t3.codes` 기본값(hosted app, Codex 반환 origin, `goat.json` schema), 모바일 네이티브 모듈, Linux deb 패키지 `goat`(`t3code`를 Replaces), upstream 전용 workflow·AUR·Vercel 설정과 upstream contribution triage(스킬, 예외·vouch 목록, 지원 playbook) drop. replay transcript는 rename 대상이 아니라서 `/home/replay-user/t3code` 경로는 transcript와 기대값 모두 그대로 둔다. 저장된 값은 legacy 이름을 그대로 읽는다: `t3-connect` 경로 종류, 모바일 relay 토큰 캐시의 client id, Android 알림 저장소·태그·`t3_kind`, 위젯 만료 저장소, 옛 `app.t3.codes` 공유 링크. troubleshooting 안내서 사본과 도움말 anchor는 GOAT가 사용자 문서를 호스팅할 때까지 유지한다.
 
 ### `launch-watch` 띄운 스레드 완료 알림
 
@@ -167,6 +167,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: `3a13908a0`
 - 경로: `apps/web/src/components/files/pdf`, `apps/web/src/components/files/BrowserDocumentFrame.tsx`, `third-party-licenses.config.json`의 PDF.js·Synara 항목
 - 정책: 파일 미리보기의 PDF는 GOAT PDF.js 뷰어(페이지 이동, 확대, 검색)로 보인다. upstream이 브라우저 미리보기 PDF를 native `<embed>`로 보내는 변경(#21095)은 라우팅만 받고 `BrowserDocumentFrame`은 GOAT 뷰어를 유지한다. 어느 쪽으로 갈지는 #515에서 정한다.
+  upstream 자체 뷰어(`apps/web/src/components/files/PdfViewer.tsx`, `pdfViewer.css`, `readBoundedDocument.ts`)는 GOAT에서 쓰지 않는다. 사이클 261028 B18(PR #1923)이 이 세 파일을 지운다. 그 PR이 랜딩한 뒤에는 upstream이 이 세 파일을 바꿔도 받지 않는다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 
@@ -190,6 +191,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: `c96310a1a` `d18f83e4e`
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
+
+### `settings-page` 설정은 모달이 아니라 전체 페이지
+
+- 경로: `apps/web/src/routes/_chat.settings.tsx`, `apps/web/src/routes/_chat.tsx`, `apps/web/src/components/settings/{SettingsPageShell,SettingsSidebarNav}.tsx`, `apps/web/src/components/AppSidebarLayout.tsx`, `apps/web/src/components/sidebar/{mainAppLocation.ts,SidebarChrome.tsx}`
+- 정책: upstream은 사이클 261026(#1767)에서 설정을 채팅 위에 뜨는 `AppRouteModal`로 바꿨다. GOAT는 받지 않는다. `/settings/*`는 메인 화면을 바꾸는 전체 페이지이고, 섹션 목록(`SettingsSidebarNav placement="app-sidebar"`)은 앱 사이드바 자리에 들어가며, 닫기·Escape·사이드바 Back은 설정을 연 페이지로 돌아간다. 페이지 틀은 GOAT 모듈 `SettingsPageShell`에 있고 `_chat.settings.tsx`에는 그 호출만 둔다. upstream이 설정 라우트, scope 처리, 새 설정 페이지를 바꾸면 받고 모달 대신 이 틀을 다시 얹는다. `isAppModalPage`는 Usage만, `isSettingsPage`가 설정을 가리킨다. Usage는 upstream 모달 그대로다. 설정 위에서 연 Usage를 닫으면 설정 이전 페이지로 간다(복귀 위치는 설정을 기록하지 않는다). 모바일은 #1767에서 시트가 아니라 페이지로 옮겨졌으므로 해당 없다.
 
 ### `ssh-runtime` SSH 런타임 공급과 원격 디스패치
 

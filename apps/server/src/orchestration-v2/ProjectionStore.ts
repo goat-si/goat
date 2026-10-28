@@ -1,3 +1,4 @@
+import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { makeShellThreadRows, type ShellThreadRow } from "./ProjectionShellThreadRows.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
@@ -898,7 +899,10 @@ export function emptyProjection(
   event: Extract<OrchestrationV2DomainEvent, { readonly type: "thread.created" }>,
 ): OrchestrationV2ThreadProjection {
   return {
-    thread: RunNotification.preserveThreadNotification(undefined, event.payload),
+    thread: LatestAnswer.withExcerpt(
+      RunNotification.preserveThreadNotification(undefined, event.payload),
+      undefined,
+    ),
     runs: [],
     attempts: [],
     nodes: [],
@@ -943,17 +947,22 @@ export function applyToProjection(
   options: { readonly deferNotificationCursor?: boolean } = {},
 ): OrchestrationV2ThreadProjection {
   const next = applyToProjectionEvent(projection, event);
+  const cursorContext = notificationCursorContext(next, [event]);
   const completedAt = options.deferNotificationCursor
     ? undefined
-    : RunNotification.notificationCompletions([event]).get(event.threadId);
+    : RunNotification.notificationCompletions([event], cursorContext).get(event.threadId);
+  const thread = LatestAnswer.withExcerpt(
+    RunNotification.preserveThreadNotification(projection.thread, next.thread),
+    LatestAnswer.changesLatestAnswer(event, LatestAnswer.promptOfCompletedRunIn(projection))
+      ? LatestAnswer.latestAnswerExcerpt(next, (run) => isIdleCompactionRun(run, next))
+      : projection.thread.latestAnswerExcerpt,
+  );
   return {
     ...next,
-    thread: RunNotification.preserveThreadNotification(
-      projection.thread,
+    thread:
       completedAt === undefined
-        ? next.thread
-        : { ...next.thread, notificationCompletedAt: completedAt },
-    ),
+        ? thread
+        : RunNotification.advanceNotificationCursor(thread, completedAt),
   };
 }
 
@@ -1783,6 +1792,9 @@ export function threadShellFromProjection(
     ...(projection.thread.launchedBy === undefined
       ? {}
       : { launchedBy: projection.thread.launchedBy }),
+    ...(projection.thread.latestAnswerExcerpt === undefined
+      ? {}
+      : { latestAnswerExcerpt: projection.thread.latestAnswerExcerpt }),
     ...(projection.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: projection.thread.externalLauncher }),
@@ -1909,8 +1921,14 @@ function isSilentRunForShell(
   run: OrchestrationV2ThreadProjection["runs"][number],
   projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
 ): boolean {
+  return run.status !== "failed" && isIdleCompactionRun(run, projection);
+}
+
+function isIdleCompactionRun(
+  run: OrchestrationV2ThreadProjection["runs"][number],
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
+): boolean {
   return (
-    run.status !== "failed" &&
     projection.messages.some(
       (message) => message.id === run.userMessageId && idleCompactionOf(message) !== undefined,
     ) &&
@@ -1918,6 +1936,25 @@ function isSilentRunForShell(
       (item) => item.runId === run.id && item.type === "compaction" && item.status === "failed",
     )
   );
+}
+
+function notificationCursorContext(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages" | "turnItems">,
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+): RunNotification.NotificationCursorContext {
+  const idleRunIds = new Set<RunId>();
+  for (const event of events) {
+    if (event.type !== "run.created" && event.type !== "run.updated") continue;
+    const run = projection.runs.find((candidate) => candidate.id === event.payload.id);
+    if (run !== undefined && isIdleCompactionRun(run, projection)) idleRunIds.add(run.id);
+  }
+  const failedIds = RunNotification.failedCompactionRunIds(events);
+  const failedCompactions = projection.runs.flatMap((run) =>
+    failedIds.has(run.id) && run.completedAt !== null && run.completionNotification !== "silent"
+      ? [{ threadId: run.threadId, completedAt: run.completedAt }]
+      : [],
+  );
+  return { idleRunIds, failedCompactions };
 }
 
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
@@ -2082,6 +2119,9 @@ function shellFromState(input: {
     ...(input.state.thread.launchedBy === undefined
       ? {}
       : { launchedBy: input.state.thread.launchedBy }),
+    ...(input.state.thread.latestAnswerExcerpt === undefined
+      ? {}
+      : { latestAnswerExcerpt: input.state.thread.latestAnswerExcerpt }),
     ...(input.state.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: input.state.thread.externalLauncher }),
@@ -2287,6 +2327,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event: OrchestrationV2DomainEvent,
           options?: { readonly deferNotificationCursor?: boolean },
         ) {
+          let promptOfCompletedRun = false;
           switch (event.type) {
             case "thread.pull-request-link-updated": {
               const thread = yield* getThread(event.threadId);
@@ -2367,7 +2408,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 updated_at = excluded.updated_at,
                 archived_at = excluded.archived_at,
                 deleted_at = excluded.deleted_at,
-                payload_json = ${RunNotification.threadNotificationPayload(sql)}
+                payload_json = ${LatestAnswer.latestAnswerPayload(
+                  sql,
+                  RunNotification.threadNotificationPayload(sql),
+                )}
             `;
               break;
             }
@@ -2849,7 +2893,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "message.updated": {
               const payloadJson = yield* encodeMessagePayload(event.payload);
               const payload = parseEncodedPayload(payloadJson);
-              yield* sql`
+              const upserted = yield* sql<{ readonly prompt_of_completed_run: number | null }>`
               INSERT INTO orchestration_v2_projection_messages (
                 message_id,
                 thread_id,
@@ -2882,7 +2926,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 payload_json = excluded.payload_json
+              RETURNING ${LatestAnswer.promptOfCompletedRunColumn(sql, event.threadId)}
             `;
+              promptOfCompletedRun = upserted[0]?.prompt_of_completed_run === 1;
               break;
             }
             case "plan.updated": {
@@ -3180,6 +3226,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }
           if (!options?.deferNotificationCursor)
             yield* RunNotification.recordNotificationCompletions(sql, [event]);
+          yield* LatestAnswer.recordLatestAnswer(sql, event, promptOfCompletedRun);
         },
         (effect, event) =>
           effect.pipe(
@@ -5250,10 +5297,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     )(
       function* (node) {
         const payloadJson = yield* encodeNodePayload(node);
-        const rows = yield* sql<PayloadRow>`
-          SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
+        // Compared in SQLite so each streamed delta does not copy the stored payload into JS.
+        const rows = yield* sql<{ readonly stored: number }>`
+          SELECT 1 AS stored
+          FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
+            AND payload_json = ${payloadJson}
         `;
-        return rows[0]?.payload_json === payloadJson;
+        return rows.length > 0;
       },
       (effect, node) => effect.pipe(Effect.mapError(controlReadError(node.threadId))),
     );
@@ -7259,15 +7309,29 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         }),
       recordNotificationCompletions: (events) =>
         Ref.update(replayState, (state) => {
-          for (const [threadId, at] of RunNotification.notificationCompletions(events)) {
+          const idleRunIds = new Set<RunId>();
+          const failedCompactions: Array<
+            RunNotification.NotificationCursorContext["failedCompactions"][number]
+          > = [];
+          for (const threadId of new Set(events.map((event) => event.threadId))) {
+            const projection = state.projections.get(threadId);
+            if (projection === undefined) continue;
+            const context = notificationCursorContext(
+              projection,
+              events.filter((event) => event.threadId === threadId),
+            );
+            for (const id of context.idleRunIds) idleRunIds.add(id);
+            failedCompactions.push(...context.failedCompactions);
+          }
+          for (const [threadId, at] of RunNotification.notificationCompletions(events, {
+            idleRunIds,
+            failedCompactions,
+          })) {
             const projection = state.projections.get(threadId);
             if (projection)
               state.projections.set(threadId, {
                 ...projection,
-                thread: RunNotification.preserveThreadNotification(projection.thread, {
-                  ...projection.thread,
-                  notificationCompletedAt: at,
-                }),
+                thread: RunNotification.advanceNotificationCursor(projection.thread, at),
               });
           }
           return state;

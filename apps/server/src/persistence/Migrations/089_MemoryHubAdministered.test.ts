@@ -31,7 +31,7 @@ it.effect("082 participates in the migration ledger and preserves its flag on re
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* runMigrations({ toMigrationInclusive: 88 });
-    assert.deepStrictEqual(yield* runMigrations(), [
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
       [89, "MemoryHubAdministered"],
       [90, "MemoryCheckpointLifecycle"],
       [91, "FleetGoals"],
@@ -54,9 +54,10 @@ it.effect("082 participates in the migration ledger and preserves its flag on re
       [108, "HubProvisionedLinks"],
       [109, "ScheduledTaskRuns"],
       [110, "ScheduledTaskNotificationPolicy"],
+      [111, "NotificationCursorRepair"],
     ]);
     yield* sql`INSERT INTO memory_hub_administration_state VALUES(1,1)`;
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
     assert.deepStrictEqual(yield* sql`SELECT administered FROM memory_hub_administration_state`, [
       { administered: 1 },
     ]);

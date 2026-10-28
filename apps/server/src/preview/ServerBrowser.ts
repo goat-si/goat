@@ -101,9 +101,14 @@ import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
+import { pushBounded } from "./boundedBuffer.ts";
+import { pageRead } from "./pageRead.ts";
+import { attachNetworkTracker } from "./networkTracker.ts";
+import { READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -255,7 +260,6 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
-    readonly onAuthorityChange?: (listener: ServerBrowserScreen.AuthorityListener) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -264,8 +268,7 @@ export class ServerBrowser extends Context.Service<
       readonly tabId: string;
       readonly control: "stop" | "handBack";
     }) => Effect.Effect<boolean>;
-    readonly cursorState?: ServerBrowserScreen.CursorStateSink;
-  }
+  } & ServerBrowserScreen.SurfaceService
 >()("goat/preview/ServerBrowser") {}
 
 interface ViewerState {
@@ -358,15 +361,6 @@ interface ServerDownload {
   readonly completedAt: string;
 }
 
-/** Read-only operations remain available during human control; evaluate requires control because scripts can mutate the page. */
-const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new Set([
-  "status",
-  "snapshot",
-  "logs",
-  "fetch",
-  "waitFor",
-]);
-
 const AGENT_TAB_LIMIT = 8;
 const SERVER_TAB_LIMIT = 32;
 const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
@@ -377,15 +371,6 @@ const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
 const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
-
-const pushBounded = <A>(
-  buffer: Array<A>,
-  entry: A,
-  limit = ServerBrowserPage.DIAGNOSTIC_BUFFER_LIMIT,
-) => {
-  buffer.push(entry);
-  if (buffer.length > limit) buffer.splice(0, buffer.length - limit);
-};
 
 const viewportSettingsEqual = (left: PreviewViewportSetting, right: PreviewViewportSetting) =>
   left._tag === right._tag &&
@@ -403,6 +388,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  const secretFill = yield* ServerBrowserSecretFill.make;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -687,6 +673,7 @@ const make = Effect.gen(function* () {
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
     if (!desktop) await prepareContext(context);
     const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
+    attachNetworkTracker(page);
     const cdp = await context.newCDPSession(page);
     await installPdfDocumentNavigation(cdp);
     // The desktop's page is already a normal browser. A popup's first request
@@ -699,7 +686,7 @@ const make = Effect.gen(function* () {
       ServerBrowserPage.invalidateRefs(page),
     );
     control.onDispatchCut(inputFence(cdp));
-    const diagnostics = new ServerBrowserDiagnostics(page);
+    const diagnostics = new ServerBrowserDiagnostics(page, secretFill.maskText(snapshot.threadId));
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
       tabId: snapshot.tabId,
@@ -1225,6 +1212,7 @@ const make = Effect.gen(function* () {
         tab.control.agentId !== null &&
         tab.desktop === null &&
         tab.viewers.size === 0 &&
+        tab.control.handoffReason === null &&
         tab.usedAt < cutoff
       )
         dropTab(tab, true);
@@ -1327,6 +1315,7 @@ const make = Effect.gen(function* () {
         owner: tabOwner(tab),
         ownedByCaller: tab.control.agentId === agentSessionId,
         generation: tab.control.generation,
+        ...(tab.control.handoffReason === null ? {} : { waitingForPerson: true as const }),
       },
       dialog: dialogStatus(tab),
       fileChooser: tab.fileChooser
@@ -1627,15 +1616,14 @@ const make = Effect.gen(function* () {
       (cause: unknown) => {
         event.status = "failed";
         event.completedAt = new Date().toISOString();
-        event.error = cause instanceof Error ? cause.message.split("\n")[0] : String(cause);
+        event.error = tab.diagnostics.firstLine(cause);
         throw cause;
       },
     );
   };
 
   const requireTab = async (request: PreviewAutomationRequest) => {
-    if (!request.agentSessionId)
-      throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
+    SessionControl.requireAgentSession(request);
     const owned = [...tabs.values()].filter(
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
     );
@@ -1691,10 +1679,7 @@ const make = Effect.gen(function* () {
           (tab) => statusWithTitle(tab, request.agentSessionId),
         );
       case "open": {
-        if (!request.agentSessionId)
-          throw new BrowserControlInterrupted(
-            "The agent session is missing. Reconnect the provider.",
-          );
+        SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
         const reuse = open.reuseExistingTab ?? true;
@@ -1835,6 +1820,8 @@ const make = Effect.gen(function* () {
       }
     }
     const tab = await requireTab(request);
+    if (request.operation === "fillSecret")
+      return secretFill.fill(tab, request, deadlineMs, recordAction);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)
@@ -1842,8 +1829,7 @@ const make = Effect.gen(function* () {
           "Only the agent session that opened this tab can close it.",
           "agentMismatch",
         );
-      if (tab.control.controller !== null)
-        throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
       void tab.control.close().catch(constVoid);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
@@ -1852,8 +1838,7 @@ const make = Effect.gen(function* () {
     }
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
-      if (tab.control.controller !== null)
-        throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      tab.control.assertNoHumanControl();
       await resolveDialog(tab, input as PreviewAutomationDialogInput);
       return statusWithTitle(tab, request.agentSessionId);
     }
@@ -1901,6 +1886,7 @@ const make = Effect.gen(function* () {
     signal?: AbortSignal,
   ) => {
     const input = request.input;
+    await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = () => ServerBrowserScreen.screenActionGate(tab, request);
     switch (request.operation) {
@@ -1948,6 +1934,14 @@ const make = Effect.gen(function* () {
         await applyRendering(tab, snapshot);
         return { tabId: tab.tabId, colorScheme };
       }
+      case "read":
+        return pageRead(
+          tab.page,
+          tab.cdp,
+          tab.control,
+          input as import("@goat/contracts").PreviewAutomationReadInput,
+          (text) => tab.diagnostics.mask(text),
+        ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
         return withScreencastsPaused(
           tab,
@@ -1955,7 +1949,8 @@ const make = Effect.gen(function* () {
             ServerBrowserPage.snapshot({
               ...tab,
               renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+              ...(input as PreviewAutomationSnapshotInput),
+              agentSessionId: request.agentSessionId,
               captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
               timeoutMs: deadlineMs - performance.now(),
             }),
@@ -1963,7 +1958,7 @@ const make = Effect.gen(function* () {
         ).then(ServerBrowserScreen.recheck(tab, request));
       }
       case "logs":
-        return tab.diagnostics.read(decodeLogsInput(input));
+        return tab.diagnostics.readMasked(decodeLogsInput(input));
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
         return inPageFetch(tab.page, tab.control, {
@@ -2065,6 +2060,7 @@ const make = Effect.gen(function* () {
           },
         }),
       }),
+      Effect.map(secretFill.mask(request)),
       Effect.flatMap((outcome) =>
         broker.respond({
           clientId: SERVER_HOST_CLIENT_ID,
@@ -2504,8 +2500,9 @@ const make = Effect.gen(function* () {
         clientId: SERVER_HOST_CLIENT_ID,
         environmentId,
         supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS],
+        supportedFeatures: ["snapshotOptions"],
       },
-      { preferred: true },
+      { preferred: true, inProcess: true },
     )
     .pipe(
       Effect.flatMap((events) =>

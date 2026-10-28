@@ -24,6 +24,7 @@ import * as Threads from "../../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as ManagedFolders from "../../project/ManagedProjectFolders.ts";
 import * as Projects from "../../project/ProjectService.ts";
+import * as PendingAttachmentSweep from "../../assets/PendingAttachmentSweep.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import * as RemoteDispatch from "../../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ScheduledTasks from "../../scheduledTasks/ScheduledTaskService.ts";
@@ -205,6 +206,7 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(dependencies),
     Layer.provide(DocumentText.layer),
+    Layer.provideMerge(PendingAttachmentSweep.layer),
     Layer.provideMerge(options.sharedDatabase === true ? Layer.empty : Sqlite.layerMemory),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-retry-keys-" })),
     Layer.provideMerge(NodeServices.layer),

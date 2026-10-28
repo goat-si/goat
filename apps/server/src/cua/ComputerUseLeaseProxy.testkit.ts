@@ -124,6 +124,14 @@ export const harness = Effect.fn(function* (
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
     /** The helper draws the agent cursor, so the proxy answers the cursor tools. */
     readonly answersCursorTools?: boolean;
+    /** Re-read a window as a tree diff after unverified input. */
+    readonly verifyInputByTreeDiff?: boolean;
+    /** Stands in for the thread proxy's reconnecting state. */
+    readonly transportHeld?: () => boolean;
+    /** Receives the hook the thread proxy calls when the lease stream drops. */
+    readonly onTransportDropReceiver?: (drop: () => void) => void;
+    /** The app macOS asks for Automation consent on this host's behalf. */
+    readonly automationHolder?: "helper" | "app";
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -181,6 +189,14 @@ export const harness = Effect.fn(function* (
       ),
     controlId: options.controlId ?? CONTROL,
     ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
+    ...(options.verifyInputByTreeDiff ? { verifyInputByTreeDiff: true } : {}),
+    ...(options.transportHeld === undefined ? {} : { transportHeld: options.transportHeld }),
+    ...(options.onTransportDropReceiver === undefined
+      ? {}
+      : { onTransportDropReceiver: options.onTransportDropReceiver }),
+    ...(options.automationHolder === undefined
+      ? {}
+      : { automationHolder: options.automationHolder }),
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
@@ -432,12 +448,42 @@ export const harness = Effect.fn(function* (
   };
 });
 
+export const unknownWriteSafety = {
+  possibleCommit: true,
+  retryClass: "never",
+  writeStatus: "may_have_applied",
+  code: "write_indeterminate",
+} as const;
+export const terminalRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "never",
+  writeStatus: "not_started",
+  code: "write_refused_terminal",
+} as const;
+export const reobserveRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "new_key",
+  writeStatus: "not_started",
+  code: "write_refused_reobserve",
+} as const;
+export const fixInputRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "fix_input",
+  writeStatus: "rejected_before_commit",
+  code: "write_refused_fix_input",
+} as const;
+
 export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
   jsonrpc: "2.0",
   id,
   result: {
     content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
-    structuredContent: { refused: computerUseRefusalReason(reason), detail: reason },
+    structuredContent: {
+      refused: computerUseRefusalReason(reason),
+      detail: reason,
+      // Only a call on another display may be sent again, after a fresh look.
+      safety: reason === "wrong_display" ? reobserveRefusalSafety : terminalRefusalSafety,
+    },
     isError: true,
   },
 });
@@ -454,8 +500,17 @@ export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, 
       },
     ],
     structuredContent: read
-      ? { code: "interrupted", detail: reason }
-      : { effect: "unverifiable", code: "interrupted", detail: reason },
+      ? {
+          code: "interrupted",
+          detail: reason,
+          safety: {
+            possibleCommit: false,
+            retryClass: "same_key",
+            writeStatus: "not_applicable",
+            code: "read_indeterminate",
+          },
+        }
+      : { effect: "unverifiable", code: "interrupted", detail: reason, safety: unknownWriteSafety },
     isError: true,
   },
 });

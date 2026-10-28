@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import type { PreviewAutomationSnapshot } from "@goat/contracts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 
 it("a new desktop observation invalidates the previous element reference", () => {
@@ -85,6 +86,50 @@ const tabDraft = (text: string, generation = 1) => ({
       name: line,
       driverToken: `aria-ref=${line.match(/\[ref=([^\]]+)\]/)?.[1] ?? ""}`,
     })),
+});
+
+it("opaque browser generations keep complete snapshots actionable", () => {
+  const observations = new ScreenObservations();
+  const snapshot: PreviewAutomationSnapshot = {
+    url: "https://example.test/",
+    title: "Workspace",
+    loading: false,
+    visibleText: "Save",
+    interactiveElements: [],
+    accessibilityTree: "- button Save [ref=e1]",
+    consoleEntries: [],
+    networkEntries: [],
+    actionTimeline: [],
+    treeComplete: true,
+    refGeneration: "ns-3",
+  };
+  const normalize = (value: PreviewAutomationSnapshot) =>
+    observations.normalizeTabSnapshot({
+      targetRef: tabDraft("").targetRef,
+      targetGeneration: 0,
+      connectionId: "connection",
+      controlGeneration: 1,
+      snapshot: value,
+    });
+  const first = observations.renderObservation({
+    draft: normalize(snapshot),
+    mode: "full",
+    limits: { treeBytes: 4096 },
+  });
+  expect(first).toMatchObject({
+    complete: true,
+    truncated: false,
+    title: snapshot.title,
+    url: snapshot.url,
+  });
+  expect(first.elements).toHaveLength(1);
+  expect(observations.index.resolveElement(first.elements[0]!.ref)).toBe("aria-ref=e1");
+  const same = normalize(snapshot);
+  const next = normalize({ ...snapshot, refGeneration: "other-1" });
+  expect(same.surfaceGeneration).toBe(first.surfaceGeneration);
+  expect(next.surfaceGeneration).toBeGreaterThan(first.surfaceGeneration);
+  const missing = normalize({ ...snapshot, refGeneration: undefined });
+  expect(missing).toMatchObject({ complete: false, truncated: true, elements: [] });
 });
 
 it("indexes only actionable refs in the current complete observation", () => {
@@ -217,4 +262,40 @@ it("evicting a target clears both its refs and diff base", () => {
   });
   expect(after.mode).toBe("full");
   expect(after.resetReason).toBe("lineage_or_completeness_changed");
+});
+
+it("a Playwright-quoted tree line keeps its role, so its textbox is editable and found by role", () => {
+  const observations = new ScreenObservations();
+  const accessibilityTree =
+    '- generic [active] [ref=e1]:\n  - \'textbox "Email: required" [ref=e2]\'\n  - button "Go" [ref=e3]';
+  const draft = observations.normalizeTabSnapshot({
+    targetRef: tabDraft("").targetRef,
+    targetGeneration: 0,
+    connectionId: "connection",
+    controlGeneration: 1,
+    snapshot: {
+      url: "https://example.test/",
+      title: "Page",
+      loading: false,
+      visibleText: "",
+      interactiveElements: [],
+      accessibilityTree,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      treeComplete: true,
+      refGeneration: "1",
+    },
+  });
+  const full = observations.renderObservation({ draft, mode: "full", limits: { treeBytes: 4096 } });
+  const textbox = full.elements.find((element) => element.name.includes("Email: required"));
+  expect(textbox?.role).toBe("textbox");
+  expect(textbox && observations.index.isEditable(textbox.ref)).toBe(true);
+  const query = observations.renderObservation({
+    draft,
+    mode: "query",
+    query: { role: "textbox" },
+    limits: { treeBytes: 4096 },
+  });
+  expect(query.elements.map((element) => element.role)).toEqual(["textbox"]);
 });

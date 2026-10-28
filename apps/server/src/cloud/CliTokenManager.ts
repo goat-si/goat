@@ -1,3 +1,10 @@
+import { type ConnectLinkIntent } from "@goat/contracts/connectAssurance";
+import {
+  createCliApprovalKey,
+  acceptsCliApprovalPost,
+  decodeCliApprovalCallback,
+  type ApprovedCliLink,
+} from "./CliLinkApproval.ts";
 // @effect-diagnostics nodeBuiltinImport:off - The CLI loopback OAuth callback is a Node HTTP boundary.
 import * as NodeHttp from "node:http";
 
@@ -25,7 +32,10 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
-import { buildConnectAuthorizeRequestUrl } from "@goat/shared/connectAuth";
+import {
+  buildConnectAuthorizeRequestUrl,
+  buildConnectClerkAuthorizeUrl,
+} from "@goat/shared/connectAuth";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
@@ -36,25 +46,23 @@ import {
 } from "./publicConfig.ts";
 import { renderLoopbackAuthorizationCompleteHtml } from "./cliAuthHtml.ts";
 
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
 const CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT = Duration.minutes(10);
 const CLOUD_CLI_OAUTH_REFRESH_EARLY_MS = Duration.toMillis(Duration.minutes(5));
-const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
-// RFC 8628 defaults, used only when Clerk omits the field.
-const DEVICE_AUTHORIZATION_DEFAULT_INTERVAL = Duration.seconds(5);
-// RFC 8628 §3.5: a slow_down response means "add 5 seconds to the interval".
-const DEVICE_AUTHORIZATION_SLOW_DOWN_INCREMENT = Duration.seconds(5);
 // A stalled OAuth request holds the semaphore and blocks all credential calls.
 const OAUTH_REQUEST_TIMEOUT = Duration.seconds(10);
 const boldTerminalText = (value: string): string => `\u001b[1m${value}\u001b[22m`;
 
-function formatLoopbackAuthorizationPrompt(authorizationUrl: string): string {
+function formatLoopbackAuthorizationPrompt(authorizationUrl: string, linking = true): string {
   return [
     "Open this URL to authorize GOAT Connect:",
     `  ${authorizationUrl}`,
     "",
     `Press ${boldTerminalText("Enter")} to open it in your browser.`,
-    `No browser on this device? Press ${boldTerminalText("H")} to switch to headless mode.`,
+    linking
+      ? "A local browser and MFA are required for the Connect beta."
+      : "This signs in for account-owned withdrawal. Linking still requires a separate browser approval.",
   ].join("\n");
 }
 
@@ -110,7 +118,7 @@ const waitForLoopbackAuthorization = Effect.fn("cloud.cli_token.wait_for_loopbac
             .pipe(
               Effect.catch(() =>
                 Console.warn(
-                  `Could not open a browser on this device. Open the URL above manually, or press ${boldTerminalText("H")} to switch to headless mode.`,
+                  `Could not open a browser on this device. Open the URL above manually, or pair an updated browser through a trusted network and link in Settings.`,
                 ),
               ),
             );
@@ -140,10 +148,6 @@ const OAuthTokenResponse = Schema.Struct({
   token_type: Schema.String,
 });
 
-const OAuthErrorResponse = Schema.Struct({
-  error: Schema.String,
-  error_description: Schema.optional(Schema.String),
-});
 const OAuthRefreshErrorCode = Schema.Literals([
   "invalid_grant",
   "invalid_client",
@@ -159,15 +163,6 @@ const decodeOAuthRefreshErrorResponse = Schema.decodeUnknownOption(
 
 const isPermanentRefreshStatus = (status: number): boolean =>
   status >= 400 && status < 500 && status !== 408 && status !== 429;
-
-const DeviceAuthorizationResponse = Schema.Struct({
-  device_code: Schema.String,
-  user_code: Schema.String,
-  verification_uri: Schema.String,
-  verification_uri_complete: Schema.optional(Schema.String),
-  expires_in: Schema.Number,
-  interval: Schema.optional(Schema.Number),
-});
 
 const OidcIdentityClaimsJson = Schema.fromJsonString(
   Schema.Struct({
@@ -242,6 +237,15 @@ export class CloudCliAuthorizationError extends Schema.TaggedError<CloudCliAutho
   }
 }
 
+export class CloudCliAuthorizationUnsupportedError extends Schema.TaggedError<CloudCliAuthorizationUnsupportedError>()(
+  "CloudCliAuthorizationUnsupportedError",
+  {},
+) {
+  override get message() {
+    return "GOAT Connect beta requires a browser approval for this computer. Pair an updated browser through local networking, Tailscale or SSH and link in Settings when a local browser is unavailable.";
+  }
+}
+
 export class CloudCliAuthorizationTimeoutError extends Schema.TaggedError<CloudCliAuthorizationTimeoutError>()(
   "CloudCliAuthorizationTimeoutError",
   { cause: Schema.Defect() },
@@ -260,11 +264,14 @@ export class CloudCliAuthorizationDeniedError extends Schema.TaggedError<CloudCl
   }
 }
 
+const isAuthorizationUnsupported = Schema.is(CloudCliAuthorizationUnsupportedError);
+
 export const CloudCliTokenManagerError = Schema.Union([
   CloudCliCredentialRemovalError,
   CloudCliCredentialRefreshError,
   CloudCliCredentialReadError,
   CloudCliAuthorizationError,
+  CloudCliAuthorizationUnsupportedError,
   CloudCliAuthorizationTimeoutError,
   CloudCliAuthorizationDeniedError,
 ]);
@@ -273,6 +280,9 @@ export type CloudCliTokenManagerError = typeof CloudCliTokenManagerError.Type;
 export class CloudCliTokenManager extends Context.Service<
   CloudCliTokenManager,
   {
+    readonly approveLink: (
+      intent: ConnectLinkIntent,
+    ) => Effect.Effect<ApprovedCliLink, CloudCliTokenManagerError | Terminal.QuitError>;
     readonly get: Effect.Effect<
       | { readonly _tag: "Authorized"; readonly token: PersistedToken }
       | { readonly _tag: "HeadlessRequested" },
@@ -382,87 +392,9 @@ export interface DeviceAuthorizationPrompt {
   readonly expiresIn: Duration.Duration;
 }
 
-const isTransportError = (error: unknown) =>
-  HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError";
-
-const pollDeviceToken = Effect.fn("cloud.cli_token.poll_device_token")(function* (
-  metadata: Pick<CloudCliOAuthConfig, "tokenEndpoint" | "clientId">,
-  deviceCode: string,
-  initialInterval: Duration.Duration,
-) {
-  const httpClient = yield* HttpClient.HttpClient;
-  const params = {
-    grant_type: DEVICE_CODE_GRANT_TYPE,
-    device_code: deviceCode,
-    client_id: metadata.clientId,
-  };
-  let interval = initialInterval;
-  while (true) {
-    yield* Effect.sleep(interval);
-    const response = yield* HttpClientRequest.post(metadata.tokenEndpoint).pipe(
-      HttpClientRequest.bodyUrlParams(params),
-      httpClient.execute,
-      Effect.asSome,
-      Effect.catchIf(isTransportError, () => Effect.succeedNone),
-    );
-    // Retry transport errors and 5xx while the device code is valid, backing off per RFC 8628 §3.5. Drain bodies to reuse connections.
-    if (Option.isNone(response) || response.value.status >= 500) {
-      if (Option.isSome(response)) yield* Effect.ignore(response.value.text);
-      interval = Duration.sum(interval, DEVICE_AUTHORIZATION_SLOW_DOWN_INCREMENT);
-      continue;
-    }
-    if (response.value.status >= 200 && response.value.status < 300) {
-      return yield* readTokenResponse(response.value, params);
-    }
-    const failure = yield* HttpClientResponse.schemaBodyJson(OAuthErrorResponse)(response.value);
-    switch (failure.error) {
-      case "authorization_pending":
-        continue;
-      case "slow_down":
-        interval = Duration.sum(interval, DEVICE_AUTHORIZATION_SLOW_DOWN_INCREMENT);
-        continue;
-      case "expired_token":
-        return yield* new CloudCliAuthorizationTimeoutError({ cause: failure });
-      case "access_denied":
-        return yield* new CloudCliAuthorizationDeniedError();
-      default:
-        return yield* new CloudCliAuthorizationError({
-          cause: failure.error_description ?? failure.error,
-        });
-    }
-  }
-});
-
 export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_authorization_login")(
-  function* <E, R>(showPrompt: (prompt: DeviceAuthorizationPrompt) => Effect.Effect<void, E, R>) {
-    const metadata = yield* cloudCliOAuthConfig;
-    const httpClient = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
-    const authorization = yield* HttpClientRequest.post(metadata.deviceAuthorizationEndpoint).pipe(
-      HttpClientRequest.bodyUrlParams({
-        client_id: metadata.clientId,
-        scope: metadata.scopes.join(" "),
-      }),
-      httpClient.execute,
-      Effect.flatMap(HttpClientResponse.schemaBodyJson(DeviceAuthorizationResponse)),
-      Effect.timeout(OAUTH_REQUEST_TIMEOUT),
-    );
-    const expiresIn = Duration.seconds(authorization.expires_in);
-    const interval =
-      authorization.interval === undefined
-        ? DEVICE_AUTHORIZATION_DEFAULT_INTERVAL
-        : Duration.seconds(authorization.interval);
-    yield* showPrompt({
-      verificationUri: authorization.verification_uri,
-      verificationUriComplete: authorization.verification_uri_complete,
-      userCode: authorization.user_code,
-      expiresIn,
-    });
-    return yield* pollDeviceToken(metadata, authorization.device_code, interval).pipe(
-      Effect.timeout(expiresIn),
-      Effect.catchTags({
-        TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
-      }),
-    );
+  function* <E, R>(_showPrompt: (prompt: DeviceAuthorizationPrompt) => Effect.Effect<void, E, R>) {
+    return yield* new CloudCliAuthorizationUnsupportedError({});
   },
 );
 
@@ -505,11 +437,66 @@ export const make = Effect.gen(function* () {
       : refreshed;
   });
 
-  const login = Effect.fn("cloud.cli_token.login")(function* () {
+  const login = Effect.fn("cloud.cli_token.login")(function* (intent?: ConnectLinkIntent) {
     const metadata = yield* cloudCliOAuthConfig;
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
+    const approvalRequest = yield* makePkceRequest;
+    const key = yield* Effect.try(() => createCliApprovalKey());
+    const approvalCallback = yield* Deferred.make<string>();
     const callback = yield* Deferred.make<string>();
+    const originHeaders = {
+      "access-control-allow-origin": hostedAppUrl,
+      "access-control-allow-methods": "POST",
+      "access-control-allow-headers": "content-type",
+      "access-control-allow-private-network": "true",
+      "cache-control": "no-store",
+      vary: "Origin",
+    };
+    const layerApprovalRoute = HttpRouter.add(
+      "POST",
+      "/approval",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        if (
+          !acceptsCliApprovalPost({
+            method: request.method,
+            origin: request.headers.origin,
+            expectedOrigin: hostedAppUrl,
+            contentLength: request.headers["content-length"],
+          })
+        )
+          return HttpServerResponse.empty({ status: 403 });
+        const raw = yield* request.text;
+        if (raw.length > 16384) return HttpServerResponse.empty({ status: 413 });
+        const decoded = yield* decodeUnknownJson(raw).pipe(
+          Effect.flatMap(decodeCliApprovalCallback),
+          Effect.option,
+        );
+        if (
+          decoded._tag === "None" ||
+          decoded.value.state !== state ||
+          (yield* Deferred.isDone(approvalCallback))
+        )
+          return HttpServerResponse.empty({ status: 400, headers: originHeaders });
+        const expires = Date.parse(decoded.value.expiresAt);
+        if (!Number.isFinite(expires) || expires <= (yield* Clock.currentTimeMillis))
+          return HttpServerResponse.empty({ status: 400, headers: originHeaders });
+        yield* Deferred.succeed(approvalCallback, decoded.value.approval);
+        return HttpServerResponse.text("Approved", { headers: originHeaders });
+      }),
+    );
+    const layerApprovalOptions = HttpRouter.add(
+      "OPTIONS",
+      "/approval",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        return HttpServerResponse.empty({
+          status: request.headers.origin === hostedAppUrl ? 204 : 403,
+          headers: request.headers.origin === hostedAppUrl ? originHeaders : {},
+        });
+      }),
+    );
     const layerCallbackRoute = HttpRouter.add(
       "GET",
       "/callback",
@@ -517,19 +504,30 @@ export const make = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const url = new URL(request.originalUrl, metadata.redirectUri);
         const code = url.searchParams.get("code");
-        if (url.searchParams.get("state") !== state || !code) {
+        if (
+          url.searchParams.get("state") !== state ||
+          !code ||
+          (yield* Deferred.isDone(callback))
+        ) {
           return HttpServerResponse.text("Invalid GOAT Connect authorization callback.", {
             status: 400,
           });
         }
         yield* Deferred.succeed(callback, code);
-        return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
+        return !intent || (yield* Deferred.isDone(approvalCallback))
+          ? HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml())
+          : HttpServerResponse.text(
+              "Authorization code received. Waiting for the matching browser approval.",
+            );
       }),
     );
-    yield* HttpRouter.serve(layerCallbackRoute, {
-      disableListenLog: true,
-      disableLogger: true,
-    }).pipe(
+    yield* HttpRouter.serve(
+      Layer.mergeAll(layerCallbackRoute, layerApprovalRoute, layerApprovalOptions),
+      {
+        disableListenLog: true,
+        disableLogger: true,
+      },
+    ).pipe(
       Layer.provide(
         NodeHttpServer.layer(NodeHttp.createServer, {
           host: "127.0.0.1",
@@ -540,16 +538,36 @@ export const make = Effect.gen(function* () {
       Layer.build,
     );
     // /connect establishes a Clerk session first; /oauth/authorize loses parameters across sign-in.
-    const authorizationUrl = buildConnectAuthorizeRequestUrl({
-      hostedAppUrl,
-      state,
-      challenge,
-      loopbackPort: metadata.loopbackPort,
-    });
-    yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl));
+    const authorizationUrl = intent
+      ? buildConnectAuthorizeRequestUrl({
+          hostedAppUrl,
+          state,
+          challenge,
+          loopbackPort: metadata.loopbackPort,
+          approval: {
+            intent,
+            cliKeyThumbprint: key.thumbprint,
+            approvalChallenge: approvalRequest.challenge,
+            state,
+          },
+        })
+      : buildConnectClerkAuthorizeUrl({
+          authorizationEndpoint: new URL("authorize", metadata.tokenEndpoint).toString(),
+          clientId: metadata.clientId,
+          redirectUri: metadata.redirectUri,
+          scopes: metadata.scopes,
+          state,
+          challenge,
+        });
+    yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl, intent !== undefined));
     const authorization = yield* waitForLoopbackAuthorization({
       authorizationUrl,
-      callback: Deferred.await(callback).pipe(
+      callback: (intent
+        ? Effect.all([Deferred.await(callback), Deferred.await(approvalCallback)]).pipe(
+            Effect.map(([code]) => code),
+          )
+        : Deferred.await(callback)
+      ).pipe(
         Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
         Effect.catchTags({
           TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
@@ -559,7 +577,10 @@ export const make = Effect.gen(function* () {
       launchBrowser: externalLauncher.launchBrowser,
     });
     if (authorization._tag === "HeadlessRequested") {
-      return authorization;
+      return yield* new CloudCliAuthorizationError({
+        cause:
+          "Headless Connect authorization is unavailable in beta. Pair an updated browser over a trusted local, Tailscale or SSH connection and link in Settings.",
+      });
     }
     const { token } = yield* exchangeToken(metadata, {
       grant_type: "authorization_code",
@@ -568,7 +589,15 @@ export const make = Effect.gen(function* () {
       client_id: metadata.clientId,
       code_verifier: verifier,
     });
-    return { _tag: "Authorized", token } as const;
+    if (!intent) return { _tag: "IdentityAuthorized", token } as const;
+    return {
+      _tag: "Authorized",
+      token,
+      approval: yield* Deferred.await(approvalCallback),
+      approvalVerifier: approvalRequest.verifier,
+      approvalState: state,
+      key,
+    } as const;
   });
 
   const getExistingNoLock = Effect.fn("cloud.cli_token.get_existing_no_lock")(function* () {
@@ -616,12 +645,12 @@ export const make = Effect.gen(function* () {
         return { _tag: "Authorized", token: token.value } as const;
       }
       const authorization = yield* Effect.scoped(login());
-      return authorization._tag === "Authorized"
-        ? ({ _tag: "Authorized", token: yield* persist(authorization.token) } as const)
-        : authorization;
+      return { _tag: "Authorized", token: yield* persist(authorization.token) } as const;
     }).pipe(
       Effect.mapError((cause) =>
-        Terminal.isQuitError(cause) ? cause : new CloudCliAuthorizationError({ cause }),
+        Terminal.isQuitError(cause) || isAuthorizationUnsupported(cause)
+          ? cause
+          : new CloudCliAuthorizationError({ cause }),
       ),
       Effect.provide(services),
     ),
@@ -635,7 +664,30 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  return CloudCliTokenManager.of({ get, getExisting, hasCredential, store, clear });
+  const approveLink = Effect.fn("cloud.cli_token.approve_link")(function* (
+    intent: ConnectLinkIntent,
+  ) {
+    return yield* semaphore
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const approved = yield* Effect.scoped(login(intent));
+          if (approved._tag !== "Authorized") {
+            return yield* new CloudCliAuthorizationUnsupportedError({});
+          }
+          yield* persist(approved.token);
+          return approved;
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          Terminal.isQuitError(cause) || isAuthorizationUnsupported(cause)
+            ? cause
+            : new CloudCliAuthorizationError({ cause }),
+        ),
+        Effect.provide(services),
+      );
+  });
+  return CloudCliTokenManager.of({ get, approveLink, getExisting, hasCredential, store, clear });
 });
 
 export const layer = Layer.effect(CloudCliTokenManager, make);

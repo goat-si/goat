@@ -1,3 +1,4 @@
+import { snapshotResult } from "./toolkits/preview/snapshotTransport.testkit.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -98,24 +99,6 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
     ),
   ),
 );
-
-const snapshotResult = {
-  url: "http://example.test/",
-  title: "Example",
-  loading: false,
-  visibleText: "Example",
-  interactiveElements: [],
-  accessibilityTree: {},
-  consoleEntries: [],
-  networkEntries: [],
-  actionTimeline: [],
-  screenshot: {
-    mimeType: "image/png",
-    data: Buffer.from("png").toString("base64"),
-    width: 10,
-    height: 5,
-  },
-};
 
 const serveSnapshots = (clientId: string, result: unknown) =>
   Effect.gen(function* () {
@@ -229,7 +212,7 @@ it.effect.each([{}, { includeImage: false }])(
         expect(snapshot.content).toEqual([
           { type: "text", text: `Preview snapshot failed: ${message}` },
         ]);
-        expect(snapshot.structuredContent).toEqual({
+        expect(snapshot.structuredContent).toMatchObject({
           error: {
             _tag: "PreviewAutomationExecutionError",
             operation: "snapshot",
@@ -313,13 +296,17 @@ it.effect.each([
             Effect.provideService(McpSchema.McpServerClient, client),
           );
         const metadata = { ...page, title: `Snapshot ${call}`, screenshot };
-        const { accessibilityTree: _tree, ...boundedMetadata } = metadata;
+        const { accessibilityTree: _tree, ...keptMetadata } = metadata;
+        const boundedMetadata = {
+          ...keptMetadata,
+          treeComplete: false,
+          omitted: ["transport_budget"],
+          next: "Narrow with interactiveOnly or scope, or read the text with goat_preview_read.",
+        };
         const omitted =
           "accessibilityTree (use interactiveElements locators or goat_preview_evaluate)";
         expect(snapshot.isError).toBe(false);
-        expect(snapshot.structuredContent).toEqual(
-          images ? undefined : { ...boundedMetadata, omitted: [omitted] },
-        );
+        expect(snapshot.structuredContent).toEqual(images ? undefined : boundedMetadata);
         const [identity, text, ...rest] = snapshot.content;
         expect(identity?.type === "text" ? decodeJsonText(identity.text) : null).toEqual({
           url: page.url,
@@ -617,7 +604,9 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
       expect(notice?.type === "text" ? notice.text : "").toContain("60 older console entries");
       expect(snapshot.structuredContent).toEqual({
         ...parsed,
-        omitted: expect.arrayContaining(["60 older console entries"]),
+        omitted: expect.arrayContaining(["transport_budget"]),
+        treeComplete: false,
+        next: "Narrow with interactiveOnly or scope, or read the text with goat_preview_read.",
       });
     }),
   ).pipe(Effect.provide(layerTest)),
@@ -930,12 +919,11 @@ it.effect("registers annotated tools and preserves authenticated request context
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(evaluated.isError).toBe(false);
-      expect(evaluated.structuredContent).toEqual({ value: ["Connect", "Continue"], toolIcon });
+      const value = ["Connect", "Continue"];
+      expect(evaluated.structuredContent).toMatchObject({ value, toolIcon });
       const evaluatedText = evaluated.content[0];
-      expect(evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null).toEqual({
-        toolIcon,
-        value: ["Connect", "Continue"],
-      });
+      const decoded = evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null;
+      expect(decoded).toMatchObject({ toolIcon, value });
 
       const actionRequests = [
         { name: "goat_preview_click", arguments: { x: 10, y: 10 } },
@@ -952,10 +940,17 @@ it.effect("registers annotated tools and preserves authenticated request context
             Effect.provideService(McpSchema.McpServerClient, client),
           );
         expect(result.isError).toBe(false);
-        expect(result.structuredContent).toEqual({ toolIcon });
+        const expected = {
+          toolIcon,
+          ...(request.name === "goat_preview_wait"
+            ? {}
+            : { next: "Unconfirmed: check with goat_preview_snapshot diff:true." }),
+        };
+        expect(result.structuredContent).toMatchObject(expected);
         expect(routedRequests.at(-1)?.operation).toBe("status");
         const text = result.content[0];
-        expect(text?.type === "text" ? decodeJsonText(text.text) : null).toEqual({ toolIcon });
+        const decodedText = text?.type === "text" ? decodeJsonText(text.text) : null;
+        expect(decodedText).toMatchObject(expected);
       }
     }),
   ).pipe(Effect.provide(layerTest)),

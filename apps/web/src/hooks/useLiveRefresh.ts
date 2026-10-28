@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useId } from "react";
 
-const LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
+export const LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
 
 const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -75,10 +75,18 @@ export function useLiveRefresh(
   options: {
     readonly enabled?: boolean;
     readonly key?: string;
-    readonly intervalMs?: number;
+    /** `null` turns off the periodic refresh, for a read too costly to repeat unasked. */
+    readonly intervalMs?: number | null;
+    /** Revalidate on enable for views that stay mounted while hidden, respecting the floor. */
+    readonly refreshOnShow?: boolean;
   } = {},
 ): void {
-  const { enabled = true, key, intervalMs = LIVE_REFRESH_INTERVAL_MS } = options;
+  const {
+    enabled = true,
+    key,
+    intervalMs = LIVE_REFRESH_INTERVAL_MS,
+    refreshOnShow = false,
+  } = options;
   const runRefresh = useEffectEvent((viewId: string, now: number) => {
     if (refresh === null) return;
     lastRefreshedAtByView.set(viewId, now);
@@ -112,7 +120,7 @@ export function useLiveRefresh(
     let timer: ReturnType<typeof setInterval> | undefined;
     const syncTimer = () => {
       clearInterval(timer);
-      timer = visible() ? setInterval(onInterval, intervalMs) : undefined;
+      timer = visible() && intervalMs !== null ? setInterval(onInterval, intervalMs) : undefined;
     };
     const onVisibilityChange = () => {
       onArrival();
@@ -123,7 +131,13 @@ export function useLiveRefresh(
       onArrival();
       syncTimer();
     });
-    onArrival();
+    if (refreshOnShow) {
+      const now = Date.now();
+      const lastRefreshedAt = lastRefreshedAtByView.get(viewId);
+      if (lastRefreshedAt === undefined || now - lastRefreshedAt >= LIVE_REFRESH_MIN_INTERVAL_MS) {
+        read(now);
+      }
+    } else onArrival();
     syncTimer();
     window.addEventListener("focus", onArrival);
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -133,5 +147,5 @@ export function useLiveRefresh(
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stopWatchingInteraction();
     };
-  }, [enabled, viewId, intervalMs]);
+  }, [enabled, viewId, intervalMs, refreshOnShow]);
 }

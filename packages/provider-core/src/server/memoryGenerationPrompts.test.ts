@@ -58,6 +58,7 @@ const conflict = M.ResolveMemoryConflictInput.make({
   modelSelection: selection,
 });
 const result = { text: "Synthetic result", assertionKind: "inference" as const, evidence: [] };
+const decodeSummaryResult = Schema.decodeUnknownSync(M.GenerateMemorySummaryResult);
 
 import {
   buildMemoryConflictPrompt,
@@ -154,6 +155,47 @@ describe("memory generation prompts", () => {
     const unknown = decide([{ ...cited, messageIds: ["m-unknown"] }]);
     expect(unknown.evidence[0]?.watermark?.toEventId).toBe("e2-miscopied");
     expect(M.validateMemoryGenerationResult(summary, unknown)).toBe(false);
+  });
+  it("repairs consolidation evidence that the previous summary already cites", () => {
+    // Consolidation rereads messages its previous summary cites, so two sources held each cited
+    // message, the model's own miscopied references were kept, and every retry failed validation.
+    const earlier = {
+      origin: "thread" as const,
+      sourceThread: summary.sourceThread,
+      watermark: {
+        fromEventId: M.EventId.make("e0"),
+        toEventId: M.EventId.make("e1"),
+        throughSequence: 1,
+      },
+      messageIds: [M.MessageId.make("m0"), M.MessageId.make("m1")],
+    };
+    const consolidation = M.GenerateMemorySummaryInput.make({
+      ...summary,
+      previousSummary: { text: "Earlier", evidence: [earlier], derivedFromMemoryRevisions: [] },
+    });
+    const miscopied = {
+      origin: "thread" as const,
+      sourceThread: summary.sourceThread,
+      watermark: { ...summary.sourceWatermark, toEventId: "e2-miscopied" },
+      importSourceId: null,
+    };
+    const decide = (messageIds: string[]) =>
+      decodeSummaryResult(
+        memoryResultFromModelOutput(
+          { ...result, assertionKind: "fact", evidence: [{ ...miscopied, messageIds }] },
+          memoryEvidenceSources(consolidation),
+        ),
+      );
+    const shared = decide(["m1"]);
+    expect(shared.evidence).toHaveLength(1);
+    expect(M.validateMemoryGenerationResult(consolidation, shared)).toBe(true);
+    // One entry citing an earlier and a new message becomes one entry per source.
+    const spanning = decide(["m0", "m1"]);
+    expect(M.validateMemoryGenerationResult(consolidation, spanning)).toBe(true);
+    expect(spanning.evidence.flatMap((e) => e.messageIds).toSorted()).toEqual(["m0", "m1"]);
+    expect(M.validateMemoryGenerationResult(consolidation, decide(["m0", "m-unknown"]))).toBe(
+      false,
+    );
   });
   it.effect("rejects oversize input output and unknown evidence", () =>
     Effect.gen(function* () {

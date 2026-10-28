@@ -15,6 +15,7 @@
  * @module DesktopFrames
  */
 import {
+  type AgentCursorSnapshot,
   type DesktopCuaFrame,
   type DesktopCuaFrames,
   PREVIEW_SESSION_FRAME_LIMITS,
@@ -75,6 +76,11 @@ export type FrameGate =
       readonly apps: ReadonlyArray<string> | undefined;
       /** When the control can next change without a signal, epoch ms. */
       readonly wakeAt: number;
+      /** The agent's cursor on the window now; a frame admitted now carries it. */
+      readonly cursor?: ComputerUseLeases.ComputerUseControl["cursor"];
+      readonly cursorState?: AgentCursorSnapshot;
+      /** When that cursor last changed; a frame captured before it carries none. */
+      readonly cursorAt?: number;
     }
   | { readonly _tag: "closed"; readonly reason: PreviewSessionNoPicture };
 
@@ -92,7 +98,18 @@ export function frameGate(
   if (!detection.frames) return closed("unsupported");
   const target = entry.control.target;
   if (target === undefined) return closed("windowUnknown");
-  return { _tag: "open", ...target, apps: entry.state.apps, wakeAt: entry.state.wakeAt };
+  const { cursor, cursorReport, cursorAt } = entry.control;
+  return {
+    _tag: "open",
+    ...target,
+    apps: entry.state.apps,
+    wakeAt: entry.state.wakeAt,
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(cursorReport === undefined
+      ? {}
+      : { cursorState: { identity: cursorReport.identity, phase: cursorReport.phase } }),
+    ...(cursorAt === undefined ? {} : { cursorAt }),
+  };
 }
 
 export interface ViewerAsk {
@@ -135,11 +152,17 @@ const sameApps = (a: ReadonlyArray<string> | undefined, b: ReadonlyArray<string>
     ? a === b
     : a.length === b.length && a.every((app) => b.includes(app));
 
-/** What a viewer receives for a frame the desktop sent, or undefined when it is dropped. */
+/**
+ * What a viewer receives for a frame the desktop sent, or undefined when it is dropped. A frame
+ * carries the cursor the gate holds only when that cursor changed before the capture began, so a
+ * viewer never draws over pixels a cursor they do not show yet. A frame from a source that does
+ * not stamp its capture carries no cursor: its arrival says nothing about when it was taken.
+ */
 export function admitFrame(
   message: DesktopCuaFrame,
   current: { readonly seq: number; readonly targets: ReadonlyArray<Target> },
   gate: FrameGate | undefined,
+  now: number,
 ): PreviewSessionFrameEvent | undefined {
   if (message.seq !== current.seq) return undefined;
   const target = current.targets.find((candidate) => candidate.key === message.key);
@@ -159,6 +182,12 @@ export function admitFrame(
   const bytes = Math.floor((message.data.length * 3) / 4);
   if (bytes > PREVIEW_SESSION_FRAME_LIMITS.maxBytes || message.width > target.maxWidth)
     return { type: "unavailable", reason: "captureFailed" };
+  // A stamp later than now means the host's clock stepped back during the capture; it orders
+  // nothing against a cursor stamped since, so the frame counts as unstamped.
+  const stamped =
+    message.capturedAt === undefined || message.capturedAt > now ? undefined : message.capturedAt;
+  const capturedAt = stamped ?? now;
+  const paired = stamped !== undefined && (gate.cursorAt === undefined || gate.cursorAt < stamped);
   return {
     type: "frame",
     seq: 0,
@@ -166,6 +195,10 @@ export function admitFrame(
     height: message.height,
     mime: message.mime,
     data: message.data,
+    capturedAt,
+    ...(stamped === undefined ? {} : { ageMs: now - stamped }),
+    ...(!paired || gate.cursor === undefined ? {} : { cursor: gate.cursor }),
+    ...(!paired || gate.cursorState === undefined ? {} : { cursorState: gate.cursorState }),
   };
 }
 
@@ -332,7 +365,7 @@ const make = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         // Expiry sends no signal; a read that began before it can still say open.
         if (gate._tag === "open" && gate.wakeAt <= now) return yield* kick;
-        const event = admitFrame(message, current, gate);
+        const event = admitFrame(message, current, gate, now);
         if (event === undefined) return;
         if (event.type === "frame") {
           const target = current.targets.find((candidate) => candidate.key === message.key);

@@ -107,7 +107,7 @@ it.effect("083 participates in the migration ledger and leaves healthy spaces un
     const sql = yield* SqlClient.SqlClient;
     yield* runMigrations({ toMigrationInclusive: 89 });
     yield* sql`INSERT INTO memory_quota_counters VALUES (${space},'checkpoint_initialized','',1),(${space},'hub_snapshot_bytes','',0),(${space},'hub_snapshot_rows','',0)`;
-    assert.deepStrictEqual(yield* runMigrations(), [
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
       [90, "MemoryCheckpointLifecycle"],
       [91, "FleetGoals"],
       [92, "FleetHealth"],
@@ -129,10 +129,11 @@ it.effect("083 participates in the migration ledger and leaves healthy spaces un
       [108, "HubProvisionedLinks"],
       [109, "ScheduledTaskRuns"],
       [110, "ScheduledTaskNotificationPolicy"],
+      [111, "NotificationCursorRepair"],
     ]);
     assert.deepStrictEqual(yield* pending, []);
     yield* sql.withTransaction(refreshCheckpointAccounting());
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
     assert.deepStrictEqual(yield* pending, []);
   }).pipe(Effect.provide(database)),
 );

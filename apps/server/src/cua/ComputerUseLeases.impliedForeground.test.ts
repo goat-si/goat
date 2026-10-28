@@ -46,7 +46,6 @@ const personRun = Effect.fn("impliedForeground.personRun")(function* (name: stri
   yield* run(threadId, `run:${name}:R`, 1, "running");
   const control = Option.getOrThrow(
     yield* leases.everyAppControl(threadId, false, {
-      person: true,
       runId: RunId.make(`run:${name}:R`),
     }),
   );
@@ -125,7 +124,6 @@ it.effect(
       yield* drain;
       const reused = Option.getOrThrow(
         yield* leases.everyAppControl(threadId, false, {
-          person: true,
           runId: RunId.make("run:reused:Q"),
         }),
       );
@@ -160,14 +158,12 @@ it.effect(
             '2026-01-01', '2026-01-01', '{}')`;
         const first = Option.getOrThrow(
           yield* leases.everyAppControl(threadId, false, {
-            person: true,
             runId: RunId.make(`run:${budget}:R`),
           }),
         );
         // The reuse yields after `budget` ops, and the Stop forked behind it runs at that yield.
         const reuse = yield* leases
           .everyAppControl(threadId, false, {
-            person: true,
             runId: RunId.make(`run:${budget}:Q`),
           })
           .pipe(Effect.provideService(MaxOpsBeforeYield, budget), Effect.forkChild);

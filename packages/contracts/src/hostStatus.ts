@@ -233,6 +233,18 @@ export const HostStatusEntry = Schema.Struct({
   reachability: HostStatusReachability,
   lastKnown: Schema.optional(Schema.Literal(true)),
   metrics: Schema.optional(HostStatusMetrics),
+  /**
+   * Metrics sections dropped because a value in them was not JSON. The rest of the host is still
+   * returned. Older hosts omit it.
+   */
+  omittedMetrics: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        section: TrimmedNonEmptyString,
+        message: Schema.String.check(Schema.isMaxLength(500)),
+      }),
+    ),
+  ),
   /** GOAT version that machine runs. Older hosts omit it. */
   serverVersion: Schema.optional(TrimmedNonEmptyString),
   /** Protocol ranges that machine serves. Older hosts omit it. Partial or malformed ranges decode

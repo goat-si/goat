@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, RunAttemptId } from "@goat/contracts";
+import {
+  EventId,
+  RunAttemptId,
+  TurnItemId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2Run,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -207,4 +213,181 @@ it.effect(
         }),
       { runStatus: "queued" },
     ),
+);
+
+type ThreadEvent = Parameters<typeof applyToProjection>[1];
+
+const withIdleCompactionRun = (
+  batches: (input: {
+    readonly run: OrchestrationV2Run;
+    readonly now: DateTime.Utc;
+    readonly later: DateTime.Utc;
+    readonly message: ThreadEvent;
+    readonly thread: OrchestrationV2AppThread;
+  }) => ReadonlyArray<ReadonlyArray<ThreadEvent>>,
+  expected: "now" | "later" | null,
+) =>
+  withWebhookService(
+    ({ service, sink, projections }) =>
+      Effect.gen(function* () {
+        const input = yield* webhookTaskInput({ schedule: { type: "interval", everyMs: 60000 } });
+        const task = (yield* service.upsert(input)).task;
+        const ran = yield* service.runNow({ id: task.id });
+        const initial = yield* projections.getThreadProjection(ran.threadId!);
+        const run = initial.runs[0]!;
+        const now = yield* DateTime.now;
+        const later = DateTime.add(now, { seconds: 1 });
+        const message: ThreadEvent = {
+          id: EventId.make("idle-message"),
+          type: "message.updated",
+          threadId: run.threadId,
+          occurredAt: now,
+          payload: {
+            ...initial.messages[0]!,
+            text: "/compact",
+            createdBy: "agent",
+            creationSource: "server",
+          },
+        };
+        const written = batches({ run, now, later, message, thread: initial.thread });
+        const memory = yield* ProjectionStore.ProjectionStoreV2.pipe(
+          Effect.provide(ProjectionStore.layerMemory),
+        );
+        yield* memory.apply({
+          id: EventId.make("idle-thread"),
+          type: "thread.created",
+          threadId: run.threadId,
+          occurredAt: now,
+          payload: initial.thread,
+        });
+        let replay = initial;
+        for (const events of written) {
+          yield* sink.write({ events });
+          for (const event of events) {
+            yield* memory.apply(event);
+            replay = applyToProjection(replay, event);
+          }
+        }
+        const cursor = expected === null ? null : expected === "now" ? now : later;
+        assert.deepStrictEqual(
+          (yield* projections.getThreadShell(run.threadId))?.notificationCompletedAt,
+          cursor,
+        );
+        assert.deepStrictEqual(
+          (yield* memory.getThreadShell(run.threadId))?.notificationCompletedAt,
+          cursor,
+        );
+        assert.deepStrictEqual(threadShellFromProjection(replay).notificationCompletedAt, cursor);
+      }),
+    { runStatus: "queued" },
+  );
+
+const runEvent = (suffix: string, at: DateTime.Utc, payload: OrchestrationV2Run): ThreadEvent => ({
+  id: EventId.make(suffix),
+  type: "run.updated",
+  threadId: payload.threadId,
+  occurredAt: at,
+  payload,
+});
+
+const failedCompaction = (run: OrchestrationV2Run, at: DateTime.Utc): ThreadEvent => ({
+  id: EventId.make("idle-compaction-failed"),
+  type: "turn-item.updated",
+  threadId: run.threadId,
+  occurredAt: at,
+  payload: {
+    id: TurnItemId.make("idle-compaction"),
+    threadId: run.threadId,
+    runId: run.id,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "failed",
+    title: null,
+    startedAt: at,
+    completedAt: at,
+    updatedAt: at,
+    type: "compaction",
+    driver: null,
+  },
+});
+
+it.effect(
+  "keeps an idle compaction's failed attempt unread when its retry completes quietly in the same batch",
+  () =>
+    withIdleCompactionRun(
+      ({ run, now, later, message }) => [
+        [
+          message,
+          runEvent("idle-failed", now, { ...run, status: "failed", completedAt: now }),
+          runEvent("idle-reopened", now, {
+            ...run,
+            status: "preparing",
+            completedAt: null,
+            activeAttemptId: RunAttemptId.make("retry"),
+          }),
+          runEvent("idle-retried", later, {
+            ...run,
+            status: "completed",
+            completedAt: later,
+            activeAttemptId: RunAttemptId.make("retry"),
+          }),
+        ],
+      ],
+      "now",
+    ),
+);
+
+it.effect(
+  "a compaction failure recorded after an idle compaction completes in one batch makes it unread",
+  () =>
+    withIdleCompactionRun(
+      ({ run, later, message }) => [
+        [
+          message,
+          runEvent("idle-completed", later, { ...run, status: "completed", completedAt: later }),
+          failedCompaction(run, later),
+        ],
+      ],
+      "later",
+    ),
+);
+
+it.effect(
+  "a compaction failure recorded in a later batch makes the completed idle compaction unread",
+  () =>
+    withIdleCompactionRun(
+      ({ run, later, message }) => [
+        [
+          message,
+          runEvent("idle-completed", later, { ...run, status: "completed", completedAt: later }),
+        ],
+        [failedCompaction(run, later)],
+      ],
+      "later",
+    ),
+);
+
+it.effect("a replayed thread update cannot restore the cursor an idle compaction once set", () =>
+  withIdleCompactionRun(
+    ({ run, later, message, thread }) => [
+      [
+        message,
+        runEvent("idle-completed", later, { ...run, status: "completed", completedAt: later }),
+      ],
+      [
+        {
+          id: EventId.make("idle-stale-thread"),
+          type: "thread.metadata-updated",
+          threadId: run.threadId,
+          occurredAt: later,
+          payload: { ...thread, notificationCompletedAt: later },
+        },
+      ],
+    ],
+    null,
+  ),
 );

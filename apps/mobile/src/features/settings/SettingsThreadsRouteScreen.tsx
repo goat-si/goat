@@ -46,6 +46,7 @@ export function SettingsThreadsRouteScreen() {
           contentContainerClassName="gap-6 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
+          <NewThreadProjectSettingsSection />
           <AutoSettleSettingsRows />
           <BetaSettingsSection />
           <LegacySettingsSection />
@@ -288,5 +289,23 @@ function LegacySettingsSection() {
         control; otherwise every task runs in Build mode.
       </Text>
     </View>
+  );
+}
+
+function NewThreadProjectSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  return (
+    <SettingsSection title="New threads">
+      <SettingsSwitchRow
+        icon="folder"
+        label="Use last project"
+        value={
+          AsyncResult.isSuccess(preferences) &&
+          preferences.value.useLastProjectForNewThreads !== false
+        }
+        onValueChange={(value) => savePreferences({ useLastProjectForNewThreads: value })}
+      />
+    </SettingsSection>
   );
 }

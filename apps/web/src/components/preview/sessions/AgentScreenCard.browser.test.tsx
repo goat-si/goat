@@ -12,7 +12,7 @@ import type { Ref } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { commands, type Locator, page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../../../test/render";
+import { act, fakeTimers, render } from "../../../../test/render";
 import { toastManager } from "../../ui/toast";
 
 const state = vi.hoisted(() => ({
@@ -190,7 +190,11 @@ const sendFrame = (event: PreviewSessionFrameEvent | null) =>
     for (const listener of state.frameListeners) listener();
   });
 
-function setup(sessions: ReadonlyArray<PreviewSession>) {
+/** The route shows the first session's thread unless a test names another one. */
+function setup(
+  sessions: ReadonlyArray<PreviewSession>,
+  routeThread: string | null = sessions[0]?.threadId ?? null,
+) {
   state.sessions = sessions;
   state.control.mockReset();
   state.control.mockResolvedValue({ _tag: "Success", value: { applied: true } });
@@ -200,7 +204,7 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
   state.frameRequests = [];
   state.surfaceControl = null;
   state.surfaceCalls = [];
-  state.routeThread = null;
+  state.routeThread = routeThread;
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   window.sessionStorage.removeItem(HIDDEN_KEY);
   usePreviewSessionStack.setState({
@@ -209,7 +213,8 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
     revealedWhileNarrow: false,
     dismissed: new Set(),
     hiddenLive: new Map(),
-    expanded: null,
+    expanded: new Map(),
+    revealedThreads: new Set(),
     focus: null,
     focusRequest: 0,
   });
@@ -285,13 +290,13 @@ const pictureRatio = (card: Locator) => {
 };
 
 it("gives browser tabs and desktop threads the same card, with no session counter", async () => {
-  setup([browserTab(), desktopApp()]);
+  setup([browserTab(), desktopApp({ threadId: ThreadId.make("thread-1") })]);
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
   await using screen = await render(<Cards />);
   const browser = screen.getByRole("article", { name: "GOAT (Dev): Agent controlling" });
   // A desktop card is named by the thread driving it, never one merged "Whole screen".
-  const desktop = screen.getByRole("article", { name: "Thread thread-desk: Agent controlling" });
+  const desktop = screen.getByRole("article", { name: "Thread thread-1: Agent controlling" });
   await expect.element(browser).toBeVisible();
   await expect.element(desktop).toBeVisible();
   for (const card of [browser, desktop])
@@ -304,7 +309,7 @@ it("gives browser tabs and desktop threads the same card, with no session counte
   expect(screen.container.textContent).not.toMatch(/Agents on screen|helper|Agent controlling/);
 });
 
-it("shows one card per thread, and a stopped control gives way to the thread's newer session", async () => {
+it("shows one desktop card for the thread, and a stopped control gives way to its newer session", async () => {
   const thread = ThreadId.make("thread-desk");
   setup([
     desktopApp({ id: "desktop-old", status: "stopped", threadId: thread }),
@@ -317,10 +322,7 @@ it("shows one card per thread, and a stopped control gives way to the thread's n
   await expect
     .element(screen.getByRole("article", { name: "Thread thread-desk: Permission needed" }))
     .toBeVisible();
-  await expect
-    .element(screen.getByRole("article", { name: "Thread thread-two: Agent controlling" }))
-    .toBeVisible();
-  expect(screen.container.querySelectorAll("article")).toHaveLength(2);
+  expect(document.querySelectorAll("article")).toHaveLength(1);
 });
 
 it("hides the cards in a pane too narrow for them, and the header toggle shows them anyway", async () => {
@@ -728,6 +730,72 @@ it("draws the agent's cursor where it is on the window, inside a letterboxed pic
   await vi.waitFor(() => expect(marker()).toBeNull());
 });
 
+it("draws the cursor a frame was captured with, and says when the picture stops updating", async () => {
+  setup([]);
+  const desk = desktopApp({
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+    target: {
+      kind: "desktop",
+      motionSupport: "supported",
+      pid: 7,
+      windowId: 3,
+      title: "Finder",
+      // The list already has the cursor's next point, which the frames do not show yet.
+      cursor: { windowId: 3, point: { fx: 1, fy: 1 }, phase: "resting" },
+    },
+  });
+  const captured = (seq: number, fx?: number): PreviewSessionFrameEvent => ({
+    type: "frame",
+    seq,
+    width: 10,
+    height: 10,
+    mime: "image/jpeg",
+    data: "AAAA",
+    capturedAt: seq * 500,
+    ...(fx === undefined
+      ? {}
+      : { cursor: { windowId: 3, point: { fx, fy: fx }, phase: "resting" } }),
+  });
+  state.frame = captured(1, 0.5);
+  await using screen = await render(cardView(desk).element);
+  const marker = () => screen.container.querySelector<HTMLElement>("[data-agent-browser-cursor]");
+  const picture = () => screen.container.querySelector("img")!.getBoundingClientRect();
+  await vi.waitFor(() => {
+    const [x, y] = marker()!
+      .style.transform.match(/translate3d\(([^)]*)\)/)![1]!
+      .match(/-?[\d.]+/g)!
+      .map(Number);
+    expect([Math.round(x!), Math.round(y!)]).toEqual([
+      Math.round(picture().width / 2),
+      Math.round(picture().height / 2),
+    ]);
+  });
+  // The list hides the cursor after this frame: the frame's own cursor goes with it.
+  await screen.rerender(
+    cardView({
+      ...desk,
+      target: { kind: "desktop", motionSupport: "supported", pid: 7, windowId: 3, title: "Finder" },
+    }).element,
+  );
+  await vi.waitFor(() => expect(marker()).toBeNull());
+  await screen.rerender(cardView(desk).element);
+  await vi.waitFor(() => expect(marker()).not.toBeNull());
+  using _timers = fakeTimers();
+  // Captured with no cursor on the window: none is drawn, whatever the list says.
+  await sendFrame(captured(2));
+  await vi.waitFor(() => expect(marker()).toBeNull());
+  const notice = screen.getByText("Picture not updating");
+  await act(() => vi.advanceTimersByTime(2_900));
+  await expect.element(notice).not.toBeInTheDocument();
+  await act(() => vi.advanceTimersByTime(100));
+  await expect.element(notice).toBeVisible();
+  await sendFrame(captured(3));
+  await expect.element(notice).not.toBeInTheDocument();
+  // Frames that keep arriving but were already old when sent are not a live picture either.
+  await sendFrame({ ...captured(4), ageMs: 5_000 } as PreviewSessionFrameEvent);
+  await expect.element(notice).toBeVisible();
+});
+
 it("says why a desktop thread has no picture instead of a bare No preview", async () => {
   setup([]);
   const desk = desktopApp({
@@ -793,7 +861,7 @@ it("keeps a stopped session's dimmed card until the person closes it", async () 
 });
 
 it("closes a working browser tab's card while its agent works, and the header brings it back", async () => {
-  setup([browserTab(), desktopApp()]);
+  setup([browserTab(), desktopApp({ threadId: ThreadId.make("thread-1") })]);
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
   await using screen = await render(<Cards />);
@@ -807,7 +875,7 @@ it("closes a working browser tab's card while its agent works, and the header br
   // The agent was not stopped; only its card was put away.
   expect(state.control).not.toHaveBeenCalled();
   // The other card stays, and the list button says a card is put away.
-  await expect.element(screen.getByRole("article", { name: /Thread thread-desk/ })).toBeVisible();
+  await expect.element(screen.getByRole("article", { name: /Thread thread-1/ })).toBeVisible();
   await expect.element(list).toHaveAttribute("aria-pressed", "false");
   await userEvent.click(list);
   await expect.element(screen.getByRole("article", { name: /GOAT \(Dev\)/ })).toBeVisible();

@@ -12,7 +12,7 @@ hold the rules. This skill puts them in order.
 2. From C2 up, read the code you will change and its direct callers, then write a short plan: the
    files, the surfaces from [Hit every surface](../../../AGENTS.md#hit-every-surface) that apply, and
    the commands that will prove it. Run each command once to confirm it exists and reads the change.
-3. When the problem is unfamiliar, research current practice (Aside when available, otherwise web
+3. When the problem is unfamiliar, research current practice (GOAT's browser (`goat_preview_read`) or web
    search) and cite the sources in the plan or pull request.
 4. Implement in small working steps and commit each locally. A logic, data, state, or protocol bug
    gets a failing test first, then the fix.

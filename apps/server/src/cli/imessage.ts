@@ -1,3 +1,4 @@
+import * as AuxiliarySqlite from "../storage/AuxiliarySqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- local CLI manages one versioned file and ID.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -24,7 +25,7 @@ import {
   normalizeHandle,
   validateImessageSettings,
 } from "../channels/imessage/ImessageChannelSettings.ts";
-import { openImessageChatDb, type ImessageDbError } from "../channels/imessage/imessageChatDb.ts";
+import { openImessageChatDb } from "../channels/imessage/imessageChatDb.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { baseDirFlag } from "./config.ts";
@@ -207,19 +208,12 @@ const statusCommand = Command.make("status", { baseDir: baseDirFlag }).pipe(
         file !== undefined && configured === undefined ? "invalid_settings" : "not_checked";
       if (enabled) {
         const probe = yield* Effect.result(
-          Effect.try({
-            try: () => {
-              const db = openImessageChatDb(
-                NodePath.join(NodeOS.homedir(), "Library/Messages/chat.db"),
-              );
-              try {
-                db.maxRowId();
-              } finally {
-                db.close();
-              }
-            },
-            catch: (cause) => cause as ImessageDbError,
-          }),
+          Effect.gen(function* () {
+            const db = yield* openImessageChatDb(
+              NodePath.join(NodeOS.homedir(), "Library/Messages/chat.db"),
+            );
+            return yield* db.maxRowId().pipe(Effect.ensuring(db.close()));
+          }).pipe(Effect.provide(AuxiliarySqlite.layer)),
         );
         database =
           probe._tag === "Success"

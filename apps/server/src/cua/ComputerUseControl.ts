@@ -31,6 +31,8 @@ export interface ComputerUseControl {
   readonly cursor?: LegacyCursor;
   /** Latest scoped report, including a terminal identity-bearing tombstone. */
   readonly cursorReport?: AgentCursorReport;
+  /** When cursor or cursorReport last changed, epoch ms, so a frame captured before it goes without. */
+  readonly cursorAt?: number;
 }
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
@@ -80,6 +82,7 @@ export const nextTurn = <C extends ComputerUseControl>({
   acted,
   cursor: _cursor,
   cursorReport: _cursorReport,
+  cursorAt: _cursorAt,
   ...rest
 }: C) => (idle !== true && acted === true ? { ...rest, acted } : rest);
 

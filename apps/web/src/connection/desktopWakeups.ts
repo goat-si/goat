@@ -4,27 +4,22 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-/**
- * A sleep at least this long replaces every session instead of probing it,
- * like a long background on mobile: sockets that slept this long are often
- * dead without a close event, and a probe would hold them as "connected"
- * until it times out.
- */
-export const DESKTOP_SLEEP_RECONNECT_AFTER_MS = 10_000;
+// Long sleep checks stale sockets with the shorter resume probe budget.
+export const DESKTOP_LONG_SLEEP_AFTER_MS = 10_000;
 /** Window focus checks connections at most this often; a quick app switch needs no check. */
 export const FOCUS_PROBE_MIN_INTERVAL_MS = 30_000;
 
 export type DesktopWakeup = Extract<
   Wakeups.ConnectionWakeup,
-  "suspend" | "application-active-probe" | "application-active-reconnect"
+  "suspend" | "application-active-probe" | "application-active-long"
 >;
 
 export function desktopSystemWakeup(event: DesktopSystemWakeEvent): DesktopWakeup {
   if (event.reason === "suspend") return "suspend";
   if (event.reason !== "resume") return "application-active-probe";
   // A resume without a recorded suspend still followed a sleep of unknown length.
-  return event.asleepMs === null || event.asleepMs >= DESKTOP_SLEEP_RECONNECT_AFTER_MS
-    ? "application-active-reconnect"
+  return event.asleepMs === null || event.asleepMs >= DESKTOP_LONG_SLEEP_AFTER_MS
+    ? "application-active-long"
     : "application-active-probe";
 }
 
@@ -75,8 +70,8 @@ export function desktopWakeups(sources: DesktopWakeupSources): Stream.Stream<Des
             event.asleepMs <= now - lastSystemWakeAtMs;
           if (
             !sleptSinceLastWake &&
-            now - lastSystemWakeAtMs < DESKTOP_SLEEP_RECONNECT_AFTER_MS &&
-            (lastSystemWakeup === "application-active-reconnect" || lastSystemWakeup === wakeup)
+            now - lastSystemWakeAtMs < DESKTOP_LONG_SLEEP_AFTER_MS &&
+            (lastSystemWakeup === "application-active-long" || lastSystemWakeup === wakeup)
           ) {
             lastWakeupAtMs = now;
             return;

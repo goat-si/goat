@@ -439,8 +439,23 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  goat_preview_read: tool(
+    ["Read", "Reading", "Read", "rendered browser text"],
+    "browser",
+    "browser",
+  ),
+  goat_preview_request_handoff: tool(
+    ["Ask", "Asking", "Asked", "a person to finish a step"],
+    "browser",
+    "browser",
+  ),
   goat_preview_fetch: tool(
     ["Fetch", "Fetching", "Fetched", "from the preview page"],
+    "browser",
+    "browser",
+  ),
+  goat_preview_fill_secret: tool(
+    ["Fill", "Filling", "Filled", "a saved password"],
     "browser",
     "browser",
   ),
@@ -842,13 +857,7 @@ function normalizeGoatMcpToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
-/**
- * ACP agents disagree on how the injected GOAT server prefixes its tools:
- * `mcp__goat__x` (Claude/Cursor), `goat.x` (Codex), plus single
- * underscore, colon, slash, dash, and space separators seen from registry
- * agents. The prefix match is deliberately loose because the display-name
- * inventory is the real gate; unknown tools stay on the generic renderer.
- */
+// Provider prefixes vary; only names in the GOAT inventory reach a tool renderer.
 function resolveGoatMcpToolName(value: string): string | null {
   const label = normalizeGoatMcpToolLabel(value);
   // Bare goat_* ids are tools themselves, before goat_ is read as a namespace.

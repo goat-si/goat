@@ -1,3 +1,5 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
+import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
 import * as NodeSqlite from "node:sqlite";
 
@@ -14,7 +16,9 @@ import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
 import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
 
 const withHome = <A, E>(
-  run: (home: string) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  run: (
+    home: string,
+  ) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | AuxiliarySqlite.AuxiliarySqlite>,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -23,7 +27,7 @@ const withHome = <A, E>(
       Effect.provideService(HostProcess.HomeDirectory, home),
       Effect.provideService(HostProcess.Environment, {}),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(AuxiliarySqlite.layer), Effect.scoped, Effect.provide(NodeServices.layer));
 
 const seedDatabase = (file: string, worktreePaths: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -154,3 +158,45 @@ describe("otherGoatHomes", () => {
       ),
   );
 });
+
+it.effect("reads foreign worktree ownership without preparing SQL on the server thread", () =>
+  withHome((home) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const foreign = path.join(home, ".goat", "desktop-nightly", "userdata", "statev2.sqlite");
+      const checkout = path.join(home, "checkouts", "kept");
+      yield* fs.makeDirectory(checkout, { recursive: true });
+      yield* seedDatabase(foreign, [checkout]);
+      using prepare = vi.spyOn(NodeSqlite.DatabaseSync.prototype, "prepare");
+      const bindings = yield* readOtherHomeBindings({
+        ownDatabase: path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite"),
+      });
+      assert.isTrue(bindings.worktreePaths.has(checkout));
+      assert.deepEqual(bindings.unreadable, []);
+      assert.equal(prepare.mock.calls.length, 0);
+    }),
+  ),
+);
+
+it.effect("treats unsupported schemas and failed database opens as unreadable ownership", () =>
+  withHome((home) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const nightly = path.join(home, ".goat", "desktop-nightly", "userdata", "statev2.sqlite");
+      yield* fs.makeDirectory(path.dirname(nightly), { recursive: true });
+      const seed = new NodeSqlite.DatabaseSync(nightly);
+      seed.close();
+      const ownDatabase = path.join(home, "own.sqlite");
+      const unsupported = yield* readOtherHomeBindings({ ownDatabase });
+      assert.deepEqual(unsupported.unreadable, [nightly]);
+      assert.equal(unsupported.worktreePaths.size, 0);
+      yield* fs.remove(nightly);
+      yield* fs.makeDirectory(nightly);
+      const failedOpen = yield* readOtherHomeBindings({ ownDatabase });
+      assert.deepEqual(failedOpen.unreadable, [nightly]);
+      assert.equal(failedOpen.worktreePaths.size, 0);
+    }),
+  ),
+);

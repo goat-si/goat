@@ -4,6 +4,8 @@ import {
   PreviewAutomationControlInterruptedError,
   PreviewAutomationControlReason,
   PreviewAutomationExecutionError,
+  PreviewAutomationReadError,
+  PreviewAutomationReadFailure,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -60,6 +62,8 @@ export interface PreviewAutomationInvokeInput {
 
 export interface PreviewAutomationConnectOptions {
   readonly preferred?: boolean;
+  /** Only the server's own browser may fill secrets: other hosts never get the operation. */
+  readonly inProcess?: boolean;
 }
 
 export class PreviewAutomationBroker extends Context.Service<
@@ -85,8 +89,10 @@ interface ClientConnection {
   readonly connectionId: string;
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
+  readonly supportedFeatures: ReadonlySet<string>;
   readonly focused: boolean;
   readonly preferred: boolean;
+  readonly inProcess: boolean;
   readonly liveTabs: NonNullable<PreviewAutomationHostFocus["liveTabs"]>;
   readonly focusOrder: number;
   readonly queue: Queue.Queue<PreviewAutomationStreamEvent, Cause.Done>;
@@ -183,7 +189,24 @@ const readResultTabId = (result: unknown): PreviewTabId | null | undefined => {
 const supportsOperation = (
   connection: ClientConnection,
   operation: PreviewAutomationOperation,
-): boolean => connection.supportedOperations.has(operation);
+): boolean =>
+  connection.supportedOperations.has(operation) &&
+  (operation !== "fillSecret" || connection.inProcess);
+
+const supportsRequest = (
+  connection: ClientConnection,
+  request: PreviewAutomationInvokeInput,
+): boolean => {
+  const input = request.input;
+  return (
+    supportsOperation(connection, request.operation) &&
+    (request.operation !== "snapshot" ||
+      typeof input !== "object" ||
+      input === null ||
+      !["scope", "interactiveOnly", "diff", "annotate"].some((key) => key in input) ||
+      connection.supportedFeatures.has("snapshotOptions"))
+  );
+};
 
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
@@ -211,11 +234,21 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
 };
 
 const MAX_REASON_CHARS = 500;
+const isReadFailure = Schema.is(PreviewAutomationReadFailure);
 
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
   error: NonNullable<PreviewAutomationResponse["error"]>,
 ): PreviewAutomationError => {
+  // A host that refused before any input left says so in its detail; the classifier reads it.
+  const hostDetail = error.detail;
+  const notSent =
+    typeof hostDetail === "object" &&
+    hostDetail !== null &&
+    "beforeInput" in hostDetail &&
+    hostDetail.beforeInput === true
+      ? { dispatched: false }
+      : {};
   const remoteDiagnostics = {
     remoteTag: error._tag,
     remoteMessageLength: error.message.length,
@@ -223,6 +256,14 @@ const classifyResponseError = (
     cause: error,
   };
   switch (error._tag) {
+    case "PreviewAutomationReadError": {
+      const reason =
+        typeof error.detail === "object" && error.detail !== null && "reason" in error.detail
+          ? error.detail.reason
+          : undefined;
+      if (isReadFailure(reason)) return new PreviewAutomationReadError({ reason });
+      return new PreviewAutomationMalformedResponseError(context);
+    }
     case "PreviewAutomationRecordingDesktopUpdateRequiredError":
       return new PreviewAutomationRecordingDesktopUpdateRequiredError({
         threadId: context.threadId,
@@ -260,20 +301,32 @@ const classifyResponseError = (
       });
     case "PreviewAutomationTimeoutError": {
       const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
+      const interceptedBy =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "interceptedBy" in error.detail &&
+        typeof error.detail.interceptedBy === "string"
+          ? error.detail.interceptedBy.slice(0, 300)
+          : undefined;
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
+        ...(interceptedBy ? { interceptedBy } : {}),
         ...(remoteTimeoutMs === undefined
           ? {}
           : { timeoutMs: Math.min(context.timeoutMs, remoteTimeoutMs) }),
       });
     }
     case "PreviewAutomationControlInterruptedError": {
-      const reason = decodeControlReason(error.detail);
+      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left.
+      const detail = error.detail;
+      const object = typeof detail === "object" && detail !== null ? detail : undefined;
+      const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
       return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
         ...(Option.isSome(reason) ? { reason: reason.value } : {}),
+        ...notSent,
       });
     }
     case "PreviewAutomationInvalidSelectorError": {
@@ -344,6 +397,7 @@ const classifyResponseError = (
       return new PreviewAutomationExecutionError({
         ...context,
         ...remoteDiagnostics,
+        ...notSent,
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
           ? { reason: error.message.slice(0, MAX_REASON_CHARS) }
           : {}),
@@ -411,8 +465,10 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       connectionId,
       environmentId: host.environmentId,
       supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
+      supportedFeatures: new Set(host.supportedFeatures ?? []),
       focused: false,
       preferred: options?.preferred ?? false,
+      inProcess: options?.inProcess ?? false,
       liveTabs: [],
       focusOrder: 0,
       queue,
@@ -532,10 +588,12 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             (!visibleOnly || tab.visible === true) &&
             (input.tabId === undefined || tab.tabId === input.tabId),
         );
-      const screen = BoundPreviewTabs.screenConnection(current.clients, input, supportsOperation);
+      const screen = BoundPreviewTabs.screenConnection(current.clients, input, (host) =>
+        supportsRequest(host, input),
+      );
       const connection = screen
         ? screen.connection
-        : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+        : hasLiveAssignment && supportsRequest(assignedConnection, input)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined
@@ -543,7 +601,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
                 .filter(
                   (host) =>
                     host.environmentId === input.scope.environmentId &&
-                    supportsOperation(host, input.operation),
+                    supportsRequest(host, input),
                 )
                 .sort(
                   (left, right) =>

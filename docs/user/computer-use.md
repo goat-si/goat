@@ -46,6 +46,10 @@ them do at that keyboard.
 
 ## Ask an agent to work across the browser and apps
 
+Agents read and use web pages in GOAT's built-in browser by default, including
+pages that build their content with scripts. To have an agent use another
+browser tool instead, name that tool in your request.
+
 Ask an agent to use a page in GOAT's built-in browser and an app on the computer
 running that GOAT environment in the same task. Point it to a specific tab or
 app when you start the turn. In the web or desktop composer, type `@` and pick
@@ -60,7 +64,11 @@ to approve an app or finish a private step.
 Watch the browser and app tiles while it works. Use **Take control** or **Stop**
 on the affected tile, or **Stop all** to end every agent's screen work on that
 computer. The agent checks the screen again after you hand control back. A
-password or passkey step pauses its view and input.
+password or passkey step in a browser tab pauses its view and input. In desktop
+apps this is switched off for now; see
+[Work that runs on its own](#work-that-runs-on-its-own).
+When an agent asks for a password for a sign-in page, the card shows the site.
+GOAT types the password into that site's password field, and the agent gets only a reference.
 
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
@@ -70,8 +78,7 @@ before it tries another action.
 
 Every thread in full access mode uses every app without asking, whatever
 started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
-channel. Threads you direct in full access mode also get foreground input
-without asking. In other modes, the agent asks before it uses an app. The
+channel. They also get foreground input without asking. In other modes, the agent asks before it uses an app. The
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
 approved, it can list apps and windows but cannot look inside or type into them.
@@ -85,6 +92,13 @@ one. An agent waits up to ten minutes for your answer, or until the request
 expires if sooner. If it stops waiting, answering later wakes the thread so it
 can continue.
 
+On a Mac, a few actions, such as saving a document while its app stays in the
+background or renaming a file through Finder, also need macOS Automation
+permission for that app. macOS asks once per app. Until someone at the Mac
+answers, or while it is off in **System Settings > Privacy & Security >
+Automation**, the agent stops that action and tells you, naming the app when it
+can.
+
 Your pointer stays where you put it. By default agents never move it: they
 click through an element's accessibility action, the keyboard, or a background
 click that shows only their own cursor, and a call that would move your pointer
@@ -97,17 +111,17 @@ action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
 automatically only on its next turn.
 
-Full access skips only the app approval. Everything else on this page still
+Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
-secret field still pauses agents, each action stays within what its call may
-reach, and work that runs on its own still asks for foreground control, still
-needs a computer that can tell when you type a secret, and still shares the
-screen one thread at a time. **Stop**, **Stop all** and turning computer use off
+secret field in a browser tab still pauses agents, each action stays within
+what its call may reach, and work that runs on its own still shares the screen
+one thread at a time. **Stop**, **Stop all** and turning computer use off
 end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
 **Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
-password, one-time code, or passkey field still pauses them automatically.
+password, one-time code, or passkey field in a browser tab still pauses them
+automatically.
 
 ## Watching agents
 
@@ -127,6 +141,18 @@ work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field.
 
+The GOAT menu bar or taskbar menu offers the same stops, per app or all at
+once; its **Stop All Computer Use** also stops agents in browser tabs, like
+Stop all here.
+
+When an agent needs you for a step it cannot do, such as a sign-in, a second
+factor or a CAPTCHA, it asks: its tile reads **Waiting for you** with what it
+needs, and the request also appears in its thread on every device. The agent
+stays off that tab, or off this computer, until you finish the step and choose
+**Hand back**, or answer the request in the thread. Then the agent picks up
+where it stopped. If nobody answers within 30 minutes, the request expires and
+the agent hears that too.
+
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
@@ -141,15 +167,17 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 ## Work that runs on its own
 
 GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
-threads any of them start use every app without asking when they run in full
-access mode, and need approval otherwise. They still need approval for
-foreground control. When such a thread needs approval, GOAT asks in that
+threads any of them start use every app and foreground input without asking
+when they run in full access mode, and need approval otherwise. When such a
+thread needs approval, GOAT asks in that
 thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
-Such work only gets the screen on a computer whose GOAT can tell when you enter
-a password or another secret; elsewhere the request is refused and says why.
+In full access mode, a thread started from another computer's GOAT uses every
+app here beside the threads you run, rather than waiting for the screen.
+Detecting secret fields in desktop apps is switched off while it is being
+fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts
 until the time shown and does not approve each action. If the agent already has
 the tools, it continues in the same turn; otherwise, GOAT wakes it in a new turn
@@ -212,8 +240,8 @@ keyboard but cannot read app controls.
 Window screenshots on Linux need a desktop that composites its windows (a bare
 Xvfb needs a compositor such as xcompmgr). In a Wayland session without
 XWayland, other than Hyprland, agents read app controls but get no window
-screenshots. Before each screenshot the app is asked to redraw its window, and
-an app that does not redraw all of it promptly gets no screenshot that time.
+screenshots. A screenshot shows the window as the desktop draws it; a part an
+app never painted can still show what was behind the window when it opened.
 
 ## Other computers
 

@@ -62,6 +62,7 @@ export function makeFrameFollower(deps: {
             height: frame.height,
             mime: "image/jpeg",
             data: frame.data,
+            ...(frame.capturedAt === undefined ? {} : { capturedAt: frame.capturedAt }),
           }
         : { version: 1, type: "cuaFrameUnavailable", seq, key: frame.key, reason: frame.reason },
     );

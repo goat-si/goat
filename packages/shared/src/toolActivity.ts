@@ -94,19 +94,136 @@ export function computerUseTypedTextLength(
   return redactedMarker(slot.value)?.redactedCharacters ?? rawLength(slot.value);
 }
 
-/** The input with its typed text, raw or redacted, replaced by what `replace` makes of its length. */
+const typedLength = (value: unknown) =>
+  redactedMarker(value)?.redactedCharacters ?? rawLength(value);
+
+/** A run_steps step's own fields; any other key names its tool and holds its arguments. */
+const STEP_KEYS: ReadonlySet<string> = new Set([
+  "tool",
+  "args",
+  "wait_for",
+  "expect",
+  "timeout_ms",
+]);
+/** Step tool names the driver reads as type_text and set_value. */
+const STEP_ALIASES: Readonly<Record<string, string>> = { type: "type_text", set: "set_value" };
+/** A wait_for or expect check names a field's value, which can be what a step typed into it. */
+const CHECK_VALUE_FIELDS = ["value", "value_contains"] as const;
+
+/** Receives each typed value, raw or already a marker, and returns what takes its place. */
+type ReplaceValue = (value: unknown) => unknown;
+
+/** A copy of `record` with `fields` replaced, or undefined when it has none of them. */
+function replaceFields(record: unknown, fields: ReadonlyArray<string>, replace: ReplaceValue) {
+  const object = asRecord(record);
+  const present = fields.filter((field) => object?.[field] !== undefined);
+  if (object === undefined || present.length === 0) return undefined;
+  return {
+    ...object,
+    ...Object.fromEntries(present.map((field) => [field, replace(object[field])])),
+  };
+}
+
+/**
+ * A check's value fields always go. Its text is usually words on screen and stays readable,
+ * unless it repeats a value the same batch typed or checked.
+ */
+const replaceCheck = (check: unknown, replace: ReplaceValue, typed: ReadonlySet<string>) => {
+  const text = asRecord(check)?.text;
+  const repeats =
+    typeof text === "string" &&
+    (typed.has(text) || [...typed].some((value) => value.length >= 4 && text.includes(value)));
+  return replaceFields(
+    check,
+    repeats ? [...CHECK_VALUE_FIELDS, "text"] : CHECK_VALUE_FIELDS,
+    replace,
+  );
+};
+
+const replaceChecks = (checks: unknown, replace: ReplaceValue, typed: ReadonlySet<string>) =>
+  Array.isArray(checks)
+    ? checks.map((check) => replaceCheck(check, replace, typed) ?? check)
+    : replaceCheck(checks, replace, typed);
+
+/**
+ * One run_steps step, `{tool, args}` or `{<tool>: args}` as the driver reads it, with its typed
+ * text and the field values its checks name replaced. The driver skips a null key, so every other
+ * key that names a typing tool is treated as the action.
+ */
+function replaceStep(step: unknown, replace: ReplaceValue, typed: ReadonlySet<string>): unknown {
+  const object = asRecord(step);
+  if (object === undefined) return step;
+  const fieldOf = (tool: unknown) =>
+    typeof tool === "string" ? TYPED_TEXT_FIELDS[STEP_ALIASES[tool] ?? tool] : undefined;
+  const actions: ReadonlyArray<readonly [string, string | undefined]> =
+    object.tool !== undefined
+      ? [["args", fieldOf(object.tool)]]
+      : Object.keys(object)
+          .filter((key) => !STEP_KEYS.has(key) && object[key] !== null)
+          .map((key) => [key, fieldOf(key)]);
+  const replaced = actions.flatMap(([key, field]) => {
+    const args = field === undefined ? undefined : replaceFields(object[key], [field], replace);
+    return args === undefined ? [] : [[key, args] as const];
+  });
+  const waitFor = replaceCheck(object.wait_for, replace, typed);
+  const expect = replaceChecks(object.expect, replace, typed);
+  return {
+    ...object,
+    ...Object.fromEntries(replaced),
+    ...(waitFor === undefined ? {} : { wait_for: waitFor }),
+    ...(expect === undefined ? {} : { expect }),
+  };
+}
+
+/** A call's arguments with what it types replaced, or undefined when it types nothing. */
+function replaceArguments(tool: string, args: unknown, replace: ReplaceValue): unknown {
+  const field = TYPED_TEXT_FIELDS[tool];
+  if (field !== undefined) return replaceFields(args, [field], replace);
+  // A script's literals can hold what it types, and no parse can tell which; it shows as a length.
+  if (tool === "run_script") return replaceFields(args, ["script"], replace);
+  const steps = asRecord(args)?.steps;
+  if (tool !== "run_steps" || !Array.isArray(steps)) return undefined;
+  // What the batch types or checks, raw, so a text check that repeats it goes too.
+  const typed = new Set<string>();
+  for (const step of steps)
+    replaceStep(
+      step,
+      (value) => {
+        if (typeof value === "string" && value !== "") typed.add(value);
+        return value;
+      },
+      new Set(),
+    );
+  return { ...asRecord(args), steps: steps.map((step) => replaceStep(step, replace, typed)) };
+}
+
+function replaceTypedValues(
+  toolName: string | null | undefined,
+  input: unknown,
+  replace: ReplaceValue,
+): unknown {
+  const record = asRecord(input);
+  if (record === undefined) return input;
+  const tool =
+    cuaDriverToolName(toolName) ??
+    (record.server === "cua-driver" && typeof record.tool === "string" ? record.tool : undefined);
+  if (tool === undefined) return input;
+  const own = replaceArguments(tool, record, replace);
+  if (own !== undefined) return own;
+  const nested = replaceArguments(tool, record.arguments, replace);
+  return nested === undefined ? input : { ...record, arguments: nested };
+}
+
+/**
+ * The input with its typed text, raw or redacted, replaced by what `replace` makes of its length:
+ * a type_text or set_value call's own, every one inside a run_steps batch, and a run_script source.
+ */
 export function replaceComputerUseTypedText(
   toolName: string | null | undefined,
   input: unknown,
   replace: (length: number) => unknown,
 ): unknown {
-  const slot = typedTextSlot(toolName, input);
-  const length = computerUseTypedTextLength(toolName, input);
-  if (slot === undefined || length === undefined) return input;
-  const value = replace(length);
-  return slot.nested
-    ? { ...slot.record, arguments: { ...asRecord(slot.record.arguments), [slot.field]: value } }
-    : { ...slot.record, [slot.field]: value };
+  return replaceTypedValues(toolName, input, (value) => replace(typedLength(value)));
 }
 
 /**
@@ -117,11 +234,118 @@ export function redactComputerUseTypedText(
   toolName: string | null | undefined,
   input: unknown,
 ): unknown {
-  const slot = typedTextSlot(toolName, input);
-  if (slot !== undefined && redactedMarker(slot.value) !== undefined) return input;
   return replaceComputerUseTypedText(toolName, input, (redactedCharacters) => ({
     redactedCharacters,
   }));
+}
+
+/** What a call's output shows in place of a value its input typed. */
+const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
+/** Shorter typed values are masked only as whole tokens, so "123" never eats into "1234". */
+const MIN_EMBEDDED_TYPED_LENGTH = 4;
+/** How many times a result may wrap JSON in a JSON string before it is masked as plain text. */
+const MAX_JSON_DEPTH = 3;
+
+const regexLiteral = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeJson = (text: string) => JSON.stringify(text).slice(1, -1);
+
+/**
+ * Whether a key of this output object carries protocol structure or binary data, never text: a
+ * content block's type, an image's MIME type, and image data in either the MCP or the Claude shape.
+ */
+const structuralKey = (object: Record<string, unknown>, key: string) =>
+  key === "type" ||
+  key === "mimeType" ||
+  key === "media_type" ||
+  (key === "data" &&
+    (object.type === "image" ||
+      object.type === "base64" ||
+      typeof object.mimeType === "string" ||
+      typeof object.media_type === "string"));
+
+/** A masker for plain text: literal replacement for long values, whole tokens for short ones. */
+function typedTextMask(typed: ReadonlySet<string>) {
+  // Each value as typed and as JSON escapes it, for text that quotes it inside a string.
+  const forms = new Set<string>();
+  for (const value of typed) {
+    let form = value;
+    for (let depth = 0; depth <= MAX_JSON_DEPTH; depth++) {
+      forms.add(form);
+      form = escapeJson(form);
+    }
+  }
+  const sorted = [...forms].sort((left, right) => right.length - left.length);
+  const long = sorted.filter((form) => form.length >= MIN_EMBEDDED_TYPED_LENGTH);
+  // Short values go as whole tokens in any script. A lone punctuation mark, such as a quote,
+  // would match all over the text, so it goes only where it is the whole string.
+  const short = sorted.filter(
+    (form) =>
+      form.length < MIN_EMBEDDED_TYPED_LENGTH && (form.length > 1 || /[\p{L}\p{N}]/u.test(form)),
+  );
+  const tokens =
+    short.length === 0
+      ? undefined
+      : new RegExp(
+          `(?<![\\p{L}\\p{N}])(?:${short.map(regexLiteral).join("|")})(?![\\p{L}\\p{N}])`,
+          "gu",
+        );
+  return (text: string) => {
+    if (typed.has(text)) return COMPUTER_USE_TYPED_OUTPUT;
+    let masked = text;
+    for (const form of long) masked = masked.split(form).join(COMPUTER_USE_TYPED_OUTPUT);
+    return tokens === undefined ? masked : masked.replace(tokens, COMPUTER_USE_TYPED_OUTPUT);
+  };
+}
+
+/**
+ * A computer-use call's output with every value its input typed masked, since a batch report can
+ * echo a checked value. Text that is JSON is masked value by value and written back, so keys,
+ * content types, MIME types and image data stay intact. A script's own results are page reads,
+ * which private mode governs.
+ */
+export function redactComputerUseTypedOutput(
+  toolName: string | null | undefined,
+  input: unknown,
+  output: unknown,
+): unknown {
+  const typed = new Set<string>();
+  replaceTypedValues(toolName, input, (value) => {
+    if (typeof value === "string" && value.length > 0) typed.add(value);
+    return value;
+  });
+  if (typed.size === 0 || output === undefined) return output;
+  const mask = typedTextMask(typed);
+  const walk = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") return maskString(value, depth);
+    if (Array.isArray(value)) return value.map((each) => walk(each, depth));
+    const object = asRecord(value);
+    return object === undefined
+      ? value
+      : Object.fromEntries(
+          Object.entries(object).map(([key, each]) => [
+            key,
+            structuralKey(object, key) ? each : walk(each, depth),
+          ]),
+        );
+  };
+  const maskString = (text: string, depth: number): string => {
+    // A typed value can itself be JSON; it goes whole before it is read as structure.
+    if (typed.has(text)) return COMPUTER_USE_TYPED_OUTPUT;
+    const start = text.trimStart()[0];
+    if (depth < MAX_JSON_DEPTH && (start === "{" || start === "[")) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return mask(text);
+      }
+      const walked = walk(parsed, depth + 1);
+      const written = JSON.stringify(walked);
+      return written === JSON.stringify(parsed) ? text : written;
+    }
+    return mask(text);
+  };
+  return walk(output, 0);
 }
 
 export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {

@@ -11,6 +11,8 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
+import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
+import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import type {
@@ -22,6 +24,8 @@ import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 
 const isJson = Schema.is(Schema.Json);
+const isRefusalReason = Schema.is(ComputerUseRefusalReason);
+const isRefusalDetail = Schema.is(ComputerUseRefusalDetail);
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -46,17 +50,53 @@ const driverValue = (reply: ComputerUsePrimitiveReply): unknown => {
   const result = object(reply.result);
   return result?.structuredContent ?? result;
 };
+const refusalOf = (structured: Record<string, unknown> | undefined) => {
+  const app = string(structured?.app);
+  return {
+    ...(isRefusalReason(structured?.refused) ? { refused: structured.refused } : {}),
+    ...(isRefusalDetail(structured?.detail) ? { detail: structured.detail } : {}),
+    ...(app !== undefined && app.length <= 200 ? { app } : {}),
+  };
+};
 const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
-  if (reply.status === "not_started") return fail("unavailable");
   const result = object(reply.result);
-  if (object(result?.structuredContent)?.effect === "refused") return fail("permission_denied");
+  const structured = object(result?.structuredContent);
+  // GOAT refused before the driver: keep its reason so the receipt says why.
+  if (reply.status === "not_started") return { ...fail("unavailable"), ...refusalOf(structured) };
+  // The lease proxy's rule: the driver's own refusal; an explicit other effect wins over a status.
+  if (
+    structured !== undefined &&
+    (structured.effect === undefined
+      ? structured.status === "refused"
+      : structured.effect === "refused")
+  ) {
+    return { ...fail("permission_denied"), ...refusalOf(structured) };
+  }
   if (result?.isError === true || reply.error !== undefined)
-    return object(result?.structuredContent)?.effect === "unverifiable"
+    return structured?.effect === "unverifiable"
       ? { ...fail("unknown_outcome"), effectStarted: true }
       : fail("downstream_failure");
   return undefined;
+};
+
+/** An input tool's answer as a receipt category, read the way computer use reads it. */
+const driverResult = (tool: string, reply: ComputerUsePrimitiveReply): ScreenHostDispatchResult => {
+  const value = driverValue(reply);
+  const effect = object(value)?.effect;
+  const category =
+    effect === "confirmed" || effect === "partial" || effect === "refused"
+      ? effect
+      : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
+        ? "suspected_noop"
+        : "unverifiable";
+  return {
+    value,
+    category,
+    evidence: effect === "confirmed" ? ["driver:effect=confirmed"] : [],
+    safety: driverOutcomeSafety(tool, reply),
+  };
 };
 
 interface BoundWindow {
@@ -68,6 +108,8 @@ interface BoundWindow {
   readonly epoch: number;
   readonly connectionGeneration: string;
   observationId?: string;
+  /** The driver snapshot behind observationId; a diff read names it as `since`. */
+  snapshotId?: string;
 }
 
 export interface DesktopTargetHost extends ScreenHostDispatcher {
@@ -119,15 +161,10 @@ export const createDesktopTargetHost = (deps: {
       args,
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
     });
+    const safety = driverOutcomeSafety(tool, reply);
     const error = driverError(reply);
     if (error) {
-      const readOnly =
-        tool === "list_apps" || tool === "list_windows" || tool === "get_window_state";
-      return yield* Effect.fail(
-        error.code === "downstream_failure" && !readOnly
-          ? { ...fail("unknown_outcome"), effectStarted: true }
-          : error,
-      );
+      return yield* Effect.fail({ ...error, safety, effectStarted: safety.possibleCommit });
     }
     return reply;
   });
@@ -166,31 +203,44 @@ export const createDesktopTargetHost = (deps: {
       const requestedWindow = integer(args.window_id) ?? integer(args.windowId);
       if (!appId || !requestedWindow) return yield* Effect.fail(fail("invalid_argument"));
       const appsReply = yield* request("list_apps", {}, call, context);
-      const apps = array(object(driverValue(appsReply))?.apps)
+      const listed = object(driverValue(appsReply))?.apps;
+      const matches = array(listed)
         .map(object)
-        .filter((app) => app !== undefined);
-      const matches = apps.filter((app) =>
-        bundleId ? app.bundle_id === bundleId : app.name === name,
-      );
-      if (matches.length !== 1) return yield* Effect.fail(fail("target_ambiguous"));
-      const pid = integer(matches[0]?.pid);
-      if (!pid) return yield* Effect.fail(fail("target_missing"));
+        .filter((app) => app !== undefined)
+        .filter((app) => (bundleId ? app.bundle_id === bundleId : app.name === name));
+      const pids = new Set(matches.map((app) => integer(app.pid)));
+      pids.delete(undefined);
+      if (Array.isArray(listed) && pids.size === 0)
+        return yield* Effect.fail(fail("target_missing"));
+      const [onlyPid] = pids.size === 1 ? pids : [];
+      // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
+      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. It
+      // also finds the window among several processes of one app.
       const windowsReply = yield* request(
         "list_windows",
-        { pid },
+        onlyPid ? { pid: onlyPid } : { app: appId },
         call,
         context,
         appsReply.connectionGeneration,
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const windows = array(object(driverValue(windowsReply))?.windows)
+      const named = array(object(driverValue(windowsReply))?.windows)
         .map(object)
-        .filter((window) => window !== undefined);
-      const matchingWindows = windows.filter(
-        (window) => window.pid === pid && window.window_id === requestedWindow,
-      );
-      if (matchingWindows.length !== 1) return yield* Effect.fail(fail("target_ambiguous"));
+        .filter((window) => window !== undefined)
+        .filter(
+          (window) =>
+            window.window_id === requestedWindow &&
+            (Array.isArray(listed)
+              ? pids.has(integer(window.pid))
+              : bundleId !== undefined ||
+                window.app_name === undefined ||
+                window.app_name === name),
+        );
+      const pid = integer(named[0]?.pid);
+      if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
+      if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
+      const app = matches.find((candidate) => candidate.pid === pid);
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
@@ -217,7 +267,7 @@ export const createDesktopTargetHost = (deps: {
         ref,
         pid,
         windowId: requestedWindow,
-        appId: string(matches[0]?.bundle_id) ?? string(matches[0]?.name) ?? appId,
+        appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
         epoch,
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
@@ -237,6 +287,13 @@ export const createDesktopTargetHost = (deps: {
       )
         return yield* Effect.fail(fail("unsupported"));
       const capture = call.method === "screenshot";
+      const args = callArgs(call.args);
+      const baseObservationId = capture ? undefined : string(args.baseObservationId);
+      // The driver diffs against a snapshot it still holds; only this target's latest read has one.
+      const since =
+        !capture && args.mode === "diff" && baseObservationId === bound.observationId
+          ? bound.snapshotId
+          : undefined;
       const reply = yield* request(
         "get_window_state",
         {
@@ -245,6 +302,8 @@ export const createDesktopTargetHost = (deps: {
           include_accessibility_tree: !capture,
           include_screenshot: capture,
           max_elements: 4096,
+          ...(capture ? {} : { tree_format: "both" }),
+          ...(since === undefined ? {} : { since }),
         },
         call,
         context,
@@ -271,20 +330,57 @@ export const createDesktopTargetHost = (deps: {
             },
           ];
         });
-      const observation = yield* Effect.try({
+      const sinceStatus = string(state.since_status);
+      const diff =
+        since !== undefined &&
+        (sinceStatus === "diff" || sinceStatus === "no_change") &&
+        typeof state.tree_diff === "string"
+          ? state.tree_diff
+          : undefined;
+      const resetReason =
+        capture || diff !== undefined
+          ? undefined
+          : args.mode === "diff"
+            ? since === undefined
+              ? "unknown_base_observation"
+              : (sinceStatus ?? "driver_read_full")
+            : args.mode === "query"
+              ? "desktop_query_unsupported"
+              : undefined;
+      // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
+      // tree's observation stays and only gains this region. Any other read has retired them in
+      // the driver, so the old refs go now, before a render that may fail.
+      const invalidated = array(state.invalidated_snapshot_ids);
+      const kept =
+        capture &&
+        bound.snapshotId !== undefined &&
+        string(state.snapshot_id) === bound.snapshotId &&
+        !invalidated.includes(bound.snapshotId)
+          ? bound.observationId
+          : undefined;
+      if (kept === undefined) {
+        observations.evictTarget(bound.ref.id);
+        delete bound.observationId;
+        delete bound.snapshotId;
+      }
+      const render = Effect.try({
         try: () =>
           observations.renderObservation({
             draft: observations.normalizeAppTree({
               targetRef: bound.ref,
               targetGeneration: bound.epoch,
               surfaceGeneration: bound.epoch,
-              indexedText: typeof state.tree_markdown === "string" ? state.tree_markdown : "",
+              indexedText:
+                diff ?? (typeof state.tree_markdown === "string" ? state.tree_markdown : ""),
               complete: state.elements_complete === true,
               truncated: state.truncated === true,
               loading: false,
               elements,
             }),
-            mode: "full",
+            mode: diff === undefined ? "full" : "diff",
+            ...(diff === undefined ? {} : { prediffed: true }),
+            ...(diff === undefined || baseObservationId === undefined ? {} : { baseObservationId }),
+            ...(resetReason === undefined ? {} : { resetReason }),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
         catch: (cause) =>
@@ -295,8 +391,18 @@ export const createDesktopTargetHost = (deps: {
               : "downstream_failure",
           ),
       });
-      bound.observationId = observation.observationId;
-      if (!capture) return { value: observation, category: "unverifiable" };
+      if (!capture) {
+        const observation = yield* render;
+        bound.observationId = observation.observationId;
+        const snapshotId = string(state.snapshot_id);
+        if (snapshotId !== undefined) bound.snapshotId = snapshotId;
+        return { value: observation, category: "unverifiable" };
+      }
+      let observationId = kept;
+      if (observationId === undefined) {
+        observationId = (yield* render).observationId;
+        bound.observationId = observationId;
+      }
       const imagePart = reply.image;
       const width = integer(state.screenshot_width);
       const height = integer(state.screenshot_height);
@@ -315,7 +421,7 @@ export const createDesktopTargetHost = (deps: {
         imageRef: NodeCrypto.randomUUID(),
         callId: call.callId,
         targetId: bound.ref.id,
-        observationId: observation.observationId,
+        observationId,
         regionId: NodeCrypto.randomUUID(),
         region: {
           kind: "window",
@@ -332,12 +438,25 @@ export const createDesktopTargetHost = (deps: {
             : 1,
         mimeType,
       };
+      observations.index.putRegion(bound.ref.id, observationId, metadata.regionId, {
+        ...metadata.region,
+        pixelWidth: width,
+        pixelHeight: height,
+        scale: metadata.scale,
+      });
       const image: ScreenImage = { ...metadata, bytes: imagePart.bytes };
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
   );
   const invoke: DesktopTargetHost["invoke"] = Effect.fn("DesktopTargetHost.invoke")(
     function* (call, context) {
+      if (call.method === "select_text")
+        return yield* Effect.fail(
+          fail(
+            "unsupported",
+            "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
+          ),
+        );
       if (call.method === "launch_app" && !call.targetRef) {
         const args = callArgs(call.args);
         const bundleId = string(args.bundle_id) ?? string(args.bundleId);
@@ -347,21 +466,7 @@ export const createDesktopTargetHost = (deps: {
         );
         if (!current) return yield* Effect.fail(fail("unavailable"));
         const reply = yield* request("launch_app", { bundle_id: bundleId }, call, context);
-        const value = driverValue(reply);
-        const effect = object(value)?.effect;
-        const category =
-          effect === "confirmed" ||
-          effect === "partial" ||
-          effect === "unverifiable" ||
-          effect === "suspected_noop" ||
-          effect === "refused"
-            ? effect
-            : "unverifiable";
-        return {
-          value,
-          category,
-          evidence: effect === "confirmed" ? ["driver:effect=confirmed"] : [],
-        };
+        return driverResult("launch_app", reply);
       }
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
@@ -435,18 +540,7 @@ export const createDesktopTargetHost = (deps: {
       }
       const tool = call.method === "right_click" ? "right_click" : call.method;
       const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration);
-      const value = driverValue(reply);
-      const effect = object(value)?.effect;
-      const category =
-        effect === "confirmed" ||
-        effect === "partial" ||
-        effect === "unverifiable" ||
-        effect === "suspected_noop" ||
-        effect === "refused"
-          ? effect
-          : "unverifiable";
-      const evidence = effect === "confirmed" ? ["driver:effect=confirmed"] : [];
-      return { value, category, evidence };
+      return driverResult(tool, reply);
     },
   );
   return {
@@ -492,14 +586,16 @@ export const createDesktopTargetHost = (deps: {
       return [{ kind: "app" as const, available: false, reason }];
     }),
     dispatch: (call, context) =>
-      call.method === "bind_app"
-        ? bindApp(call, context)
-        : call.method === "list_apps" || call.method === "list_windows"
-          ? discover(call, context)
-          : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                call.method,
-              )
-            ? observe(call, context)
-            : invoke(call, context),
+      call.method === "tab_status" || call.method === "read_page"
+        ? Effect.fail(fail("unsupported"))
+        : call.method === "bind_app"
+          ? bindApp(call, context)
+          : call.method === "list_apps" || call.method === "list_windows"
+            ? discover(call, context)
+            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
+                  call.method,
+                )
+              ? observe(call, context)
+              : invoke(call, context),
   };
 };

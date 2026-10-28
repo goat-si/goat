@@ -12,6 +12,11 @@ Its workspace starts from the project's configured default, which falls back to
 A draft with text or attachments stays saved with its selection. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
+On mobile, when you pick a project that is on more than one machine, the thread
+starts on a connected one if any is connected. **Settings → Thread behavior → Use last
+project** reuses the current or last project for new threads. Turn it off to choose a
+project each time. Shared content stays available if you cancel project selection.
+
 When you change a new thread's project, GOAT stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
@@ -146,6 +151,11 @@ Choose **Mark all as read** from Priority's menu to acknowledge unread completio
 unacknowledged wakes on connections you can change. Those rows leave Priority. Work in progress
 and pending requests stay. The activity bell shows the same count as Priority.
 
+When Priority holds threads you already read, or unread completions and wakes on connections you
+can change, **Clear read threads** appears beside its menu. It marks those unread threads read and
+moves all of them out of Priority at once. Work in progress, pending requests, and unread threads
+on connections you cannot change stay. Nothing is archived or deleted.
+
 ### Answer waiting decisions
 
 Open **Decisions** at the top of the thread sidebar, or search for it in the command palette,
@@ -224,6 +234,13 @@ Linux panel. Its menu lists the threads that need you, the threads running, and 
 threads across connected machines, the same way Fleet counts them; choose one to open it.
 **New Thread** starts one the way the new-thread shortcut does, **Open GOAT** brings the window
 back, and **Quit GOAT** quits the app.
+
+While an agent on this computer uses Computer Use, the menu starts with **Computer Use** and the
+icon shows a small dot. Its submenu stops one app for every thread using it, the whole screen, or
+everything. Stopping ends GOAT's permission and leaves the app open; a thread that holds several
+apps loses all of them, and asks again on its next turn unless it is in full access. Only this
+computer's agents are listed. On Linux some panels leave out the app icons, and the menu updates
+while it is open.
 
 On Windows and Linux, closing the window keeps GOAT running behind the icon; quit from its menu.
 On Linux this needs a panel that shows the icon: GNOME shows it only while the AppIndicator
@@ -371,6 +388,17 @@ A thread an agent launched sends its questions to the thread that launched it.
 That agent may answer itself or ask you; its answer shows which thread answered
 and why. You can still answer in the asking thread, and the first answer counts.
 Approvals always wait for you.
+
+On web and desktop, threads an agent launched (with thread launch, create threads, or an SSH
+launch) fold under the thread that launched them, as one line such as **8 threads · 5 running**.
+Choose it to list them as ordinary rows; the sidebar remembers that per thread, and opening a
+launched thread expands its group. While the group is folded, a launched thread that is working
+keeps its launcher in **Priority**, and one waiting for an approval or an answer shows on the
+launcher row. The group counts once in Priority and on the activity bell. A launched thread you
+pinned, one whose launcher is archived, deleted, or on a machine this app is not connected to,
+one still working under a snoozed launcher, and finished work you have not settled under a settled
+launcher keep their own rows. Search lists launched threads
+like any other. In **Projects**, a thread folds only under a launcher in the same project.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it

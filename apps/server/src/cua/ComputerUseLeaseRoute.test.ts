@@ -51,6 +51,7 @@ const fixture = Effect.fnUntraced(function* () {
     control: () => Effect.die("unused"),
     attached: () => Effect.succeedNone,
     everyAppControl: () => Effect.die("unused"),
+    nameApps: () => Effect.die("unused"),
     serializeAdmission: (effect) => effect,
     currentControl: () => Effect.die("unused"),
     controlState: () =>
@@ -87,6 +88,7 @@ const fixture = Effect.fnUntraced(function* () {
     pause: () => Effect.die("unused"),
     detection: Effect.succeed({ humanInput: true, privateMode: true, frames: false }),
     resume: Effect.die("unused"),
+    hold: () => Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: PubSub.subscribe(signals),
     changed: PubSub.publish(signals, undefined).pipe(Effect.asVoid),
@@ -255,6 +257,8 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       Stream.orDie,
       Stream.decodeText,
       Stream.splitLines,
+      // Heartbeats are blank lines every proxy skips.
+      Stream.filter((line) => line.length > 0),
       Stream.map((line): unknown => JSON.parse(line)),
       Stream.toQueue({ capacity: "unbounded" }),
     );

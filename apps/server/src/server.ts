@@ -1,3 +1,5 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
+import * as VoiceTranscription from "./voiceTranscription.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
@@ -164,6 +166,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
+import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
@@ -434,9 +437,7 @@ const layerHttpServer = Layer.unwrap(
     );
   }),
 );
-
 const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
-
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
@@ -810,8 +811,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  // The same hub layer backs routes, descriptors and future L4 application consumers.
-  Layer.provideMerge(layerMemoryHub),
+  Layer.provideMerge(Layer.merge(AuxiliarySqlite.layer, layerMemoryHub)),
   // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
   // Same EventSink layer reference as orchestration, so memoization shares one instance.
   // Remote channel workers reach other machines through the same SshRemoteDispatch layer
@@ -820,7 +820,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ChannelLayers.layer.pipe(
       Layer.provide(RuntimeLayer.layerEventSink),
       Layer.provide(SshRemoteDispatchLive.layer),
-      // GOAT Bot searches memory when it answers; same references, so one memory instance.
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
     ),
   ),
@@ -874,7 +873,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       layerLinuxFrameSource,
       ComputerUseAgentConnections.layer,
       ComputerUseLeases.layer.pipe(
-        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(Layer.merge(layerCuaDriver, layerDesktopTelemetryReceiver)),
         Layer.provide(layerLinuxFrameSource),
         Layer.provide(layerLinuxHelperHost),
       ),
@@ -972,7 +971,6 @@ const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
   Layer.provide(GitVcsDriver.layer),
   Layer.provide(RuntimeLayer.layerProjectService),
 );
-
 const layerNotes = NotesLayers.layer.pipe(
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provide(
@@ -987,7 +985,6 @@ const layerNotes = NotesLayers.layer.pipe(
   ),
   Layer.provide(ThreadResultService.layer),
 );
-
 const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -1003,6 +1000,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
+      Layer.provide(VoiceTranscription.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -1107,7 +1105,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(SshRemoteDispatchLive.layer),
+  Layer.provide(Layer.merge(SshRemoteDispatchLive.layer, PreviewSessions.layerHandoffs)),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
@@ -1322,6 +1320,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
+      Layer.provideMerge(PendingAttachmentSweep.layer),
     );
   }),
 ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));
