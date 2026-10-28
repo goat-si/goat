@@ -43,17 +43,16 @@ describe("computer use guide on the agent's answers", () => {
     assert.deepEqual(texts(guide(result, { tool: "launch_app" })), ["ok"]);
   });
 
-  it("tells the agent where the skill is in the MCP initialize answer", () => {
+  it("leaves the initialize answer alone, so Codex does not repeat the pointer on every tool", () => {
     const guide = makeAppGuide("darwin", "/state/skills/computer-use/SKILL.md");
     const line = JSON.stringify({
       jsonrpc: "2.0",
       id: 0,
       result: { protocolVersion: "2025-06-18", instructions: "driver notes" },
     });
-    const instructions = (JSON.parse(guide(line)) as { result: { instructions: string } }).result
-      .instructions;
-    assert.include(instructions, "driver notes");
-    assert.include(instructions, "/state/skills/computer-use/SKILL.md");
+    assert.equal(guide(line), line);
+    const first = texts(guide(answer(1, {})));
+    assert.isTrue(first.some((text) => text.includes("/state/skills/computer-use/SKILL.md")));
   });
 
   it("adds an app's notes to the first answer about its window, once per app", () => {

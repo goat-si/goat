@@ -120,16 +120,17 @@ export const DEFAULT_SCREEN_RUN_LIMITS: ScreenRunLimits = {
 
 export const ScreenRunBoot = Schema.Struct({
   t: Schema.Literal("boot"),
-  runId: id,
-  turnId: id,
   limits: ScreenRunLimits,
   wasmPath: text(4096),
   wasmSha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
 });
 export type ScreenRunBoot = typeof ScreenRunBoot.Type;
 
+/** A child serves one thread across its turns, so each cell names the run and turn it acts for. */
 export const ScreenRunCell = Schema.Struct({
   t: Schema.Literal("cell"),
+  runId: id,
+  turnId: id,
   cellId: id,
   source: utf8Text(64 * 1024),
   resetValues: Schema.Boolean,

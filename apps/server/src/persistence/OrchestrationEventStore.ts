@@ -447,15 +447,24 @@ const makeEventStore = Effect.gen(function* () {
               : encoded.type === "turn-item.updated" && encoded.payload.type === "subagent"
                 ? encoded.payload
                 : undefined;
-          const promptKey = subagent === undefined ? undefined : `${event.type}:${subagent.id}`;
+          const promptKey =
+            subagent === undefined
+              ? undefined
+              : `${event.threadId}\u0000${event.type}\u0000${subagent.id}`;
           const hint = promptKey === undefined ? undefined : promptHints.get(promptKey);
           const payloadJson = yield* encodeJson(encoded.payload);
           // Deduplicate repeated progress prompts via anchor rows that ProjectionMaintenance never deletes.
+          // A rolled-back insert can leave a hint whose sequence another row reuses, so the anchor
+          // must still be this thread's row for the same event type and subagent.
           const storedPayload =
             hint !== undefined && subagent !== undefined
               ? sql`CASE WHEN EXISTS (
                   SELECT 1 FROM orchestration_events
                   WHERE sequence = ${hint}
+                    AND aggregate_kind = 'thread'
+                    AND stream_id = ${event.threadId}
+                    AND event_type = ${event.type}
+                    AND json_extract(payload_json, '$.id') = ${subagent.id}
                     AND json_type(payload_json, '$.promptSequence') IS NULL
                     AND json_extract(payload_json, '$.prompt') = ${subagent.prompt}
                 ) THEN json_set(${payloadJson}, '$.prompt', '', '$.promptSequence', CAST(${hint} AS INTEGER))

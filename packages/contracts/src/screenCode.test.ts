@@ -120,6 +120,8 @@ describe("screen code wire contracts", () => {
     expect(() =>
       decodeCell({
         t: "cell",
+        runId: "run:1",
+        turnId: "turn:1",
         cellId: "cell:1",
         source: "한".repeat(22_000),
         resetValues: false,

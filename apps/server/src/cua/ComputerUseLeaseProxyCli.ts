@@ -54,6 +54,7 @@ import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatc
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { helperCursorListing } from "./ComputerUseCursorTools.ts";
+import { withoutDriverTools } from "./ComputerUseDriverListing.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
@@ -347,6 +348,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const descriptor = driver.value;
   // The skill's path and per-app notes ride on the driver's answers (ComputerUseGuide.ts).
   const guide = makeAppGuide(platform, process.env[LEASE_PROXY_ENV.skill]?.trim() || undefined);
+  const driverToolsHidden = process.env[LEASE_PROXY_ENV.driverTools] === "hidden";
   // The X display GOAT started the driver on; every window the driver names must be there (#1358).
   const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
   const placement = Option.isSome(x11Display)
@@ -720,7 +722,11 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ).pipe(Stream.catchCause(() => Stream.empty)),
       output: (line: string, context?: { readonly tool?: string | undefined }) =>
         Effect.sync(() => {
-          const listed = drawsOverlay ? helperCursorListing(line) : line;
+          const listed = driverToolsHidden
+            ? withoutDriverTools(line)
+            : drawsOverlay
+              ? helperCursorListing(line)
+              : line;
           process.stdout.write(guide(listed, context) + "\n");
         }),
       answersCursorTools: drawsOverlay,

@@ -488,6 +488,9 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                     }),
                   },
                   { type: "text", text: bounded.text },
+                  ...(bounded.logNote === undefined
+                    ? []
+                    : [{ type: "text" as const, text: bounded.logNote }]),
                   ...(bounded.omitted.length === 0
                     ? []
                     : [

@@ -71,7 +71,7 @@ it.live("a later cell keeps computation values in the same child", () =>
       const limits = screenRunLimits({ cellWallMs: 5000 });
       const bridge = new ScreenHostBridge();
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
-      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       const first = yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("one", limits) },
         "screen.values.count = 1; return screen.values.count;",
@@ -84,6 +84,141 @@ it.live("a later cell keeps computation values in the same child", () =>
       );
       expect(first.value).toBe(1);
       expect(second.value).toBe(2);
+    }),
+  ),
+);
+
+it.live("a later turn of the thread keeps its top-level declarations until a reset", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+      const turn = (runId: string, cellId: string) => ({
+        runId,
+        turnId: runId,
+        context: { ...context(cellId, limits), runId, turnId: runId },
+      });
+      yield* supervisor.runCell(
+        turn("r1", "one"),
+        "const greeting = 'hi'; let { n } = { n: 2 }; function twice(x) { return x * n; } if (true) { const hidden = 1; } return 1;",
+        false,
+      );
+      yield* supervisor.finishTurn("r1", "r1", "turnEnded");
+      const later = yield* supervisor.runCell(
+        turn("r2", "two"),
+        "return [greeting, twice(3), typeof hidden];",
+        false,
+      );
+      expect(later.value).toEqual(["hi", 6, "undefined"]);
+      expect(supervisor.consumeLost("thread")).toBe(false);
+      const reset = yield* supervisor.runCell(turn("r2", "three"), "return typeof greeting;", true);
+      expect(reset.value).toBe("undefined");
+    }),
+  ),
+);
+
+it.live(
+  "a later cell shares live bindings with the earlier cell's closures, runs no stray getter, and keeps strict mode as written",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const asset = yield* resolveScreenRuntimeAsset("dev");
+        const limits = screenRunLimits({ cellWallMs: 5000 });
+        const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+        yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+        const cell = (cellId: string, source: string) =>
+          supervisor
+            .runCell({ runId: "r", turnId: "t", context: context(cellId, limits) }, source, false)
+            .pipe(Effect.map((result) => result.value));
+        yield* cell("define", "let n = 0; function inc() { return ++n; } return n;");
+        expect(yield* cell("mutate", "inc(); inc(); return n;")).toBe(2);
+        expect(yield* cell("assign", "n = 10; return inc();")).toBe(11);
+        yield* cell(
+          "getter",
+          "Object.defineProperty(globalThis, 'label', { get() { globalThis.reads = (globalThis.reads ?? 0) + 1; return 1; }, configurable: true }); return 0;",
+        );
+        expect(
+          yield* cell(
+            "pattern",
+            "const { label: value } = { label: 5 }; return [value, globalThis.reads ?? 0];",
+          ),
+        ).toEqual([5, 0]);
+        expect(
+          yield* cell(
+            "strict",
+            "/* first */ 'use strict'; return (function () { return this === undefined; })();",
+          ),
+        ).toBe(true);
+        expect(yield* cell("sloppy", "'use strict' + ''; loose = 1; return loose;")).toBe(1);
+        // A var inside a nested function is not the cell's binding, even when it names an inherited one.
+        yield* cell("nested", "function f() { var toString = 1; } return 0;");
+        expect(yield* cell("inherited", "return typeof toString;")).toBe("function");
+        // A directive ends at a line break before a block, so the block runs strict.
+        const strictBlock = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("strict-block", limits) },
+          '"use strict"\n{ undeclared = 9; }\nreturn 1;',
+          false,
+        );
+        expect(strictBlock.status).toBe("failed");
+        // A line opening with != still compares with the directive, so the cell stays sloppy.
+        expect(yield* cell("compare", '"use strict"\n!= ""; looser = 1; return looser;')).toBe(1);
+        yield* cell("constant", "const fixed = 1; return fixed;");
+        expect(
+          yield* cell(
+            "reassign",
+            "try { fixed = 2; return 'assigned'; } catch (error) { return error instanceof TypeError; }",
+          ),
+        ).toBe(true);
+      }),
+    ),
+);
+
+it.live("a disposed supervisor boots no further spare", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+    const spawns = () =>
+      vi
+        .mocked(NodeChildProcess.spawn)
+        .mock.calls.filter((call) => call[1]?.includes("__screen-run-child")).length;
+    supervisor.dispose();
+    const before = spawns();
+    supervisor.prewarm();
+    expect(spawns()).toBe(before);
+  }),
+);
+
+it.live("a new thread's first cell takes the booted spare instead of starting a child", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+      const spawns = () =>
+        vi
+          .mocked(NodeChildProcess.spawn)
+          .mock.calls.filter((call) => call[1]?.includes("__screen-run-child")).length;
+      const before = spawns();
+      yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("one", limits) },
+        "return 1;",
+        false,
+      );
+      // The thread's own child, then the spare booted while its cell ran.
+      expect(spawns() - before).toBe(2);
+      const other = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: { ...context("two", limits), threadId: "other" } },
+        "return 2;",
+        false,
+      );
+      expect(other.value).toBe(2);
+      // Only the replacement spare: the other thread took the booted one.
+      expect(spawns() - before).toBe(3);
+      expect(supervisor.activeCount()).toBe(2);
     }),
   ),
 );
@@ -117,7 +252,7 @@ it.live("screen state keeps a tab handle across cells and reset clears it", () =
           }),
       });
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
-      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       const authorized = (cellId: string) => ({
         ...context(cellId, limits),
         invocation: {
@@ -168,7 +303,7 @@ it.live("a thrown guest error reports its message and preserves values for the n
       false,
     );
     expect(next.value).toBe(3);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -188,7 +323,7 @@ it.live("a multibyte guest error message fits the result contract", () =>
         ? Buffer.byteLength(result.error.message, "utf8")
         : Infinity,
     ).toBeLessThanOrEqual(1024);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -215,7 +350,7 @@ it.live("a later cell may lower its call limit without losing values", () =>
     );
     expect(second.status).toBe("failed");
     expect(second.journal).toHaveLength(1);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -235,7 +370,7 @@ it.live("resetValues clears prior computation values", () =>
       true,
     );
     expect(result.value).toBe(false);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -260,7 +395,7 @@ it.live("hung post-cell availability returns within its bound", () =>
       { kind: "app", available: false, reason: "no_lease" },
       { kind: "tab", available: false, reason: "no_host" },
     ]);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -293,7 +428,7 @@ it.live("a failed availability read after the result keeps the live child and it
         false,
       );
       expect(second.value).toBe(7);
-    }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
+    }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
   }),
 );
 
@@ -356,7 +491,7 @@ it.live("a deadline stops a queued call before it dispatches and journals it und
         "unknown_outcome",
       ]);
       yield* Deferred.succeed(held, undefined);
-    }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
+    }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
     expect(clicks).toBe(1);
   }),
 );
@@ -404,7 +539,9 @@ it.live(
       expect(result.journal[0]?.receipt).toMatchObject({ category: "confirmed" });
       expect(supervisor.activeCount()).toBe(1);
       yield* supervisor.finishTurn("r", "t", "test");
-      expect(supervisor.activeCount()).toBe(0);
+      // The turn's cell already returned, so its end leaves the thread's child for the next turn.
+      expect(supervisor.activeCount()).toBe(1);
+      supervisor.dispose();
     }),
 );
 
@@ -427,7 +564,7 @@ it.live("sequential awaited host calls settle in order", () =>
     );
     expect(result.value).toBe(3);
     expect(result.journal).toHaveLength(3);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -469,7 +606,7 @@ it.live("a deadline during an awaited host call reports deadline and keeps the c
     expect(result.status).toBe("deadline");
     expect(supervisor.activeCount()).toBe(1);
     yield* Deferred.succeed(held, undefined);
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -484,7 +621,7 @@ it.live("busy loop reaches the child deadline without preserving its turn", () =
         hostBridge: new ScreenHostBridge(),
         scheduleDeadline: childDeadlineOnly,
       });
-      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("warmup", limits) },
         "return true;",
@@ -509,7 +646,7 @@ it.live("large allocations stop within the fixed WASM memory cap", () =>
       const asset = yield* resolveScreenRuntimeAsset("dev");
       const limits = screenRunLimits({ cellWallMs: 5000 });
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       const result = yield* supervisor
         .runCell(
           { runId: "r", turnId: "t", context: context("one", limits) },
@@ -552,27 +689,22 @@ it.live("an Electron-as-Node child loads the staged WASM", () =>
           false,
         );
         expect(result.value).toBe(7);
-      }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
+      }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
     } finally {
       yield* Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true }));
     }
   }),
 );
 
-it.live("Stop kills only the child owned by the cut turn", () =>
+it.live("Stop kills only the cut thread's child", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const asset = yield* resolveScreenRuntimeAsset("dev");
       // The default wall limit lies far beyond the Stop, so only the Stop ends the spinning cell
-      // while the other turn's child boots.
+      // while the other thread's child boots.
       const limits = screenRunLimits();
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-      yield* Effect.addFinalizer(() =>
-        Effect.all(
-          [supervisor.finishTurn("r1", "t1", "test"), supervisor.finishTurn("r2", "t2", "test")],
-          { discard: true },
-        ),
-      );
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       const spinning = yield* Effect.forkChild(
         supervisor
           .runCell(
@@ -590,7 +722,7 @@ it.live("Stop kills only the child owned by the cut turn", () =>
         {
           runId: "r2",
           turnId: "t2",
-          context: { ...context("two", limits), runId: "r2", turnId: "t2" },
+          context: { ...context("two", limits), runId: "r2", turnId: "t2", threadId: "other" },
         },
         "screen.values.count = 9; return screen.values.count;",
         false,
@@ -603,7 +735,7 @@ it.live("Stop kills only the child owned by the cut turn", () =>
         {
           runId: "r2",
           turnId: "t2",
-          context: { ...context("two", limits), runId: "r2", turnId: "t2" },
+          context: { ...context("two", limits), runId: "r2", turnId: "t2", threadId: "other" },
         },
         "return screen.values.count;",
         false,
@@ -630,7 +762,7 @@ it.live("an unawaited screen effect does not report a completed cell", () =>
     );
     expect(result.status).toBe("failed");
     expect(result.journal[0]?.receipt.category).toBe("unknown_outcome");
-    yield* supervisor.finishTurn("r", "t", "test");
+    yield* Effect.sync(supervisor.dispose);
   }),
 );
 
@@ -672,7 +804,7 @@ it.live("a cell's wall limit includes the time its fresh child takes to start", 
         hostBridge: new ScreenHostBridge(),
         scheduleDeadline: childDeadlineOnly,
       });
-      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
       const result = yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("one", limits) },
         "console.log('ran'); return 1;",
@@ -750,6 +882,6 @@ it.live.each([false, true])(
         }
         expect(closedBeforeEof).toBe(true);
         expect(dispatched).toBe(effectDispatched ? 1 : 0);
-      }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test cleanup")));
+      }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
     }),
 );

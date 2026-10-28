@@ -24,6 +24,8 @@ export const handleScreenRunEvent = Effect.fn("ScreenRunTurnEnd.handleEvent")(fu
   const { event, screen, orchestrator } = input;
   if (event.type === "message.updated" && event.payload.role === "user") {
     yield* screen.controlChanged({ kind: "newMessage", threadId: event.threadId });
+    // A message usually starts a turn; a cell in it then finds a booted child.
+    yield* screen.prewarm;
     return;
   }
   if (event.type !== "run.updated" || OPEN.has(event.payload.status)) return;

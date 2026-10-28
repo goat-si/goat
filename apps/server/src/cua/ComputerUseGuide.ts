@@ -54,27 +54,19 @@ const skillPointer = (skillPath: string) =>
   `Before the first computer use action in a turn, read the computer use skill at ${skillPath} (and the files it names when they apply).`;
 
 /**
- * What the lease proxy adds to tool answers on their way to the agent, like Aside's guidance in
- * `getApp`: the skill's path on the first successful answer of the connection, and an app's notes
- * on the first successful answer about that app's window. Lines it cannot read, errors and
- * handshake answers pass unchanged.
+ * Adds the skill's path to the connection's first successful answer and an app's notes to the first
+ * answer about its window. Handshake answers pass unchanged: Codex copies a server's initialize
+ * instructions into every tool's description, so a pointer there repeats on each driver tool.
  */
 export function makeAppGuide(platform: NodeJS.Platform, skillPath: string | undefined) {
   const told = new Set<string>();
   let pointed = skillPath === undefined;
   return (line: string, context?: { readonly tool?: string | undefined }): string => {
     // Answers can carry megabytes of screenshot; only parse one that can need a note.
-    if (
-      pointed &&
-      !line.includes('"app_name"') &&
-      context?.tool !== "launch_app" &&
-      !(skillPath !== undefined && line.includes('"protocolVersion"'))
-    )
-      return line;
+    if (pointed && !line.includes('"app_name"') && context?.tool !== "launch_app") return line;
     let message: {
       result?: {
         protocolVersion?: unknown;
-        instructions?: unknown;
         content?: unknown;
         isError?: unknown;
         structuredContent?: {
@@ -90,14 +82,12 @@ export function makeAppGuide(platform: NodeJS.Platform, skillPath: string | unde
       return line;
     }
     const result = message?.result;
-    // The MCP initialize answer: providers that read server instructions learn the skill's path
-    // before any call (modelcontextprotocol.io, "Server Instructions").
-    if (result !== undefined && "protocolVersion" in result && skillPath !== undefined) {
-      const own = typeof result.instructions === "string" ? result.instructions + "\n\n" : "";
-      result.instructions = own + skillPointer(skillPath);
-      return JSON.stringify(message);
-    }
-    if (result === undefined || result.isError === true || !Array.isArray(result.content))
+    if (
+      result === undefined ||
+      "protocolVersion" in result ||
+      result.isError === true ||
+      !Array.isArray(result.content)
+    )
       return line;
     const added: Array<{ type: "text"; text: string }> = [];
     const pid = result.structuredContent?.pid;

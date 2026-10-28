@@ -32,6 +32,7 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
+import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
   narrowTree,
@@ -713,7 +714,7 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): Promise<{ readonly x: number; readonly y: number }> => {
+): Promise<{ readonly x: number; readonly y: number } & ClickEffect> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
@@ -721,14 +722,30 @@ export const click = async (
   await pointer(point, "click");
   const button = input.button ?? "left";
   if (locator !== null) await settled(locator, deadline);
+  let sent = false;
+  let dialog = false;
   let onDialog = constVoid;
+  // Listening first: a dialog that opens while the watch installs still ends the wait.
+  let dialogBeforePress = false;
   const dialogOpened = new Promise<"dialog">((resolve) => {
-    onDialog = () => resolve("dialog");
+    onDialog = () => {
+      dialogBeforePress = !sent;
+      resolve("dialog");
+    };
     page.once("dialog", onDialog);
   });
+  const aim = await aimClick(page, locator, point);
+  const watch = await watchClick(page, aim.frame);
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = (count: number) => {
+    // A dialog the page opened before the press is not the click's, and holds the page: send nothing.
+    if (dialogBeforePress)
+      throw new BrowserControlInterrupted(
+        'A browser dialog opened before the click, so nothing was sent. Read goat_call {path:"preview.status"} and answer it with goat_call {path:"preview.dialog"} first.',
+        "dialogPending",
+        true,
+      );
     // A later press after the deadline is refused too, but the first one may already have landed.
     if (count === 1) remaining(deadline);
     else if (performance.now() >= deadline)
@@ -737,6 +754,7 @@ export const click = async (
         "The click's deadline passed after its first press; the later presses were not sent.",
       );
     gate();
+    sent = true;
     if (count === 1)
       return locator === null
         ? page.mouse.click(point.x, point.y, { button })
@@ -746,21 +764,26 @@ export const click = async (
       .then(() => page.mouse.up({ button, clickCount: count }));
   };
   try {
+    await watch.arm(aim);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
       const pressed = press(count);
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
         // That press waits on the dialog, past this action; later presses are never sent.
+        dialog = true;
         gate.linger?.(pressed);
         void pressed.catch(constVoid);
         break;
       }
     }
   } catch (cause) {
+    watch.cancel();
+    releaseAim(aim);
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
-  return point;
+  if (!sent) watch.cancel();
+  return { ...point, ...(await watch.settle(dialog).finally(() => releaseAim(aim))) };
 };
 
 export const type = async (

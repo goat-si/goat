@@ -62,20 +62,31 @@ const failure = (
     ...(options.receipts === undefined ? {} : { receipts: [...options.receipts] }),
   });
 
+interface ActiveCell {
+  readonly cellId: string;
+  readonly runId: string;
+  readonly turnId: string;
+}
+
+/**
+ * One booted child. A thread keeps its own across turns, so its values and the runtime's start
+ * cost both carry over; a spare has no thread yet and is handed to the next thread that needs one.
+ */
 interface Session {
   readonly child: NodeChildProcess.ChildProcessWithoutNullStreams;
   readonly lines: BoundedLines;
-  readonly key: string;
-  readonly runId: string;
-  readonly turnId: string;
   readonly turnWasmBytes: number;
-  active: string | undefined;
+  thread: string | undefined;
+  active: ActiveCell | undefined;
   abortActive: ((code: typeof SupervisorCode.Type) => void) | undefined;
   closed: boolean;
+  lastUsed: number;
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
-const key = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
 const MAX_FRAME_BYTES = 256 * 1024;
+// A child holds tens of megabytes; one left alone this long is ended and its thread starts fresh.
+const IDLE_CHILD_MS = 10 * 60 * 1000;
 // The child ends a cell at the same deadline; this only catches a child that stopped answering.
 const BACKSTOP_GRACE_MS = 2_000;
 const ChildResultFrame = Schema.Struct({
@@ -107,8 +118,20 @@ export function createScreenRunSupervisor(deps: {
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }) {
   const sessions = new Map<string, Session>();
-  const spawnSession = (runId: string, turnId: string, turnWasmBytes: number) => {
-    if (sessions.size >= deps.limits.activeChildren) throw failure("live_children_limit");
+  let spare: Session | undefined;
+  let disposed = false;
+  /** Threads whose child ended while it held their values; their next cell is told. */
+  const lost = new Set<string>();
+  const liveChildren = () => sessions.size + (spare === undefined ? 0 : 1);
+  const armIdle = (session: Session) => {
+    clearTimeout(session.idleTimer);
+    session.lastUsed = Date.now();
+    session.idleTimer = setTimeout(() => {
+      if (!session.active) close(session);
+    }, IDLE_CHILD_MS);
+    session.idleTimer.unref?.();
+  };
+  const spawnSession = (turnWasmBytes: number) => {
     const { command, args } = screenChildInvocation(deps.invocation);
     const isElectron =
       process.versions.electron !== undefined ||
@@ -125,20 +148,19 @@ export function createScreenRunSupervisor(deps: {
     const session: Session = {
       child,
       lines: new BoundedLines(child.stdout, MAX_FRAME_BYTES),
-      key: key(runId, turnId),
-      runId,
-      turnId,
       turnWasmBytes,
+      thread: undefined,
       closed: false,
       active: undefined,
       abortActive: undefined,
+      lastUsed: Date.now(),
+      idleTimer: undefined,
     };
     session.lines.on("limit", () => {
       session.abortActive?.("output_limit");
       close(session);
     });
     child.stderr.resume();
-    sessions.set(session.key, session);
     const onProcessEnd = () => {
       session.abortActive?.("runtime_unavailable");
       close(session);
@@ -147,27 +169,80 @@ export function createScreenRunSupervisor(deps: {
     child.once("error", onProcessEnd);
     const boot: ScreenRunBoot = {
       t: "boot",
-      runId,
-      turnId,
       limits: { ...deps.limits, turnWasmBytes },
       wasmPath: deps.asset.path,
       wasmSha256: deps.asset.sha256,
     };
     child.stdin.write(`${JSON.stringify(boot)}\n`);
+    armIdle(session);
     return session;
   };
   const close = (session: Session) => {
     if (session.closed) return;
     session.closed = true;
-    sessions.delete(session.key);
+    clearTimeout(session.idleTimer);
+    if (spare === session) spare = undefined;
+    if (session.thread !== undefined && sessions.get(session.thread) === session) {
+      sessions.delete(session.thread);
+      lost.add(session.thread);
+    }
     session.child.stdin.end();
     // Only the captured ChildProcess may be killed; no PID lookup or pattern matching.
     if (session.child.exitCode === null) session.child.kill("SIGKILL");
     session.lines.close();
   };
+  /** Makes room under the child cap: the spare goes first, then the longest idle thread's child. */
+  const makeRoom = () => {
+    while (liveChildren() >= deps.limits.activeChildren) {
+      if (spare !== undefined) {
+        close(spare);
+        continue;
+      }
+      let oldest: Session | undefined;
+      for (const session of sessions.values())
+        if (!session.active && (oldest === undefined || session.lastUsed < oldest.lastUsed))
+          oldest = session;
+      if (oldest === undefined) throw failure("live_children_limit");
+      close(oldest);
+    }
+  };
+  /** Boots the next thread's child ahead of its first cell, when the cap leaves room. */
+  const prewarm = () => {
+    if (disposed || spare !== undefined || liveChildren() >= deps.limits.activeChildren) return;
+    try {
+      spare = spawnSession(deps.limits.turnWasmBytes);
+    } catch {
+      spare = undefined;
+    }
+  };
+  const sessionFor = (thread: string, turnWasmBytes: number) => {
+    if (disposed) throw failure("runtime_unavailable");
+    const existing = sessions.get(thread);
+    if (existing !== undefined) return existing;
+    let session: Session;
+    if (spare !== undefined && !spare.closed && spare.turnWasmBytes === turnWasmBytes) {
+      session = spare;
+      spare = undefined;
+    } else {
+      makeRoom();
+      session = spawnSession(turnWasmBytes);
+    }
+    session.thread = thread;
+    sessions.set(thread, session);
+    return session;
+  };
+  const sessionOfCell = (runId: string, turnId: string, cellId?: string) => {
+    for (const session of sessions.values())
+      if (
+        session.active?.runId === runId &&
+        session.active.turnId === turnId &&
+        (cellId === undefined || session.active.cellId === cellId)
+      )
+        return session;
+    return undefined;
+  };
   const abortCellNow = (runId: string, turnId: string, cellId: string) => {
-    const session = sessions.get(key(runId, turnId));
-    if (session?.active === cellId) session.abortActive?.("stopped");
+    sessionOfCell(runId, turnId, cellId)?.abortActive?.("stopped");
   };
   return {
     runCell: Effect.fn("ScreenRunSupervisor.runCell")(function* (
@@ -175,17 +250,18 @@ export function createScreenRunSupervisor(deps: {
       source: string,
       resetValues: boolean,
     ) {
-      const id = key(identity.runId, identity.turnId);
+      const thread = identity.context.threadId;
       const session = yield* Effect.try({
-        try: () =>
-          sessions.get(id) ??
-          spawnSession(identity.runId, identity.turnId, identity.context.limits.turnWasmBytes),
+        try: () => sessionFor(thread, identity.context.limits.turnWasmBytes),
         catch: (cause) =>
           isScreenSupervisorFailure(cause) ? cause : failure("runtime_unavailable"),
       });
       if (session.closed || session.active) return yield* failure("pending_limit");
       const cellId = identity.context.cellId;
-      session.active = cellId;
+      session.active = { cellId, runId: identity.runId, turnId: identity.turnId };
+      clearTimeout(session.idleTimer);
+      // The next thread's child boots while this one works, off this cell's path.
+      setImmediate(prewarm);
       return yield* Effect.tryPromise({
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
@@ -201,6 +277,7 @@ export function createScreenRunSupervisor(deps: {
               session.lines.off("line", onLine);
               session.active = undefined;
               session.abortActive = undefined;
+              if (!session.closed) armIdle(session);
             };
             const failRun = (code: typeof SupervisorCode.Type) => {
               if (settled) return;
@@ -261,7 +338,7 @@ export function createScreenRunSupervisor(deps: {
                     (reply) => {
                       if (reply?.outcome === "error" && reply.error)
                         hostErrors.set(call.callId, reply.error);
-                      if (reply && !session.closed && session.active === cellId)
+                      if (reply && !session.closed && session.active?.cellId === cellId)
                         session.child.stdin.write(`${JSON.stringify(reply)}\n`);
                     },
                     // Aborting unawaited calls after a result is ours; it is not a runtime failure.
@@ -371,7 +448,7 @@ export function createScreenRunSupervisor(deps: {
             session.lines.on("line", onLine);
             if (signal.aborted) return onAbort();
             session.child.stdin.write(
-              `${JSON.stringify({ t: "cell", cellId, source, resetValues, limits: identity.context.limits, deadlineMillis })}\n`,
+              `${JSON.stringify({ t: "cell", runId: identity.runId, turnId: identity.turnId, cellId, source, resetValues, limits: identity.context.limits, deadlineMillis })}\n`,
             );
           }),
         catch: (cause) =>
@@ -396,24 +473,38 @@ export function createScreenRunSupervisor(deps: {
     }),
     /** Ends the cell before the child can turn a cut reply it caught into a completed result. */
     cutCellNow: abortCellNow,
+    /**
+     * Ends the turn's running cell, and with it the child that ran it unless the cell already
+     * returned. A child with no cell running stays with its thread, values included.
+     */
     finishTurn: Effect.fn("ScreenRunSupervisor.finishTurn")(function* (
       runId: string,
       turnId: string,
       reason: string,
     ) {
-      const session = sessions.get(key(runId, turnId));
-      if (!session) return;
-      if (session.active) {
-        yield* deps.hostBridge.cutCell(runId, turnId, session.active, reason);
-        session.abortActive?.("stopped");
-      }
-      // A cell that already returned its result keeps the child through a per-cell Stop; the turn
-      // ending still ends it.
-      close(session);
+      const session = sessionOfCell(runId, turnId);
+      if (!session?.active) return;
+      yield* deps.hostBridge.cutCell(runId, turnId, session.active.cellId, reason);
+      session.abortActive?.("stopped");
     }),
+    /** Ends a thread's idle child, such as one booted with more WASM memory than a cell allows. */
+    closeThread: (thread: string) => {
+      const session = sessions.get(thread);
+      if (session !== undefined && !session.active) close(session);
+    },
+    /** Whether the thread's values went with a child that ended since its last cell; asks once. */
+    consumeLost: (thread: string) => lost.delete(thread),
+    prewarm,
+    /** Ends every child, the spare included, when the service that owns them closes. */
+    dispose: () => {
+      disposed = true;
+      if (spare !== undefined) close(spare);
+      for (const session of sessions.values()) close(session);
+      lost.clear();
+    },
+    /** Children a thread holds; a spare waiting for its thread is not counted. */
     activeCount: () => sessions.size,
-    turnWasmBytes: (runId: string, turnId: string) =>
-      sessions.get(key(runId, turnId))?.turnWasmBytes,
+    threadWasmBytes: (thread: string) => sessions.get(thread)?.turnWasmBytes,
   };
 }
 export type ScreenRunSupervisor = ReturnType<typeof createScreenRunSupervisor>;
