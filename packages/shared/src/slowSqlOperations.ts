@@ -46,6 +46,7 @@ export const measureNativeSql = <A>(
     recordSlowSql({
       ...operation,
       nativeMs: NodePerfHooks.performance.now() - started,
+      // @effect-diagnostics-next-line globalDate:off - native SQL completes outside Effect, before its fiber resumes.
       completedAtMs: Date.now(),
     });
   }
@@ -92,6 +93,7 @@ export const recordReaderSql = (
         operation,
         owner,
         nativeMs,
+        // @effect-diagnostics-next-line globalDate:off - worker replies are recorded synchronously on receipt.
         completedAtMs: Date.now(),
       });
   }
