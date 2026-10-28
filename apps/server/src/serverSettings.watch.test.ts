@@ -227,7 +227,8 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
         );
         yield* fs.remove(settingsPath);
         yield* fs.symlink(newTarget, settingsPath);
-        yield* PubSub.publish(notifications, { _tag: "Update", path: settingsPath });
+        const update: FileSystem.WatchEvent = { _tag: "Update", path: settingsPath };
+        yield* PubSub.publish(notifications, update);
         yield* Deferred.await(newAttached);
         yield* Deferred.await(oldClosed);
         yield* TestClock.adjust("100 millis");

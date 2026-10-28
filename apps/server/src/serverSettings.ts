@@ -34,7 +34,7 @@ import {
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
 import { supervise } from "./backgroundSupervision.ts";
-import { fileWatchResync } from "./fileWatchResync.ts";
+import { fileWatchResync, watchEndedError } from "./fileWatchResync.ts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -60,7 +60,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1993,13 +1992,6 @@ const make = Effect.gen(function* () {
     const directory = pathService.dirname(filePath);
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
-    const watchEnded = PlatformError.systemError({
-      _tag: "Unknown",
-      module: "FileSystem",
-      method: "watch",
-      pathOrDescriptor: filePath,
-      description: "Settings filesystem watcher ended unexpectedly",
-    });
     return fileWatchResync(directory).pipe(
       Stream.provideService(FileSystem.FileSystem, fs),
       Stream.filter(
@@ -2009,7 +2001,9 @@ const make = Effect.gen(function* () {
           event.path === filePath ||
           pathService.resolve(directory, event.path) === resolvedFilePath,
       ),
-      Stream.concat(Stream.fail(watchEnded)),
+      Stream.concat(
+        Stream.fail(watchEndedError(filePath, "Settings filesystem watcher ended unexpectedly")),
+      ),
     );
   };
 
