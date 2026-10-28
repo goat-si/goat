@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import type { BoundPreviewTab } from "./BoundPreviewTabs.ts";
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
   observationReplyBudget,
@@ -48,6 +49,11 @@ const firstArg = (call: ScreenHostCall): Record<string, unknown> => {
 };
 const stringField = (record: Record<string, unknown>, key: string) =>
   typeof record[key] === "string" ? (record[key] as string) : undefined;
+/** A wait without its own timeout gets the browser's usual one. */
+const DEFAULT_WAIT_MS = 15_000;
+// A wait ends this long before its cell, so its answer arrives and it never holds the tab's queue
+// into the next cell.
+const WAIT_ANSWER_MARGIN_MS = 500;
 
 interface BoundTarget {
   readonly ref: ScreenTargetRef;
@@ -60,9 +66,11 @@ interface BoundTarget {
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
 export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(function* (
-  broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">,
+  broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> &
+    Partial<Pick<PreviewAutomationBroker["Service"], "canOpenTab">>,
 ) {
   const observations = new ScreenObservations();
+  const callApps = yield* ComputerUseCallApps;
   const targets = new Map<string, BoundTarget>();
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
@@ -176,6 +184,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       generation: 0,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
+    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url });
     return ref;
   };
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -216,6 +225,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
+    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url });
     if (originOf(current.url) !== bound.origin) {
       observations.evictTarget(bound.ref.id);
       if (!readOnly)
@@ -391,7 +401,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const current = yield* status(
         bound,
         context,
-        call.method === "observe" || call.method === "tab_status" || call.method === "read_page",
+        call.method === "observe" ||
+          call.method === "tab_status" ||
+          call.method === "read_page" ||
+          call.method === "wait_for",
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
@@ -697,16 +710,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if (call.method === "wait_for") {
         const now = yield* Clock.currentTimeMillis;
         const requested =
-          typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : Infinity;
+          typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : DEFAULT_WAIT_MS;
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
             operation: "waitFor",
             input,
-            exact: exact(bound.tab),
+            // A wait only reads, so it watches whatever document the tab holds, on any origin.
+            exact: exact(bound.tab, false),
             timeoutMs: Math.max(
               1,
-              Math.min(requested, context.limits.cellWallMs, call.deadlineMillis - now),
+              Math.min(
+                requested,
+                context.limits.cellWallMs,
+                call.deadlineMillis - now - WAIT_ANSWER_MARGIN_MS,
+              ),
             ),
           })
           .pipe(Effect.result);
@@ -750,6 +768,22 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         ),
       );
+      // Navigation answers with the page it reached, as a click that navigated may.
+      const reached =
+        typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
+      if (typeof reached === "string")
+        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
+      // The agent moved its own tab, so the handle follows to the page it reached; the old
+      // document's refs and points were retired above.
+      if (
+        ["navigate", "reload", "back", "forward"].includes(operation) &&
+        typeof reached === "string"
+      )
+        targets.set(bound.ref.id, {
+          ref: bound.ref,
+          tab: { ...bound.tab, url: reached },
+          origin: originOf(reached),
+        });
       if (call.method === "close_tab") {
         observations.evictTarget(bound.ref.id);
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
@@ -776,15 +810,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const availability: ScreenHostDispatcher["availability"] = Effect.fn(
     "PreviewTargetHost.availability",
   )(function* (context) {
-    const available = yield* list(context).pipe(Effect.option);
+    const listed = yield* list(context).pipe(Effect.option);
+    // With no tab yet the surface still works when this server's browser can open one.
+    const available =
+      Option.isSome(listed) &&
+      (listed.value.length > 0 ||
+        (yield* broker.canOpenTab?.(context.invocation) ?? Effect.succeed(false)));
     return [
-      {
-        kind: "tab" as const,
-        available: Option.isSome(available) && available.value.length > 0,
-        ...(Option.isSome(available) && available.value.length > 0
-          ? {}
-          : { reason: "no_host" as const }),
-      },
+      { kind: "tab" as const, available, ...(available ? {} : { reason: "no_host" as const }) },
     ];
   });
   const finishTurn = Effect.fn("PreviewTargetHost.finishTurn")(function* (

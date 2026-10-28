@@ -30,15 +30,15 @@ const acceptsAppScope = (toolList: unknown, name: string): boolean => {
   return record(record(record(tool?.inputSchema)?.properties)?.app_scope) !== undefined;
 };
 
-/** grantApps: the grant's apps as it spells them, undefined for the whole screen. */
 export const makeProxyBatchScope = (
   handshake: {
     readonly listTools: (send: Send) => Effect.Effect<unknown>;
     readonly remember: (method: string, message: Envelope) => void;
   },
-  grantApps: () => ReadonlyArray<string> | undefined,
   current: () => Running | undefined,
 ) => {
+  /** The apps the control's grant names, as it spells them; undefined for the whole screen. */
+  let grantApps: ReadonlyArray<string> | undefined;
   /** Each child's own tool list, once it gave one: to the provider's tools/list or a probe. */
   const listed = new WeakMap<Running, unknown>();
   /** A handshake answer from a child, kept for the handshake and, for tools/list, for that child. */
@@ -58,7 +58,7 @@ export const makeProxyBatchScope = (
     if (!isBatchTool(name)) return unchanged;
     const args = record(message.params?.arguments) ?? {};
     const named = args.app_scope !== undefined && args.app_scope !== null;
-    const apps = grantApps();
+    const apps = grantApps;
     // Without a list the batch may act anywhere; past the driver's limit it stays refused.
     if (!named && (apps === undefined || apps.length > MAX_BATCH_SCOPE_APPS)) return unchanged;
     const child = current();
@@ -92,5 +92,8 @@ export const makeProxyBatchScope = (
       } as Envelope,
     };
   });
-  return { scope, remember };
+  const grant = (apps: ReadonlyArray<string> | undefined) => {
+    grantApps = apps;
+  };
+  return { scope, remember, grant };
 };

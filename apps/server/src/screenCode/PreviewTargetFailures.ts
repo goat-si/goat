@@ -23,6 +23,7 @@ export const previewTargetFailure = (
     operation !== "snapshot" &&
     operation !== "status" &&
     operation !== "read" &&
+    operation !== "waitFor" &&
     !beforeInput.has(error._tag);
   const message = NodeUtil.stripVTControlCharacters(error.message)
     .replace(/https?:\/\/\S+/gi, "[url]")

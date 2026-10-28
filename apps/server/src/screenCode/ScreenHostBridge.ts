@@ -82,7 +82,7 @@ interface CellState {
   retainedBytes: number;
   // Counted apart from the journal so a full journal cannot hide an input whose effect may have started.
   effectsStarted: number;
-  /** The first call that failed; the cell's later calls do not run. */
+  /** The first call that failed after its write may have landed; the cell's later input does not run. */
   haltedBy?: number;
   readonly batches: BatchGroups;
 }
@@ -101,7 +101,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   outcome: "error",
   error,
 });
-/** Results that did not do what was asked stop the rest of the cell, as errors do. */
+/** Results that did not do what was asked; a write that answers one fails its call. */
 export const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
@@ -141,6 +141,8 @@ export class ScreenHostBridge {
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
+  /** Each cell's targets in first-use order, kept past a cut until the cell's result takes them. */
+  private readonly cellTargetOrder = new Map<string, string[]>();
   private readonly closedCells = new Map<string, Set<string>>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
@@ -201,7 +203,8 @@ export class ScreenHostBridge {
     const turn = `${context.runId}\u0000${context.turnId}`;
     const state = this.cell(context);
     // A member of a batch group; any other call closes the cell's open group.
-    const slot = state.batches.join(call);
+    const joined = state.batches.join(call);
+    const slot = joined !== undefined && "late" in joined ? undefined : joined;
     const leave = () => {
       if (slot !== undefined) state.batches.withdraw(slot, notRun);
     };
@@ -235,9 +238,10 @@ export class ScreenHostBridge {
       });
       return index;
     };
-    // The first failure stops the cell's later calls; calls already dispatched keep their outcome.
-    const halt = () => {
-      if (state.haltedBy === undefined) state.haltedBy = call.callId;
+    // A failed write that may have changed the page stops the cell's later input, since the cell
+    // has not seen that change; a refusal that sent nothing, or a failed read, leaves the cell free.
+    const halt = (safety: ActionOutcomeSafety) => {
+      if (safety.possibleCommit && state.haltedBy === undefined) state.haltedBy = call.callId;
     };
     const notRunEvidence = (error: ScreenRunError) =>
       error.code === "not_run" && state.haltedBy !== undefined
@@ -252,8 +256,6 @@ export class ScreenHostBridge {
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
       record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
-      halt();
-      // After the halt, so the group's first call sees it and sends nothing of the group.
       leave();
       return refused(call, { ...error, safety, receipts });
     };
@@ -268,6 +270,7 @@ export class ScreenHostBridge {
       return deny(failure("stopped", call.callId));
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
+    if (joined !== undefined && "late" in joined) return deny(notRun(call.callId, joined.late));
     // After a failure, reads still run so the cell can observe what the failed call did.
     const halted = state.haltedBy !== undefined && !isScreenRead(call.method);
     if (halted) return deny(notRun(call.callId, state.haltedBy ?? call.callId));
@@ -329,6 +332,9 @@ export class ScreenHostBridge {
       let cellTargets = this.cellTargets.get(cellId);
       if (!cellTargets) this.cellTargets.set(cellId, (cellTargets = new Set()));
       cellTargets.add(call.targetRef.id);
+      const order = this.cellTargetOrder.get(cellId) ?? [];
+      if (!order.includes(call.targetRef.id) && order.length < 64) order.push(call.targetRef.id);
+      this.cellTargetOrder.set(cellId, order);
     }
     if (
       call.targetRef &&
@@ -392,7 +398,7 @@ export class ScreenHostBridge {
         safety,
         refusalOf(error),
       );
-      halt();
+      halt(safety);
     };
     const bridge = this;
     const dispatch = Effect.gen(function* () {
@@ -559,7 +565,7 @@ export class ScreenHostBridge {
         safety,
         refusalOf(result.failure),
       );
-      halt();
+      halt(safety);
       return refused(call, { ...result.failure, safety, callId: call.callId });
     }
     let value = result.success.value;
@@ -640,7 +646,6 @@ export class ScreenHostBridge {
       result.success.safety,
       result.success.outcome ? { outcome: result.success.outcome } : {},
     );
-    if (FAILED_CATEGORIES.has(result.success.category)) halt();
     return {
       t: "reply" as const,
       runId: call.runId,
@@ -677,6 +682,14 @@ export class ScreenHostBridge {
   /** Targets the cell has called, so a change to one tab can spare a cell that never used it. */
   cellTargetIds(runId: string, turnId: string, cellId: string): ReadonlySet<string> {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
+  }
+
+  /** The targets a finished cell acted on, in first-use order, even when its cell was cut. */
+  takeCellTargets(runId: string, turnId: string, cellId: string): readonly string[] {
+    const id = key(runId, turnId, cellId);
+    const order = this.cellTargetOrder.get(id) ?? [];
+    this.cellTargetOrder.delete(id);
+    return order;
   }
 
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
@@ -804,6 +817,8 @@ export class ScreenHostBridge {
     this.cursorPhases?.finishTurn(runId, turnId);
     for (const cellId of this.cellTargets.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
+    for (const cellId of this.cellTargetOrder.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.cellTargetOrder.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
     this.fencedTurns.delete(turn);

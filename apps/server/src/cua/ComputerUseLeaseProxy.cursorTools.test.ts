@@ -2,7 +2,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation/types.js";
-import { ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
@@ -32,6 +32,53 @@ const SHOT = Buffer.concat([
 ]).toString("base64");
 
 describe("agent cursor tools on a helper that draws the cursor", () => {
+  it.effect(
+    "draws a screen cell's element click at its point under its owner before the driver gets it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        const current = yield* h.driverStarted;
+        // No phase of this owner reached the proxy yet: the call carries its owner itself.
+        const owner = {
+          environmentId: EnvironmentId.make("environment"),
+          runId: "run:one",
+          turnId: "cell:one",
+          targetId: "target",
+          generation: 1,
+          sequence: 0,
+        };
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "request:element",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 60_000,
+          tool: "click",
+          args: { target: { kind: "window", ...window }, element_token: "s1:1" },
+          cursor: { owner, point: { fx: 0.5, fy: 0.45 } },
+        });
+        const forwarded = yield* h.nextToDriver;
+        assert.notInclude(JSON.stringify(forwarded), "owner");
+        const sent = h.log.indexOf("send click");
+        assert.equal(
+          h.log[sent - 1],
+          "draw " +
+            JSON.stringify({
+              op: "show",
+              identity: owner,
+              pid: 4,
+              windowId: 9,
+              point: { fx: 0.5, fy: 0.45 },
+              phase: "acting",
+            }),
+        );
+      }),
+  );
   it.effect("answers from GOAT's cursor without reaching the driver, enabled by default", () =>
     Effect.gen(function* () {
       const h = yield* harness({ overlay: true, answersCursorTools: true });

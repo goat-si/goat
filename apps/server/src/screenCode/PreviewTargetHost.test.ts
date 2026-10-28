@@ -6,13 +6,18 @@ import {
   DEFAULT_SCREEN_RUN_LIMITS,
   PreviewTabId,
   PreviewAutomationInvalidSelectorError,
+  ThreadId,
+  TurnItemId,
   type ScreenTargetRef,
+  type ScreenHostCall,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { ComputerUseCallApps, makeCallApps } from "../cua/ComputerUseCallApps.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
@@ -136,6 +141,132 @@ it.effect("same-tab origin changes require observation before further input", ()
     ).toBe("https://next.test");
   }),
 );
+
+it.effect(
+  "a tab handle survives its own navigation: later waits and input reach the new page",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      yield* fixture.observe();
+      fixture.state.navigateOnClick = true;
+      fixture.state.clickResult = { tabId: fixture.tab.tabId, url: "https://next.test/" };
+      const navigated = yield* fixture.dispatch("navigate_tab", { url: "https://next.test/" });
+      expect(navigated?.outcome).toBe("ok");
+      const waited = yield* fixture.dispatch("wait_for", { urlIncludes: "next" });
+      expect(waited).toMatchObject({ outcome: "ok", value: { status: "met" } });
+      expect((yield* fixture.dispatch("press_key", { key: "Enter" }))?.outcome).toBe("ok");
+      expect(fixture.requests.find((request) => request.operation === "press")?.exact?.origin).toBe(
+        "https://next.test",
+      );
+    }),
+);
+
+it.effect("a wait reads a page that moved to another origin by itself", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const first = yield* fixture.observe();
+    fixture.state.navigateOnClick = true;
+    yield* fixture.dispatch("click", { ref: first.elements[0]!.ref });
+    const waited = yield* fixture.dispatch("wait_for", { urlIncludes: "next" });
+    expect(waited).toMatchObject({ outcome: "ok", value: { status: "met" } });
+    // Waiting only reads, so it watches whatever document the tab holds now.
+    const request = fixture.requests.find((entry) => entry.operation === "waitFor");
+    expect(request?.exact).not.toHaveProperty("origin");
+  }),
+);
+
+it.effect(
+  "a wait answers before its cell's deadline, so it never holds the tab into the next cell",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      const wait = (
+        callId: number,
+        args: { text: string; timeoutMs?: number },
+        deadlineMillis: number,
+      ) =>
+        fixture.bridge.handle(
+          {
+            ...call("wait_for", callId, args, fixture.ref),
+            cellId: `wait-${callId}`,
+            deadlineMillis,
+          },
+          { ...context, cellId: `wait-${callId}` },
+        );
+      expect((yield* wait(80, { text: "Missing" }, 60_000))?.value).toEqual({ status: "timeout" });
+      yield* wait(81, { text: "Missing", timeoutMs: 5_000 }, 1_000);
+      yield* wait(82, { text: "Missing" }, 1_000);
+      const waits = fixture.requests.filter((request) => request.operation === "waitFor");
+      // No timeout means the browser's usual 15 s; either way it ends with time left to answer.
+      expect(waits[0]?.timeoutMs).toBe(15_000);
+      for (const late of waits.slice(1)) {
+        expect(late.timeoutMs).toBeGreaterThan(0);
+        expect(late.timeoutMs).toBeLessThan(1_000);
+      }
+    }),
+);
+
+it.effect(
+  "a wait the browser could not start fails as a read, and the cell's input still runs",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const inCell = (
+        method: ScreenHostCall["method"],
+        callId: number,
+        args: ScreenHostCall["args"],
+      ) =>
+        fixture.bridge.handle(
+          { ...call(method, callId, args, fixture.ref), cellId: "busy" },
+          { ...context, cellId: "busy" },
+        );
+      fixture.state.failure = new PreviewAutomationExecutionError({
+        ...actionErrorContext,
+        operation: "waitFor",
+      });
+      const waited = yield* inCell("wait_for", 90, { text: "Ready" });
+      expect(waited?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
+      fixture.state.failure = undefined;
+      expect((yield* inCell("press_key", 91, { key: "Enter" }))?.outcome).toBe("ok");
+    }),
+);
+
+it.effect("a cell's timeline row shows the page its tab navigated to last", () => {
+  const callApps = makeCallApps();
+  return Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.clickResult = { tabId: fixture.tab.tabId, url: "https://next.test/page" };
+    const navigated = yield* fixture.dispatch("navigate_tab", { url: "https://next.test/page" });
+    expect(navigated?.outcome).toBe("ok");
+    const row = callApps.present({
+      id: TurnItemId.make("cell-row"),
+      type: "dynamic_tool",
+      threadId: ThreadId.make("thread"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      toolName: "mcp__goat__goat_screen_run",
+      input: { code: "..." },
+      output: {
+        journal: [{ receipt: { callId: 2, targetId: fixture.ref.id, method: "navigate_tab" } }],
+      },
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-10-29T00:00:00.000Z"),
+    });
+    expect(row.toolIcon).toEqual({ _tag: "website", pageUrl: "https://next.test/page" });
+  }).pipe(Effect.provideService(ComputerUseCallApps, callApps));
+});
 
 it.effect("observation cannot refresh a replaced tab or control generation", () =>
   Effect.gen(function* () {
@@ -756,5 +887,23 @@ it.effect("preview host keeps a refusal before input as nothing started", () =>
         effectStarted: false,
         safety: { possibleCommit: false },
       });
+  }),
+);
+
+it.effect("a turn with no tab yet reports tabs available when this server can open one", () =>
+  Effect.gen(function* () {
+    const withoutTabs = (canOpen: boolean) =>
+      makePreviewTargetHost({
+        invoke: <A>() => Effect.succeed(null as A),
+        listBoundTabs: () => Effect.succeed([]),
+        canOpenTab: () => Effect.succeed(canOpen),
+      });
+    expect(yield* (yield* withoutTabs(true)).availability(context)).toEqual([
+      { kind: "tab", available: true },
+    ]);
+    // No browser host here can open a tab, so the agent hears that it has none.
+    expect(yield* (yield* withoutTabs(false)).availability(context)).toEqual([
+      { kind: "tab", available: false, reason: "no_host" },
+    ]);
   }),
 );

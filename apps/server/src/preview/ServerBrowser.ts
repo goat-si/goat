@@ -2,21 +2,16 @@
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
-  BUILT_IN_BROWSER_PROFILES,
-  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   FILL_PREVIEW_VIEWPORT,
-  findBrowserProfile,
   INCOGNITO_BROWSER_PROFILE_ID,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewAutomationLogsInput,
   PreviewClearProfileError,
   PreviewViewportSetting as PreviewViewportSettingSchema,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-  resolveBrowserProfiles,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
-  type BrowserProfile,
   type AgentCursorSnapshot,
   type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
@@ -42,11 +37,11 @@ import {
   type PreviewAutomationStatus,
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
-  type PreviewAutomationWaitForInput,
   type PreviewEvent,
   type PreviewNavStatus,
   type PreviewReportProfilesInput,
   type PreviewSessionSnapshot,
+  type PreviewTabSession,
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -94,9 +89,10 @@ import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as AgentTabState from "./agentTabState.ts";
-import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
+import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import { pointAtTarget } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -112,6 +108,16 @@ import { inPageFetch } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import {
+  assertReusable,
+  assertStoreUsed,
+  dialogStatus,
+  hostedTwice,
+  openInSession,
+  SessionProfiles,
+  tabSession,
+  type RequestedSession,
+} from "./sessionMode.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -328,6 +334,8 @@ interface ServerTab {
   readonly onFileChooser: (chooser: FileChooser) => void;
 
   readonly isolatedContext: boolean;
+  /** The sign-in mode and store the tab was opened with; it never changes. */
+  readonly session: PreviewTabSession;
 
   readonly desktop: { readonly close: () => Promise<void> } | null;
   readonly profileId: string | undefined;
@@ -403,6 +411,17 @@ const make = Effect.gen(function* () {
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
+    (tab, pointer) => {
+      if (tab.desktop)
+        runFork(desktopChannel.pointer({ threadId: tab.threadId, tabId: tab.tabId }, pointer));
+      void tab.recording?.encoder
+        ?.evaluate(
+          ([px, py, click]) =>
+            (globalThis as unknown as EncoderWindow).__goatRecorder?.cursor(px, py, click),
+          [pointer.x, pointer.y, pointer.phase === "click"] as const,
+        )
+        .catch(constVoid);
+    },
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
@@ -413,6 +432,7 @@ const make = Effect.gen(function* () {
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
+  const profiles = new SessionProfiles();
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
@@ -435,15 +455,6 @@ const make = Effect.gen(function* () {
     },
   });
 
-  const dialogStatus = (tab: ServerTab) =>
-    tab.dialog
-      ? {
-          type: tab.dialog.type(),
-          message: tab.dialog.message().slice(0, 4000),
-          defaultValue: tab.dialog.defaultValue().slice(0, 4000),
-        }
-      : null;
-
   const updateFileChooserInterception = (tab: ServerTab) => {
     // Only agents and streamed controllers can answer intercepted uploads; native desktop views use the OS picker.
     const intercept = !tab.desktop || tab.agentOperating || tab.control.controller !== null;
@@ -460,7 +471,7 @@ const make = Effect.gen(function* () {
         _tag: "control",
         canOperate: viewer.canOperate,
         ...ServerBrowserScreen.viewerControl(tab.control, viewer.id),
-        dialog: dialogStatus(tab),
+        dialog: dialogStatus(tab.dialog),
       });
   };
 
@@ -651,9 +662,10 @@ const make = Effect.gen(function* () {
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
     const desktop =
-      adopted === undefined && (await desktopRenders(snapshot))
+      adopted === undefined && snapshot.serverRendered !== true && (await desktopRenders(snapshot))
         ? await connectDesktop(snapshot)
         : null;
+    if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
     const isolatedContext =
       adopted === undefined &&
       desktop === null &&
@@ -672,9 +684,9 @@ const make = Effect.gen(function* () {
     attachNetworkTracker(page);
     const cdp = await context.newCDPSession(page);
     await installPdfDocumentNavigation(cdp);
-    // The desktop's page is already a normal browser. A popup's first request
-    // went out before it became a tab; everything after presents as Chrome.
-    if (!desktop) await presentAsChrome(cdp, host);
+    // A popup's first request went out before it became a tab; everything after presents as
+    // Chrome, a desktop page too, whose Electron UA would name the app.
+    await presentAsChrome(cdp, host);
     if (!desktop) await recordCopies(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
@@ -702,6 +714,9 @@ const make = Effect.gen(function* () {
       fileChooserIntercepted: false,
       onFileChooser: (chooser) => void offerFileChooser(tab, chooser),
       isolatedContext,
+      session:
+        (adopted && tabs.get(tabKey(snapshot.threadId, adopted.openerTabId))?.session) ??
+        tabSession({ isolatedContext, profileId: snapshot.profileId, desktop }),
       desktop: desktop === null ? null : { close: desktop.close },
       profileId: snapshot.profileId,
       openerTabId: adopted?.openerTabId,
@@ -1127,6 +1142,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
+        ...(opener.session.store === "server" ? { serverRendered: true as const } : {}),
         ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
@@ -1232,10 +1248,6 @@ const make = Effect.gen(function* () {
         ? ("agent" as const)
         : ("unclaimed" as const);
 
-  let reportedProfiles: {
-    readonly profiles: ReadonlyArray<BrowserProfile>;
-    readonly defaultProfileId: string;
-  } | null = null;
   // Agent recordings encode here, so they need the client's Browser recording frame rate. The
   // last report outlives the client, which lets agents record while no client is connected.
   let recordingFrameRate = DEFAULT_BROWSER_RECORDING_FRAME_RATE;
@@ -1243,39 +1255,42 @@ const make = Effect.gen(function* () {
   const reportProfiles: ServerBrowser["Service"]["reportProfiles"] = (input) =>
     Effect.sync(() => {
       if (input.recordingFrameRate !== undefined) recordingFrameRate = input.recordingFrameRate;
-      const profiles = resolveBrowserProfiles(input.profiles);
-      reportedProfiles = {
-        profiles,
-        defaultProfileId:
-          findBrowserProfile(profiles, input.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
-      };
+      profiles.report(input);
     });
 
-  const profileStatus = () => {
-    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
-    return {
-      profiles: profiles.map((profile) => ({
-        id: profile.id,
-        name: profile.name,
-        ...(profile.kind === "incognito" ? { incognito: true } : {}),
-      })),
-      ...(reportedProfiles ? { defaultProfileId: reportedProfiles.defaultProfileId } : {}),
-    };
-  };
-
-  const resolveOpenProfile = (requested: string | undefined): string | undefined => {
-    if (requested === undefined) return reportedProfiles?.defaultProfileId;
-    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
-    const wanted = requested.toLowerCase();
-    const match =
-      findBrowserProfile(profiles, requested) ??
-      profiles.find((profile) => profile.name.toLowerCase() === wanted);
-    if (match) return match.id;
-    throw new ServerBrowserPage.ServerBrowserOperationError(
-      "PreviewAutomationUnknownProfileError",
-      `No browser profile is named "${requested}". Use one of: ${profiles
-        .map((profile) => `${profile.name} (id ${profile.id})`)
-        .join(", ")}.`,
+  /** A new agent tab in exactly the requested session, closing idle tabs first. */
+  const openSessionTab = (
+    request: { readonly threadId: string; readonly agentSessionId: string },
+    url: string | undefined,
+    session: RequestedSession,
+  ) => {
+    closeIdleAgentTabs();
+    assertTabCapacity(request.agentSessionId);
+    return openInSession(
+      {
+        profiles,
+        contexts,
+        desktopAvailable: desktopChannel.available,
+        open: (fields) =>
+          runPromise(
+            manager.open({
+              threadId: ThreadId.make(request.threadId),
+              ...(url ? { url } : {}),
+              runtime: "server",
+              reveal: false,
+              automationOwner: request.agentSessionId,
+              ...fields,
+            }),
+          ),
+        ensureTab,
+        hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
+        discard: async (snapshot, tab) => {
+          if (tab) return dropTab(tab, true);
+          const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
+          await runPromise(manager.close(key)).catch(constVoid);
+        },
+      },
+      session,
     );
   };
 
@@ -1292,7 +1307,7 @@ const make = Effect.gen(function* () {
         url: null,
         title: null,
         loading: false,
-        ...profileStatus(),
+        ...profiles.status(),
       };
     }
     const url = tab.page.url();
@@ -1311,7 +1326,7 @@ const make = Effect.gen(function* () {
         generation: tab.control.generation,
         ...(tab.control.handoffReason === null ? {} : { waitingForPerson: true as const }),
       },
-      dialog: dialogStatus(tab),
+      dialog: dialogStatus(tab.dialog),
       fileChooser: tab.fileChooser
         ? { multiple: tab.fileChooser.chooser.isMultiple(), accept: tab.fileChooser.accept }
         : null,
@@ -1327,8 +1342,10 @@ const make = Effect.gen(function* () {
           ownedByCaller: candidate.control.agentId === agentSessionId,
           visible: candidate.viewers.size > 0,
           ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
+          session: candidate.session,
         })),
-      ...profileStatus(),
+      ...profiles.status(),
+      session: tab.session,
       downloads: tab.downloads.map(({ fileName, path, sizeBytes, url, completedAt }) => ({
         fileName,
         path,
@@ -1552,7 +1569,6 @@ const make = Effect.gen(function* () {
       };
     });
 
-  let pointerSequence = 0;
   /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
   const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
 
@@ -1563,30 +1579,10 @@ const make = Effect.gen(function* () {
 
       if (tab.viewers.size === 0 && !encoder && !tab.desktop)
         return tab.control.assertAgentMayDispatch();
-      const show = (next: "move" | "click") => {
-        const { sequence, withCursor } = screen.nextPointer(tab, pointerSequence);
-        pointerSequence = sequence;
-        for (const viewer of tab.viewers)
-          viewer.push({ _tag: "pointer", phase: next, x, y, sequence, ...withCursor });
-        if (tab.desktop)
-          runFork(
-            desktopChannel.pointer(
-              { threadId: tab.threadId, tabId: tab.tabId },
-              { phase: next, x, y, ...withCursor },
-            ),
-          );
-        void encoder
-          ?.evaluate(
-            ([px, py, click]) =>
-              (globalThis as unknown as EncoderWindow).__goatRecorder?.cursor(px, py, click),
-            [x, y, next === "click"] as const,
-          )
-          .catch(constVoid);
-      };
-      show("move");
+      screen.showPointer(tab, x, y, "move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
       if (phase === "click") {
-        show("click");
+        screen.showPointer(tab, x, y, "click");
         await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
       }
     };
@@ -1712,25 +1708,8 @@ const make = Effect.gen(function* () {
             ? found
             : undefined;
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
-        const profileId = existing ? undefined : resolveOpenProfile(open.profileId);
-        if (!existing) {
-          closeIdleAgentTabs();
-          assertTabCapacity(request.agentSessionId);
-        }
-        const tab =
-          existing ??
-          (await ensureTab(
-            await runPromise(
-              manager.open({
-                threadId: request.threadId,
-                ...(url ? { url } : {}),
-                ...(profileId === undefined ? {} : { profileId }),
-                runtime: "server",
-                reveal: false,
-                automationOwner: request.agentSessionId,
-              }),
-            ),
-          ));
+        if (existing) assertReusable(existing.session, open, profiles);
+        const tab = existing ?? (await openSessionTab(request, url, profiles.resolve(open)));
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1865,7 +1844,8 @@ const make = Effect.gen(function* () {
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
         }
       },
-      deadlineMs,
+      // A wait dequeued after its deadline says it never started, never that its condition failed.
+      request.operation === "waitFor" ? undefined : deadlineMs,
     );
   };
 
@@ -1948,6 +1928,8 @@ const make = Effect.gen(function* () {
       }
       case "logs":
         return tab.diagnostics.readMasked(decodeLogsInput(input));
+      case "signInState":
+        return secretFill.signInState(tab, tab.threadId);
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
         return inPageFetch(tab.page, tab.control, {
@@ -1982,9 +1964,11 @@ const make = Effect.gen(function* () {
           ),
         );
       case "select":
-        return recordAction(tab, "select", () =>
-          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, actionGate()),
-        );
+        return recordAction(tab, "select", async () => {
+          const gate = actionGate();
+          await pointAtTarget(tab.page, input as PreviewAutomationSelectInput, pointerFor(tab));
+          return ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gate);
+        });
       case "drag":
         return recordAction(tab, "drag", () =>
           ServerBrowserPage.drag(
@@ -1999,9 +1983,11 @@ const make = Effect.gen(function* () {
           uploadFiles(tab, input as PreviewAutomationUploadInput),
         );
       case "type":
-        return recordAction(tab, "type", () =>
-          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, actionGate()),
-        );
+        return recordAction(tab, "type", async () => {
+          const gate = actionGate();
+          await pointAtTarget(tab.page, input as PreviewAutomationTypeInput, pointerFor(tab));
+          return ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gate);
+        });
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
@@ -2017,11 +2003,9 @@ const make = Effect.gen(function* () {
           request.timeoutMs,
         );
       case "waitFor":
-        return ServerBrowserPage.waitFor(
-          tab.page,
-          { ...(input as PreviewAutomationWaitForInput), timeoutMs: request.timeoutMs },
-          signal,
-        ).then(ServerBrowserScreen.recheck(tab, request));
+        return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
+          ServerBrowserScreen.recheck(tab, request),
+        );
       case "recordingStart": {
         const recording = await startRecording(tab, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
@@ -2033,7 +2017,7 @@ const make = Effect.gen(function* () {
     Effect.tryPromise({
       try: () => {
         ServerBrowserScreen.assertScreenConnection(request, connectionId);
-        return answerCall(request.timeoutMs, (deadlineMs) =>
+        return answerCall(request, (deadlineMs) =>
           runOperation(request, deadlineMs)
             // After every observation around the operation let the result through.
             .then((result) =>
@@ -2467,6 +2451,17 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         const tab = tabs.get(tabKey(key.threadId, key.tabId));
         if (tab?.desktop) dropTab(tab, false);
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  // An older desktop app ignores serverRendered and hosts the tab itself, with its own sign-ins.
+  yield* desktopChannel.attached.pipe(
+    Stream.runForEach((key) =>
+      Effect.promise(async () => {
+        const id = tabKey(key.threadId, key.tabId);
+        const tab = tabs.get(id) ?? (await pendingTabs.get(id)?.catch(() => undefined));
+        if (tab && hostedTwice(tab)) dropTab(tab, true);
       }),
     ),
     Effect.forkScoped,

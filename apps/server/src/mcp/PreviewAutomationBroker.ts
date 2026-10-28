@@ -82,6 +82,7 @@ export class PreviewAutomationBroker extends Context.Service<
       request: PreviewAutomationInvokeInput,
     ) => Effect.Effect<A, PreviewAutomationError>;
     readonly listBoundTabs: BoundPreviewTabs.ListBoundTabs;
+    readonly canOpenTab: BoundPreviewTabs.CanOpenTab;
   }
 >()("goat/mcp/PreviewAutomationBroker") {}
 
@@ -193,7 +194,8 @@ const supportsOperation = (
   operation: PreviewAutomationOperation,
 ): boolean =>
   connection.supportedOperations.has(operation) &&
-  (operation !== "fillSecret" || connection.inProcess);
+  // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
+  ((operation !== "fillSecret" && operation !== "open") || connection.inProcess);
 
 const supportsRequest = (
   connection: ClientConnection,
@@ -237,6 +239,18 @@ const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
 
 const MAX_REASON_CHARS = 500;
 const isReadFailure = Schema.is(PreviewAutomationReadFailure);
+
+type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
+const isSecretFailure = (value: unknown): value is SecretFailure =>
+  value === "no_candidate" || value === "not_permitted" || value === "unavailable";
+/** The server browser names why a secret fill could not use its secretRef. */
+const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFailure } => {
+  const value =
+    typeof detail === "object" && detail !== null && "secretFailure" in detail
+      ? detail.secretFailure
+      : undefined;
+  return isSecretFailure(value) ? { secretFailure: value } : {};
+};
 
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
@@ -410,7 +424,10 @@ const classifyResponseError = (
         ...remoteDiagnostics,
         ...notSent,
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
-          ? { reason: error.message.slice(0, MAX_REASON_CHARS) }
+          ? {
+              reason: error.message.slice(0, MAX_REASON_CHARS),
+              ...secretFailureOf(hostDetail),
+            }
           : {}),
       });
   }
@@ -774,8 +791,19 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     supports: supportsOperation,
     invoke,
   });
+  const canOpenTab = BoundPreviewTabs.makeCanOpenTab({
+    hosts: Effect.map(SynchronizedRef.get(state), (current) => current.clients),
+    supports: supportsOperation,
+  });
 
-  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke, listBoundTabs });
+  return PreviewAutomationBroker.of({
+    connect,
+    focusHost,
+    respond,
+    invoke,
+    listBoundTabs,
+    canOpenTab,
+  });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
 export const layer = Layer.effect(PreviewAutomationBroker, make);

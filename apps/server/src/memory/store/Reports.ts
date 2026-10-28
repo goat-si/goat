@@ -27,6 +27,9 @@ import {
 import type { MemoryStoreShape } from "./StoreShape.ts";
 import type { WorkQueue } from "./WorkQueue.ts";
 
+/** Generation diagnostics a space keeps; the rest of its report budget stays free for deliveries. */
+export const MEMORY_GENERATION_REPORTS_MAX = 100;
+
 export const makeReports = (
   kernel: Pick<StoreKernel, "markRunnable" | "sql" | "transact" | "withHubBudget">,
   workQueue: Pick<WorkQueue, "finishWork" | "readWork" | "retryWork">,
@@ -360,13 +363,25 @@ export const makeReports = (
           !["summary", "consolidate"].includes(current.kind)
         )
           return yield* new MemoryStoreConflict({ code: "unsupported_operation" });
-        const reportId = hashText(`${environment}:${work.id}:${work.attempt}:failed`);
+        // Nothing delivers summary failures, so one row per work keeps the latest outcome without
+        // filling the space's report capacity with every retry.
+        const reportId = hashText(`${environment}:${work.id}:failed`);
+        // Older diagnostics of the same memory are superseded, and freeing them first lets this
+        // one in even when the space's report budget is full.
+        yield* stored(
+          "generation-failure-supersede",
+          sql`DELETE FROM memory_report_outbox WHERE space=${current.space} AND memory_id=${current.memoryId} AND report_kind IN ('summary','consolidate') AND state!='delivered' AND report_id!=${reportId}`,
+        );
         yield* stored(
           "generation-failure-intent",
           sql`INSERT INTO memory_report_outbox
         (report_id,space,memory_id,operation_id,resolution_id,attempt_id,resolving_environment_id,outcome,state,failure_code,created_at,report_kind,report_approved,attempts_known)
         VALUES (${reportId},${current.space},${current.memoryId},${metadata.operationId},NULL,${metadata.operationId},${environment},'failed','pending',${code},${input.now},${current.kind},1,1)
-        ON CONFLICT(report_id) DO NOTHING`,
+        ON CONFLICT(report_id) DO UPDATE SET failure_code=excluded.failure_code,created_at=excluded.created_at WHERE memory_report_outbox.state!='delivered'`,
+        );
+        yield* stored(
+          "generation-failure-trim",
+          sql`DELETE FROM memory_report_outbox WHERE report_id IN (SELECT report_id FROM memory_report_outbox WHERE space=${current.space} AND report_kind IN ('summary','consolidate') AND state!='delivered' ORDER BY created_at DESC,report_id DESC LIMIT -1 OFFSET ${MEMORY_GENERATION_REPORTS_MAX})`,
         );
         // Keep the safe failure on its existing work even if report admission refused it.
         yield* stored(

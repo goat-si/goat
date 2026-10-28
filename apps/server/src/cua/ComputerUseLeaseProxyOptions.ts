@@ -17,7 +17,11 @@ import type {
   AgentCursorLeaseUpdate,
   AgentCursorReport,
 } from "@goat/contracts";
-import { DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
+import {
+  COMPUTER_USE_PRIMITIVE_RESULT_BYTES,
+  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  DEFAULT_SCREEN_RUN_LIMITS,
+} from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -123,18 +127,29 @@ export const primitiveReplySink = (
               ...(textState === undefined ? {} : { structuredContent: textState }),
               content: content.filter((part) => record(part)?.type !== "image"),
             };
-      const bounded = (value: unknown) => {
+      const bounded = (value: unknown, maxBytes: number) => {
         if (value === undefined) return undefined;
         const encoded = JSON.stringify(value);
-        return encoded !== undefined && Buffer.byteLength(encoded) <= 64 * 1024
+        const bytes = encoded === undefined ? Infinity : Buffer.byteLength(encoded);
+        return encoded !== undefined && bytes <= maxBytes
           ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
-          : { message: "Driver reply exceeded the primitive channel limit." };
+          : {
+              code: COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+              message: "Driver reply exceeded the primitive channel limit.",
+              ...(Number.isFinite(bytes) ? { bytes } : {}),
+              maxBytes,
+              // A driver failure stays one when only its size is lost.
+              ...(record(value)?.isError === true ? { isError: true } : {}),
+            };
       };
-      const result = imageError ? undefined : bounded(strippedResult);
+      const result = imageError
+        ? undefined
+        : bounded(strippedResult, COMPUTER_USE_PRIMITIVE_RESULT_BYTES);
       const error = bounded(
         imageError
           ? { message: "Driver image exceeded the primitive image limit or was invalid." }
           : envelope?.error,
+        64 * 1024,
       );
       return (
         reply?.({

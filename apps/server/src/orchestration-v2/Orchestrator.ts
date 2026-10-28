@@ -8,6 +8,7 @@ import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
 import { secretRequestOptionalFields } from "./goat/secretRequestFields.ts";
+import { canSteerDelegatedCompletionIntoRun } from "./goat/DelegatedCompletionRouting.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import type {
   GuestShareId,
@@ -5638,6 +5639,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         active !== undefined &&
+        canSteerDelegatedCompletionIntoRun(
+          command.threadId,
+          delegatedCompletion.parentRunId,
+          active.id,
+        ) &&
         activeTurn !== undefined &&
         providerThread?.providerSessionId != null &&
         (activeMessage === undefined || !isNativeMaintenanceCommand(activeMessage))

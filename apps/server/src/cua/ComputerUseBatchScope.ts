@@ -44,6 +44,14 @@ export function batchAppScope(name: unknown, args: unknown): BatchAppScope | und
   return delivery === undefined ? undefined : { apps: apps as ReadonlyArray<string>, delivery };
 }
 
+/**
+ * A run_steps the driver keeps to background delivery in its scoped apps. run_script never counts:
+ * a scope admits a launch of a scoped app inside it, which a direct launch_app needs foreground
+ * approval for.
+ */
+export const backgroundBatch = (name: unknown, args: unknown) =>
+  name === "run_steps" && batchAppScope(name, args)?.delivery === "background";
+
 const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 /** Fields with which a run_steps step or its arguments can name a window of their own. */

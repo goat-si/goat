@@ -921,3 +921,53 @@ it.effect("GOAT's refusal tells the agent why, what to do, and which thread hold
     });
   }),
 );
+
+// A full Finder read passes the primitive channel's size cap, and the lease proxy sends a marker
+// in its place: the read ran, so the agent hears the limit and keeps its binding.
+it.effect("a window read too large for the primitive channel fails as tree_limit, not stale", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const { host, sent } = fixture({
+      get_window_state: () =>
+        reads++ === 1
+          ? {
+              code: "primitive_reply_too_large",
+              message: "Driver reply exceeded the primitive channel limit.",
+              bytes: 2_000_000,
+              maxBytes: 1_048_576,
+            }
+          : state,
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const target = bound.value as ScreenTargetRef;
+    const first = yield* host.observe(call("get_window_state", {}, target), context);
+    const elementRef = (first.value as { elements: Array<{ ref: ScreenElementRef }> }).elements[0]
+      ?.ref;
+    const tooLarge = yield* host
+      .observe(call("get_window_state", {}, target), context)
+      .pipe(Effect.result);
+    if (!elementRef) throw new Error("The first read must offer a ref");
+    expect(tooLarge._tag === "Failure" && tooLarge.failure.code).toBe("tree_limit");
+    // That read retired the driver's earlier tokens, so the earlier ref never reaches it.
+    const sentBefore = sent.length;
+    const click = yield* host
+      .invoke(call("click", { elementRef }, target), context)
+      .pipe(Effect.result);
+    expect(click._tag === "Failure" && click.failure.code).toBe("stale_reference");
+    expect(sent.length).toBe(sentBefore);
+    const again = yield* host.observe(call("get_window_state", {}, target), context);
+    expect(again.value).toMatchObject({ indexedText: "Apply" });
+    const shapeless = fixture({ get_window_state: { elements: [] } });
+    const other = yield* shapeless.host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const unknown = yield* shapeless.host
+      .observe(call("get_window_state", {}, other.value as ScreenTargetRef), context)
+      .pipe(Effect.result);
+    expect(unknown._tag === "Failure" && unknown.failure.code).toBe("downstream_failure");
+  }),
+);

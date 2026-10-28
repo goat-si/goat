@@ -38,7 +38,7 @@ export interface ScrollCollectOptions {
   readonly url?: string | RegExp | undefined;
   /** Matched against the content-type header; JSON types by default. */
   readonly mimeType?: RegExp | undefined;
-  /** Turns one response's JSON into items; arrays pass through, anything else yields none. */
+  /** Turns one response's JSON into items; by default its largest array, at most three deep. */
   readonly extract?: ((json: unknown) => ReadonlyArray<unknown>) | undefined;
   readonly minItems?: number | undefined;
   readonly maxItems?: number | undefined;
@@ -56,6 +56,8 @@ export interface ScrollCollectResult {
   readonly rounds: number;
   readonly responses: number;
   readonly stoppedBecause: ScrollCollectStop;
+  /** Why the collection came back empty or stopped early, when that is not plain. */
+  readonly note?: string;
 }
 
 const JSON_MIME = /^application\/json\s*(;|$)|\+json\s*(;|$)/i;
@@ -73,7 +75,21 @@ const bounded = (value: number | undefined, fallback: number, low: number, high:
     ? Math.min(high, Math.max(low, Math.round(value)))
     : fallback;
 
-const anArray = (json: unknown): ReadonlyArray<unknown> => (Array.isArray(json) ? json : []);
+/** A feed's items: the response itself when it is an array, else its largest nested array. */
+const itemsOf = (json: unknown, depth = 3): ReadonlyArray<unknown> => {
+  if (Array.isArray(json)) return json;
+  if (depth === 0 || typeof json !== "object" || json === null) return [];
+  let largest: ReadonlyArray<unknown> = [];
+  for (const value of Object.values(json)) {
+    const found = itemsOf(value, depth - 1);
+    if (found.length > largest.length) largest = found;
+  }
+  return largest;
+};
+
+const JSONP_URL = /[?&](?:callback|cb|jsonp)=/i;
+const JSONP_BODY = /^\s*(?:\/\*\*\/\s*)?[\w$.]+\s*\(([\s\S]*)\)\s*;?\s*$/;
+const SCRIPT_MIME = /^(?:application|text)\/(?:x-)?javascript\s*(;|$)/i;
 
 export const matchesResponse = (
   url: string,
@@ -86,8 +102,26 @@ export const matchesResponse = (
     (typeof pattern === "string"
       ? url.includes(pattern)
       : new RegExp(pattern.source, pattern.flags).test(url));
-  return urlMatches && (options.mimeType ?? JSON_MIME).test(contentType);
+  if (!urlMatches) return false;
+  if (options.mimeType) return options.mimeType.test(contentType);
+  // A script answer counts only where its URL names a callback, as JSONP does.
+  return JSON_MIME.test(contentType) || (SCRIPT_MIME.test(contentType) && JSONP_URL.test(url));
 };
+
+const noteFor = (items: number, responses: number, stoppedBecause: ScrollCollectStop) =>
+  items === 0 && responses === 0
+    ? {
+        note: "No response matched: JSON, or JSONP whose URL has a callback parameter, within the url filter. The feed may load on another trigger or answer with another content type.",
+      }
+    : items === 0
+      ? {
+          note: `${responses} responses matched but none held an array of items. Narrow url to the feed's own request.`,
+        }
+      : stoppedBecause === "noGrowth"
+        ? {
+            note: "Stopped once two scrolls added nothing; raise settleMs if the feed loads slowly.",
+          }
+        : {};
 
 /**
  * Runs inside `control.observe`: a private tab refuses to start, and a private period that
@@ -117,7 +151,7 @@ const collect = async (
   const maxResponseBytes = bounded(options.maxResponseBytes, 2_000_000, 1, 10_000_000);
   const settleMs = bounded(options.settleMs, 800, 0, 10_000);
   const bodyTimeoutMs = bounded(options.bodyTimeoutMs, 5_000, 0, 30_000);
-  const extract = options.extract ?? anArray;
+  const extract = options.extract ?? itemsOf;
   const dispatch = () => {
     if (control.isPrivate) throw wentPrivate();
     gate();
@@ -136,8 +170,11 @@ const collect = async (
     if (Number(response.headers()["content-length"] ?? 0) > maxResponseBytes) return;
     const body = await response.body();
     if (closed || body.byteLength > maxResponseBytes) return;
+    const jsonp = SCRIPT_MIME.test(response.headers()["content-type"] ?? "")
+      ? JSONP_BODY.exec(body.toString("utf8"))?.[1]
+      : undefined;
     // Playwright caches the body it just returned, so this parses without a second fetch.
-    const json = await response.json();
+    const json = jsonp === undefined ? await response.json() : JSON.parse(jsonp);
     if (!closed) parsed.push(json);
   };
   const listener = (response: CollectorResponse) => {
@@ -182,6 +219,13 @@ const collect = async (
     }
   };
 
+  const done = (stoppedBecause: ScrollCollectStop, rounds: number): ScrollCollectResult => ({
+    items,
+    rounds,
+    responses,
+    stoppedBecause,
+    ...noteFor(items.length, responses, stoppedBecause),
+  });
   page.on("response", listener);
   try {
     let rounds = 0;
@@ -191,15 +235,15 @@ const collect = async (
     for (;;) {
       await drain();
       if (control.isPrivate) throw wentPrivate();
-      if (items.length >= maxItems) return { items, rounds, responses, stoppedBecause: "maxItems" };
-      if (items.length >= minItems) return { items, rounds, responses, stoppedBecause: "minItems" };
-      if (rounds >= maxScrolls) return { items, rounds, responses, stoppedBecause: "maxScrolls" };
+      if (items.length >= maxItems) return done("maxItems", rounds);
+      if (items.length >= minItems) return done("minItems", rounds);
+      if (rounds >= maxScrolls) return done("maxScrolls", rounds);
       const height = Number(await page.evaluate(HEIGHT_SCRIPT));
       // A feed that scrolls inside its own container keeps the document's height; new items count.
       unchanged = height === lastHeight && items.length === lastCount ? unchanged + 1 : 0;
       lastHeight = height;
       lastCount = items.length;
-      if (unchanged >= 2) return { items, rounds, responses, stoppedBecause: "noGrowth" };
+      if (unchanged >= 2) return done("noGrowth", rounds);
       const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
       const next = arm();
       dispatch();

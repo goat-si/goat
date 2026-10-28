@@ -842,3 +842,125 @@ describe("proxy release of a call that never ran", () => {
     }),
   );
 });
+
+describe("proxy reservations of a call its driver never answers", () => {
+  it.effect("an unanswered click releases its driver's reservations once its deadline passes", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:unanswered",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 30_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9, x: 1, y: 1 },
+      });
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      assert.deepInclude((yield* h.nextToDriver).params as object, { name: "click" });
+      // Until now the app stayed reserved to the stuck call, and other threads heard app_busy.
+      yield* TestClock.adjust("31 seconds");
+      const closed = yield* h.nextReservation;
+      assert.equal(closed.action, "close");
+      assert.equal(closed.connectionId, current.connectionId);
+      assert.equal((yield* h.primitiveReply).status, "unknown_outcome");
+    }),
+  );
+});
+
+describe("proxy reservations of a call its driver answered late in processing", () => {
+  it.effect("a reply GOAT is still processing at the deadline keeps its driver", () =>
+    Effect.gen(function* () {
+      const releaseGate = yield* Deferred.make<void>();
+      const h = yield* harness({
+        reservation: (call) =>
+          call.action === "release"
+            ? Deferred.await(releaseGate).pipe(Effect.as({ status: "released" as const }))
+            : Effect.succeed(
+                call.action === "reserve"
+                  ? { status: "admitted" as const, reservationId: "ticket:slow" }
+                  : { status: "released" as const },
+              ),
+      });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:processing",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 30_000,
+        tool: "list_apps",
+        args: {},
+      });
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      const sent = yield* h.nextToDriver;
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result: { content: [] } }));
+      // The reply arrived; GOAT is still releasing its reservation when the deadline passes.
+      assert.equal((yield* h.nextReservation).action, "release");
+      yield* TestClock.adjust("31 seconds");
+      yield* Deferred.succeed(releaseGate, undefined);
+      assert.equal((yield* h.primitiveReply).status, "settled");
+      assert.isFalse(yield* h.isKilled);
+      assert.equal(h.drivers.length, 1);
+    }),
+  );
+});
+
+describe("proxy replies queued behind one GOAT is still processing", () => {
+  it.effect("a reply waiting behind another past its deadline keeps its driver", () =>
+    Effect.gen(function* () {
+      const releaseGate = yield* Deferred.make<void>();
+      const h = yield* harness({
+        reservation: (call) =>
+          call.action === "release"
+            ? Deferred.await(releaseGate).pipe(Effect.as({ status: "released" as const }))
+            : Effect.succeed(
+                call.action === "reserve"
+                  ? { status: "admitted" as const, reservationId: `ticket:${call.callId}` }
+                  : { status: "released" as const },
+              ),
+      });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      const listApps = (requestId: string, deadlineMillis: number) => ({
+        state: "primitive-request" as const,
+        requestId,
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis,
+        tool: "list_apps",
+        args: {},
+      });
+      yield* h.sendPrimitive(listApps("request:first", 60_000));
+      const first = yield* h.nextToDriver;
+      yield* h.sendPrimitive(listApps("request:second", 30_000));
+      const second = yield* h.nextToDriver;
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: first.id, result: { content: [] } }));
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: second.id, result: { content: [] } }));
+      // GOAT is still releasing the first reply's reservation; the second reply waits behind it.
+      yield* h.nextReservation;
+      yield* h.nextReservation;
+      assert.equal((yield* h.nextReservation).action, "release");
+      yield* TestClock.adjust("31 seconds");
+      yield* Deferred.succeed(releaseGate, undefined);
+      assert.equal((yield* h.primitiveReply).status, "settled");
+      assert.equal((yield* h.primitiveReply).status, "settled");
+      assert.isFalse(yield* h.isKilled);
+    }),
+  );
+});

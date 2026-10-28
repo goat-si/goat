@@ -98,6 +98,25 @@ export type ListBoundTabs = (
   scope: McpInvocationContext.McpThreadInvocationScope,
 ) => Effect.Effect<readonly BoundPreviewTab[]>;
 
+export type CanOpenTab = (
+  scope: McpInvocationContext.McpThreadInvocationScope,
+) => Effect.Effect<boolean>;
+
+/** Whether a code-mode new tab would find this environment's server browser to open it. */
+export const makeCanOpenTab =
+  <Host extends ScreenHost>(options: {
+    readonly hosts: Effect.Effect<ReadonlyMap<string, Host>>;
+    readonly supports: Supports<Host>;
+  }): CanOpenTab =>
+  (scope) =>
+    Effect.map(
+      options.hosts,
+      (hosts) =>
+        screenConnection(hosts, { scope, operation: "open", serverHostOnly: true }, (host) =>
+          options.supports(host, "open"),
+        )?.connection !== undefined,
+    );
+
 /** Lists this thread's server tabs that still answer status on the connection that listed them. */
 export const makeListBoundTabs = <Host extends ScreenHost>(options: {
   readonly hosts: Effect.Effect<ReadonlyMap<string, Host>>;

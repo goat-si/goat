@@ -3,7 +3,8 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Worker from "./MemoryWorker.ts";
-import { now, live, countingTracer, seed } from "./MemoryWorker.testkit.ts";
+import { countingTracer } from "../observability/countingTracer.testkit.ts";
+import { now, live, seed } from "./MemoryWorker.testkit.ts";
 
 // Sweeps run every few seconds on the server's one thread, so repeated source reads are a cost.
 describe("MemoryWorker sweep cost", () => {

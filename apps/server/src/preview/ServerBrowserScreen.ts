@@ -222,6 +222,14 @@ const pushCursorState = (
 export const nextPointerSequence = (previous: number, cursor?: AgentCursorSnapshot): number =>
   Math.max(previous + 1, cursor?.identity.sequence ?? 0);
 
+/** The agent pointer as the desktop host and a recording take it. */
+export interface AgentPointer {
+  readonly phase: "move" | "click";
+  readonly x: number;
+  readonly y: number;
+  readonly cursor?: AgentCursorSnapshot;
+}
+
 /** The screen state one ServerBrowser keeps: authority listeners and each tab's last cursor. */
 export const makeSurface = <Tab extends ScreenTab>(
   findTab: (threadId: string, tabId: string) => Tab | undefined,
@@ -229,11 +237,16 @@ export const makeSurface = <Tab extends ScreenTab>(
     key: { readonly threadId: string; readonly tabId: string },
     cursor: AgentCursorSnapshot,
   ) => void,
+  /** Draws a pointer outside the viewers: the desktop host and a recording. */
+  drawPointer: (tab: Tab, pointer: AgentPointer) => void = () => {},
 ) => {
   const listeners = new Set<AuthorityListener>();
   const handoffListeners = new Set<(changed: HandoffChanged) => void>();
   const watched = new WeakSet<Tab>();
   const cursorByTab = new WeakMap<Tab, AgentCursorSnapshot>();
+  /** Where the agent's pointer last was on each tab, and on which document. */
+  const pointerByTab = new WeakMap<Tab, { x: number; y: number; document?: number }>();
+  let pointerSequence = 0;
   const notify: AuthorityListener = (change) => {
     for (const listener of listeners) listener(change);
   };
@@ -241,15 +254,21 @@ export const makeSurface = <Tab extends ScreenTab>(
     listeners.add(listener);
     return () => void listeners.delete(listener);
   };
-  /** The next pointer sequence, and the visible cursor to draw the pointer with. */
-  const nextPointer = (tab: Tab, previous: number) => {
+  /** Draws the agent's pointer for the tab's viewers, with the visible cursor that owns it. */
+  const showPointer = (tab: Tab, x: number, y: number, phase: "move" | "click") => {
     const current = cursorByTab.get(tab);
     const cursor =
       current?.phase === "hidden" || current?.phase === "yielded" ? undefined : current;
-    return {
-      sequence: nextPointerSequence(previous, current),
-      withCursor: cursor ? { cursor } : {},
-    };
+    const sequence = (pointerSequence = nextPointerSequence(pointerSequence, current));
+    const withCursor = cursor ? { cursor } : {};
+    for (const viewer of tab.viewers)
+      viewer.push({ _tag: "pointer", phase, x, y, sequence, ...withCursor });
+    drawPointer(tab, { phase, x, y, ...withCursor });
+    pointerByTab.set(tab, {
+      x,
+      y,
+      ...(tab.documentGeneration === undefined ? {} : { document: tab.documentGeneration }),
+    });
   };
   const cursorState: CursorStateSink = (input) =>
     Effect.sync(() => {
@@ -258,6 +277,17 @@ export const makeSurface = <Tab extends ScreenTab>(
       const key = { threadId: tab.threadId, tabId: tab.tabId };
       const sent = pushCursorState(tab, input.cursor, (cursor) => pushDesktop(key, cursor));
       if (sent) cursorByTab.set(tab, input.cursor);
+      // Each state carries the agent's position: the last pointer on this document, redrawn
+      // under the new state, so a state that arrives after its action's pointer cannot drop it.
+      const last = pointerByTab.get(tab);
+      if (
+        sent &&
+        last !== undefined &&
+        last.document === tab.documentGeneration &&
+        input.cursor.phase !== "hidden" &&
+        input.cursor.phase !== "yielded"
+      )
+        showPointer(tab, last.x, last.y, "move");
       return sent;
     });
   const requestHandoff: NonNullable<SurfaceService["requestHandoff"]> = (input) =>
@@ -283,7 +313,7 @@ export const makeSurface = <Tab extends ScreenTab>(
   };
   return {
     notify,
-    nextPointer,
+    showPointer,
     service: {
       onAuthorityChange,
       cursorState,

@@ -4,6 +4,8 @@ import {
   NonNegativeInt,
   OrchestratorMcpFailure,
   PreviewAutomationError,
+  PreviewAutomationSignInState,
+  PreviewAutomationSignInStateInput,
   PreviewListResult,
   PreviewRequestHandoffInput,
   PreviewRequestHandoffResult,
@@ -58,8 +60,16 @@ const PreviewRequestHandoffTool = Tool.make(requestHandoff.name, {
     PreviewHandoffs.PreviewHandoffs,
   ],
 }).annotateMerge(agentSurfaceAnnotations(requestHandoff));
+const signInState = agentSurfaceRegistry["preview.sign_in_state"];
+const PreviewSignInStateTool = Tool.make(signInState.name, {
+  ...shared,
+  description: signInState.description,
+  parameters: PreviewAutomationSignInStateInput,
+  success: PreviewAutomationSignInState,
+}).annotateMerge(agentSurfaceAnnotations(signInState));
 export const PreviewControlsToolkit = Toolkit.make(
   PreviewListTool,
   PreviewCloseTool,
   PreviewRequestHandoffTool,
+  PreviewSignInStateTool,
 );

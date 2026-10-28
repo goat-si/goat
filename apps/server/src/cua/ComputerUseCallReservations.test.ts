@@ -681,6 +681,11 @@ describe("server computer-use call reservations", () => {
             ),
             { status: "refused", detail: "target_busy" },
           );
+        // A script can launch a scoped app, which needs foreground approval, so its scope grants none.
+        assert.deepInclude(
+          yield* f.reserve(f.b, { script: "cua.call('launch_app', {})", app_scope }, "run_script"),
+          { status: "refused", detail: "foreground_not_approved" },
+        );
         // Without a scope, or with foreground delivery, it still needs foreground approval.
         for (const args of [
           { pid: 44, window_id: 9, steps: [] },

@@ -31,6 +31,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
@@ -145,7 +146,12 @@ export function layerWithTabHost() {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const browser = yield* ServerBrowser.ServerBrowser;
       const cursorPublisher = yield* ScreenCursorPublisher;
-      const desktopHost = createDesktopTargetHost({ primitiveChannel, leases });
+      const callApps = yield* ComputerUseCallApps;
+      const desktopHost = createDesktopTargetHost({
+        primitiveChannel,
+        leases,
+        labelTarget: callApps.screenTarget,
+      });
       const tabHost = yield* makePreviewTargetHost(broker);
       return yield* make({
         primitiveChannel,
@@ -223,6 +229,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
   const bridge = new ScreenHostBridge(cursorPhases);
+  const callApps = yield* ComputerUseCallApps;
   if (options.dispatcher) {
     const dispatcher = options.dispatcher;
     bridge.setDispatcher({
@@ -461,6 +468,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   };
   const service: ScreenRunService["Service"] = {
     runCell: Effect.fn("ScreenRunService.runCell")(function* (input: ScreenRunInput) {
+      // A call refused before its cell runs must not show an earlier cell with the same code.
+      callApps.screenCell(input.threadId, input.source, []);
       if (endedRuns.has(input.runId)) return yield* Effect.fail(fail("stale_run"));
       const runIsOpen = Effect.gen(function* () {
         if (!orchestrator) return true;
@@ -586,6 +595,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           }),
           Effect.ensuring(
             Effect.sync(() => {
+              // Before the provider sees the result, so the cell's row can name what it acted on.
+              callApps.screenCell(
+                input.threadId,
+                input.source,
+                bridge.takeCellTargets(input.runId, input.turnId, cellId),
+              );
               if (activeCells.get(id) === cellId) activeCells.delete(id);
             }),
           ),

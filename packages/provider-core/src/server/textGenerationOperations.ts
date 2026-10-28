@@ -5,7 +5,8 @@ import type * as SchemaAST from "effect/SchemaAST";
 
 import {
   validateMemoryGenerationResult,
-  GenerateMemorySummaryExecutionResult,
+  GenerateMemorySummaryOutcome,
+  GenerateMemorySummaryResult,
   ResolveMemoryConflictExecutionResult,
   type ChatAttachment,
   type ModelSelection,
@@ -18,8 +19,11 @@ import { buildChannelReceptionPrompt, toChannelReceptionResult } from "./channel
 import {
   buildMemoryConflictPrompt,
   buildMemorySummaryPrompt,
+  isNoDurableMemoryText,
   memoryEvidenceSources,
   memoryResultFromModelOutput,
+  MemoryPromotingModelAnswer,
+  type MemorySummaryModelOutput,
 } from "./memoryGenerationPrompts.ts";
 import { unsupportedMemoryRunner, type MemoryRunner } from "./memoryGenerationRunner.ts";
 export type { MemoryRunner } from "./memoryGenerationRunner.ts";
@@ -59,9 +63,9 @@ const sameMemorySelection = (
   (a.options ?? []).every(
     (option, i) => option.id === b.options?.[i]?.id && option.value === b.options[i]?.value,
   );
-const decodeMemorySummaryExecution = Schema.decodeUnknownEffect(
-  GenerateMemorySummaryExecutionResult,
-);
+const decodeMemorySummaryExecution = Schema.decodeUnknownEffect(GenerateMemorySummaryOutcome);
+const decodePromotionCandidate = Schema.decodeUnknownOption(GenerateMemorySummaryResult);
+const decodePromotingAnswer = Schema.decodeUnknownOption(MemoryPromotingModelAnswer);
 const decodeMemoryConflictExecution = Schema.decodeUnknownEffect(
   ResolveMemoryConflictExecutionResult,
 );
@@ -174,10 +178,35 @@ export function fromRunner(
         modelSelection: input.modelSelection,
         ...request,
       });
+      const answer = generated.result;
+      const sources = memoryEvidenceSources(input);
+      const candidate = (output: MemorySummaryModelOutput | null) =>
+        output === null || isNoDurableMemoryText(output.text)
+          ? null
+          : memoryResultFromModelOutput(output, sources);
+      // A promotion is optional: one that fails validation or rests only on model evidence is
+      // dropped without failing the summary it came with.
+      const promotion = (output: MemorySummaryModelOutput | null) => {
+        const decoded = decodePromotionCandidate(candidate(output), { onExcessProperty: "error" });
+        return Option.isSome(decoded) &&
+          decoded.value.evidence.some((evidence) => evidence.origin !== "model") &&
+          validateMemoryGenerationResult(input, decoded.value)
+          ? decoded.value
+          : null;
+      };
+      const promoting = input.promote ? decodePromotingAnswer(answer) : Option.none();
       const result = yield* decodeMemorySummaryExecution(
         {
-          ...generated,
-          result: memoryResultFromModelOutput(generated.result, memoryEvidenceSources(input)),
+          execution: generated.execution,
+          result: candidate(answer.summary),
+          ...(Option.isSome(promoting)
+            ? {
+                promotions: {
+                  project: promotion(promoting.value.project),
+                  user: promotion(promoting.value.user),
+                },
+              }
+            : {}),
         },
         { onExcessProperty: "error" },
       ).pipe(
@@ -191,7 +220,7 @@ export function fromRunner(
         ),
       );
       if (
-        !validateMemoryGenerationResult(input, result.result) ||
+        (result.result !== null && !validateMemoryGenerationResult(input, result.result)) ||
         result.execution.providerInstanceId !== input.modelSelection.instanceId ||
         !sameMemorySelection(result.execution.requestedModelSelection, input.modelSelection)
       )

@@ -75,7 +75,9 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     saveFingerprint(cwd, metadata.repository);
     saveFingerprint(branchKey, metadata.refs);
   });
-  const remember = Effect.fn("GitManager.rememberPrLookupGitState")(function* (
+  // Untraced: each lookup asks for several keys, mostly from memory, every sweep minute; a read
+  // that misses has its own git span under lookupBranchPullRequest.
+  const remember = Effect.fnUntraced(function* (
     cwd: string,
     key: string,
     fresh: boolean,

@@ -363,7 +363,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
             ? fixture.textGeneration.resolveMemoryConflict!({
                 ...memoryConflict,
                 modelSelection: selection,
-              })
+              }).pipe(Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome))
             : fixture.textGeneration.generateMemorySummary!({
                 ...memorySummary,
                 modelSelection: selection,
@@ -386,7 +386,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
             JSON.stringify(
               operation === "resolveMemoryConflict"
                 ? { ...memoryOutput, judgment: "Synthetic" }
-                : memoryOutput,
+                : { summary: memoryOutput },
             ),
           ],
         });
@@ -418,7 +418,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
             ? fixture.textGeneration.resolveMemoryConflict!({
                 ...memoryConflict,
                 modelSelection: selection,
-              })
+              }).pipe(Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome))
             : fixture.textGeneration.generateMemorySummary!({
                 ...memorySummary,
                 modelSelection: selection,
@@ -439,7 +439,9 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         });
         const error = yield* (
           operation === "resolveMemoryConflict"
-            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : fixture.textGeneration.generateMemorySummary!(memorySummary)
         ).pipe(Effect.flip);
         expect(error.operation).toBe(operation);
@@ -453,16 +455,27 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         const fixture = yield* makeFixture({
           memoryRunnerContext: memoryContext,
           outputs: [
-            JSON.stringify({
-              ...memoryOutput,
-              text: "x".repeat(65536),
-              ...(operation === "resolveMemoryConflict" ? { judgment: "Synthetic" } : {}),
-            }),
+            JSON.stringify(
+              operation === "resolveMemoryConflict"
+                ? {
+                    ...memoryOutput,
+                    text: "x".repeat(65536),
+                    judgment: "Synthetic",
+                  }
+                : {
+                    summary: {
+                      ...memoryOutput,
+                      text: "x".repeat(65536),
+                    },
+                  },
+            ),
           ],
         });
         const error = yield* (
           operation === "resolveMemoryConflict"
-            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : fixture.textGeneration.generateMemorySummary!(memorySummary)
         ).pipe(Effect.flip);
         expect(error.operation).toBe(operation);
@@ -479,7 +492,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
             JSON.stringify(
               operation === "resolveMemoryConflict"
                 ? { ...memoryOutput, judgment: "Synthetic judgment" }
-                : memoryOutput,
+                : { summary: memoryOutput },
             ),
           ],
         });
@@ -517,7 +530,11 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
                 sessionUpdate: "agent_message_chunk",
                 content: {
                   type: "text",
-                  text: JSON.stringify({ ...memoryOutput, judgment: "Synthetic judgment" }),
+                  text: JSON.stringify(
+                    operation === "resolveMemoryConflict"
+                      ? { ...memoryOutput, judgment: "Synthetic judgment" }
+                      : { summary: memoryOutput },
+                  ),
                 },
               });
               return { stopReason: "end_turn" as const };
@@ -525,7 +542,9 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         });
         const exit = yield* Effect.exit(
           operation === "resolveMemoryConflict"
-            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : fixture.textGeneration.generateMemorySummary!(memorySummary),
         );
         expect(exit._tag).toBe("Failure");
@@ -537,16 +556,27 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       const fixture = yield* makeFixture({
         memoryRunnerContext: memoryContext,
         outputs: [
-          JSON.stringify({
-            ...memoryOutput,
-            judgment: "Synthetic",
-            execution: { effectiveModel: "forged" },
-          }),
+          JSON.stringify(
+            operation === "resolveMemoryConflict"
+              ? {
+                  ...memoryOutput,
+                  judgment: "Synthetic",
+                  execution: { effectiveModel: "forged" },
+                }
+              : {
+                  summary: {
+                    ...memoryOutput,
+                    execution: { effectiveModel: "forged" },
+                  },
+                },
+          ),
         ],
       });
       const exit = yield* Effect.exit(
         operation === "resolveMemoryConflict"
-          ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+          ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+              Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+            )
           : fixture.textGeneration.generateMemorySummary!(memorySummary),
       );
       expect(exit._tag).toBe("Failure");
@@ -567,7 +597,9 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         );
         const exit = yield* Effect.exit(
           operation === "resolveMemoryConflict"
-            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : fixture.textGeneration.generateMemorySummary!(memorySummary),
         );
         expect(exit._tag).toBe("Failure");
@@ -586,7 +618,9 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         });
         const exit = yield* Effect.exit(
           operation === "resolveMemoryConflict"
-            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
             : fixture.textGeneration.generateMemorySummary!(memorySummary),
         );
         expect(exit._tag).toBe("Failure");

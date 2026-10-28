@@ -4,17 +4,31 @@ import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { AgentCursorEvent } from "./computerUseOverlay.ts";
+import {
+  AgentCursorEvent,
+  AgentCursorOwner,
+  ComputerUseOverlayPoint,
+} from "./computerUseOverlay.ts";
 import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
 
 // Screen primitives on the computer use lease stream. A leaf: cua.ts re-exports it and joins the
 // request, cancel and cursor updates into its lease update unions.
 const primitiveId = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
-const primitiveJson = Schema.Json.check(
-  Schema.makeFilter(
-    (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 64 * 1024,
-  ),
-);
+const boundedJson = (maxBytes: number) =>
+  Schema.Json.check(
+    Schema.makeFilter(
+      (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= maxBytes,
+    ),
+  );
+const primitiveJson = boundedJson(64 * 1024);
+/**
+ * A driver answer's JSON on the primitive channel. A full window read of a busy app (Finder lists
+ * hundreds of elements, each with its token, frame and actions, beside the tree's markdown) passes
+ * 64 KiB; the screen-run tree budget, not this cap, decides how much of it reaches the agent.
+ */
+export const COMPUTER_USE_PRIMITIVE_RESULT_BYTES = 1024 * 1024;
+/** The result the proxy sends in place of a driver answer over the cap; never a driver's own. */
+export const COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE = "primitive_reply_too_large";
 const strictPrimitive = <S extends Schema.Constraint>(schema: S) =>
   Schema.declareConstructor<S["Type"], S["Encoded"]>()(
     [schema],
@@ -45,6 +59,13 @@ export const ComputerUsePrimitiveRequest = Schema.Struct({
   ),
   tool: primitiveId,
   args: primitiveJson,
+  /**
+   * The agent cursor this call draws, never sent to the driver: the host-owned owner (sequence 0,
+   * before any of its phases) and where in the window the call acts, when the host knows.
+   */
+  cursor: Schema.optionalKey(
+    Schema.Struct({ owner: AgentCursorOwner, point: Schema.optionalKey(ComputerUseOverlayPoint) }),
+  ),
 });
 export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
 
@@ -68,7 +89,7 @@ export const ComputerUsePrimitiveReply = strictPrimitive(
   Schema.Struct({
     ...primitiveCallIdentity,
     status: Schema.Literals(["not_started", "settled", "unknown_outcome"]),
-    result: Schema.optionalKey(primitiveJson),
+    result: Schema.optionalKey(boundedJson(COMPUTER_USE_PRIMITIVE_RESULT_BYTES)),
     error: Schema.optionalKey(primitiveJson),
     image: Schema.optionalKey(
       Schema.Struct({

@@ -6,7 +6,7 @@ import type {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
-import { batchAppScope, batchWindow, isBatchTool } from "./ComputerUseBatchScope.ts";
+import { backgroundBatch, batchWindow, isBatchTool } from "./ComputerUseBatchScope.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
 const READS = new Set([
@@ -73,7 +73,7 @@ export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
   call.name === "move_cursor"
     ? movesPointer(call.args)
     : // The driver keeps a background-scoped batch out of the foreground itself.
-      (isBatchTool(call.name) && batchAppScope(call.name, call.args)?.delivery !== "background") ||
+      (isBatchTool(call.name) && !backgroundBatch(call.name, call.args)) ||
       call.name === "bring_to_front" ||
       call.name === "launch_app" ||
       foreground(call.args);
@@ -82,7 +82,7 @@ export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
   const desktop = requiresForeground(call);
   if (isBatchTool(call.name)) {
-    const scoped = !desktop && batchAppScope(call.name, call.args) !== undefined;
+    const scoped = !desktop && backgroundBatch(call.name, call.args);
     return (scoped ? batchWindow(call.name, call.args) : undefined) ?? "desktop";
   }
   if (!WINDOW_MUTATIONS.has(call.name))

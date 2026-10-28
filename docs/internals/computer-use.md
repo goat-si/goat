@@ -213,8 +213,12 @@ collected. When the agent did not ask for the reset itself, its next cell's resu
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
 observe again before deciding what to do. The cell never replays that input. The first call that
-fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
-their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+fails after its write may have landed (an unknown outcome or a partial write) stops the cell's later
+input: calls already dispatched keep their outcome, and each later write gets its own `not_run`
+error and receipt without dispatching, while reads still run. The macOS driver's suspected no-op
+counts as an unknown outcome, because it does not prove nothing landed. A call refused before
+anything was sent, a write refused before it could land, or a failed read leaves the cell free,
+because the page is as the cell last saw it and the guest has caught or will see that error. An
 unverifiable write is a success whose receipt says it may have committed, because the macOS
 driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with
@@ -225,8 +229,8 @@ Element clicks, typing and `set_value` that a cell starts on one app window with
 each leave the guest as one batch group and reach the driver as one `run_steps`, kept by
 `app_scope` to that window's app in the background (`ScreenBatchGroups.ts`,
 `DesktopTargetHost.dispatchBatch`). The runtime admits a group whole or refuses all of it before
-any goes out, and the group takes one pending place; a refused group stops the cell's later input, as
-a failed call does, while reads still run. Each call keeps its own admission, receipt and
+any goes out, and the group takes one pending place; a refused group sent nothing, so like any
+refusal it leaves the cell free. Each call keeps its own admission, receipt and
 reply. The group's first call holds the window's gate until every member has passed its own checks,
 so a member refused on admission sends none of the group. Each step's receipt reads the driver's
 effect and code for that step, which stay on a failed call's error and receipt as evidence. Steps
@@ -613,7 +617,7 @@ GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split 
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
 GOAT pins the fork's release archives by name, size and SHA-256
 (`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
-attestations. GOAT pins `0.38.0-goat.7`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
+attestations. GOAT pins `0.38.0-goat.8`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
 the server installer rejects (goat-si/cua-driver#16), and `0.38.0-goat.4` is a tag with no release.
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
 embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps

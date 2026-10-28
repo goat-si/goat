@@ -29,18 +29,19 @@ const cursorOf = (command: ComputerUseOverlayCommand): ComputerUseAgentCursor | 
     ? { windowId: command.windowId, point: command.point, phase: command.phase }
     : null;
 
+const sameScopedOwner = (a: AgentCursorReport["identity"], b: AgentCursorReport["identity"]) =>
+  a.environmentId === b.environmentId &&
+  a.runId === b.runId &&
+  a.turnId === b.turnId &&
+  a.targetId === b.targetId &&
+  a.generation === b.generation;
+
 /** Retains the last observed point for a positionless in-flight phase on the same owner. */
 const scopedCursorReport = (
   event: AgentCursorEvent,
   previous?: AgentCursorReport,
 ): AgentCursorReport => {
-  const sameOwner =
-    previous !== undefined &&
-    previous.identity.environmentId === event.identity.environmentId &&
-    previous.identity.runId === event.identity.runId &&
-    previous.identity.turnId === event.identity.turnId &&
-    previous.identity.targetId === event.identity.targetId &&
-    previous.identity.generation === event.identity.generation;
+  const sameOwner = previous !== undefined && sameScopedOwner(previous.identity, event.identity);
   const point =
     event.op === "show" && event.point && event.windowId !== undefined
       ? { windowId: event.windowId, point: event.point, phase: event.phase }
@@ -62,15 +63,11 @@ export const makeScopedAgentCursorReports = Effect.fn("agentCursorReports.scoped
     ),
     Effect.forkScoped,
   );
-  return (event: AgentCursorEvent) =>
+  const emit = (event: AgentCursorEvent) =>
     Effect.suspend(() => {
       if (
         previous !== undefined &&
-        event.identity.environmentId === previous.identity.environmentId &&
-        event.identity.runId === previous.identity.runId &&
-        event.identity.turnId === previous.identity.turnId &&
-        event.identity.targetId === previous.identity.targetId &&
-        event.identity.generation === previous.identity.generation &&
+        sameScopedOwner(previous.identity, event.identity) &&
         event.identity.sequence <= previous.identity.sequence
       )
         return Effect.void;
@@ -78,6 +75,37 @@ export const makeScopedAgentCursorReports = Effect.fn("agentCursorReports.scoped
       previous = report;
       return Queue.offer(latest, report).pipe(Effect.asVoid);
     });
+  /**
+   * What the overlay drew for the current owner: its point, from the call that acted, replaces
+   * the one the owner's positionless events would retain.
+   */
+  const placed = (command: ComputerUseOverlayCommand) =>
+    Effect.suspend(() => {
+      if (
+        command.op !== "show" ||
+        !("identity" in command) ||
+        previous === undefined ||
+        !sameScopedOwner(previous.identity, command.identity) ||
+        command.identity.sequence < previous.identity.sequence
+      )
+        return Effect.void;
+      const cursor = cursorOf(command);
+      const before = previous.cursor;
+      if (
+        cursor === null
+          ? before === null
+          : before !== null &&
+            before.windowId === cursor.windowId &&
+            before.point.fx === cursor.point.fx &&
+            before.point.fy === cursor.point.fy &&
+            before.phase === cursor.phase
+      )
+        return Effect.void;
+      const report = { identity: command.identity, phase: previous.phase, cursor };
+      previous = report;
+      return Queue.offer(latest, report).pipe(Effect.asVoid);
+    });
+  return Object.assign(emit, { placed });
 });
 
 /**
@@ -128,13 +156,18 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
     enabled || command.op !== "show" ? command : { op: "hide", reason: "idle" };
   return {
     draw: Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
+      const before = state.scoped;
       const [next, commands] = overlayStep(state, event);
       state = next;
       const draw = sink();
-      if (event.type === "cursor" && scopedReport) yield* scopedReport(event.event);
+      // Only what the overlay took: an owner's phase, or the owner a call brought ahead of its
+      // phases. A late phase of an older owner the overlay refused would steal the preview.
+      if (next.scoped !== before && next.scoped !== undefined && scopedReport)
+        yield* scopedReport(next.scoped);
       for (const command of commands) {
         if (next.scoped === undefined || (command.op === "hide" && command.reason === "capture"))
           yield* report(command);
+        else if (scopedReport) yield* scopedReport.placed(command);
         if (draw !== undefined) yield* draw(toHelper(command));
       }
     }),

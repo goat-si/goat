@@ -51,11 +51,12 @@ it.effect(
       assert.equal((yield* h.nextToProvider).id, 1);
 
       // Without a scope, the batch gets the grant's apps, kept to the background.
-      yield* h.send(call(2, "run_script", { script: "click()" }));
+      yield* h.send(call(2, "run_steps", { ...window, steps }));
       const scoped = yield* h.nextToDriver;
       assert.equal(scoped.id, 2);
       assert.deepEqual((scoped.params as { arguments: unknown }).arguments, {
-        script: "click()",
+        ...window,
+        steps,
         app_scope: scope(["com.apple.calculator"], "background"),
       });
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
@@ -72,6 +73,11 @@ it.effect(
           steps,
           app_scope: scope(["com.apple.calculator"], "foreground"),
         }),
+      );
+      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "screen_shared" });
+      // A script can launch a scoped app, which takes the screen, whatever its scope says.
+      yield* h.send(
+        call(5, "run_script", { script: "click()", app_scope: scope(["com.apple.calculator"]) }),
       );
       assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "screen_shared" });
       assert.equal(yield* h.driverQueued, 0);
@@ -137,12 +143,13 @@ it.effect("scopes an unscoped batch from the tool list the provider asked the sa
     assert.equal((yield* h.nextToDriver).method, "tools/list");
     yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: toolList(true) }));
     assert.equal((yield* h.nextToProvider).id, 1);
-    // No probe: that child already said its run_script keeps an app_scope.
-    yield* h.send(call(2, "run_script", { script: "click()" }));
+    // No probe: that child already said its run_steps keeps an app_scope.
+    yield* h.send(call(2, "run_steps", { ...window, steps }));
     const scoped = yield* h.nextToDriver;
     assert.equal(scoped.id, 2);
     assert.deepEqual((scoped.params as { arguments: unknown }).arguments, {
-      script: "click()",
+      ...window,
+      steps,
       app_scope: scope(["com.apple.calculator"], "background"),
     });
   }),

@@ -10,6 +10,63 @@ import type { PreviewAutomationSnapshot } from "@goat/contracts";
 
 // Playwright single-quotes a tree line whose name contains ": ".
 const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
+// `role "name" [attribute]...`, then `: text` when the line carries a value.
+const TAB_LINE = /^(\w[\w-]*)(?:\s+("(?:[^"\\]|\\.)*"))?((?:\s*\[[^\]]*\])*)\s*(?::\s?(.*))?$/;
+const CHECKABLE = /^(?:checkbox|radio|switch|menuitemcheckbox|menuitemradio|option|tab|treeitem)$/;
+
+/** A YAML scalar as Playwright writes it: plain, double-quoted (JSON) or single-quoted. */
+const scalar = (value: string): string => {
+  if (value.startsWith('"'))
+    try {
+      return String(JSON.parse(value));
+    } catch {
+      return value;
+    }
+  return value.startsWith("'") && value.endsWith("'") && value.length > 1
+    ? value.slice(1, -1).replaceAll("''", "'")
+    : value;
+};
+
+/** One tab tree line as an element's role, name, value and state, read the same in every mode. */
+const tabTreeElement = (
+  line: string,
+): Pick<
+  ScreenObservationDraft["elements"][number],
+  "role" | "name" | "text" | "enabled" | "selected"
+> => {
+  let body = line.trim().replace(/^-\s*/, "");
+  let tail: string | undefined;
+  if (body.startsWith("'")) {
+    // A quoted key doubles its own single quotes; its value follows the closing quote.
+    let end = 1;
+    let inner = "";
+    for (; end < body.length; end++) {
+      if (body[end] !== "'") inner += body[end];
+      else if (body[end + 1] === "'") inner += body[++end];
+      else break;
+    }
+    tail = body.slice(end + 1).match(/^\s*:\s?(.*)$/)?.[1];
+    body = inner;
+  }
+  const parsed = TAB_LINE.exec(body);
+  if (!parsed)
+    return {
+      role: line.trim().match(TREE_ROLE)?.[1] ?? "element",
+      name: line.replace(/\[ref=[^\]]+\]/g, "").trim(),
+    };
+  const [, role = "element", quotedName, attributeText = "", plainText] = parsed;
+  const attributes = new Set([...attributeText.matchAll(/\[([^\]]*)\]/g)].map((match) => match[1]));
+  const value = scalar((tail ?? plainText ?? "").trim());
+  const on = ["checked", "selected", "pressed"].some((name) => attributes.has(name));
+  const mixed = attributes.has("checked=mixed") || attributes.has("pressed=mixed");
+  return {
+    role,
+    name: quotedName === undefined ? "" : scalar(quotedName),
+    ...(value === "" ? {} : { text: value }),
+    ...(attributes.has("disabled") ? { enabled: false } : {}),
+    ...(on ? { selected: true } : !mixed && CHECKABLE.test(role) ? { selected: false } : {}),
+  };
+};
 
 /** State and geometry a driver reports for an element; carried to the agent unchanged. */
 export type ScreenElementDetail = Pick<
@@ -200,9 +257,7 @@ export class ScreenObservations {
     for (const line of lines) {
       const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
       if (!ref) continue;
-      const role = line.trim().match(TREE_ROLE)?.[1] ?? "element";
-      const name = line.replace(/\[ref=[^\]]+\]/g, "").trim();
-      elements.push({ role, name, driverToken: `aria-ref=${ref}` });
+      elements.push({ ...tabTreeElement(line), driverToken: `aria-ref=${ref}` });
     }
     const validGeneration =
       typeof snapshot.refGeneration === "string" && snapshot.refGeneration.length > 0;

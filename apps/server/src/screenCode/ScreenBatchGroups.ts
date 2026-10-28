@@ -78,10 +78,22 @@ export const dispatchInTurn = Effect.fn("ScreenHostBridge.dispatchInTurn")(funct
 export class BatchGroups {
   private open: BatchGroup | undefined;
 
-  /** The slot a call takes; any other call closes the open group. */
-  join(call: ScreenHostCall): BatchSlot | undefined {
+  /**
+   * The slot a call takes; any other call closes the open group. A member of a group that closed
+   * before it came cannot run alone: `late` names the group's first call for its not_run.
+   */
+  join(call: ScreenHostCall): BatchSlot | { readonly late: number } | undefined {
     const marker = batchMarker(call);
     const open = this.open;
+    if (
+      open !== undefined &&
+      open.closed &&
+      marker !== undefined &&
+      marker.index > 0 &&
+      marker.size === open.size &&
+      call.callId === open.first + marker.index
+    )
+      return { late: open.first };
     if (open !== undefined && !open.closed) {
       if (
         marker !== undefined &&
@@ -164,7 +176,10 @@ export class BatchGroups {
     yield* Deferred.await(group.settled);
     let ready = 0;
     while (group.slots.get(ready)?.state === "ready") ready++;
-    const blocked = deps.blocked(opener.call.callId);
+    // A group runs whole: one member refused, failed or missing sends none of it.
+    const blocked =
+      deps.blocked(opener.call.callId) ??
+      (ready === group.size ? undefined : deps.notRun(opener.call.callId, group.first + ready));
     const calls = Array.from({ length: ready }, (_, index) => group.slots.get(index)?.call);
     const outcomes =
       blocked !== undefined

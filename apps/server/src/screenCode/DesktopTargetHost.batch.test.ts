@@ -203,29 +203,24 @@ it.live("a batch group takes one pending place, so a run longer than one group s
   }).pipe(Effect.provide(cellService(host)));
 });
 
-it.live("a refused group stops the cell's later input, while reads still run", () => {
+it.live("a refused group sends nothing and, like any refusal, leaves the cell free", () => {
   const { host, sent } = fixture();
   return Effect.gen(function* () {
-    // Sixteen calls make one group, refused for its oversized typing; the seventeenth and a call
-    // made after the cell caught the refusal do not run either.
+    // Sixteen calls make one group, refused whole for its oversized typing; the seventeenth goes
+    // alone, and so does a call the cell makes after it caught the refusal.
     const result = yield* runCell(
       `${BIND} const clicks = [app.type('x'.repeat(66000), 'Apply'), ...Array.from({ length: 16 }, () => app.click('Apply'))];
-      const settled = (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code);
-      let after; try { await app.click('Apply'); after = 'ran'; } catch (error) { after = error.code; }
-      const read = (await app.observe()).elements.length;
-      return { settled, after, read };`,
+      const settled = (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code + ':' + r.reason.nothingSent);
+      const after = (await app.click('Apply')).verdict;
+      return { settled, after };`,
     );
     expect(result.value).toEqual({
-      settled: [...Array.from({ length: 16 }, () => "refused"), "not_run"],
-      after: "not_run",
-      read: 1,
+      settled: [...Array.from({ length: 16 }, () => "refused:true"), "confirmed"],
+      after: "confirmed",
     });
     expect(
       sent.map((entry) => entry.tool).filter((tool) => tool === "click" || tool === "run_steps"),
-    ).toEqual([]);
-    // The halt is the cell's: the next cell acts again.
-    const next = yield* runCell(`${BIND} return (await app.click('Apply')).verdict;`);
-    expect(next.value).toBe("confirmed");
+    ).toEqual(["click", "click"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });

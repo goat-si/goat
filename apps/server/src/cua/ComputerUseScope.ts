@@ -13,7 +13,7 @@
  */
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 
-import { batchAppScope } from "./ComputerUseBatchScope.ts";
+import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
@@ -91,7 +91,7 @@ export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) =
 /**
  * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
  * delivers input in the foreground. A script or batch cannot be read for that, so it counts
- * unless its app scope keeps it to background delivery. Background delivery posts to the target
+ * unless it is a run_steps whose app scope keeps it to background delivery. Background delivery posts to the target
  * process without either, which is what lets threads admitted to different apps act at once.
  */
 export function takesScreen(name: unknown, args: unknown): boolean {
@@ -99,7 +99,7 @@ export function takesScreen(name: unknown, args: unknown): boolean {
   if (name === "move_cursor") return movesPointer(args);
   if (typeof name === "string" && SCREEN_TOOLS.has(name)) return true;
   if (typeof name === "string" && OPAQUE_TOOLS.has(name))
-    return batchAppScope(name, args)?.delivery !== "background" || foreground(args);
+    return !backgroundBatch(name, args) || foreground(args);
   // The same foreground test as window reservations (#1462), so both agree on what takes it.
   return foreground(args);
 }

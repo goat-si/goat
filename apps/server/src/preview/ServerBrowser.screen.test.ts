@@ -11,6 +11,7 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
@@ -48,6 +49,24 @@ import { makeSession } from "./ServerBrowserTestFixtures.ts";
 // One fake Chromium context per test; its page refuses every locator, so input never lands.
 const contexts: Array<ReturnType<typeof makeContext>> = [];
 const privacy = vi.hoisted(() => ({ setters: [] as Array<(on: boolean) => void> }));
+// Tells a test when the browser took a call, which starts that call's deadline.
+const calls = vi.hoisted(() => ({
+  received: undefined as ((timeoutMs: number) => void) | undefined,
+}));
+
+vi.mock("./CaptureLock.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./CaptureLock.ts")>();
+  return {
+    ...actual,
+    answerCall: <A>(
+      request: Parameters<typeof actual.answerCall>[0],
+      call: (deadlineMs: number) => Promise<A>,
+    ) => {
+      calls.received?.(request.timeoutMs);
+      return actual.answerCall(request, call);
+    },
+  };
+});
 
 vi.mock("./PreviewPrivateMode.ts", () => ({
   watchPrivateMode: async (_page: unknown, onChange: (on: boolean) => void) => {
@@ -221,6 +240,61 @@ it.effect("an agent cannot close its own tab while a private field has focus", (
           reason: "privateMode",
         });
       expect((yield* broker.listBoundTabs(scope)).some((tab) => tab.tabId === tabId)).toBe(true);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  { queuedMs: 900, outcome: "waits only the 100 ms its call has left" },
+  { queuedMs: 2_000, outcome: "fails as never started, without checking the condition" },
+])("a wait queued $queuedMs ms behind other work on its tab $outcome", ({ queuedMs }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      let clock = 0;
+      using _now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const page = contexts.at(-1)!.page;
+      const holding = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const timeouts: number[] = [];
+      page.waitForLoadState = vi.fn(async (_state?: string, options?: { timeout?: number }) => {
+        if (timeouts.push(options?.timeout ?? Number.NaN) > 1) return;
+        holding.resolve();
+        await release.promise;
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+      const wait = (timeoutMs: number) =>
+        broker.invoke({
+          scope,
+          tabId,
+          operation: "waitFor",
+          input: { loadState: "load" },
+          timeoutMs,
+        });
+      const first = yield* wait(15_000).pipe(Effect.forkScoped);
+      yield* Effect.promise(() => holding.promise);
+      const arrived = Promise.withResolvers<void>();
+      calls.received = (timeoutMs) => {
+        if (timeoutMs === 1_000) arrived.resolve();
+      };
+      const queued = yield* wait(1_000).pipe(Effect.result, Effect.forkScoped);
+      yield* Effect.promise(() => arrived.promise);
+      calls.received = undefined;
+      clock = queuedMs;
+      release.resolve();
+      yield* Fiber.join(first);
+      const result = yield* Fiber.join(queued);
+      if (queuedMs < 1_000) {
+        expect(result._tag).toBe("Success");
+        expect(timeouts).toHaveLength(2);
+        expect(timeouts[1]).toBeLessThanOrEqual(1_000 - queuedMs);
+      } else {
+        // A timeout would read as an unmet condition; this wait never looked.
+        expect(result._tag === "Failure" && result.failure._tag).toBe(
+          "PreviewAutomationExecutionError",
+        );
+        expect(timeouts).toHaveLength(1);
+      }
     }),
   ).pipe(Effect.provide(layer)),
 );

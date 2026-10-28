@@ -1,3 +1,4 @@
+import type { PreviewAutomationSignInState } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Preview from "../../../preview/Manager.ts";
 import * as PreviewHandoffs from "../../../preview/PreviewHandoffs.ts";
@@ -57,6 +58,18 @@ export const layer = McpToolAccess.toLayer(PreviewControlsToolkit, {
         threadId: caller.thread.threadId,
         providerInstanceId: caller.thread.providerInstanceId,
         reason: input.reason,
+        ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
+      });
+    }),
+  ),
+  goat_preview_sign_in_state: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      const { scope } = yield* access;
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      return yield* broker.invoke<PreviewAutomationSignInState>({
+        scope,
+        operation: "signInState",
+        input: {},
         ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
       });
     }),

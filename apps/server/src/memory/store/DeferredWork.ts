@@ -344,6 +344,11 @@ export const makeDeferredWork = (
           return false;
         yield* finishWork(work.id, "completed");
         const meta = work.metadata;
+        // A generated summary settles every earlier generation failure of the same memory.
+        yield* stored(
+          "summary-failure-reports",
+          sql`DELETE FROM memory_report_outbox WHERE space=${work.space} AND memory_id=${work.memoryId} AND report_kind IN ('summary','consolidate') AND state!='delivered'`,
+        );
         yield* stored(
           "summary-completion-clock",
           sql`UPDATE memory_outbox SET metadata_json=${yield* workMetadataCodec.encode({ ...meta, completedAt: yield* Clock.currentTimeMillis })} WHERE id=${work.id}`,

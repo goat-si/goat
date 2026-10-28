@@ -74,6 +74,7 @@ import {
 } from "./ComputerUseLeaseMessages.ts";
 import * as Transport from "./ComputerUseLeaseProxyTransport.ts";
 import { refreshDriverManifest } from "./ComputerUseLeaseProxyManifest.ts";
+import { makeUnansweredWatch } from "./ComputerUseLeaseProxyUnanswered.ts";
 import {
   type JsonRpcId,
   UNCONFIRMED_DISPLAY,
@@ -107,7 +108,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: ComputerUsePauseReason | undefined;
   let idle = false;
   let apps: ReadonlySet<string> | undefined;
-  let grantApps: ReadonlyArray<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
   let shared = false;
@@ -138,8 +138,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
-  const currentChild = () => lifecycle.current;
-  const batches = makeProxyBatchScope(handshakeAnswers, () => grantApps, currentChild);
+  const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -362,6 +361,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
+      Stream.tap(unanswered.received),
       Stream.buffer({ capacity: "unbounded" }),
       Stream.runForEach(handle),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper
@@ -420,6 +420,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ),
   });
   const start = lifecycle.start;
+  const unanswered = makeUnansweredWatch(
+    { lock: lifecycleLock, scope, outstanding, lifecycle },
+    { active, interrupt, start, end },
+  );
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
   ) {
@@ -454,7 +458,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
-    grantApps = update.apps;
+    batches.grant(update.apps);
     shared = update.shared === true;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
@@ -819,6 +823,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
         codeMode: typeof id === "string" && id.startsWith(PRIMITIVE_ID),
+        ...(primitive?.cursor === undefined ? {} : { cursor: primitive.cursor }),
       });
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
       if (
@@ -978,6 +983,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             : notSent(id),
       );
     }
+    if (primitive !== undefined && isRequest)
+      yield* unanswered.watch(JSON.stringify(id), primitiveDeadline);
   });
   yield* forwardPrimitiveRequests(
     options.primitiveRequests,
