@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeUtil from "node:util";
-import { _electron, type ElectronApplication } from "playwright-core";
+import { _electron, type ElectronApplication, type Page } from "playwright-core";
 import {
   assertDesktopLaunchMigrated,
   LAUNCH_THREAD_MESSAGE,
@@ -23,6 +23,23 @@ if (!values.executable) {
 }
 const artifacts = NodePath.resolve(values["artifacts-dir"] ?? "desktop-launch-check");
 const scratch = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-desktop-launch-"));
+// The desktop opens hidden pages here to copy renderer storage to the GOAT origin, then closes them.
+const ORIGIN_MIGRATION_PATH = "/__goat-origin-migration";
+
+/** The app's own window, skipping the migration pages that can open first and then close. */
+async function appWindow(app: ElectronApplication, seconds: number): Promise<Page> {
+  for (let attempt = 0; attempt < seconds; attempt++) {
+    for (const page of app.windows()) {
+      if (page.isClosed()) continue;
+      await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+      const url = page.isClosed() ? "" : page.url();
+      if (url !== "" && url !== "about:blank" && !url.includes(ORIGIN_MIGRATION_PATH)) return page;
+    }
+    await app.waitForEvent("window", { timeout: 1_000 }).catch(() => undefined);
+  }
+  throw new Error(`GOAT showed no app window within ${seconds} s.`);
+}
+
 let step = "preparing the fixture";
 let app: ElectronApplication | undefined;
 try {
@@ -56,7 +73,7 @@ try {
     timeout: 60_000,
   });
   step = "waiting for the first window";
-  const page = await app.firstWindow({ timeout: 60_000 });
+  const page = await appWindow(app, 60);
   try {
     step = "finding the seeded thread";
     const thread = page.locator("li[data-thread-item]", { hasText: LAUNCH_THREAD_TITLE });
@@ -85,6 +102,11 @@ try {
   );
 } catch (error) {
   console.error(`Desktop launch check failed while ${step}.`, error);
+  if (app)
+    console.error(
+      "Open windows:",
+      app.windows().map((page) => (page.isClosed() ? "(closed)" : page.url())),
+    );
   NodeFS.mkdirSync(artifacts, { recursive: true });
   const logs = NodePath.join(scratch, "goat/userdata/logs");
   if (NodeFS.existsSync(logs))
