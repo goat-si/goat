@@ -138,6 +138,11 @@ export function createRemoteVoiceTranscriber(
 
       return {
         locale,
+        location: {
+          kind: "environment",
+          environmentId: initialContext.prepared.environmentId,
+          label: initialContext.prepared.label,
+        },
         transcribe: async (
           uri: string,
           transcribeOptions: VoiceTranscriptionOptions,

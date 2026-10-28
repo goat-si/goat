@@ -2,6 +2,7 @@ import type { useComposerVoiceController } from "./useComposerVoiceController";
 import { useEffect } from "react";
 import { ArrowUpIcon, CheckIcon, XIcon } from "~/components/solar";
 import { MAX_WAVEFORM_SAMPLES } from "../../lib/voiceRecorder";
+import { useEnvironment } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -11,6 +12,16 @@ interface ComposerVoiceRecorderBarProps {
 }
 
 export function ComposerVoiceRecorderBar({ controller, disabled }: ComposerVoiceRecorderBarProps) {
+  const route = controller.transcriptionRoute;
+  const environmentLabel = useEnvironment(
+    route.kind === "environment" ? route.environmentId : null,
+  )?.label;
+  const transcribesOn =
+    route.kind === "local"
+      ? "Transcribes on this device"
+      : environmentLabel
+        ? `Transcribes on ${environmentLabel}`
+        : null;
   const props = {
     isStarting: controller.isVoiceStarting,
     isWaitingForAudio: controller.isVoiceWaitingForAudio,
@@ -54,6 +65,9 @@ export function ComposerVoiceRecorderBar({ controller, disabled }: ComposerVoice
         >
           {status}
         </span>
+        {transcribesOn ? (
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{transcribesOn}</span>
+        ) : null}
         <div
           aria-hidden="true"
           className="flex h-7 min-w-0 flex-1 items-center justify-end gap-0.5 overflow-hidden motion-reduce:transition-none"

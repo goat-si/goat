@@ -2,11 +2,14 @@ import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contract
 import {
   prewarmEnvironmentVoice,
   resolveTranscriptCommit,
+  resolveVoiceTranscriptionRoute,
   transcribeEnvironmentVoice,
   voiceInputBlocksSubmission,
+  voiceTranscriptionRequest,
   type EnvironmentVoiceRequestContext,
   type VoiceDraftSnapshot,
   type VoiceInputState,
+  type VoiceTranscriptionRoute,
 } from "@goat/client-runtime/voice-input";
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -16,6 +19,7 @@ import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorizati
 import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import type { ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { expandCollapsedComposerCursor } from "../../composer-logic";
 import { collectInlineContextIds } from "../../lib/composerContextReferences";
@@ -23,6 +27,7 @@ import {
   formatVoiceRecordingDuration,
   isVoiceRecordingCancelledError,
   useVoiceRecorder,
+  VoiceMicrophoneError,
   type VoiceRecordingOptions,
   type VoiceRecordingPayload,
 } from "../../lib/voiceRecorder";
@@ -35,6 +40,8 @@ export interface ComposerVoiceTarget {
   readonly cwd: string | null;
   readonly locale: string;
   readonly enabled: boolean;
+  /** Where this composer's audio is transcribed; see resolveVoiceTranscriptionRoute. */
+  readonly route: VoiceTranscriptionRoute;
 }
 
 interface VoiceControllerState extends VoiceInputState {
@@ -104,6 +111,7 @@ export class ComposerVoiceController {
       previous.ownerKey !== target.ownerKey ||
       previous.cwd !== target.cwd ||
       previous.locale !== target.locale ||
+      routeKey(previous.route) !== routeKey(target.route) ||
       (previous.enabled && !target.enabled)
     ) {
       this.cancel();
@@ -129,6 +137,16 @@ export class ComposerVoiceController {
 
   readonly start = async (): Promise<void> => {
     if (!this.target.enabled || this.blocksSubmission()) return;
+    if (this.target.route.kind === "unavailable") {
+      this.publish({
+        ...IDLE,
+        phase: "error",
+        error:
+          "Desktop voice input records and transcribes on this computer. Turn on Local environment in Settings › Connections to use it.",
+        errorAction: null,
+      });
+      return;
+    }
     const draft = this.dependencies.readDraft();
     if (!draft || draft.ownerKey !== this.target.ownerKey) return;
     const generation = ++this.generation;
@@ -153,6 +171,9 @@ export class ComposerVoiceController {
         onLimitReached: () => {
           if (generation === this.generation) void this.confirm();
         },
+        onError: (error) => {
+          if (generation === this.generation) this.fail(error);
+        },
       });
       if (generation === this.generation) this.publish({ ...this.state, phase: "recording" });
     } catch (error) {
@@ -168,7 +189,8 @@ export class ComposerVoiceController {
       ...IDLE,
       phase: "error",
       error: error instanceof Error ? error.message : "Voice transcription failed.",
-      errorAction: "retry",
+      errorAction:
+        error instanceof VoiceMicrophoneError && error.opensSystemSettings ? "settings" : "retry",
     });
   }
 
@@ -309,17 +331,21 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
         commitDraft,
         onSubmit,
         prewarm: async (target, signal) => {
-          const context = await resolveContext(target.environmentId);
+          const request = voiceTranscriptionRequest(target.route, target);
+          if (!request) return;
+          const context = await resolveContext(request.environmentId);
           if (!context || signal.aborted) return;
-          return prewarmEnvironmentVoice(context, voiceRouting(target), { signal });
+          return prewarmEnvironmentVoice(context, request.routing, { signal });
         },
         transcribe: async (target, payload, signal) => {
-          const context = await resolveContext(target.environmentId);
+          const request = voiceTranscriptionRequest(target.route, target);
+          if (!request) throw new Error("Voice input has nowhere to transcribe this recording.");
+          const context = await resolveContext(request.environmentId);
           signal.throwIfAborted();
           if (!context) throw new Error("Connect to an environment before transcribing voice.");
           return transcribeEnvironmentVoice(
             context,
-            { ...payload, ...voiceRouting(target), locale: target.locale },
+            { ...payload, ...request.routing, locale: target.locale },
             { signal },
           );
         },
@@ -364,17 +390,33 @@ export function useComposerVoiceController(options: UseComposerVoiceControllerOp
     voiceWaveformLevels: recorder.waveformLevels,
     voiceRecordingDurationLabel: formatVoiceRecordingDuration(recorder.durationMs),
     streamingPreviewText: state.streamingPreviewText,
+    transcriptionRoute: options.route,
     start: controller.start,
     confirm: controller.confirm,
     send: controller.send,
     cancel: controller.cancel,
+    /** Composer errors win; a macOS microphone denial adds a way to fix it. */
+    validation: (composerError: string | null) =>
+      composerError
+        ? { message: composerError }
+        : {
+            message: state.error,
+            action:
+              state.errorAction === "settings"
+                ? { label: "Open System Settings", onClick: openMicrophoneSettings }
+                : null,
+          },
   };
+}
+
+function openMicrophoneSettings() {
+  void window.desktopBridge?.openSystemSettings?.("microphone").catch(() => false);
 }
 
 export function useChatComposerVoiceController(
   options: Omit<
     UseComposerVoiceControllerOptions,
-    "ownerKey" | "readDraft" | "locale" | "subscribeDraft" | "commitDraft"
+    "ownerKey" | "readDraft" | "locale" | "subscribeDraft" | "commitDraft" | "route"
   > & {
     readonly draftTarget: Parameters<typeof composerTargetKey>[0];
     readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
@@ -388,9 +430,16 @@ export function useChatComposerVoiceController(
   },
 ) {
   const ownerKey = composerTargetKey(options.draftTarget);
+  // The desktop app transcribes on its own machine; a browser or phone uses the thread's server.
+  const route = resolveVoiceTranscriptionRoute({
+    requiresLocalRuntime: typeof window !== "undefined" && window.desktopBridge !== undefined,
+    localEnvironmentId: usePrimaryEnvironmentId(),
+    threadEnvironmentId: options.environmentId,
+  });
   return useComposerVoiceController({
     ...options,
     ownerKey,
+    route,
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     subscribeDraft: useComposerDraftStore.subscribe,
     readDraft: () => {
@@ -414,13 +463,8 @@ export function useChatComposerVoiceController(
   });
 }
 
-function voiceRouting(target: ComposerVoiceTarget) {
-  return {
-    providerInstanceId: target.providerInstanceId,
-    ...(target.threadId ? { threadId: target.threadId } : {}),
-    ...(target.cwd ? { cwd: target.cwd } : {}),
-  };
-}
+const routeKey = (route: VoiceTranscriptionRoute) =>
+  route.kind === "unavailable" ? route.kind : `${route.kind}:${route.environmentId}`;
 
 export function readDraftSnapshot(
   editor: ComposerPromptEditorHandle | null,

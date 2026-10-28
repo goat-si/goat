@@ -12,6 +12,7 @@ import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
+import * as MediaPermissions from "../permissions/MediaPermissions.ts";
 import * as DesktopAppActivation from "./DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
@@ -183,6 +184,7 @@ const bootstrap = Effect.gen(function* () {
   });
   yield* installDesktopIpcHandlers();
   yield* logBootstrapInfo("bootstrap ipc handlers registered");
+  yield* (yield* MediaPermissions.MediaPermissions).installOnDefaultSession;
   const userDataPath = yield* (yield* DesktopAppIdentity.DesktopAppIdentity).resolveUserDataPath;
   // Before any window: the renderer must find its storage on the new origin.
   yield* (yield* DesktopRendererOriginMigration.DesktopRendererOriginMigration).run(userDataPath);

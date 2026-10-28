@@ -37,7 +37,7 @@ import {
   packWindowsServerAsar,
   stageWindowsServerSidecar,
   preflightWindowsDesktopBuild,
-  renderMacPasskeyEntitlements,
+  renderMacEntitlements,
   resolveMacWebAuthnEntitlements,
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
@@ -1707,9 +1707,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       GOAT_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
-    const entitlements = renderMacPasskeyEntitlements(configuration, {
-      touchIdKeychainAccessGroup: undefined,
-      browserPasskeys: false,
+    const entitlements = renderMacEntitlements({
+      configuration,
+      webAuthn: { touchIdKeychainAccessGroup: undefined, browserPasskeys: false },
     });
 
     assert.deepStrictEqual(configuration.rpDomains, [
@@ -1720,7 +1720,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
-    assert.match(entitlements, /<key>com\.apple\.security\.device\.camera<\/key>\s*<true\/>/u);
+    assert.notInclude(entitlements, "com.apple.security.device.camera");
     assert.match(entitlements, /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/u);
     assert.notInclude(entitlements, "keychain-access-groups");
     assert.notInclude(entitlements, "com.apple.developer.web-browser.public-key-credential");
@@ -1774,15 +1774,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       },
     );
 
-    const entitlements = renderMacPasskeyEntitlements(
-      { ...configuration, rpDomains: ["clerk.example.com"], provisioningProfilePath: "" },
-      resolveMacWebAuthnEntitlements(
+    const entitlements = renderMacEntitlements({
+      configuration: {
+        ...configuration,
+        rpDomains: ["clerk.example.com"],
+      },
+      webAuthn: resolveMacWebAuthnEntitlements(
         profile(
           `${teamWildcardGroups}<key>com.apple.developer.web-browser.public-key-credential</key><true/>`,
         ),
         configuration,
       ),
-    );
+    });
     assert.match(
       entitlements,
       /<key>keychain-access-groups<\/key>\s*<array>\s*<string>ABC1234567\.com\.t3tools\.t3code\.webauthn<\/string>\s*<\/array>/u,
@@ -2148,24 +2151,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(entitled?.appId, "si.goat.desktop.nightly");
   });
 
-  it.effect("keeps normal signing available without a passkey profile", () =>
-    Effect.gen(function* () {
-      const config = yield* createBuildConfig(
-        "mac",
-        "dmg",
-        "1.2.3",
-        true,
-        false,
-        undefined,
-        undefined,
-      );
-      const mac = config.mac as Record<string, unknown>;
-      assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
-      assert.notProperty(mac, "provisioningProfile");
-      assert.notProperty(mac, "entitlements");
-    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
-  );
-
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "GOAT");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "GOAT (Nightly)");
@@ -2437,12 +2422,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
         entitlementsPath: "/tmp/entitlements.mac.plist",
+        entitlementsInheritPath: "/tmp/entitlements.mac.inherit.plist",
         provisioningProfilePath: "/tmp/t3code.provisionprofile",
       });
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "si.goat.desktop");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
       assert.deepStrictEqual(mac.protocols, [

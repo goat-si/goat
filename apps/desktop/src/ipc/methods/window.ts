@@ -2,6 +2,7 @@ import {
   ContextMenuItemSchema,
   DesktopAppBrandingSchema,
   DesktopEnvironmentBootstrapSchema,
+  DesktopMicrophoneAccessSchema,
   DesktopThemeSchema,
   EDITORS,
   EditorId,
@@ -41,6 +42,7 @@ import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
 import { macPermissionGranted } from "../../permissions/MacPermissionHelper.ts";
+import * as MediaPermissions from "../../permissions/MediaPermissions.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -316,7 +318,8 @@ export const openSystemSettings = DesktopIpc.makeIpcMethod({
     if (environment.platform !== "darwin") return false;
     const owner = Electron.BrowserWindow.getFocusedWindow();
     const opened = yield* shell.openSystemSettings(pane);
-    if (opened && environment.isPackaged) {
+    // macOS lists apps that asked for the microphone itself; there is nothing to drag in.
+    if (opened && environment.isPackaged && pane !== "microphone") {
       const permissions = yield* MacPermissions.MacPermissions;
       const isGranted = yield* permissionCheck(pane);
       yield* permissions.showHelper(pane, owner, isGranted);
@@ -434,5 +437,14 @@ export const checkSystemPermission = DesktopIpc.makeIpcMethod({
     if (environment.platform !== "darwin") return false;
     const check = yield* permissionCheck(pane);
     return yield* Effect.promise(check);
+  }),
+});
+
+export const requestMicrophoneAccess = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REQUEST_MICROPHONE_ACCESS_CHANNEL,
+  payload: Schema.Undefined,
+  result: DesktopMicrophoneAccessSchema,
+  handler: Effect.fn("desktop.ipc.window.requestMicrophoneAccess")(function* () {
+    return yield* (yield* MediaPermissions.MediaPermissions).requestMicrophoneAccess;
   }),
 });

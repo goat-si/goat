@@ -1,3 +1,5 @@
+import type { VoiceTranscriptionLocation } from "./routing.ts";
+
 /** Cancellation is cooperative: settle only after the underlying work has stopped. */
 export type VoiceTranscriptionOptions = {
   readonly signal: AbortSignal;
@@ -6,6 +8,8 @@ export type VoiceTranscriptionOptions = {
 export type PreparedVoiceTranscription = {
   readonly locale: string;
   readonly transcribe: (uri: string, options: VoiceTranscriptionOptions) => Promise<string>;
+  /** Where the audio goes, so the UI can name the device that transcribes it. */
+  readonly location?: VoiceTranscriptionLocation;
 };
 
 export type VoiceTranscriber = {

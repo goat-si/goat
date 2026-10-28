@@ -1469,10 +1469,38 @@ export function resolveMacWebAuthnEntitlements(
   };
 }
 
-export function renderMacPasskeyEntitlements(
-  configuration: MacPasskeySigningConfiguration,
-  webAuthn: MacWebAuthnEntitlements,
-): string {
+export interface MacPasskeyEntitlements {
+  readonly configuration: Pick<MacPasskeySigningConfiguration, "appId" | "teamId" | "rpDomains">;
+  readonly webAuthn: MacWebAuthnEntitlements;
+}
+
+/**
+ * Every macOS build signs the app with these; Electron helpers get them without `passkey`.
+ * Passkey identity keys need the provisioning profile, so only the main app carries them.
+ */
+export function renderMacEntitlements(passkey?: MacPasskeyEntitlements): string {
+  const identity = passkey ? renderMacPasskeyIdentityEntitlements(passkey) : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>${identity}
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- The hardened runtime denies the microphone, with no prompt, unless the app
+         claims it. Voice input needs it; commands run by terminals and coding agents
+         share GOAT's grant. GOAT deliberately does not claim the camera. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>
+`;
+}
+
+function renderMacPasskeyIdentityEntitlements({ configuration, webAuthn }: MacPasskeyEntitlements) {
   const associatedDomains = configuration.rpDomains
     .map((domain) => `      <string>webcredentials:${escapeXml(domain)}</string>`)
     .join("\n");
@@ -1488,11 +1516,7 @@ export function renderMacPasskeyEntitlements(
     <key>${BROWSER_PASSKEYS_ENTITLEMENT}</key>
     <true/>`
     : "";
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
+  return `
     <key>com.apple.application-identifier</key>
     <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
     <key>com.apple.developer.team-identifier</key>
@@ -1500,24 +1524,7 @@ export function renderMacPasskeyEntitlements(
     <key>com.apple.developer.associated-domains</key>
     <array>
 ${associatedDomains}
-    </array>${keychainAccessGroups}${browserPasskeys}
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-    <!-- The hardened runtime denies camera and microphone to the app and every
-         child process, with no prompt, unless the app claims these. Terminals
-         and coding agents inherit the app's TCC identity, so without these a
-         command like ffmpeg or imagesnap gets silent access-denied. -->
-    <key>com.apple.security.device.camera</key>
-    <true/>
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
-  </dict>
-</plist>
-`;
+    </array>${keychainAccessGroups}${browserPasskeys}`;
 }
 
 export function resolveFffNativeDependencies(
@@ -3063,10 +3070,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
-  macPasskeySigning:
+  macSigning:
     | {
         readonly entitlementsPath: string;
-        readonly provisioningProfilePath: string;
+        readonly entitlementsInheritPath: string;
+        readonly provisioningProfilePath?: string;
       }
     | undefined,
   wslRuntimeBundled = false,
@@ -3149,10 +3157,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           "GOAT connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
         NSScreenCaptureUsageDescription:
           "GOAT captures the active window when you use the window capture shortcut.",
-        NSCameraUsageDescription:
-          "GOAT lets commands run by terminals and coding agents use the camera.",
         NSMicrophoneUsageDescription:
-          "GOAT lets commands run by terminals and coding agents use the microphone.",
+          "GOAT uses this Mac's microphone for voice input and for commands run by terminals and coding agents, including work started from connected devices. After you allow access, those commands can record without asking again.",
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -3176,10 +3182,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
-      ...(macPasskeySigning
+      ...(macSigning
         ? {
-            entitlements: macPasskeySigning.entitlementsPath,
-            provisioningProfile: macPasskeySigning.provisioningProfilePath,
+            entitlements: macSigning.entitlementsPath,
+            entitlementsInherit: macSigning.entitlementsInheritPath,
+            ...(macSigning.provisioningProfilePath
+              ? { provisioningProfile: macSigning.provisioningProfilePath }
+              : {}),
           }
         : {}),
     };
@@ -4377,11 +4386,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         ),
       }
     : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
   let macWebAuthn: MacWebAuthnEntitlements | undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
+  if (macPasskeySigning) {
     if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
         provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
@@ -4394,10 +4400,27 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     yield* Effect.log(
       `[desktop-artifact] In-app browser passkeys: Touch ID ${macWebAuthn.touchIdKeychainAccessGroup ? "enabled" : "disabled"}, browser passkeys ${macWebAuthn.browserPasskeys ? "enabled" : "disabled"}.`,
     );
+  }
+  const macSigning =
+    options.platform === "mac"
+      ? {
+          entitlementsPath: path.join(stageAppDir, "entitlements.mac.plist"),
+          entitlementsInheritPath: path.join(stageAppDir, "entitlements.mac.inherit.plist"),
+          ...(macPasskeySigning
+            ? { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }
+            : {}),
+        }
+      : undefined;
+  if (macSigning) {
     yield* fs.writeFileString(
-      macEntitlementsPath,
-      renderMacPasskeyEntitlements(macPasskeySigning, macWebAuthn),
+      macSigning.entitlementsPath,
+      renderMacEntitlements(
+        macPasskeySigning && macWebAuthn
+          ? { configuration: macPasskeySigning, webAuthn: macWebAuthn }
+          : undefined,
+      ),
     );
+    yield* fs.writeFileString(macSigning.entitlementsInheritPath, renderMacEntitlements());
   }
 
   const stageDependencies =
@@ -4445,12 +4468,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         options.signed,
         options.mockUpdates,
         options.mockUpdateServerPort,
-        macPasskeySigning && macEntitlementsPath
-          ? {
-              entitlementsPath: macEntitlementsPath,
-              provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-            }
-          : undefined,
+        macSigning,
         bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
         options.arch,
         options.sshRuntimeArchiveDir !== undefined,

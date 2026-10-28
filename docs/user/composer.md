@@ -209,8 +209,37 @@ for example, put **Other Bluetooth** above your AirPods so a new headset is pref
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
 microphone.
 
-Transcription runs on your device. GOAT deletes the temporary audio after
-transcription or cancellation; only the message text is sent when you submit.
+Transcription runs on your iPhone when Apple's speech model supports your
+language. Otherwise the recording is transcribed by the environment the thread
+belongs to, and the composer names it while you record. GOAT deletes the
+temporary audio after transcription or cancellation; only the message text is
+sent when you submit.
+
+## Voice input on desktop and web
+
+Click the composer's microphone to record, then confirm to insert the text or send it.
+
+The desktop app transcribes on this computer, even when the thread runs on another
+machine: the recording goes to the transcription service through this computer's
+Codex sign-in or OpenCodex, and never to the other machine. If you
+turned off **Local environment** in **Settings › Connections**, desktop voice input
+is unavailable until you turn it back on. In a browser, the environment you are
+connected to transcribes. The recorder shows which device transcribes.
+
+The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
+declined, or turned GOAT off later, the composer says so and offers **Open System
+Settings**: turn on GOAT in **Privacy & Security › Microphone**. GOAT may need to
+restart to notice the change. In a browser, allow the microphone in the site's
+settings; recording also needs HTTPS or localhost.
+
+If no sound reaches GOAT within a few seconds, recording stops and the composer
+asks you to check the selected input. Your draft stays as it was.
+
+On a Mac, the microphone access you give GOAT also covers commands run by
+terminals and coding agents in GOAT, including work started from your other
+devices; those commands can record without asking again. GOAT does not ask for
+the camera, so camera commands such as `imagesnap` cannot use it when GOAT runs
+them.
 
 ## Queued messages
 

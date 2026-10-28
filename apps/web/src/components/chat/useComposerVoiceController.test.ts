@@ -1,7 +1,11 @@
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import type { VoiceDraftSnapshot } from "@goat/client-runtime/voice-input";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { VoiceRecordingOptions, VoiceRecordingPayload } from "../../lib/voiceRecorder";
+import {
+  VoiceMicrophoneError,
+  type VoiceRecordingOptions,
+  type VoiceRecordingPayload,
+} from "../../lib/voiceRecorder";
 import { ComposerVoiceController, type ComposerVoiceTarget } from "./useComposerVoiceController";
 
 const payload: VoiceRecordingPayload = {
@@ -11,7 +15,7 @@ const payload: VoiceRecordingPayload = {
   durationMs: 4_000,
 };
 
-function setup() {
+function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
   const target: ComposerVoiceTarget = {
     environmentId: EnvironmentId.make("voice-env-a"),
     threadId: ThreadId.make("voice-thread-a"),
@@ -20,6 +24,8 @@ function setup() {
     cwd: "/fixture",
     locale: "en-US",
     enabled: true,
+    route: { kind: "environment", environmentId: EnvironmentId.make("voice-env-a") },
+    ...overrides,
   };
   let draft: VoiceDraftSnapshot = {
     ownerKey: target.ownerKey,
@@ -58,6 +64,7 @@ function setup() {
   return {
     target,
     controller,
+    startRecording,
     transcribe,
     prewarm,
     commitDraft,
@@ -70,11 +77,38 @@ function setup() {
     },
     chunk: (audioBase64: string) =>
       recordingOptions.onStreamingChunk?.({ ...payload, audioBase64 }),
+    failRecording: (error: VoiceMicrophoneError) => recordingOptions.onError?.(error),
     [Symbol.dispose]: () => controller.cancel(),
   };
 }
 
 describe("composer voice controller", () => {
+  it("offers System Settings only for a macOS denial and leaves the draft alone", async () => {
+    using session = setup();
+    session.startRecording.mockRejectedValueOnce(
+      new VoiceMicrophoneError("permission-denied", "macOS is blocking GOAT.", true),
+    );
+    await session.controller.start();
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "macOS is blocking GOAT.",
+      errorAction: "settings",
+    });
+
+    await session.controller.start();
+    session.failRecording(new VoiceMicrophoneError("no-input", "No sound is reaching GOAT."));
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: "No sound is reaching GOAT.",
+      errorAction: "retry",
+    });
+    expect(session.controller.blocksSubmission()).toBe(false);
+    expect(await session.controller.confirm()).toBe(false);
+    expect(session.transcribe).not.toHaveBeenCalled();
+    expect(session.commitDraft).not.toHaveBeenCalled();
+    expect(session.readDraft().text).toBe("hello");
+  });
+
   it("records and commits a full clip even when prewarming fails", async () => {
     using session = setup();
     session.prewarm.mockRejectedValue(new Error("warmup unavailable"));
@@ -166,7 +200,20 @@ describe("composer voice controller", () => {
     expect(session.onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each(["environmentId", "threadId", "providerInstanceId"] as const)(
+  it("refuses desktop voice input before opening the microphone when this computer runs no local environment", async () => {
+    using session = setup({ route: { kind: "unavailable" } });
+    await session.controller.start();
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "error",
+      error: expect.stringContaining("Local environment"),
+    });
+    expect(session.startRecording).not.toHaveBeenCalled();
+    expect(session.prewarm).not.toHaveBeenCalled();
+    expect(session.transcribe).not.toHaveBeenCalled();
+    expect(session.readDraft().text).toBe("hello");
+  });
+
+  it.each(["environmentId", "threadId", "providerInstanceId", "route"] as const)(
     "invalidates final transcription when %s changes",
     async (field) => {
       using session = setup();
@@ -185,6 +232,9 @@ describe("composer voice controller", () => {
         ...(field === "threadId" ? { threadId: ThreadId.make("voice-thread-b") } : {}),
         ...(field === "providerInstanceId"
           ? { providerInstanceId: ProviderInstanceId.make("codex-other") }
+          : {}),
+        ...(field === "route"
+          ? { route: { kind: "local" as const, environmentId: EnvironmentId.make("this-mac") } }
           : {}),
       };
       session.controller.setTarget(next);

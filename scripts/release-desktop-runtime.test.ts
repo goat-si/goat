@@ -14,7 +14,7 @@ import {
   createBuildConfig,
   resolveOptionalMacPasskeySigningConfiguration,
   resolveMacWebAuthnEntitlements,
-  renderMacPasskeyEntitlements,
+  renderMacEntitlements,
 } from "./build-desktop-artifact.ts";
 
 const decode = Schema.decodeUnknownEffect(
@@ -141,29 +141,20 @@ describe("desktop release runtime supply", () => {
                 }
               : {},
           );
-          const config = yield* createBuildConfig(
-            "mac",
-            "dmg",
-            version,
-            true,
-            false,
-            undefined,
-            passkeys
-              ? {
-                  entitlementsPath: "/fixture/entitlements.mac.plist",
-                  provisioningProfilePath: passkeys.provisioningProfilePath,
-                }
-              : undefined,
-          ).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))));
+          const config = yield* createBuildConfig("mac", "dmg", version, true, false, undefined, {
+            entitlementsPath: "/fixture/entitlements.mac.plist",
+            entitlementsInheritPath: "/fixture/entitlements.mac.inherit.plist",
+            ...(passkeys ? { provisioningProfilePath: passkeys.provisioningProfilePath } : {}),
+          }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))));
           const mac = config.mac as Record<string, unknown>;
           assert.match(String(mac.sign), /sign-macos\.ts$/);
           assert.equal(mac.provisioningProfile !== undefined, enabled);
-          assert.equal(mac.entitlements !== undefined, enabled);
+          assert.equal(mac.entitlements, "/fixture/entitlements.mac.plist");
           if (passkeys) {
-            const xml = renderMacPasskeyEntitlements(
-              passkeys,
-              resolveMacWebAuthnEntitlements(profile, passkeys),
-            );
+            const xml = renderMacEntitlements({
+              configuration: passkeys,
+              webAuthn: resolveMacWebAuthnEntitlements(profile, passkeys),
+            });
             assert.include(xml, "ABC1234567.si.goat.desktop.nightly");
             assert.include(xml, "ABC1234567.si.goat.desktop.nightly.webauthn");
           }

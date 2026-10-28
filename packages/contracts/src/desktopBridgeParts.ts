@@ -1,3 +1,4 @@
+import type { DesktopMicrophoneBridge } from "./desktopPermissions.ts";
 import type { DesktopPreviewSessionStackHost } from "./desktopPreviewSessionStack.ts";
 import type { DesktopTrayBridge } from "./desktopTray.ts";
 import type { DesktopWindowMaterialBridge } from "./desktopWindowMaterial.ts";
@@ -12,4 +13,5 @@ export interface DesktopHeadlessServerBridge {
 export type DesktopBridgeParts = DesktopWindowMaterialBridge &
   DesktopPreviewSessionStackHost &
   DesktopHeadlessServerBridge &
-  DesktopTrayBridge;
+  DesktopTrayBridge &
+  DesktopMicrophoneBridge;

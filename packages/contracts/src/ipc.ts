@@ -13,6 +13,7 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
+import type { SystemSettingsPane } from "./desktopPermissions.ts";
 import {
   type SshHostResult,
   SshHostStatus,
@@ -1151,13 +1152,6 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   mimeType: Schema.String.check(Schema.isTrimmed()).check(Schema.isNonEmpty()),
   data: Schema.Uint8Array,
 });
-
-export const SystemSettingsPaneSchema = Schema.Literals([
-  "full-disk-access",
-  "accessibility",
-  "screen-recording",
-]);
-export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 /**
  * The machine is suspending, woke from sleep, or the user unlocked the screen.
