@@ -68,7 +68,7 @@ const EXTRA_HEAD_BOUNDS_MS: Readonly<Record<string, number>> = {
   browser_download: 35_000,
   start_recording: 120_000,
   stop_recording: 120_000,
-  replay_trajectory: 120_000,
+  replay_trajectory: 150_000,
   install_ffmpeg: 120_000,
   install_extension: 120_000,
 };

@@ -15,10 +15,13 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
-// confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
+// confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
+// deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
 // later input, but observe, read, status, waitFor and verify still run.
+// Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
+// keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 interface Observation { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
@@ -50,6 +53,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }.
+// Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
@@ -64,7 +68,7 @@ interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }):
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
   openTab(q: { url: string }): Promise<Tab>;`;
 const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
-  // windows or processes are ambiguous; windows all off screen (minimized, hidden, closed) are named for window_id.
+  // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
   // A closed app, or one running with no window at all, is launched in the background
   // (reopened when running) and bound to its first window in the same call. It is looked for during 5 s, and a
   // last check started then may take 2 s more; no window then throws, with the app still running. Several
