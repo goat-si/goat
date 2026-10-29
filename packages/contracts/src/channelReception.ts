@@ -51,7 +51,7 @@ export type ChannelReceptionTaskSummary = typeof ChannelReceptionTaskSummary.Typ
 
 export const ChannelReceptionTaskEvent = Schema.Struct({
   taskId: ChannelTaskId,
-  type: ChannelTaskEventType,
+  type: Schema.Union([ChannelTaskEventType, Schema.Literal("task.started")]),
   summary: Schema.String,
 });
 export type ChannelReceptionTaskEvent = typeof ChannelReceptionTaskEvent.Type;

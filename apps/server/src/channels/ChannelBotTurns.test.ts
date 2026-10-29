@@ -23,6 +23,7 @@ import {
 } from "./channelWorkerBrief.ts";
 import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 import {
   botMessages,
   defaultScript,
@@ -72,6 +73,7 @@ const harnessWith = (
 ) => {
   const harness = makeHarness({
     botWorkspace: true,
+    channelsLayer: receptionDecisionChannels,
     settingsLayer: ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
       defaultRuntimeMode,
@@ -108,7 +110,7 @@ const runningTurn = Effect.gen(function* () {
   return { gateway, runtime, reports, turn };
 });
 
-describe("GOAT Bot turns", () => {
+describe("reception-created GOAT Bot turns", () => {
   it.effect(
     "acknowledges first, then runs in its own workspace on its model with full access",
     () => {
@@ -134,8 +136,14 @@ describe("GOAT Bot turns", () => {
         assert.include(launch.initialMessage?.text ?? "", 'goat_call {path:"task.create"}');
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
-        assert.include(launch.initialMessage?.text ?? "", "goat-bot/scratch");
-        assert.include(launch.initialMessage?.text ?? "", "goat-bot/artifacts");
+        assert.include(
+          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
+          "goat-bot/scratch",
+        );
+        assert.include(
+          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
+          "goat-bot/artifacts",
+        );
         assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);

@@ -10,6 +10,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -190,6 +191,7 @@ describe("channel first-reply deadline", () => {
       yield* TestClock.adjust("55 seconds");
       assert.strictEqual(yield* runtime.expireOverdue, 1);
       yield* runtime.deliverReceipts;
+      yield* runtime.settle([input.inputId]);
       const sent = harness.slackSent.filter(
         (send) => send.message.inReplyToInputId === input.inputId,
       );
@@ -254,6 +256,7 @@ describe("channel first-reply deadline", () => {
       const input = yield* gateway.ingest(slackInput("hello", "background-deadline"), slackContext);
       const blocked = yield* Deferred.make<void>();
       const sent = yield* Deferred.make<void>();
+      const deliveryWorker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
       let passes = 0;
       yield* Layer.build(
         ChannelRuntime.layerBackground.pipe(
@@ -267,6 +270,7 @@ describe("channel first-reply deadline", () => {
                 Effect.andThen(Effect.never),
               ),
               deliverReceipts: runtime.deliverReceipts.pipe(
+                Effect.tap(() => deliveryWorker.settleReceipts),
                 Effect.tap(() =>
                   harness.slackSent.some((send) => send.message.inReplyToInputId === input.inputId)
                     ? Deferred.succeed(sent, undefined)
@@ -314,7 +318,7 @@ describe("channel first-reply deadline", () => {
         apply(target, thisArg, args) {
           if (
             Array.isArray(args[0]) &&
-            args[0].join("").includes("SELECT 1 AS unsettled FROM channel_outbox")
+            args[0].join("").includes("SELECT state FROM channel_outbox")
           ) {
             return sql`SELECT * FROM missing_channel_receipts`;
           }

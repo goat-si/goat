@@ -15,7 +15,9 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -57,45 +59,126 @@ export class ChannelDeliveryWorker extends Context.Service<
   {
     /** Sends every due row once. Returns how many rows it handled. */
     readonly deliverDue: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    readonly deliverReceipts: (
+      owner: string,
+    ) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    readonly settleReceipts: Effect.Effect<void>;
   }
 >()("goat/channels/ChannelDeliveryWorker") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const gateway = yield* ChannelGateway.ChannelGateway;
+  const scope = yield* Effect.scope;
+  const receipts = new Set<Fiber.Fiber<void, unknown>>();
 
-  const deliverDue: ChannelDeliveryWorker["Service"]["deliverDue"] = (owner) =>
-    Effect.gen(function* () {
-      let handled = 0;
-      while (handled < MAX_PER_PASS) {
-        const [delivery] = yield* ledger.claimDueDeliveries({
-          owner,
-          now: DateTime.formatIso(yield* DateTime.now),
-          limit: 1,
-        });
-        if (delivery === undefined) break;
-        const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
-        const finishedAt = yield* DateTime.now;
-        yield* ledger.recordDelivery({
-          owner,
-          deliveryId: delivery.deliveryId,
-          outcome:
-            sent._tag === "Success"
-              ? {
-                  type: "delivered",
-                  ...(sent.success.externalMessageId === undefined
-                    ? {}
-                    : { externalMessageId: sent.success.externalMessageId }),
-                }
-              : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
-          now: DateTime.formatIso(finishedAt),
-        });
-        handled += 1;
-      }
-      return handled;
+  const sendReceipt = Effect.fn("ChannelDeliveryWorker.sendReceipt")(function* (
+    delivery: ChannelLedger.ChannelStoredDelivery,
+    owner: string,
+  ) {
+    const clock = yield* DateTime.now;
+    const remaining =
+      (delivery.receiptDeadline ?? DateTime.toEpochMillis(clock)) - DateTime.toEpochMillis(clock);
+    if (remaining <= 0) {
+      yield* ledger.expireReceipts({ owner, now: DateTime.formatIso(clock) });
+      return;
+    }
+    const expiry = yield* Effect.sleep(remaining).pipe(
+      Effect.andThen(
+        Effect.flatMap(DateTime.now, (now) =>
+          ledger.expireReceipts({ owner, now: DateTime.formatIso(now) }),
+        ),
+      ),
+      Effect.ignore,
+      Effect.forkIn(scope),
+    );
+    const send = yield* gateway.send(delivery.message).pipe(Effect.forkIn(scope));
+    const result = yield* Fiber.join(send).pipe(
+      Effect.result,
+      Effect.timeoutOption(Duration.millis(Math.min(4_000, remaining))),
+    );
+    const now = yield* DateTime.now;
+    const outcome: ChannelLedger.ChannelDeliveryOutcome = Option.isNone(result)
+      ? { type: "ambiguous", errorCode: "receipt_timeout" }
+      : result.value._tag === "Success"
+        ? { type: "delivered", externalMessageId: result.value.success.externalMessageId }
+        : deliveryOutcomeFor(result.value.failure, delivery.attempts, now);
+    yield* ledger.recordDelivery({
+      owner,
+      deliveryId: delivery.deliveryId,
+      attempt: delivery.attempts,
+      now: DateTime.formatIso(now),
+      outcome,
     });
+    if (outcome.type !== "retry") yield* Fiber.interrupt(expiry).pipe(Effect.forkIn(scope));
+    if (Option.isNone(result)) yield* Fiber.interrupt(send).pipe(Effect.forkIn(scope));
+  });
 
-  return ChannelDeliveryWorker.of({ deliverDue });
+  const deliverReceipts = Effect.fn("ChannelDeliveryWorker.deliverReceipts")(function* (
+    owner: string,
+  ) {
+    let handled = 0;
+    for (;;) {
+      const [row] = yield* ledger.claimDueDeliveries({
+        owner,
+        now: DateTime.formatIso(yield* DateTime.now),
+        limit: 1,
+        receiptsOnly: true,
+      });
+      if (row === undefined) break;
+      let fiber: Fiber.Fiber<void, unknown> | undefined;
+      fiber = yield* sendReceipt(row, owner).pipe(
+        Effect.tapCause((cause) => Effect.logWarning("channel receipt send failed", { cause })),
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (fiber !== undefined) receipts.delete(fiber);
+          }),
+        ),
+        Effect.forkIn(scope),
+      );
+      receipts.add(fiber);
+      handled += 1;
+    }
+    return handled;
+  });
+
+  const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
+    let handled = yield* deliverReceipts(owner);
+    while (handled < MAX_PER_PASS) {
+      const [delivery] = yield* ledger.claimDueDeliveries({
+        owner,
+        now: DateTime.formatIso(yield* DateTime.now),
+        limit: 1,
+        receiptsOnly: false,
+      });
+      if (delivery === undefined) break;
+      const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
+      const finishedAt = yield* DateTime.now;
+      yield* ledger.recordDelivery({
+        owner,
+        deliveryId: delivery.deliveryId,
+        attempt: delivery.attempts,
+        outcome:
+          sent._tag === "Success"
+            ? {
+                type: "delivered",
+                ...(sent.success.externalMessageId === undefined
+                  ? {}
+                  : { externalMessageId: sent.success.externalMessageId }),
+              }
+            : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
+        now: DateTime.formatIso(finishedAt),
+      });
+      handled += 1;
+    }
+    return handled;
+  });
+
+  const settleReceipts = Effect.suspend(() =>
+    Effect.forEach([...receipts], (fiber) => Fiber.await(fiber), { discard: true }),
+  );
+  return ChannelDeliveryWorker.of({ deliverDue, deliverReceipts, settleReceipts });
 });
 
 export const layer = Layer.effect(ChannelDeliveryWorker, make);

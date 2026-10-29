@@ -1,15 +1,13 @@
+import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
 /**
  * ChannelBotSession - GOAT Bot's warm session per conversation and requester: each task is its own
  * run there, follow-ups steer their task's run, and the session rotates only on a cold cache or a
- * full context. Reception still writes the first reply, since no provider can hold its tools yet.
+ * full context.
  */
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- binding keys are content hashes.
-import * as NodeCrypto from "node:crypto";
 
 import {
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelConversationId,
-  type ChannelDispatchTarget,
   ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
@@ -121,6 +119,9 @@ const rejected = (failure: unknown) => {
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
   {
+    readonly eligible: (
+      task: ChannelTask,
+    ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
     /** Runs a GOAT Bot turn in its conversation's session; "deferred" retries on a later pass. */
     readonly serve: (
       stored: ChannelLedger.ChannelStoredTask,
@@ -137,6 +138,7 @@ export class ChannelBotSession extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const eligible = yield* makeSessionEligibility;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
@@ -150,27 +152,6 @@ const make = Effect.gen(function* () {
   // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-
-  const bindingKeyFor = (
-    task: ChannelTask,
-    target: ChannelDispatchTarget,
-    sharing: string,
-    requester: ChannelRequester,
-  ) => {
-    const parts = [
-      task.conversationId,
-      requester.ownerId,
-      requester.principalId,
-      requester.externalActorId ?? "",
-      requester.originKind,
-      requester.runtimeModeCeiling,
-      target.memoryGrantCeiling ?? "none",
-      target.modelSelection.instanceId,
-      target.modelSelection.model,
-      sharing === "per_task" ? task.taskId : "",
-    ];
-    return NodeCrypto.createHash("sha256").update(parts.join("\u0000")).digest("base64url");
-  };
 
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
 
@@ -919,7 +900,7 @@ const make = Effect.gen(function* () {
     Effect.mapError(asLedgerError("forward")),
   );
 
-  return ChannelBotSession.of({ serve, forward });
+  return ChannelBotSession.of({ serve, forward, eligible });
 });
 
 const asLedgerError = (operation: string) => (cause: unknown) =>

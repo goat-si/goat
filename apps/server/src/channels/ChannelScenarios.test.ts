@@ -55,6 +55,10 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import {
+  receptionDecisionChannels,
+  claimChannelRuntime as claim,
+} from "./testkit/channelReceptionHarness.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -702,17 +706,6 @@ describe("GOAT bot boundary (scenario 6)", () => {
 });
 
 describe("concurrent input (scenario 1)", () => {
-  const claim = Effect.gen(function* () {
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    yield* ledger.claimOwnership({
-      token: runtime.ownerToken,
-      now: "2026-10-12T00:00:00.000Z",
-      staleBefore: "2026-10-11T00:00:00.000Z",
-    });
-    return runtime;
-  });
-
   it.effect("reads one conversation in order while other conversations proceed", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -741,6 +734,7 @@ describe("concurrent input (scenario 1)", () => {
       // Deliver what the Slack thread committed while the bot conversation waits on its model.
       yield* runtime.runPass;
       yield* runtime.runPass;
+      yield* runtime.settle([slack.inputId]);
 
       const slackReply = harness.slackSent.find(
         (send) => send.message.inReplyToInputId === slack.inputId,
@@ -1911,7 +1905,11 @@ describe("who may do what (scenario 4)", () => {
   });
 
   it.effect("offers this machine and runs host-level work in the bot's workspace", () => {
-    const harness = makeHarness({ projects: 2, botWorkspace: true });
+    const harness = makeHarness({
+      projects: 2,
+      botWorkspace: true,
+      channelsLayer: receptionDecisionChannels,
+    });
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkSlackUser();
