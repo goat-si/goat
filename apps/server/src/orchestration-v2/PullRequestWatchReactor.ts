@@ -249,7 +249,8 @@ export const make = Effect.gen(function* () {
     Effect.suspend(() => reportEnd(lifeKey(target), lifeOf(target), reason));
 
   const readFailures = new Map<string, number>();
-  const readRetryAt = new Map<string, number>();
+  /** When a failing group reads again, and the watches it held when it last failed. */
+  const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
   const lastReads = new Map<string, LastRead>();
   const threadTails = new Map<
     string,
@@ -515,10 +516,10 @@ export const make = Effect.gen(function* () {
       if (isRateLimited(read.cause)) return;
       const failures = (readFailures.get(group.key) ?? 0) + 1;
       readFailures.set(group.key, failures);
-      readRetryAt.set(
-        group.key,
-        now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (failures - 1), READ_RETRY_MAX_MS),
-      );
+      readRetryAt.set(group.key, {
+        at: now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (failures - 1), READ_RETRY_MAX_MS),
+        watches: new Set(group.targets.map(watchKey)),
+      });
       if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(group, giveUp))) {
         readFailures.delete(group.key);
         readRetryAt.delete(group.key);
@@ -657,7 +658,15 @@ export const make = Effect.gen(function* () {
       { discard: true },
     );
     const now = yield* Clock.currentTimeMillis;
-    const due = groups.filter((group) => (readRetryAt.get(group.key) ?? 0) <= now);
+    for (const group of groups) {
+      const retry = readRetryAt.get(group.key);
+      // A watch started since the last failure reads at once and counts its own failures.
+      if (retry && group.targets.some((target) => !retry.watches.has(watchKey(target)))) {
+        readRetryAt.delete(group.key);
+        readFailures.delete(group.key);
+      }
+    }
+    const due = groups.filter((group) => (readRetryAt.get(group.key)?.at ?? 0) <= now);
     const fingerprints = yield* Effect.forEach(due, fingerprintOf, {
       concurrency: "unbounded",
     });

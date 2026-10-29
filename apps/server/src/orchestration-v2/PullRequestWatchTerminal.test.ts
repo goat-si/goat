@@ -355,4 +355,30 @@ describe("a watch that cannot read its pull request", () => {
       assert.deepEqual((yield* records).summaries, ["#41: stopped watching, could not read it"]);
     }).pipe(Effect.provide(layerTest)),
   );
+
+  it.effect("a watch started again reads at once and gets its own failure limit", () =>
+    Effect.gen(function* () {
+      const { host, reads, reactor, link, records, orchestrator, threadId } =
+        yield* watchedThread("rewatch");
+      yield* Ref.set(host, "unreachable");
+      for (let pass = 0; pass < 60 && (yield* Ref.get(reads)) < 7; pass += 1) {
+        yield* reactor.sweep;
+        yield* TestClock.adjust("2 minutes");
+      }
+      assert.strictEqual(yield* Ref.get(reads), 7);
+      for (const watching of [false, true])
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-terminal-rewatch-${watching}`),
+          threadId,
+          ...key,
+          watching,
+          link: { url: URL, source: "agent" },
+        });
+      yield* reactor.sweep;
+      assert.strictEqual(yield* Ref.get(reads), 8);
+      assert.isDefined((yield* link)?.watch);
+      assert.deepEqual((yield* records).summaries, []);
+    }).pipe(Effect.provide(layerTest)),
+  );
 });
