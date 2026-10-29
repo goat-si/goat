@@ -770,11 +770,8 @@ export const click = async (
   if (!sent) watch.cancel();
   const settled = await watch.settle(dialog).finally(() => releaseAim(aim));
   // A dialog that stopped a multi-press click leaves it short of what was asked.
-  return {
-    ...point,
-    ...settled,
-    ...(presses < (input.clickCount ?? 1) ? { pressesSent: presses } : {}),
-  };
+  const short = presses < (input.clickCount ?? 1);
+  return { ...point, ...settled, ...(short ? { pressesSent: presses } : {}) };
 };
 
 export const type = async (
