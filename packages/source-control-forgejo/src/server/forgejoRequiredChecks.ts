@@ -11,7 +11,7 @@ export const ForgejoBranchStatusChecks = Schema.Struct({
 // run of characters, `/` included, and `?` matches one character. Classes, alternation and escapes
 // are not handled.
 const UNSUPPORTED_GLOB = /[[\]{}\\]/;
-// Linear two-pointer match: a regex built from the glob backtracks polynomially per `*`.
+// The caller bounds total pattern and name lengths before this matcher can rescan a suffix.
 const matchesContext = (glob: string, name: string) => {
   const pattern = Array.from(glob);
   const text = Array.from(name);
@@ -38,12 +38,43 @@ const matchesContext = (glob: string, name: string) => {
   return p === pattern.length;
 };
 
+const MAX_MATCH_WORK = 1_000_000;
+
+const exceedsMatchBudget = (
+  contexts: ReadonlyArray<string>,
+  checks: ReadonlyArray<PullRequestCheck>,
+) => {
+  if (contexts.length > MAX_MATCH_WORK || checks.length > MAX_MATCH_WORK) return true;
+  let patternSize = 0;
+  for (const context of contexts) {
+    patternSize += context.length + 1;
+    if (patternSize > MAX_MATCH_WORK) return true;
+  }
+  let nameSize = 0;
+  for (const check of checks) {
+    nameSize += check.name.length + 1;
+    if (nameSize > MAX_MATCH_WORK) return true;
+  }
+  return patternSize * Math.max(nameSize, 1) > MAX_MATCH_WORK;
+};
+
 export function markRequiredForgejoChecks(
   checks: ReadonlyArray<PullRequestCheck>,
   branch: typeof ForgejoBranchStatusChecks.Type,
 ): ReadonlyArray<PullRequestCheck> {
   const contexts = branch.enable_status_check ? (branch.status_check_contexts ?? []) : [];
   if (contexts.length === 0) return checks;
+  if (exceedsMatchBudget(contexts, checks)) {
+    return [
+      ...checks,
+      {
+        name: contexts[0] ?? "",
+        status: "pending",
+        description: "Required check pattern cannot be evaluated.",
+        url: null,
+      },
+    ];
+  }
   const unsupported = [...new Set(contexts.filter((context) => UNSUPPORTED_GLOB.test(context)))];
   if (unsupported.length > 0) {
     // Keep all observed checks gating, but never pass a policy we cannot evaluate.

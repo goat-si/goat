@@ -7,6 +7,63 @@ import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import { markRequiredForgejoChecks } from "./forgejoRequiredChecks.ts";
 
+it("keeps an oversized long-suffix required pattern pending without rescanning it", () => {
+  const pattern = `*${"a".repeat(1500)}b`;
+  const check = {
+    name: "a".repeat(1500),
+    status: "success" as const,
+    description: null,
+    url: null,
+  };
+  const result = markRequiredForgejoChecks([check], {
+    enable_status_check: true,
+    status_check_contexts: [pattern],
+  });
+  assert.deepStrictEqual(result, [
+    check,
+    {
+      name: pattern,
+      status: "pending",
+      description: "Required check pattern cannot be evaluated.",
+      url: null,
+    },
+  ]);
+});
+
+it("matches a long suffix within the work budget", () => {
+  const suffix = `${"a".repeat(200)}b`;
+  const checks = [`prefix${suffix}`, "a".repeat(200)].map((name) => ({
+    name,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const result = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: [`*${suffix}`],
+  });
+  assert.isTrue(result[0]?.required);
+  assert.isUndefined(result[1]?.required);
+  assert.lengthOf(result, 2);
+});
+
+it("bounds aggregate work across multiple patterns and checks", () => {
+  const contexts = Array.from({ length: 10 }, (_, i) => `*${"a".repeat(400)}${i}`);
+  const checks = Array.from({ length: 10 }, (_, i) => ({
+    name: `${"a".repeat(400)}${i}`,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const result = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: contexts,
+  });
+  assert.deepStrictEqual(result.slice(0, checks.length), checks);
+  assert.strictEqual(result.at(-1)?.description, "Required check pattern cannot be evaluated.");
+  assert.strictEqual(result.at(-1)?.status, "pending");
+});
+
 it("matches many-wildcard required patterns against long check names without backtracking", () => {
   const checks = ["a".repeat(200), `${"a".repeat(199)}b`, "x?y\nz"].map((name) => ({
     name,
