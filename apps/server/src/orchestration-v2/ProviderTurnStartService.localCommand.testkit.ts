@@ -17,6 +17,7 @@ import {
   ProjectId,
   type OrchestrationV2ThreadProjection,
   OrchestrationV2DomainEvent,
+  type ScheduledTaskId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -62,6 +63,7 @@ export function makeLocalCommandHarness(input: {
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
+  readonly scheduledTaskId?: ScheduledTaskId;
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
@@ -140,6 +142,7 @@ export function makeLocalCommandHarness(input: {
     streaming: false,
     createdBy: input.createdBy ?? "user",
     creationSource: "web",
+    ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
     createdAt: now,
     updatedAt: now,
   };

@@ -1,4 +1,5 @@
 import { it as effectIt } from "@effect/vitest";
+import { ScheduledTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { expect } from "vite-plus/test";
 
@@ -46,6 +47,28 @@ effectIt.effect(
         text: "/logout",
         previousNativeSession: true,
         createdBy: "agent",
+      });
+
+      yield* harness.start;
+
+      expect(harness.tryHandlePromptCommand).toHaveBeenCalledExactlyOnceWith({
+        instanceId: harness.oldInstanceId,
+        text: "/logout",
+        hasAttachments: false,
+        byPerson: false,
+      });
+    }),
+);
+
+effectIt.effect(
+  "asks the provider to sign out for a scheduled run's /logout only as not written by a person",
+  () =>
+    Effect.gen(function* () {
+      // The schedule's author was a person, but an agent may have edited its prompt since.
+      const harness = makeLocalCommandHarness({
+        text: "/logout",
+        previousNativeSession: true,
+        scheduledTaskId: ScheduledTaskId.make("schedule:edited"),
       });
 
       yield* harness.start;

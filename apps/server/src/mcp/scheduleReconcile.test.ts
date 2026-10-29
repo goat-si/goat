@@ -371,3 +371,20 @@ it.effect(
     }).pipe(Effect.provide(served));
   },
 );
+
+it.effect("update_scheduled_task refuses to move a webhook schedule to another trigger", () => {
+  const { upserts, served } = updateFixture();
+  return Effect.gen(function* () {
+    // Leaving the webhook trigger would end its URL and coming back would issue a new one.
+    const moved = yield* callTool("goat_schedule_update", {
+      scheduledTaskId: webhookTask.id,
+      schedule: { type: "interval", everyMs: 60_000 },
+      clientRequestId: "update-leave-webhook",
+    });
+    expect(moved.isError).toBe(true);
+    expect(moved.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("Settings → Scheduled Tasks") }),
+    ]);
+    expect(upserts).toHaveLength(0);
+  }).pipe(Effect.provide(served));
+});

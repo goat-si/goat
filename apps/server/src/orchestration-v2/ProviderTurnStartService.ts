@@ -510,7 +510,8 @@ export const layer: Layer.Layer<
                   records: message.context?.records ?? [],
                 }),
                 hasAttachments: false,
-                byPerson: message.createdBy === "user",
+                // A scheduled run replays a stored prompt that an agent may have edited since.
+                byPerson: message.createdBy === "user" && message.scheduledTaskId === undefined,
               }),
             );
         if (isEmptyCompaction || authResult?._tag === "Failure" || authResult?.success) {
