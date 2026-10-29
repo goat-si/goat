@@ -14,7 +14,7 @@ import {
   type SnapshotNode,
   tabBarRect,
 } from "./checks.ts";
-import { BUNDLE_ID, delay, type Device } from "./device.ts";
+import { BUNDLE_ID, delay, type Device, poolError } from "./device.ts";
 import { lagCheck } from "./video.ts";
 
 export interface StepResult {
@@ -150,7 +150,11 @@ export async function runJourney(
       60_000,
     )
       .then((snapshot) => (threadRow(snapshot) ? snapshot : null))
-      .catch(() => null);
+      .catch((error: unknown) => {
+        // Losing the device says nothing about pairing; the pose's retry handles the pool.
+        if (error instanceof Error && poolError(error.message)) throw error;
+        return null;
+      });
   }
   if (!threads) throw new Error("the app did not show the fixture threads after pairing");
   // Rotated only once the app is up: a rotation during launch is lost.

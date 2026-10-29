@@ -215,11 +215,26 @@ export class Device {
 
   async waitFor(predicate: (snapshot: Snapshot) => boolean, label: string, timeoutMs = 60_000) {
     const deadline = Date.now() + timeoutMs;
+    // When the last read failed, the timeout is that failure's, so the pool can be told apart.
+    let failure: unknown;
     while (Date.now() < deadline) {
-      const snapshot = await this.snapshot().catch(() => null);
+      const snapshot = await this.snapshot().then(
+        (value) => {
+          failure = undefined;
+          return value;
+        },
+        (error: unknown) => {
+          failure = error;
+          return null;
+        },
+      );
       if (snapshot && predicate(snapshot)) return snapshot;
       await delay(750);
     }
+    if (failure instanceof Error)
+      throw new AgentDeviceError(`timed out waiting for ${label}: ${failure.message}`, {
+        cause: failure,
+      });
     throw new Error(`timed out waiting for ${label}`);
   }
 

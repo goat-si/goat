@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vite-plus/test";
 
-import type { Device } from "./device.ts";
+import { AgentDeviceError, type Device, poolError } from "./device.ts";
 import type { Rect, Snapshot } from "./checks.ts";
 import { runJourney, type StepResult } from "./journey.ts";
 
-vi.mock(import("./device.ts"), () => ({
-  BUNDLE_ID: "com.t3tools.t3code.dev" as const,
+vi.mock(import("./device.ts"), async (original) => ({
+  ...(await original()),
   delay: async () => {},
 }));
 vi.mock(import("./video.ts"), () => ({
@@ -120,4 +120,44 @@ it.each([
   expect(checks.some((item) => item.name === "tab bar hidden")).toBe(hidden);
   expect(checks.every((item) => item.pass)).toBe(passes);
   expect(checks.find((item) => item.name === "back button visible")?.pass).toBe(back);
+});
+
+const loadedApp: Snapshot = {
+  viewport: { width: 400, height: 800 },
+  nodes: [
+    { index: 0, label: "New thread", kind: "text", rect: { x: 60, y: 60, width: 300, height: 30 } },
+  ],
+};
+
+/** A journey whose app loads, then whose every wait for the paired thread list fails. */
+const pairingFails = (failure: Error) => {
+  const waits: Array<Snapshot | Error> = [loadedApp];
+  const device = {
+    pose: { form: "phone", platform: "ios" },
+    agent: async () => {},
+    openUrl: async () => {},
+    screenshot: async () => {},
+    waitFor: async () => {
+      const next = waits.shift() ?? failure;
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  } as unknown as Device;
+  return runJourney(device, "/tmp/journey-fixture", async () => "https://example.invalid/pair", [])
+    .then(() => undefined)
+    .catch((error: unknown) => error);
+};
+
+it("a pool failure while pairing is reported as the pool's error", async () => {
+  const error = await pairingFails(
+    new AgentDeviceError("timed out waiting for the paired thread list: Daemon connection closed"),
+  );
+
+  expect(error instanceof Error && poolError(error.message)).toBe(true);
+});
+
+it("pairing that never shows the threads is an app failure", async () => {
+  const error = await pairingFails(new Error("timed out waiting for the paired thread list"));
+
+  expect(error).toEqual(new Error("the app did not show the fixture threads after pairing"));
 });
