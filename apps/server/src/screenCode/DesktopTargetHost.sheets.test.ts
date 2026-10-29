@@ -20,7 +20,7 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
-const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 10000 });
+const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 50000 });
 
 const win = (windowId: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   pid: 42,
@@ -630,7 +630,7 @@ it.effect(
       const bound = yield* host.bindApp(
         {
           ...call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-          deadlineMillis: 10_000,
+          deadlineMillis: 50_000,
         },
         context,
       );
@@ -751,7 +751,7 @@ it.effect(
         .invoke(
           {
             ...call("wait_for", { window: "hidden", timeoutMs: 100 }, sBound),
-            deadlineMillis: 10_000,
+            deadlineMillis: 50_000,
           },
           context,
         )
@@ -774,9 +774,11 @@ import { assert } from "@effect/vitest";
 import { active, CONTROL, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 
 it.effect(
-  "an optional auxiliary read past its deadline does not restart a driver busy with a provider call",
+  "audit r3: optional read keeps the cell watch deadline on a base proxy (no early restart at 5s, recovery watchdog fires at 30s when stuck), hidden-wait rebind forwards optional, short hidden wait returns met:false, and oversized titles are bounded",
   () =>
     Effect.gen(function* () {
+      // 1. Base-version proxy (no wire optional field): auxiliary read carries cell watch deadline (28,500 ms),
+      // so at 5 s behind a slow provider call the child is NOT killed; if an unanswered read stays stuck past 30 s, the watchdog DOES replace the child.
       const h = yield* harness();
       yield* h.push(active());
       const current = yield* h.driverStarted;
@@ -798,17 +800,106 @@ it.effect(
         runId: "run:one",
         turnId: "cell:one",
         callId: 0,
-        deadlineMillis: 1_500,
-        optional: true,
+        deadlineMillis: 28_500,
         tool: "list_windows",
         args: { pid: 42 },
-      } as never);
+      });
       const aux = yield* h.nextToDriver;
       yield* TestClock.adjust("5 seconds");
       assert.isFalse(yield* h.isKilled);
       assert.equal(h.drivers.length, 1);
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov.id, result: { content: [] } }));
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: aux.id, result: { content: [] } }));
-      assert.equal((yield* h.primitiveReply).status, "settled");
+      // Now leave aux unanswered past its 28.5 s watch deadline + 1 s grace: the watchdog replaces the stuck child.
+      yield* TestClock.adjust("25 seconds");
+      assert.isTrue(yield* h.isKilled);
+      void aux;
+
+      // 2. Hidden-wait recovery after driver replacement forwards optional: true on the rebind list_windows, and short hidden wait (50 ms) with 10 ms admission delay returns met:false.
+      const conn = { id: "driver:1" };
+      const optionalFlags: Array<boolean | undefined> = [];
+      const rebindBase = fixture(
+        {
+          list_windows: { windows: [win(7, { is_on_screen: true })] },
+        },
+        conn,
+      );
+      const rebindChannel = {
+        request: (req: {
+          tool: string;
+          args: unknown;
+          deadlineMillis: number;
+          expectedConnectionGeneration?: string;
+          optional?: boolean;
+        }) =>
+          Effect.gen(function* () {
+            yield* TestClock.adjust("5 millis");
+            const now = yield* Clock.currentTimeMillis;
+            const dl = driverCallDeadline(req.tool, req.args, req.deadlineMillis, now);
+            if (dl - now < MIN_CALL_MS)
+              return yield* Effect.fail({
+                code: "deadline" as const,
+                effectStarted: false,
+                nextStep: "Too short.",
+              });
+            optionalFlags.push(req.optional);
+            return yield* rebindBase.channel.request(req as never);
+          }),
+      };
+      const rebindHost = createDesktopTargetHost({
+        primitiveChannel: rebindChannel as never,
+        leases: rebindBase.leases,
+      });
+      const rBound = (yield* rebindHost.bindApp(
+        {
+          ...call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+          deadlineMillis: 50_000,
+        },
+        context,
+      )).value as ScreenTargetRef;
+      conn.id = "driver:2";
+      optionalFlags.length = 0;
+      const shortWaitFiber = yield* rebindHost
+        .invoke(
+          {
+            ...call("wait_for", { window: "hidden", timeoutMs: 50 }, rBound),
+            deadlineMillis: 50_000,
+          },
+          context,
+        )
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("100 millis");
+      const shortWaitOut = yield* Fiber.join(shortWaitFiber);
+      expect(shortWaitOut.value).toMatchObject({ met: false, status: "unsatisfied" });
+      expect(optionalFlags.length).toBeGreaterThanOrEqual(2);
+      expect(optionalFlags.every((f) => f === true)).toBe(true);
+
+      // 3. Desktop title > 1,024 chars is clipped to 1,024, and under a tight treeBytes budget the title is dropped rather than failing tree_limit.
+      const longTitle = "T".repeat(1500);
+      const titleFix = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          window_title: longTitle,
+          elements_complete: false,
+          tree_markdown: '- [0] AXWindow "Doc"',
+          elements: [{ role: "AXWindow", element_index: 0, element_token: "s1:0", label: "Doc" }],
+        },
+      });
+      const tBound = (yield* titleFix.host.bindApp(
+        evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      const normalObs = (yield* titleFix.host.observe(
+        evCall("get_window_state", {}, tBound),
+        context,
+      )).value as ScreenObservation;
+      expect(normalObs.title).toHaveLength(1024);
+      const tightObs = (yield* titleFix.host.observe(evCall("get_window_state", {}, tBound), {
+        ...context,
+        limits: { ...context.limits, returnBytes: 1200 },
+      })).value as ScreenObservation;
+      expect(tightObs.title).toBeUndefined();
+      expect(tightObs.truncated).toBe(true);
     }),
 );

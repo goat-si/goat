@@ -320,8 +320,11 @@ export const buildObservedDraft = (input: {
     | undefined;
   readonly fallbackTitle: string | undefined;
 }): ScreenObservationDraft => {
-  const title =
-    string(input.state.window_title) ?? string(input.state.title) ?? input.fallbackTitle;
+  const title = (
+    string(input.state.window_title) ??
+    string(input.state.title) ??
+    input.fallbackTitle
+  )?.slice(0, 1024);
   return {
     targetRef: input.targetRef,
     targetGeneration: input.generation,

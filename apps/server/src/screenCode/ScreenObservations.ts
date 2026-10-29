@@ -538,6 +538,7 @@ export class ScreenObservations {
         .toString("utf8");
     const fullText = numbered(new Set(numbers.keys()));
     let text = cut(fullText);
+    let title = draft.title === undefined ? undefined : draft.title.slice(0, 1024);
     let truncated =
       draft.truncated ||
       queryTruncated ||
@@ -574,7 +575,7 @@ export class ScreenObservations {
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,
       loading: draft.loading,
-      ...(draft.title === undefined ? {} : { title: draft.title }),
+      ...(title === undefined ? {} : { title }),
       ...(draft.url === undefined ? {} : { url: draft.url }),
       truncated,
       indexedText: text,
@@ -657,6 +658,10 @@ export class ScreenObservations {
       text = cut(numbered(new Set(tokens.values())));
     while (Buffer.byteLength(JSON.stringify(build())) > budget && text.length > 0) {
       text = text.slice(0, Math.max(0, text.length - 256));
+      truncated = true;
+    }
+    if (Buffer.byteLength(JSON.stringify(build())) > budget && title !== undefined) {
+      title = undefined;
       truncated = true;
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget)

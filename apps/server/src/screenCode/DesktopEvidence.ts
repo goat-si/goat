@@ -178,8 +178,7 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   const latestEnd = call.deadlineMillis - reserveAfterMs - CELL_RESERVE_MS;
   if (latestEnd - now < MIN_CALL_MS) return undefined;
   const effective = Math.min(budgetMs, latestEnd - now);
-  const deadlineMillis = now + CELL_RESERVE_MS + effective;
-  const sent = yield* send(tool, args, { ...call, deadlineMillis }, context, connectionGeneration, {
+  const sent = yield* send(tool, args, call, context, connectionGeneration, {
     optional: true,
   }).pipe(Effect.timeoutOption(effective), Effect.option);
   const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
@@ -311,7 +310,7 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
         callId: 0,
         method: "list_windows",
         args: { pid },
-        deadlineMillis: now + CELL_RESERVE_MS + remain,
+        deadlineMillis: cap,
       },
       context,
       entry.connectionGeneration,
@@ -358,9 +357,7 @@ export const seedBatchBaseline = Effect.fn("DesktopEvidence.seedBatchBaseline")(
 });
 
 export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(function* (deps: {
-  readonly list: (
-    deadlineMillis: number,
-  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly list: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
   readonly pid: number;
   readonly windowId: number;
   readonly timeoutMs: unknown;
@@ -379,11 +376,13 @@ export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(fu
     const now = yield* Clock.currentTimeMillis;
     if (sample > 0 && now >= deadline) break;
     const remain = waitCap === 0 ? MIN_CALL_MS : Math.max(1, deadline - now);
-    const callDeadline = Math.min(
-      cellDeadlineMillis,
-      now + CELL_RESERVE_MS + Math.max(MIN_CALL_MS, remain),
+    const polled = yield* list().pipe(
+      Effect.timeoutOption(remain),
+      Effect.catchIf(
+        (err) => err.code === "deadline" && (sample > 0 || requested < MIN_CALL_MS),
+        () => Effect.succeedNone,
+      ),
     );
-    const polled = yield* list(callDeadline).pipe(Effect.timeoutOption(remain));
     if (Option.isNone(polled)) break;
     if (waitCap > 0 && (yield* Clock.currentTimeMillis) > deadline) break;
     hidden = hiddenWindowStatus(driverValue(polled.value), pid, windowId);

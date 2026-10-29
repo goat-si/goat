@@ -310,7 +310,14 @@ export const createDesktopTargetHost = (deps: {
       return yield* Effect.fail(
         fail("stale_reference", needs === "points" ? RESTARTED_POINTS : RESTARTED_ELEMENTS),
       );
-    const listed = yield* request("list_windows", { pid: bound.pid }, call, context);
+    const listed = yield* request(
+      "list_windows",
+      { pid: bound.pid },
+      call,
+      context,
+      undefined,
+      cursor?.optional === true ? { optional: true } : undefined,
+    );
     const still = array(object(driverValue(listed))?.windows)
       .map(object)
       .some((window) => window?.window_id === bound.windowId && window.pid === bound.pid);
@@ -776,16 +783,10 @@ export const createDesktopTargetHost = (deps: {
       const args = callArgs(call.args);
       if (args.window === "hidden")
         return yield* pollHiddenWindow({
-          list: (deadlineMillis) =>
-            boundRequest(
-              bound,
-              "nothing",
-              "list_windows",
-              { pid: bound.pid },
-              { ...call, deadlineMillis },
-              context,
-              { optional: true },
-            ),
+          list: () =>
+            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context, {
+              optional: true,
+            }),
           pid: bound.pid,
           windowId: bound.windowId,
           timeoutMs: args.timeoutMs,

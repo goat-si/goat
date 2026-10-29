@@ -23,7 +23,12 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
+import {
+  CELL_RESERVE_MS,
+  driverCallDeadline,
+  MIN_CALL_MS,
+  seconds,
+} from "./ComputerUseCallCaps.ts";
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -327,11 +332,13 @@ export const make = Effect.gen(function* () {
       runId: input.runId,
       turnId: input.turnId,
       callId: input.callId,
-      deadlineMillis,
+      deadlineMillis:
+        input.optional === true
+          ? Math.max(deadlineMillis, input.deadlineMillis - CELL_RESERVE_MS)
+          : deadlineMillis,
       tool: input.tool,
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      ...(input.optional === true ? { optional: true } : {}),
     };
     const pending: Pending = { request, answer, sent: false };
     record.pending.set(request.requestId, pending);
