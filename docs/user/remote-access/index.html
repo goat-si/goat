@@ -63,9 +63,16 @@ address:</p>
 <p>If a server is already running, generate a fresh link without restarting it:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span></span></code></pre>
 <p>Scan the QR code from the GOAT app on your phone, or paste the pairing URL into
-<strong>Add device → Tailscale (GOAT server)</strong> on web and desktop. Connection settings are under <strong>Settings → Connections</strong>
-on web and desktop and <strong>Settings → Environments</strong> on mobile. A loopback address
+<strong>Settings → Connections → Add device → Tailscale (GOAT server)</strong> on web and desktop. On mobile,
+saved servers are under <strong>Settings → Environments</strong>. A loopback address
 such as <code>127.0.0.1</code> reaches only the device opening the link.</p>
+<p>On a computer with the GOAT desktop app, you can open the <code>App link</code> that
+<code>goat pair</code> and <code>goat serve</code> print (a <code>goat://pair</code> link) instead. The desktop
+app asks you to confirm the server address, then adds it. <code>t3code://pair</code> links
+from older T3 Code versions work the same way.</p>
+<p>If your HTTPS endpoint uses a certificate from your own certificate authority,
+install that CA on Android as a <strong>CA certificate</strong> in its security settings; the
+Android app then trusts it.</p>
 <p>Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
@@ -77,9 +84,10 @@ URL, or SSH. Tailscale shares its <code>100.64.0.0/10</code> address range with
 other VPNs such as Cloudflare WARP, so an address in that range shows as VPN
 unless the machine confirms it is on Tailscale. To add a route, choose <strong>Add
 route</strong> in the machine’s route list.
-Pairing the same machine again over another address also adds a route instead
-of a second machine. A new route is placed by speed, in that order, and you can
-reorder routes at any time.</p>
+A pairing link for a saved machine is refused when it comes from an address
+that machine does not have yet; add that address with <strong>Add route</strong> instead.
+Pairing again over an address the machine already has still works. A new route
+is placed by speed, in that order, and you can reorder routes at any time.</p>
 <p>While connected through a paired address, GOAT also learns the
 machine’s current LAN and Tailscale addresses and adds them as routes. When the
 machine’s LAN address changes, for example after it joins another Wi-Fi network,
@@ -440,7 +448,7 @@ mode is lower than the link’s cannot change anything through it. A link cannot
 answer approval requests, and folder browsing and runtime updates still need SSH.</p>
 <p>A link lasts 30 days; link again with a new code to renew it. Removing a link
 forgets it here. To end it on the other machine at once, revoke <strong>GOAT on …</strong> in
-that machine’s <strong>Settings → Connections</strong>. To watch its threads yourself, add
+that machine’s <strong>Settings → Connections → Authorized clients</strong>. To watch its threads yourself, add
 the machine under <strong>Settings → Connections</strong> with a pairing URL from <code>goat pair</code>.</p>
 <p><a id="devices-on-this-hub"></a></p>
 <h3 id="hub-devices">Hub devices</h3>
