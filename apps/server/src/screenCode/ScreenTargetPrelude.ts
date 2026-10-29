@@ -125,9 +125,9 @@ const __target = (binding, note, owner, extraProps = {}) => {
   let currentNote = note;
   const tab = ref.kind === 'tab';
   const seen = { observation: undefined, image: undefined, replaced: false };
-  // Older call forms reach the host directly; tab input ends the tab screenshot, app points stay usable.
+  // Older call forms reach the host directly; tab clicks keep their screenshot, other tab inputs retire it.
   const call = (method, arg = {}) => {
-    if (tab && __inputs.has(method)) seen.image = undefined;
+    if (tab && __inputs.has(method) && method !== 'click' && method !== 'right_click') seen.image = undefined;
     const withRegion =
       !tab &&
       __pointerMethods.has(method) &&
@@ -142,7 +142,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return __call(method, { ...withRegion, targetRef: ref });
   };
   const act = async (name, method, arg) => {
-    if (tab) seen.image = undefined;
+    if (tab && method !== 'click' && method !== 'right_click') seen.image = undefined;
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && arg.elementRef !== undefined);
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
