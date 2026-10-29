@@ -41,16 +41,25 @@ const sameScopedOwner = (a: AgentCursorReport["identity"], b: AgentCursorReport[
   a.targetId === b.targetId &&
   a.generation === b.generation;
 
-/** Retains the last observed point for a positionless in-flight phase on the same owner. */
+const sameScopedAuthority = (a: AgentCursorReport["identity"], b: AgentCursorReport["identity"]) =>
+  a.environmentId === b.environmentId &&
+  a.runId === b.runId &&
+  a.turnId === b.turnId &&
+  b.generation >= a.generation;
+
+/** Retains the last observed point for a positionless phase in the same turn authority. */
 const scopedCursorReport = (
   event: AgentCursorEvent,
   previous?: AgentCursorReport,
 ): AgentCursorReport => {
-  const sameOwner = previous !== undefined && sameScopedOwner(previous.identity, event.identity);
+  const retainsPoint =
+    previous !== undefined &&
+    previous.cursor !== null &&
+    sameScopedAuthority(previous.identity, event.identity);
   const point =
     event.op === "show" && event.point && event.windowId !== undefined
       ? { windowId: event.windowId, point: event.point, phase: event.phase }
-      : event.op === "show" && sameOwner && previous.cursor !== null
+      : event.op === "show" && retainsPoint && previous?.cursor !== null
         ? { ...previous.cursor, phase: event.phase }
         : null;
   return { identity: event.identity, phase: event.phase, cursor: point };

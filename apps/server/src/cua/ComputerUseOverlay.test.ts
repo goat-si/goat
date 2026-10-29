@@ -318,4 +318,215 @@ describe("ComputerUseOverlay", () => {
       replyImageSize({ content: [{ type: "image", mimeType: "image/jpeg", data: "/9j/" }] }),
     );
   });
+
+  it("keeps the cursor point across non-capturing verify_state waits, non-spatial inputs, and same-window rebinds", () => {
+    const ownerA = {
+      environmentId: EnvironmentId.make("environment"),
+      runId: "run",
+      turnId: "turn",
+      targetId: "a",
+      generation: 1,
+      sequence: 0,
+    };
+    const rebound = { ...ownerA, targetId: "a2", generation: 2 };
+    const otherWindow = { ...ownerA, targetId: "b", generation: 3 };
+    const point = { fx: 0.5, fy: 0.45 };
+    const { sent, state } = run([
+      {
+        type: "call",
+        id: "click-1",
+        name: "click",
+        args: { ...WINDOW, element_token: "s1:1" },
+        codeMode: true,
+        cursor: { owner: ownerA, point },
+      },
+      reply("click-1"),
+      {
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...ownerA, sequence: 1 },
+          phase: "resting",
+          pid: 42,
+          windowId: 7,
+        },
+      },
+      // Screenshot-free verify_state does not capture pixels, so the cursor stays visible.
+      call("wait-1", "verify_state", { ...WINDOW, expect: [] }),
+      reply("wait-1"),
+      // verify_state with include_screenshot: true still hides before capture and restores after.
+      call("wait-shot", "verify_state", { ...WINDOW, expect: [], include_screenshot: true }),
+      reply("wait-shot"),
+      // Non-spatial press_key on the same window and owner retains the last point.
+      {
+        type: "call",
+        id: "key-1",
+        name: "press_key",
+        args: { ...WINDOW, key: "Escape" },
+        codeMode: true,
+        cursor: { owner: ownerA },
+      },
+      reply("key-1"),
+      // Same-window rebind in the same turn carries pid/windowId on its phase and keeps the point.
+      {
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...rebound, sequence: 1 },
+          phase: "thinking",
+          pid: 42,
+          windowId: 7,
+        },
+      },
+      // Delayed call from older owner A after rebound owner (generation 2) is ignored.
+      {
+        type: "call",
+        id: "late-a",
+        name: "click",
+        args: { pid: 99, window_id: 88, element_token: "s1:9" },
+        codeMode: true,
+        cursor: { owner: ownerA, point: { fx: 0.1, fy: 0.1 } },
+      },
+      // Observing or waiting on a second window in the same turn keeps the last placed cursor
+      // until an input action targets that second window; another turn's owner clears it.
+      {
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...otherWindow, sequence: 1 },
+          phase: "thinking",
+          pid: 42,
+          windowId: 8,
+        },
+      },
+      // A non-spatial input on window 8 also keeps the last placed cursor.
+      {
+        type: "call",
+        id: "key-b",
+        name: "press_key",
+        args: { pid: 42, window_id: 8, key: "Escape" },
+        codeMode: true,
+        cursor: { owner: { ...otherWindow, sequence: 0 } },
+      },
+      reply("key-b"),
+      // Clicking window 8 moves the cursor to window 8; a subsequent read/wait phase on window 7
+      // (at generation 4) keeps the cursor at window 8's new position instead of jumping back to 7.
+      {
+        type: "call",
+        id: "click-b",
+        name: "click",
+        args: { pid: 42, window_id: 8, element_token: "s2:1" },
+        codeMode: true,
+        cursor: { owner: { ...otherWindow, sequence: 0 }, point: { fx: 0.8, fy: 0.2 } },
+      },
+      reply("click-b"),
+      {
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...ownerA, generation: 4, sequence: 1 },
+          phase: "thinking",
+          pid: 42,
+          windowId: 7,
+        },
+      },
+      {
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...otherWindow, turnId: "turn-2", generation: 5, sequence: 1 },
+          phase: "thinking",
+          pid: 42,
+          windowId: 8,
+        },
+      },
+    ]);
+    assert.deepEqual(sent[3], []);
+    assert.deepEqual(sent[5], [
+      { op: "hide", identity: { ...ownerA, sequence: 1 }, phase: "hidden", reason: "capture" },
+    ]);
+    assert.deepEqual(sent[6], [
+      {
+        op: "show",
+        identity: { ...ownerA, sequence: 1 },
+        pid: 42,
+        windowId: 7,
+        point,
+        phase: "resting",
+      },
+    ]);
+    assert.deepEqual(sent[7], [
+      {
+        op: "show",
+        identity: { ...ownerA, sequence: 1 },
+        pid: 42,
+        windowId: 7,
+        point,
+        phase: "acting",
+      },
+    ]);
+    assert.deepEqual(sent[9], [
+      {
+        op: "show",
+        identity: { ...rebound, sequence: 1 },
+        pid: 42,
+        windowId: 7,
+        point,
+        phase: "thinking",
+      },
+    ]);
+    assert.deepEqual(sent[10], []);
+    assert.deepEqual(sent[11], [
+      {
+        op: "show",
+        identity: { ...otherWindow, sequence: 1 },
+        pid: 42,
+        windowId: 7,
+        point,
+        phase: "thinking",
+      },
+    ]);
+    assert.deepEqual(sent[12], [
+      {
+        op: "show",
+        identity: { ...otherWindow, sequence: 1 },
+        pid: 42,
+        windowId: 7,
+        point,
+        phase: "acting",
+      },
+    ]);
+    assert.deepEqual(sent[16], [
+      {
+        op: "show",
+        identity: { ...ownerA, generation: 4, sequence: 1 },
+        pid: 42,
+        windowId: 8,
+        point: { fx: 0.8, fy: 0.2 },
+        phase: "thinking",
+      },
+    ]);
+    assert.deepEqual(state.shown, {
+      op: "hide",
+      identity: { ...otherWindow, turnId: "turn-2", generation: 5, sequence: 1 },
+      phase: "hidden",
+      reason: "idle",
+    });
+    // Direct-mode point is cleared when transitioning to an unplaced scoped owner.
+    const directToScoped = run([
+      ...snapshot,
+      call("d", "click", { ...WINDOW, x: 500, y: 250 }),
+      reply("d"),
+      {
+        type: "cursor",
+        event: { op: "show", identity: { ...ownerA, sequence: 1 }, phase: "thinking" },
+      },
+    ]);
+    assert.deepEqual(directToScoped.state.shown, {
+      op: "hide",
+      identity: { ...ownerA, sequence: 1 },
+      phase: "hidden",
+      reason: "idle",
+    });
+  });
 });

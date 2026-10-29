@@ -81,14 +81,9 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-// The guest names its target (and a batch group) in every call; the driver refuses arguments it
-// does not know.
+// Strip guest-only targetRef/batch fields before forwarding arguments to the driver.
 const callArgs = (args: ScreenHostCall["args"]): Record<string, unknown> => {
-  const {
-    targetRef: _targetRef,
-    batch: _batch,
-    ...rest
-  } = object(Array.isArray(args) ? args[0] : args) ?? {};
+  const { targetRef: _t, batch: _b, ...rest } = object(Array.isArray(args) ? args[0] : args) ?? {};
   return rest;
 };
 const array = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
@@ -135,26 +130,25 @@ export interface BoundWindow {
   windowBounds?: Rect;
 }
 
+type DesktopMethod = (
+  call: ScreenHostCall,
+  context: ScreenHostContext,
+) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+
 export interface DesktopTargetHost extends ScreenHostDispatcher {
-  readonly discover: (
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
-  readonly bindApp: (
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
-  readonly observe: (
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
-  readonly invoke: (
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+  readonly discover: DesktopMethod;
+  readonly bindApp: DesktopMethod;
+  readonly observe: DesktopMethod;
+  readonly invoke: DesktopMethod;
   readonly invalidateTarget: (targetId: string) => void;
   readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
   readonly controlIdForTarget: (targetId: string) => string | undefined;
+  readonly windowForTarget?: (
+    id: string,
+  ) => { readonly pid: number; readonly windowId: number } | undefined;
+  readonly setCursorGeneration?: (
+    lookup: (ref: ScreenTargetRef, callKey?: string) => number,
+  ) => void;
   readonly finishTurn: (runId: string, turnId: string) => void;
 }
 
@@ -167,11 +161,13 @@ export const createDesktopTargetHost = (deps: {
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   /** The platform the driver runs on, which picks launch_app's arguments; this host's by default. */
   readonly platform?: NodeJS.Platform;
+  readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
   const targets = new Map<string, BoundWindow>();
   let epoch = 0;
+  let cursorGeneration = deps.cursorGeneration;
   /** One driver call and its reply as the driver gave it; GOAT's own refusals come back as replies. */
   const send = Effect.fn("DesktopTargetHost.send")(function* (
     tool: string,
@@ -203,7 +199,9 @@ export const createDesktopTargetHost = (deps: {
                 runId: cursor.bound.ref.runId,
                 turnId: cursor.bound.ref.turnId,
                 targetId: cursor.bound.ref.id,
-                generation: cursor.bound.ref.generation,
+                generation:
+                  cursorGeneration?.(cursor.bound.ref, `${context.cellId}\u0000${call.callId}`) ??
+                  cursor.bound.ref.generation,
                 sequence: 0,
               },
               ...(cursor.point === undefined ? {} : { point: cursor.point }),
@@ -920,6 +918,11 @@ export const createDesktopTargetHost = (deps: {
       );
     },
     controlIdForTarget: (targetId) => targets.get(targetId)?.controlId,
+    windowForTarget: (targetId) => {
+      const target = targets.get(targetId);
+      return target && { pid: target.pid, windowId: target.windowId };
+    },
+    setCursorGeneration: (lookup) => void (cursorGeneration = lookup),
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {
