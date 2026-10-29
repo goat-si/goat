@@ -149,6 +149,18 @@ it.effect(
       expect(capture.imageMetadata?.pointsPerPixel?.x).toBeCloseTo(1325 / 1366, 5);
       expect(capture.imageMetadata?.pointsPerPixel?.y).toBeCloseTo(556 / 573, 5);
 
+      const { screenshot_scale: _omitted, ...noScaleState } = finderDownscaled;
+      const noScaleFix = fixture({ get_window_state: noScaleState });
+      const noScaleBound = yield* noScaleFix.host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const noScaleCapture = yield* noScaleFix.host.observe(
+        call("screenshot", {}, noScaleBound.value as ScreenTargetRef),
+        context,
+      );
+      expect(noScaleCapture.imageMetadata?.backingScale).toBeUndefined();
+
       yield* host.invoke(
         call("click", { x: 90, y: 169, ...(regionId ? { regionId } : {}) }, ref),
         context,
@@ -654,6 +666,7 @@ it.effect(
         for (const unsupportedCall of [
           call("click", { x: 20, y: 16, regionId }, ref),
           call("click", { x: 20, y: 16 }, ref),
+          call("click", { x: "20", y: "16" }, ref),
           call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
           call("right_click", { x: 10, y: 10, regionId }, ref),
           call("scroll", { x: 10, y: 10, regionId, direction: "down", amount: 3 }, ref),
@@ -677,5 +690,27 @@ it.effect(
         }
         expect(platFix.sent.slice(before)).toEqual([]);
       }
+
+      // On macOS, numeric-string coordinates (unaddressed or combined with elementRef) are refused as invalid_argument before dispatch.
+      const macFix = fixture({ get_window_state: framedState });
+      const macBound = yield* macFix.host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const macRef = macBound.value as ScreenTargetRef;
+      const macObs = yield* macFix.host.observe(call("get_window_state", {}, macRef), context);
+      const macApply = (
+        macObs.value as { elements: Array<{ index: number; ref: ScreenElementRef }> }
+      ).elements.find((item) => item.index === 1)!.ref;
+      const macBefore = macFix.sent.length;
+      for (const badMacCall of [
+        call("click", { x: "20", y: "16" }, macRef),
+        call("click", { elementRef: macApply, x: "20", y: "16" }, macRef),
+        call("scroll", { elementRef: macApply, x: "10", y: "10", direction: "down" }, macRef),
+      ]) {
+        const refused = yield* macFix.host.invoke(badMacCall, context).pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      }
+      expect(macFix.sent.slice(macBefore)).toEqual([]);
     }),
 );

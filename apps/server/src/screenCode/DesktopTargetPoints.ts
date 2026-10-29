@@ -138,14 +138,11 @@ export const applyDesktopPointerArgs = (
   delete forwarded.toEnd;
   delete forwarded.scrollCenter;
 
+  const coordKeys = ["x", "y", "from_x", "from_y", "to_x", "to_y"] as const;
+  const hasAnyCoordKey = coordKeys.some((key) => key in args && args[key] !== undefined);
   const hasConflictPoint =
     args.scrollCenter === true ||
-    finite(args.x) ||
-    finite(args.y) ||
-    finite(args.from_x) ||
-    finite(args.from_y) ||
-    finite(args.to_x) ||
-    finite(args.to_y) ||
+    hasAnyCoordKey ||
     args.coordinate_space !== undefined ||
     args.window_basis !== undefined ||
     args.regionId !== undefined ||
@@ -174,9 +171,23 @@ export const applyDesktopPointerArgs = (
   if (!POINTER_METHODS.has(method)) {
     delete forwarded.coordinate_space;
     delete forwarded.window_basis;
-    const hasPoint = finite(args.x) && finite(args.y);
-    if (!hasPoint) return { ok: true, needs: "nothing" };
+    if (
+      !hasAnyCoordKey &&
+      args.coordinate_space === undefined &&
+      args.window_basis === undefined &&
+      args.regionId === undefined
+    )
+      return { ok: true, needs: "nothing" };
     if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+    const hasPoint =
+      finite(args.x) &&
+      finite(args.y) &&
+      coordKeys.every((key) => !(key in args && args[key] !== undefined) || finite(args[key]));
+    if (!hasPoint)
+      return {
+        ok: false,
+        error: fail("invalid_argument", "Point coordinates must be finite numbers."),
+      };
     if (state.pointsStale === "restart")
       return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
     return { ok: true, needs: "points" };
@@ -226,13 +237,27 @@ export const applyDesktopPointerArgs = (
   const hasXY = finite(args.x) && finite(args.y);
   const hasDragXY =
     finite(args.from_x) && finite(args.from_y) && finite(args.to_x) && finite(args.to_y);
-  if (!hasXY && !hasDragXY) return { ok: true, needs: "nothing" };
+  const hasPointExtras =
+    hasAnyCoordKey ||
+    args.coordinate_space !== undefined ||
+    args.window_basis !== undefined ||
+    args.regionId !== undefined;
+  if (!hasPointExtras) return { ok: true, needs: "nothing" };
 
   if (!isMac) {
     delete forwarded.coordinate_space;
     delete forwarded.window_basis;
     return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
   }
+
+  const allCoordsFinite = coordKeys.every(
+    (key) => !(key in args && args[key] !== undefined) || finite(args[key]),
+  );
+  if (!allCoordsFinite || (method === "drag" ? !hasDragXY : !hasXY))
+    return {
+      ok: false,
+      error: fail("invalid_argument", "Point coordinates must be finite numbers."),
+    };
 
   if (args.coordinate_space === "window_points") {
     const basis = state.framesBasis ?? state.windowBounds;
@@ -341,14 +366,18 @@ export const buildScreenshotCapture = (input: {
     typeof bounds?.height === "number" && bounds.height > 0 ? bounds.height : height;
   const mimeType =
     imagePart.mimeType === "image/jpeg" ? ("image/jpeg" as const) : ("image/png" as const);
-  const backingScale =
-    typeof state.screenshot_scale === "number" && state.screenshot_scale > 0
+  const rawBackingScale =
+    typeof state.screenshot_scale === "number" &&
+    Number.isFinite(state.screenshot_scale) &&
+    state.screenshot_scale > 0
       ? state.screenshot_scale
-      : 1;
+      : undefined;
   // Delivered image pixels per window point (width / regionWidth), so region.width * scale === pixelWidth
   // even when the driver downscaled a large Retina capture to fit its image dimension cap.
   const deliveredScale =
-    typeof bounds?.width === "number" && bounds.width > 0 ? width / regionWidth : backingScale;
+    typeof bounds?.width === "number" && bounds.width > 0
+      ? width / regionWidth
+      : (rawBackingScale ?? 1);
   const metadata: ScreenImageMetadata = {
     imageRef: NodeCrypto.randomUUID(),
     callId,
@@ -365,7 +394,7 @@ export const buildScreenshotCapture = (input: {
     pixelWidth: width,
     pixelHeight: height,
     scale: deliveredScale,
-    backingScale,
+    ...(rawBackingScale === undefined ? {} : { backingScale: rawBackingScale }),
     pointsPerPixel: { x: regionWidth / width, y: regionHeight / height },
     mimeType,
   };
