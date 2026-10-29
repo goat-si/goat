@@ -2,8 +2,8 @@
 /**
  * Desktop pointer coordinate resolution: converts [x, y] screenshot pixels (using the screenshot's
  * actual region-to-pixel ratio, even when downscaled), { window: [x, y] } window points, and
- * element drag endpoints into window points with a validated window_basis on macOS, while keeping
- * single-use screenshot-pixel addressing on Linux and Windows.
+ * element drag endpoints into window points with a validated window_basis on macOS, while binding
+ * single-use Linux and Windows clicks to the driver's capture_id checked at dispatch.
  */
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -24,6 +24,7 @@ export interface ScreenshotBasis {
   readonly pixelWidth: number;
   readonly pixelHeight: number;
   readonly scale: number;
+  readonly captureId?: string;
 }
 
 const POINTER_METHODS: ReadonlySet<string> = new Set([
@@ -39,8 +40,8 @@ const STALE_INPUT_POINTS =
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
-const UNSUPPORTED_WIN_POINTS =
-  "Window points { window: [x, y] }, element drag endpoints and window-center scroll are only supported on macOS in this driver version; use [x, y] screenshot pixels.";
+const UNSUPPORTED_NON_MAC_POINTS =
+  "On Linux and Windows, point coordinates are supported only on click with a current screenshot capture_id; use element numbers for other actions.";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -65,7 +66,6 @@ export interface PointResolutionState {
 const resolveEndpoint = (
   end: Record<string, unknown>,
   state: PointResolutionState,
-  isMac: boolean,
 ):
   | {
       readonly ok: true;
@@ -75,11 +75,8 @@ const resolveEndpoint = (
       readonly needs: "element" | "points" | "nothing";
     }
   | { readonly ok: false; readonly error: ScreenRunError } => {
-  if (end.coordinate_space === "window_points" && !isMac)
-    return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
   const element = object(end.elementRef);
   if (element !== undefined) {
-    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
     const token = state.resolveToken(element);
     if (!token) return { ok: false, error: fail("stale_reference") };
     const placed = state.frames?.get(token);
@@ -101,13 +98,10 @@ const resolveEndpoint = (
   }
   if (state.pointsStale === "restart")
     return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
-  if (!isMac && state.pointsStale === "input")
-    return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
   const regionId = string(end.regionId);
   const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
   if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
     return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
-  if (!isMac) return { ok: true, x, y, basis: shot.basis, needs: "points" };
   return {
     ok: true,
     x: (x * shot.basis.w) / shot.pixelWidth,
@@ -154,20 +148,21 @@ export const applyDesktopPointerArgs = (
     delete forwarded.coordinate_space;
     delete forwarded.window_basis;
     const hasPoint = finite(args.x) && finite(args.y);
-    if (hasPoint && state.pointsStale === "restart")
+    if (!hasPoint) return { ok: true, needs: "nothing" };
+    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+    if (state.pointsStale === "restart")
       return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
-    if (hasPoint && !isMac && state.pointsStale === "input")
-      return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
-    return { ok: true, needs: hasPoint ? "points" : "nothing" };
+    return { ok: true, needs: "points" };
   }
 
   if (method === "drag" && (args.fromEnd !== undefined || args.toEnd !== undefined)) {
+    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     const fromObj = object(args.fromEnd);
     const toObj = object(args.toEnd);
     if (!fromObj || !toObj) return { ok: false, error: fail("invalid_argument") };
-    const fromRes = resolveEndpoint(fromObj, state, isMac);
+    const fromRes = resolveEndpoint(fromObj, state);
     if (!fromRes.ok) return fromRes;
-    const toRes = resolveEndpoint(toObj, state, isMac);
+    const toRes = resolveEndpoint(toObj, state);
     if (!toRes.ok) return toRes;
     if (!sameRect(fromRes.basis, toRes.basis))
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -175,23 +170,17 @@ export const applyDesktopPointerArgs = (
     forwarded.from_y = fromRes.y;
     forwarded.to_x = toRes.x;
     forwarded.to_y = toRes.y;
-    if (isMac) {
-      forwarded.coordinate_space = "window_points";
-      forwarded.window_basis = fromRes.basis;
-      return {
-        ok: true,
-        windowPoint: { x: toRes.x, y: toRes.y },
-        needs: combineNeeds(fromRes.needs, toRes.needs),
-      };
-    }
+    forwarded.coordinate_space = "window_points";
+    forwarded.window_basis = fromRes.basis;
     return {
       ok: true,
+      windowPoint: { x: toRes.x, y: toRes.y },
       needs: combineNeeds(fromRes.needs, toRes.needs),
     };
   }
 
   if (method === "scroll" && args.scrollCenter === true) {
-    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
+    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -213,7 +202,7 @@ export const applyDesktopPointerArgs = (
     if (!isMac) {
       delete forwarded.coordinate_space;
       delete forwarded.window_basis;
-      return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
+      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     }
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
@@ -233,11 +222,22 @@ export const applyDesktopPointerArgs = (
     return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
 
   const regionId = string(args.regionId);
+  if (!isMac) {
+    if (method !== "click" || !hasXY)
+      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+    const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
+    if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
+      return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
+    if (!shot.captureId)
+      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+    forwarded.capture_id = shot.captureId;
+    return { ok: true, needs: "points" };
+  }
+
   if (regionId !== undefined) {
     const shot = state.screenshots?.get(regionId);
     if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
-    if (!isMac) return { ok: true, needs: "points" };
     if (hasXY) {
       const wx = ((args.x as number) * shot.basis.w) / shot.pixelWidth;
       const wy = ((args.y as number) * shot.basis.h) / shot.pixelHeight;
@@ -346,6 +346,7 @@ export const buildScreenshotCapture = (input: {
     pointsPerPixel: { x: regionWidth / width, y: regionHeight / height },
     mimeType,
   };
+  const captureId = string(state.capture_id);
   const shotBasis: ScreenshotBasis = {
     regionId: metadata.regionId,
     basis: {
@@ -357,6 +358,7 @@ export const buildScreenshotCapture = (input: {
     pixelWidth: width,
     pixelHeight: height,
     scale: metadata.scale,
+    ...(captureId === undefined ? {} : { captureId }),
   };
   return {
     metadata,

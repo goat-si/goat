@@ -4,6 +4,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type {
   ComputerUseOverlayPoint,
   ScreenHostCall,
@@ -165,6 +166,7 @@ export const createDesktopTargetHost = (deps: {
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
+  const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
   const targets = new Map<string, BoundWindow>();
   let epoch = 0;
   /** One driver call and its reply as the driver gave it; GOAT's own refusals come back as replies. */
@@ -705,7 +707,11 @@ export const createDesktopTargetHost = (deps: {
           ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
         });
         if (menuAdmission.refused !== undefined) return yield* Effect.fail(menuAdmission.refused);
-        bound.pointsStale = "input";
+        bound.pointsStale ??= "input";
+        if (!isMac) {
+          bound.screenshots?.clear();
+          delete bound.latestScreenshot;
+        }
         const reply = yield* boundRequest(
           bound,
           "nothing",
@@ -858,7 +864,11 @@ export const createDesktopTargetHost = (deps: {
       };
       const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
       if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
-      bound.pointsStale = "input";
+      bound.pointsStale ??= "input";
+      if (!isMac) {
+        bound.screenshots?.clear();
+        delete bound.latestScreenshot;
+      }
       if (admission.clickedTableCell !== undefined)
         bound.lastClickedTableCell = admission.clickedTableCell;
       const needs = elementToken !== undefined ? "element" : pointerResolved.needs;

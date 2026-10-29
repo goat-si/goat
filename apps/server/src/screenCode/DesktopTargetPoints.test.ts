@@ -517,6 +517,18 @@ it.effect(
       expect(refusedElemDrag.code).toBe("stale_reference");
       expect(sent.slice(before)).toEqual([]);
 
+      // A context-free rebind + non-point input (press_key) must NOT erase the restart fence:
+      // a subsequent legacy pixel click without regionId is still refused with "The driver restarted".
+      // First press_key triggers the rebind (setting pointsStale = "restart"); second press_key
+      // runs on the already-rebound window and must not overwrite "restart" with "input".
+      yield* host.invoke(call("press_key", { key: "Escape" }, ref), context);
+      yield* host.invoke(call("press_key", { key: "Escape" }, ref), context);
+      const legacyAfterRestartKey = yield* host
+        .invoke(call("click", { x: 10, y: 10 }, ref), context)
+        .pipe(Effect.flip);
+      expect(legacyAfterRestartKey.code).toBe("stale_reference");
+      expect(legacyAfterRestartKey.nextStep).toContain("The driver restarted");
+
       // Taking a new screenshot under driver:2 clears the restart flag for the new regionId,
       // while the retired oldRegionId from driver:1 remains refused.
       const newShot = yield* host.observe(call("screenshot", {}, ref), context);
@@ -534,7 +546,7 @@ it.effect(
 );
 
 it.effect(
-  "Linux and Windows keep screenshot-pixel arguments without coordinate_space or window_basis, and legacy point type_text/press_key never receive coordinate_space",
+  "Linux and Windows bind click to capture_id checked at driver dispatch (catching resize before the first click or between admission and delivery), retire prior capture regions on input so a later capture never reactivates an older regionId, and refuse point forms without capture_id dispatch validation",
   () =>
     Effect.gen(function* () {
       const LINUX_CLICK_KEYS = new Set([
@@ -543,6 +555,7 @@ it.effect(
         "pid",
         "window_id",
         "element_token",
+        "capture_id",
         "x",
         "y",
         "button",
@@ -551,46 +564,40 @@ it.effect(
         "action",
         "delivery_mode",
       ]);
-      const KEYBOARD_KEYS = new Set([
-        "session",
-        "target",
-        "pid",
-        "window_id",
-        "element_token",
-        "x",
-        "y",
-        "text",
-        "key",
-        "modifiers",
-        "delay_ms",
-        "delivery_mode",
-      ]);
-      const base = fixture({
-        get_window_state: (args: Record<string, unknown>) =>
-          args.include_accessibility_tree === false ? goat2WindowState(args) : framedState,
-        click: (args: Record<string, unknown>) => {
-          const unknown = Object.keys(args).filter((k) => !LINUX_CLICK_KEYS.has(k));
-          if (unknown.length > 0)
-            return new DriverError({ code: "invalid_arguments" }, `unknown: ${unknown.join(",")}`);
-          return { effect: "confirmed", evidence: ["driver:acted"] };
-        },
-        type_text: (args: Record<string, unknown>) => {
-          const unknown = Object.keys(args).filter((k) => !KEYBOARD_KEYS.has(k));
-          if (unknown.length > 0)
-            return new DriverError({ code: "invalid_arguments" }, `unknown: ${unknown.join(",")}`);
-          return { effect: "confirmed", evidence: ["driver:acted"] };
-        },
-        press_key: (args: Record<string, unknown>) => {
-          const unknown = Object.keys(args).filter((k) => !KEYBOARD_KEYS.has(k));
-          if (unknown.length > 0)
-            return new DriverError({ code: "invalid_arguments" }, `unknown: ${unknown.join(",")}`);
-          return { effect: "confirmed", evidence: ["driver:acted"] };
-        },
-      });
       for (const platform of ["linux", "win32"] as const) {
+        let captureCounter = 0;
+        let activeCaptureId = "";
+        let windowResizedBeforeDelivery = false;
         const platFix = fixture({
-          get_window_state: (args: Record<string, unknown>) =>
-            args.include_accessibility_tree === false ? goat2WindowState(args) : framedState,
+          get_window_state: (args: Record<string, unknown>) => {
+            if (args.include_accessibility_tree === false) {
+              activeCaptureId = `cap-${++captureCounter}`;
+              return goat2WindowState(args, {
+                snapshot_id: "s0000000a",
+                capture_id: activeCaptureId,
+              });
+            }
+            return framedState;
+          },
+          click: (args: Record<string, unknown>) => {
+            const unknown = Object.keys(args).filter((k) => !LINUX_CLICK_KEYS.has(k));
+            if (unknown.length > 0)
+              return new DriverError(
+                { code: "invalid_arguments" },
+                `unknown: ${unknown.join(",")}`,
+              );
+            if ("x" in args && args.capture_id !== activeCaptureId)
+              return new DriverError(
+                { code: "window_geometry_changed", effect: "refused" },
+                "missing or stale capture_id",
+              );
+            if (windowResizedBeforeDelivery)
+              return new DriverError(
+                { code: "window_geometry_changed", effect: "refused" },
+                "window resized before delivery",
+              );
+            return { effect: "confirmed", evidence: ["driver:acted"] };
+          },
         });
         const host = createDesktopTargetHost({
           primitiveChannel: platFix.channel as never,
@@ -606,60 +613,71 @@ it.effect(
         const applyRef = (
           obs.value as { elements: Array<{ index: number; ref: ScreenElementRef }> }
         ).elements.find((item) => item.index === 1)!.ref;
-        const shot = yield* host.observe(call("screenshot", {}, ref), context);
-        const regionId = shot.imageMetadata?.regionId!;
 
-        // 1. Screenshot click before input keeps 2x screenshot pixel coordinates (20, 16) without coordinate_space.
-        const clicked = yield* host.invoke(call("click", { x: 20, y: 16, regionId }, ref), context);
-        expect(clicked.category).toBe("confirmed");
-        expect(platFix.sent.at(-1)?.args).toMatchObject({ x: 20, y: 16 });
+        // 1. Resize before the FIRST action (or between admission and delivery) is caught by the
+        // driver's capture_id check at dispatch and surfaces as stale_reference.
+        const shotResize = yield* host.observe(call("screenshot", {}, ref), context);
+        const resizeRegionId = shotResize.imageMetadata?.regionId!;
+        windowResizedBeforeDelivery = true;
+        const refusedResizeFirst = yield* host
+          .invoke(call("click", { x: 20, y: 16, regionId: resizeRegionId }, ref), context)
+          .pipe(Effect.flip);
+        expect(refusedResizeFirst.code).toBe("stale_reference");
+        windowResizedBeforeDelivery = false;
+
+        // 2. Capture A -> input -> Capture B: A's regionId remains refused after B, while B works
+        // and sends capture_id without coordinate_space or window_basis.
+        const shotA = yield* host.observe(call("screenshot", {}, ref), context);
+        const regionA = shotA.imageMetadata?.regionId!;
+        yield* host.invoke(call("press_key", { key: "Escape" }, ref), context);
+        const shotB = yield* host.observe(call("screenshot", {}, ref), context);
+        const regionB = shotB.imageMetadata?.regionId!;
+
+        const retiredA = yield* host
+          .invoke(call("click", { x: 20, y: 16, regionId: regionA }, ref), context)
+          .pipe(Effect.flip);
+        expect(retiredA.code).toBe("stale_reference");
+
+        const clickedB = yield* host.invoke(
+          call("click", { x: 20, y: 16, regionId: regionB }, ref),
+          context,
+        );
+        expect(clickedB.category).toBe("confirmed");
+        expect(platFix.sent.at(-1)?.args).toMatchObject({
+          x: 20,
+          y: 16,
+          capture_id: activeCaptureId,
+        });
         expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
         expect(platFix.sent.at(-1)?.args).not.toHaveProperty("window_basis");
 
-        // 2. Reusing screenshot pixels after input on non-macOS is refused because the driver lacks
-        // dispatch-time window_basis validation.
-        const reusedAfterInput = yield* host
-          .invoke(call("click", { x: 20, y: 16, regionId }, ref), context)
+        // 3. Point forms without capture_id dispatch validation (reused point after click,
+        // window_points, drag, scroll, right_click, point type_text/press_key) are refused on non-macOS.
+        const reusedB = yield* host
+          .invoke(call("click", { x: 20, y: 16, regionId: regionB }, ref), context)
           .pipe(Effect.flip);
-        expect(reusedAfterInput.code).toBe("stale_reference");
+        expect(reusedB.code).toBe("stale_reference");
 
-        // 3. { window: [x, y] }, element drag endpoints, and scrollCenter are refused as unsupported on non-macOS.
-        const freshShot = yield* host.observe(call("screenshot", {}, ref), context);
-        const freshRegion = freshShot.imageMetadata?.regionId!;
+        const shotC = yield* host.observe(call("screenshot", {}, ref), context);
+        const regionC = shotC.imageMetadata?.regionId!;
         for (const unsupportedCall of [
           call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
+          call("right_click", { x: 10, y: 10, regionId: regionC }, ref),
+          call("scroll", { x: 10, y: 10, regionId: regionC, direction: "down", amount: 3 }, ref),
           call(
             "drag",
             {
               fromEnd: { elementRef: applyRef },
-              toEnd: { x: 80, y: 60, regionId: freshRegion },
+              toEnd: { x: 80, y: 60, regionId: regionC },
             },
             ref,
           ),
-          call("scroll", { scrollCenter: true, direction: "down", amount: 3 }, ref),
+          call("type_text", { x: 10, y: 10, text: "hi", regionId: regionC }, ref),
+          call("press_key", { x: 10, y: 10, key: "Return", regionId: regionC }, ref),
         ]) {
           const refused = yield* host.invoke(unsupportedCall, context).pipe(Effect.flip);
           expect(refused.code).toBe("unsupported");
         }
       }
-
-      // On macOS, legacy point-targeted type_text and press_key never acquire coordinate_space or window_basis.
-      const boundMac = yield* base.host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const macRef = boundMac.value as ScreenTargetRef;
-      const macShot = yield* base.host.observe(call("screenshot", {}, macRef), context);
-      const macRegion = macShot.imageMetadata?.regionId!;
-      const typed = yield* base.host.invoke(
-        call("type_text", { x: 20, y: 16, text: "hi", regionId: macRegion }, macRef),
-        context,
-      );
-      expect(typed.category).toBe("confirmed");
-      const pressed = yield* base.host.invoke(
-        call("press_key", { x: 20, y: 16, key: "Return", regionId: macRegion }, macRef),
-        context,
-      );
-      expect(pressed.category).toBe("confirmed");
     }),
 );
