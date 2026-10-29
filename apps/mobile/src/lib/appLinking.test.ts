@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import * as NodeModule from "node:module";
 import * as NodeURL from "node:url";
+import { EnvironmentId } from "@goat/contracts";
+import { AsyncResult } from "effect/reactivity";
+import { finishHubPairing, resolveConnectHubIntent } from "../features/connection/connectHubIntent";
 
 import {
   findLinkedRoute,
@@ -10,6 +13,46 @@ import {
 } from "./appLinking";
 
 describe("pairing links", () => {
+  it.each([
+    ["pair", "Pair", ""],
+    ["connections/new", "ConnectionsNew", "?pairingUrl=example&autoConnect=1"],
+    [
+      "settings/environment-new",
+      "SettingsEnvironmentNew",
+      "?routeFor=old&intent=change-hub&replaceEnvironmentId=old&pairingUrl=example&autoConnect=1",
+    ],
+  ])("does not remove the existing hub after %s%s completes", async (path, name, query) => {
+    const require = NodeModule.createRequire(import.meta.url);
+    const nativeRequire = NodeModule.createRequire(require.resolve("@react-navigation/native"));
+    const { getStateFromPath } = await import(
+      NodeURL.pathToFileURL(nativeRequire.resolve("@react-navigation/core")).href
+    );
+    const state = getStateFromPath(`${path}${query}`, {
+      screens: {
+        Pair: "pair",
+        ConnectionsNew: "connections/new",
+        SettingsEnvironmentNew: "settings/environment-new",
+      },
+    });
+    const params = findLinkedRoute(withoutPairingTarget(state), [name])?.params as
+      | { intent?: string; routeFor?: string; replaceEnvironmentId?: string }
+      | undefined;
+    const intent = resolveConnectHubIntent({
+      intent: params?.intent,
+      routeFor: params?.routeFor,
+      savedEnvironmentCount: 1,
+    });
+    const removeEnvironment = vi.fn(async () => AsyncResult.success(undefined));
+    await expect(
+      finishHubPairing({
+        pairedEnvironmentId: EnvironmentId.make("new"),
+        intent,
+        replaceEnvironmentId: EnvironmentId.make(params?.replaceEnvironmentId ?? "old"),
+        removeEnvironment,
+      }),
+    ).resolves.toEqual({ removed: false, removalFailed: false });
+    expect(removeEnvironment).not.toHaveBeenCalled();
+  });
   it.each([
     ["pair", "Pair"],
     ["connections/new", "ConnectionsNew"],
@@ -47,7 +90,7 @@ describe("pairing links", () => {
       ],
     };
     const result = withoutPairingTarget(state);
-    expect(result?.routes[0]?.params).toEqual({ pairingUrl: "example" });
+    expect(result?.routes[0]?.params).toEqual({ pairingUrl: "example", intent: "add-server" });
     expect(findLinkedRoute(result, ["ConnectionsNew"])?.params).toEqual({ intent: "add-server" });
   });
 });

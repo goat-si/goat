@@ -50,22 +50,14 @@ export function withoutPairingTarget(state: LinkState | undefined): LinkState | 
     ...state,
     routes: state.routes.map((route) => {
       const nested = isLinkState(route.state) ? withoutPairingTarget(route.state) : route.state;
-      if (
-        !["Pair", "ConnectionsNew", "SettingsEnvironmentNew"].includes(route.name) ||
-        !route.params ||
-        !(
-          "routeFor" in route.params ||
-          "intent" in route.params ||
-          "replaceEnvironmentId" in route.params
-        )
-      )
+      if (!["Pair", "ConnectionsNew", "SettingsEnvironmentNew"].includes(route.name))
         return nested === route.state ? route : { ...route, state: nested };
       const {
         routeFor: _routeFor,
         intent: _intent,
         replaceEnvironmentId: _replace,
         ...params
-      } = route.params as Record<string, unknown>;
+      } = (route.params ?? {}) as Record<string, unknown>;
       return { ...route, state: nested, params: { ...params, intent: "add-server" } };
     }),
   };
