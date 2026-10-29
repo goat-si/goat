@@ -30,6 +30,8 @@ export const bindingKeyFor = (
     requester.externalActorId ?? "",
     requester.originKind,
     requester.runtimeModeCeiling,
+    // A session's frozen journal shows what these scopes could see; another set starts a new one.
+    requester.grantedScopes.toSorted().join(","),
     target.memoryGrantCeiling ?? "none",
     target.modelSelection.instanceId,
     target.modelSelection.model,

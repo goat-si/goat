@@ -157,13 +157,18 @@ const make = Effect.gen(function* () {
 
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
 
-  const fail = (stored: ChannelLedger.ChannelStoredTask, owner: string, summary: string) =>
+  const fail = (
+    stored: ChannelLedger.ChannelStoredTask,
+    owner: string,
+    summary: string,
+    reason: "launch_failed" | "permission_changed" = "launch_failed",
+  ) =>
     commitTransition(
       ledger,
       stored,
       {
         type: "task.failed",
-        payload: { generation: stored.task.generation, reason: "launch_failed", summary },
+        payload: { generation: stored.task.generation, reason, summary },
       },
       { owner, narrate: true },
     ).pipe(Effect.as("failed" as const));
@@ -231,9 +236,10 @@ const make = Effect.gen(function* () {
     return false;
   });
 
-  /** The six-part prefix for a new session, read once and frozen into its row. */
+  /** The six-part prefix for a new session, frozen into its row; the journal is what the requester may see now. */
   const freezePrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
     task: ChannelTask,
+    requester: ChannelRequester,
     message: string,
   ) {
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
@@ -244,7 +250,7 @@ const make = Effect.gen(function* () {
       .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
       .pipe(
         Effect.map((page) =>
-          page.tasks.filter((other) => canSeeTask(task.requester, other, task.conversationId)),
+          page.tasks.filter((other) => canSeeTask(requester, other, task.conversationId)),
         ),
         Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
       );
@@ -279,9 +285,12 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const modeLimit = (task: ChannelTask, refused: Ref.Ref<DispatchModeRefusal | undefined>) =>
+  const modeLimit = (
+    requester: Pick<ChannelRequester, "runtimeModeCeiling">,
+    refused: Ref.Ref<DispatchModeRefusal | undefined>,
+  ) =>
     Effect.provideService(DispatchModeLimit, {
-      runtimeMode: task.requester.runtimeModeCeiling,
+      runtimeMode: requester.runtimeModeCeiling,
       interactionMode: "default",
       refused,
     });
@@ -372,6 +381,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     text: string,
     owner: string,
+    requester: ChannelRequester,
   ) {
     const task = stored.task;
     const ids = sessionSendIdsFor(task.taskId, task.generation);
@@ -390,7 +400,7 @@ const make = Effect.gen(function* () {
         createdBy: "user",
         creationSource: "server",
       })
-      .pipe(modeLimit(task, refused), Effect.result);
+      .pipe(modeLimit(requester, refused), Effect.result);
     if (sent._tag === "Failure") {
       if ((yield* Ref.get(refused)) !== undefined || rejected(sent.failure))
         return yield* fail(stored, owner, "GOAT Bot's session did not take this request.");
@@ -408,6 +418,7 @@ const make = Effect.gen(function* () {
 
   const allocate = Effect.fn("ChannelBotSession.allocate")(function* (
     task: ChannelTask,
+    requester: ChannelRequester,
     key: string,
     sharing: string,
     driver: string | undefined,
@@ -433,7 +444,7 @@ const make = Effect.gen(function* () {
           VALUES (${task.conversationId}, ${generation}, ${key}, ${threadId},
             ${task.taskId}, ${task.generation}, 'starting', ${driver ?? null},
             ${sharing}, ${target.modelSelection.instanceId}, ${target.modelSelection.model},
-            ${encodeRequester(task.requester)}, ${sessionContextRevision(prefix)}, ${prefix}, ${now})
+            ${encodeRequester(requester)}, ${sessionContextRevision(prefix)}, ${prefix}, ${now})
         `;
         return yield* currentRow(key);
       }),
@@ -447,12 +458,19 @@ const make = Effect.gen(function* () {
     const target = yield* requireTarget(initial.task);
     const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
-    // The requester as they stand now: a Slack grant lowered since the message arrived counts.
-    const requester =
-      (yield* requesterForDispatch(initial.task).pipe(
-        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-      )) ?? initial.task.requester;
+    // The requester as they stand now: a Slack grant lowered since the message arrived counts,
+    // and one that can no longer start work is refused rather than served on intake authority.
+    const requester = yield* requesterForDispatch(initial.task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
+    if (requester === undefined)
+      return yield* fail(
+        initial,
+        owner,
+        "The requester’s permission to start this work changed.",
+        "permission_changed",
+      );
     const key = bindingKeyFor(initial.task, target, sharing, requester);
     let row = yield* currentRow(key);
     const records =
@@ -509,7 +527,7 @@ const make = Effect.gen(function* () {
       const due = sessionRotationDue(usage, DateTime.toEpochMillis(yield* DateTime.now));
       if (due === undefined) {
         const { stored } = yield* freeze(message);
-        return yield* queueInto(stored, row.thread_id, message, owner);
+        return yield* queueInto(stored, row.thread_id, message, owner, requester);
       }
       if (Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value))) {
         yield* Effect.logInfo("GOAT Bot session rotation waits for its work", {
@@ -522,8 +540,8 @@ const make = Effect.gen(function* () {
       row = undefined;
     }
     if (row === undefined) {
-      const prefix = yield* freezePrefix(initial.task, message);
-      row = yield* allocate(initial.task, key, sharing, driver, prefix);
+      const prefix = yield* freezePrefix(initial.task, requester, message);
+      row = yield* allocate(initial.task, requester, key, sharing, driver, prefix);
       if (row === undefined) return "deferred" as const;
     }
     const { stored } = yield* freeze(row.context_text ?? message);
@@ -612,7 +630,7 @@ const make = Effect.gen(function* () {
               createdBy: "user",
               creationSource: "server",
             })
-            .pipe(modeLimit(task, refused), Effect.result),
+            .pipe(modeLimit(task.requester, refused), Effect.result),
         ),
       );
     let which = ids.first;

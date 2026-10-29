@@ -21,6 +21,7 @@ import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -37,6 +38,8 @@ import {
   owner,
   rpcContext,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
 
 const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
@@ -115,6 +118,60 @@ const settle = Effect.gen(function* () {
   yield* runtime.drain;
 });
 
+/** Links Slack user U2 as a teammate, who sees the owner's other work only with orchestration:read. */
+const linkTeammate = Effect.gen(function* () {
+  const identities = yield* ChannelIdentityService.ChannelIdentityService;
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const { code } = yield* identities.createLink(
+    {
+      connectionId: "slack-1",
+      runtimeModeCeiling: "auto-accept-edits",
+      grantedScopes: ["orchestration:read", "orchestration:operate"],
+    },
+    { ...owner, principalId: "teammate", displayName: "Teammate" },
+  );
+  yield* gateway.linkIdentity(
+    {
+      connectionId: "slack-1",
+      externalActorId: "U2",
+      code,
+      idempotencyKey: "link-U2",
+      replyAddress: slackInput("", "unused").replyAddress,
+    },
+    slackContext,
+  );
+});
+
+const narrowTeammate = Effect.flatMap(
+  SqlClient.SqlClient,
+  (sql) =>
+    sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`,
+);
+
+/** The teammate's message in one Slack thread, read but not yet dispatched. */
+const receiveFromTeammate = (text: string, key: string) =>
+  Effect.gen(function* () {
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* runtime.drain;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const ingested = yield* gateway.ingest(
+      slackInput(text, key, "1760000000.000900", "U2"),
+      slackContext,
+    );
+    yield* reception.receive(ingested.inputId, runtime.ownerToken);
+    return (yield* ledger.getTask(taskIdFor(ingested.inputId, 0)))!.task;
+  });
+
+const dispatchNow = (task: ChannelTask) =>
+  Effect.gen(function* () {
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    yield* dispatcher.dispatch(task.taskId, runtime.ownerToken);
+    return yield* current(task.taskId);
+  });
+
 const current = (taskId: ChannelTaskId) =>
   ChannelLedger.ChannelLedger.pipe(
     Effect.flatMap((ledger) => ledger.getTask(taskId)),
@@ -167,6 +224,77 @@ const reportFrom = (
   );
 
 describe("GOAT Bot sessions", () => {
+  it.effect(
+    "builds a session's journal from the requester's current scopes, not the ones at intake",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* ask("look: payroll export", "j0");
+        yield* linkTeammate;
+        const task = yield* receiveFromTeammate("look: check the build", "j1");
+        assert.include(task.requester.grantedScopes, "orchestration:read");
+        yield* narrowTeammate;
+        const served = yield* dispatchNow(task);
+        const launch = harness.world.launches.find(
+          (candidate) => candidate.threadId === served.worker?.threadId,
+        );
+        assert.include(launch!.initialMessage!.text, "check the build");
+        assert.notInclude(launch!.initialMessage!.text, "payroll export");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("does not reuse a session whose prefix was built under wider scopes", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* ask("look: payroll export", "w0");
+      yield* linkTeammate;
+      const wide = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "w1"));
+      const wideThread = wide.worker!.threadId;
+      const wideLaunch = harness.world.launches.find((launch) => launch.threadId === wideThread);
+      assert.include(wideLaunch!.initialMessage!.text, "payroll export");
+      harness.world.setStatus(wideThread, 1, "completed", "Done.");
+      yield* settle;
+      yield* narrowTeammate;
+      const narrow = yield* dispatchNow(yield* receiveFromTeammate("look: second look", "w2"));
+      assert.notStrictEqual(narrow.worker?.threadId, wideThread);
+      assert.isFalse(
+        harness.world.sends.some(
+          (send) => send.threadId === wideThread && JSON.stringify(send).includes("second look"),
+        ),
+      );
+      const narrowLaunch = harness.world.launches.find(
+        (launch) => launch.threadId === narrow.worker?.threadId,
+      );
+      assert.notInclude(narrowLaunch!.initialMessage!.text, "payroll export");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "refuses to serve a requester whose link was removed instead of using intake authority",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const served = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "u1"));
+        assert.isDefined(served.worker);
+        const identities = yield* ChannelIdentityService.ChannelIdentityService;
+        yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U2" });
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const session = yield* ChannelBotSession.ChannelBotSession;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const stored = (yield* ledger.getTask(served.taskId))!;
+        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "failed");
+        const after = yield* current(served.taskId);
+        assert.strictEqual(after.status, "failed");
+        assert.lengthOf(harness.world.launches, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect(
     "runs two requests in one conversation in the same session thread, each as its own run",
     () => {
