@@ -1,10 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, BotIcon, SearchIcon } from "~/components/solar";
+import { BellIcon } from "~/components/solar";
 import { useSyncExternalStore } from "react";
 
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
-import { openCommandPalette } from "../../commandPaletteBus";
 import { useGlobalAgentStore } from "../../globalAgentStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { updateClientSettings, useLegacySidebarEnabled } from "../../hooks/useSettings";
@@ -21,11 +20,10 @@ import {
 } from "../Sidebar.logic";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { requestSidebarSearchFocus } from "./sidebarSearchFocus";
 import { withoutBotThreads } from "./botVisibility";
 import { foldedPriorityMember } from "./foldedPriority";
 import { foldLaunchedThreads } from "./launchFold";
-import { useBotThreadKeys, useShowBotThreads } from "./useBotThreadKeys";
+import { useBotThreadKeys } from "./useBotThreadKeys";
 
 export function useSidebarActivityToggle() {
   const projectsSidebar = useLegacySidebarEnabled();
@@ -103,16 +101,11 @@ export function SidebarPriorityCountBadge({ priorityCount }: { priorityCount: nu
 export function SidebarViewToggles() {
   const { activityActive, toggleActivity } = useSidebarActivityToggle();
   const priorityCount = useSidebarPriorityCount();
-  const [botThreadsShown, setBotThreadsShown] = useShowBotThreads();
-  const botThreadsLabel = botThreadsShown ? "Hide GOAT Bot threads" : "Show GOAT Bot threads";
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const activityLabel = activityActive ? "Turn off activity view" : "View activity";
   const activityName =
     priorityCount > 0 ? `${activityLabel}, ${priorityCount} in Priority` : activityLabel;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggleActivity");
-  const handleSearch = () => {
-    if (!requestSidebarSearchFocus()) openCommandPalette();
-  };
 
   return (
     <div className="relative z-10 flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
@@ -138,40 +131,6 @@ export function SidebarViewToggles() {
         </TooltipPopup>
       </Tooltip>
       <SidebarPriorityCountBadge priorityCount={priorityCount} />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="relative top-auto translate-y-0"
-              aria-label={botThreadsLabel}
-              aria-pressed={botThreadsShown}
-              data-pressed={botThreadsShown ? "" : undefined}
-              onClick={() => setBotThreadsShown(!botThreadsShown)}
-            >
-              <BotIcon />
-            </Button>
-          }
-        />
-        <TooltipPopup side="bottom">{botThreadsLabel}</TooltipPopup>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="relative top-auto translate-y-0"
-              aria-label="Search threads"
-              onClick={handleSearch}
-            >
-              <SearchIcon />
-            </Button>
-          }
-        />
-        <TooltipPopup side="bottom">Search threads</TooltipPopup>
-      </Tooltip>
     </div>
   );
 }
