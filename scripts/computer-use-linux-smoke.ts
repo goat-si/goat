@@ -105,8 +105,26 @@ const children = async (pid: number) => {
   return pids;
 };
 
-/** Pure red pixels in a PNG the helper wrote: 8-bit RGB, every row unfiltered. */
-const redPixels = (png: Buffer) => {
+/** A colour test, written once for Node and once for the Python that reads the screen. */
+interface Colour {
+  readonly js: (r: number, g: number, b: number) => boolean;
+  readonly py: string;
+}
+const RED: Colour = {
+  js: (r, g, b) => r === 255 && g === 0 && b === 0,
+  py: "(r, g, b) == (255, 0, 0)",
+};
+/**
+ * Cua Driver's agent cursor: a strong colour, different each session. The GTK fixture is grey,
+ * so any strongly coloured pixel over it is the cursor.
+ */
+const AGENT_CURSOR: Colour = {
+  js: (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) > 80,
+  py: "max(r, g, b) - min(r, g, b) > 80",
+};
+
+/** Pixels of one colour in a PNG the helper wrote: 8-bit RGB, every row unfiltered. */
+const pixelsOf = (png: Buffer, colour: Colour) => {
   const width = png.readUInt32BE(16);
   const height = png.readUInt32BE(20);
   const chunks: Buffer[] = [];
@@ -121,9 +139,36 @@ const redPixels = (png: Buffer) => {
   for (let row = 0; row < height; row++)
     for (let x = 0; x < width; x++) {
       const at = row * (width * 3 + 1) + 1 + x * 3;
-      if (raw[at] === 255 && raw[at + 1] === 0 && raw[at + 2] === 0) count++;
+      if (colour.js(raw[at] ?? 0, raw[at + 1] ?? 0, raw[at + 2] ?? 0)) count++;
     }
   return count;
+};
+
+/**
+ * Saves the screen over the fixture and counts pixels of one colour where the fixture is (no
+ * window manager runs, so its corner is 0,0). What the screen shows, unlike the helper's capture.
+ */
+const screenPixels = (env: NodeJS.ProcessEnv, file: string, colour: Colour) => {
+  const screen = NodeChildProcess.spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import gi, sys",
+        "gi.require_version('Gdk', '3.0')",
+        "from gi.repository import Gdk",
+        "root = Gdk.get_default_root_window()",
+        "shot = Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360)",
+        "shot.savev(sys.argv[1], 'png', [], [])",
+        "data, stride, step = shot.get_pixels(), shot.get_rowstride(), shot.get_n_channels()",
+        "def matches(r, g, b): return " + colour.py,
+        "print(sum(1 for y in range(320) for x in range(420) if matches(*data[y * stride + x * step:y * stride + x * step + 3])))",
+      ].join("\n"),
+      NodePath.join(evidence, file),
+    ],
+    { env, timeout: 5000, encoding: "utf8" },
+  );
+  return { pixels: Number(screen.stdout.trim()), status: screen.status };
 };
 
 let failed = false;
@@ -321,25 +366,38 @@ try {
     delivery: "background",
     at: { element: ref("Increment") },
   });
-  const counter = click.result.observation?.changed?.find(
-    (element: any) => element.label === "Count",
-  );
+  // Cua Driver draws its agent cursor over the control it acted on (#1221).
+  const cursorOnScreen = screenPixels(env, "2-screen-after-click.png", AGENT_CURSOR);
+  // An action reports only what the driver knows; the agent's next observation shows the effect.
   check(
-    // The counter changed, not the clicked button, so the helper shows the change without
-    // claiming it: unverifiable, with the diff for the agent to judge.
-    "background AT-SPI click lands; its diff shows the counter, unclaimed",
-    click.result.outcome === "unverifiable" && counter?.value === "1",
+    "background AT-SPI click is dispatched, unclaimed and without a readback",
+    click.result.outcome === "unverifiable" &&
+      click.result.observation === undefined &&
+      click.image === undefined,
+    { ms: click.ms, result: click.result },
+  );
+  const afterClick = await request("observe", {
+    target,
+    screenshot: true,
+    since: first.result.observationId,
+  });
+  const counter = afterClick.result.changed?.find((element: any) => element.label === "Count");
+  check(
+    "the next observation's diff shows the counter the click changed",
+    afterClick.result.kind === "diff" && counter?.value === "1",
     {
-      ms: click.ms,
-      result: {
-        ...click.result,
-        observation: {
-          kind: click.result.observation?.kind,
-          changed: click.result.observation?.changed,
-        },
-      },
-      file: await saveImage("2-after-click.png", click.image),
+      ms: afterClick.ms,
+      changed: afterClick.result.changed,
+      file: await saveImage("2-after-click.png", afterClick.image),
     },
+  );
+  const cursorInShot = afterClick.image
+    ? pixelsOf(Buffer.from(afterClick.image.data, "base64"), AGENT_CURSOR)
+    : -1;
+  check(
+    "the agent cursor the driver draws on screen after the click never reaches the window's screenshot",
+    cursorOnScreen.pixels > 0 && cursorInShot === 0,
+    { cursorOnScreen: cursorOnScreen.pixels, cursorInScreenshot: cursorInShot },
   );
 
   const stale = await request("click", {
@@ -355,7 +413,7 @@ try {
     stale.result,
   );
 
-  const latest = click.result.observation;
+  const latest = afterClick.result;
   const set = await request("setValue", {
     action: "setValue",
     target: latest.target,
@@ -364,18 +422,29 @@ try {
     element: ref("Name"),
     value: "GOAT on Linux",
   });
-  check("setValue through AT-SPI is confirmed", set.result.outcome === "confirmed", {
-    ms: set.ms,
-    outcome: set.result.outcome,
-    dispatch: set.result.dispatch,
-    detail: set.result.detail,
-    file: await saveImage("3-after-set-value.png", set.image),
+  const afterSet = await request("observe", {
+    target,
+    screenshot: true,
+    since: latest.observationId,
   });
+  const name = afterSet.result.changed?.find((element: any) => element.label === "Name");
+  check(
+    "setValue through AT-SPI lands, and the next observation shows the value",
+    set.result.outcome !== "refused" && name?.value === "GOAT on Linux",
+    {
+      ms: set.ms,
+      outcome: set.result.outcome,
+      dispatch: set.result.dispatch,
+      detail: set.result.detail,
+      changed: afterSet.result.changed,
+      file: await saveImage("3-after-set-value.png", afterSet.image),
+    },
+  );
 
   const keys = await request("pressKey", {
     action: "pressKey",
     target: latest.target,
-    observationId: set.result.observation.observationId,
+    observationId: afterSet.result.observationId,
     delivery: "background",
     key: "a",
   });
@@ -393,7 +462,7 @@ try {
   const pointClick = await request("click", {
     action: "click",
     target: latest.target,
-    observationId: set.result.observation.observationId,
+    observationId: afterSet.result.observationId,
     delivery: "background",
     at: {
       x: button.frame.x + button.frame.width / 2,
@@ -429,36 +498,17 @@ try {
     env,
   );
   await sleep(1500);
-  const screen = NodeChildProcess.spawnSync(
-    "python3",
-    [
-      "-c",
-      [
-        "import gi, sys",
-        "gi.require_version('Gdk', '3.0')",
-        "from gi.repository import Gdk",
-        "root = Gdk.get_default_root_window()",
-        "shot = Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360)",
-        "shot.savev(sys.argv[1], 'png', [], [])",
-        // Pure red pixels the screen shows where the fixture is (no window manager: its corner is 0,0).
-        "data, stride, step = shot.get_pixels(), shot.get_rowstride(), shot.get_n_channels()",
-        "print(sum(1 for y in range(320) for x in range(420) if tuple(data[y * stride + x * step:y * stride + x * step + 3]) == (255, 0, 0)))",
-      ].join("\n"),
-      NodePath.join(evidence, "4-screen-with-other-app.png"),
-    ],
-    { env, timeout: 5000, encoding: "utf8" },
-  );
-  const onScreen = Number(screen.stdout.trim());
+  const screen = screenPixels(env, "4-screen-with-other-app.png", RED);
   check(
     "the other app's window really covers the fixture on screen",
-    cover.exitCode === null && onScreen > 1000,
+    cover.exitCode === null && screen.pixels > 1000,
     {
-      redOnScreen: onScreen,
+      redOnScreen: screen.pixels,
       screenCapture: screen.status,
     },
   );
   const covered = await request("observe", { target, screenshot: true });
-  const red = covered.image ? redPixels(Buffer.from(covered.image.data, "base64")) : -1;
+  const red = covered.image ? pixelsOf(Buffer.from(covered.image.data, "base64"), RED) : -1;
   check(
     "another app's window over the fixture never reaches its screenshot",
     covered.result.kind === "full" && red === 0,
@@ -481,7 +531,7 @@ try {
   const secret = await request("observe", {
     target,
     screenshot: true,
-    since: set.result.observation.observationId,
+    since: afterSet.result.observationId,
   });
   check(
     "a focused password field starts private mode: no tree, no screenshot",

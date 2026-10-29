@@ -395,10 +395,12 @@ node scripts/build-computer-use-helper-linux.ts
 node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
 ```
 
-The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), `dbus-daemon`, at-spi2-core,
-python3 with GTK 3 introspection and `xdotool`. Without a writable `/dev/uinput` and an X server
-that accepts new input devices, which Xvfb is not, background keys and pixel clicks are refused
-with `backgroundUnavailable`; AT-SPI clicks and value writes still run in the background.
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), the `xcompmgr` compositing
+manager (`--compositor <path>`), `dbus-daemon`, at-spi2-core, python3 with GTK 3 introspection
+and `xdotool`. On Ubuntu: `sudo apt-get install -y xvfb xcompmgr xdotool at-spi2-core gir1.2-gtk-3.0`.
+Without a writable `/dev/uinput` and an X server that accepts new input devices, which Xvfb is
+not, background keys and pixel clicks are refused with `backgroundUnavailable`; AT-SPI clicks and
+value writes still run in the background.
 
 ### Windows installer prerequisites
 
