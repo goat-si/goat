@@ -118,6 +118,8 @@ export class DriverError {
 }
 /** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
 export class NotStarted extends DriverError {}
+/** A call cut off after it reached the driver: the proxy answers unknown_outcome. */
+export class UnknownOutcome extends DriverError {}
 // The typed refusal fields the lease proxy adds to a driver reply it refused.
 export const typedRefusal = {
   effect: "refused",
@@ -177,7 +179,12 @@ export const fixture = (
                 ? (answer as (args: unknown) => unknown)(request.args)
                 : answer;
             return {
-              status: value instanceof NotStarted ? "not_started" : "settled",
+              status:
+                value instanceof NotStarted
+                  ? "not_started"
+                  : value instanceof UnknownOutcome
+                    ? "unknown_outcome"
+                    : "settled",
               connectionGeneration: connection.id,
               result:
                 value instanceof DriverError

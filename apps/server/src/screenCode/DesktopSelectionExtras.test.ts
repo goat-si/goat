@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
 import { computerUseRefusalReason } from "@goat/contracts";
-import { context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
+import { context, DriverError, fixture, UnknownOutcome } from "./DesktopTargetHost.testkit.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -147,6 +147,7 @@ it.live("an answer that may have changed the selection is never called unsupport
     for (const structured of [
       { code: "selection_readback_failed", effect: "unverifiable" },
       { code: "tool_call_timeout", status: "refused", safety: { possibleCommit: true } },
+      { code: "unknown_tool", safety: { possibleCommit: true } },
     ]) {
       const { result } = yield* run(
         new DriverError(structured, "Unknown tool: select_text"),
@@ -156,5 +157,13 @@ it.live("an answer that may have changed the selection is never called unsupport
         caught: { code: "unknown_outcome", nothingSent: false, possibleCommit: true },
       });
     }
+    // Cut off after it reached the driver, whatever the reply's own code says.
+    const { result } = yield* run(
+      new UnknownOutcome({ code: "unknown_tool" }, "Unknown tool: select_text"),
+      "app.selectText(1, 'world')",
+    );
+    expect(result.value).toMatchObject({
+      caught: { code: "unknown_outcome", nothingSent: false, possibleCommit: true },
+    });
   }),
 );

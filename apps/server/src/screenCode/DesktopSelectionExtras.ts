@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { isReadOnlyCall } from "../cua/ComputerUseLeaseMessages.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
@@ -76,7 +77,8 @@ const unsupported = (nextStep: string, effect: "read" | "write"): ScreenRunError
 
 /**
  * A driver error as the call's failure, with its safety judged by tool and arguments. The driver
- * names a refused grant with permission_denied and no effect, which stays permission_denied.
+ * names a refused grant with permission_denied and no effect, which stays permission_denied. A
+ * write that may have run, by any account of the reply, never reads as unsent.
  */
 const driverFailure = (
   reply: ComputerUsePrimitiveReply,
@@ -92,7 +94,15 @@ const driverFailure = (
     error.code === "downstream_failure" &&
     code === "permission_denied" &&
     structured?.effect === undefined;
-  const safety = driverOutcomeSafety(tool, reply, args);
+  const computed = driverOutcomeSafety(tool, reply, args);
+  const mayHaveRun =
+    error.effectStarted ||
+    computed.possibleCommit ||
+    object(structured?.safety)?.possibleCommit === true;
+  const safety =
+    mayHaveRun && !isReadOnlyCall(tool, args)
+      ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
+      : computed;
   return {
     ...error,
     ...(denied ? { code: "permission_denied" as const, nextStep: said || error.nextStep } : {}),
